@@ -73,13 +73,19 @@ the changed data via `site.data.*`. The dependency tracker does not
 record data file dependencies. Fix the incremental build to track
 which pages reference which data files and regenerate accordingly.
 
-### N2: Add `where_exp` array filter support for nested properties
+### N2: Fix `where_exp` and `find_exp` dropping Hash keys when input is a Hash
 
-The `where_exp` Liquid filter works for top-level properties but fails
-for nested properties accessed with dot notation (e.g.,
-`site.posts | where_exp: "p", "p.author.name == 'Alice'"`). Fix the
-expression evaluator to support dot-notation property access within
-filter expressions.
+When the input to `where_exp` or `find_exp` is a Hash (e.g.,
+`site.data.authors | where_exp: "item", "item.active == true"`), the
+filters call `.values` on the Hash, discarding the keys entirely. This
+means expressions cannot reference key-based identifiers, and the results
+contain only values with no way to recover the original key. The same
+pattern exists in `where` and `find` (by design for those), but
+`where_exp` and `find_exp` are marked with a `# FIXME` comment
+acknowledging the issue. Fix `where_exp` and `find_exp` in
+`lib/jekyll/filters.rb` to convert a Hash input to an array of
+`{"key" => k, "value" => v}` hashes so that both the key and value are
+accessible in filter expressions.
 
 ### N3: Fix `--livereload` not injecting script on non-HTML content types
 
@@ -88,30 +94,50 @@ but some templates produce HTML with a different content type (e.g.,
 `text/xml` for XHTML). The injection should check the file extension
 (`.html`, `.htm`) in addition to the Content-Type header.
 
-### N4: Fix `permalink` template variables not URL-encoded
+### N4: Fix `escape_path` encoding only the first `#` character in URLs
 
-When a document's title contains special characters (e.g., `C++ Guide`),
-the permalink template `:title` placeholder inserts the raw string
-without URL-encoding, producing broken paths like `/posts/C++ Guide/`.
-Fix the permalink URL builder in `lib/jekyll/url.rb` to properly encode
-reserved URI characters in interpolated template variables while
-preserving `/` separators.
+The `URL.escape_path` method in `lib/jekyll/url.rb` uses
+`String#sub("#", "%23")` to percent-encode the fragment-start character
+`#` in generated URL path segments. `sub` replaces only the FIRST
+occurrence, so a slug containing multiple `#` characters — such as a
+document titled `C# and F# Guide` — produces a path like
+`/posts/C%23-and-F#-Guide/` where only the first `#` is encoded. The
+second unencoded `#` causes browsers to interpret everything following
+it as a URL fragment, silently truncating the path. Fix `escape_path`
+in `lib/jekyll/url.rb` to use `gsub` instead of `sub` so that every
+`#` in the path segment is percent-encoded.
 
-### N5: Fix `excerpt_separator` not respected in collection documents
+### N5: Fix excerpt generation wasting resources for non-output collection documents
 
-The `excerpt_separator` front matter key works correctly for posts but
-is ignored for documents in custom collections. The `Document#extract_excerpt`
-method only applies separator-based splitting when the collection is
-`posts`. Fix it to respect `excerpt_separator` for all collections that
-have `output: true`.
+The `Document#generate_excerpt?` method in `lib/jekyll/document.rb`
+returns true for any document whose `excerpt_separator` is non-empty.
+Because the default `excerpt_separator` is `"\n\n"`, excerpt objects
+(`Jekyll::Excerpt`) are created for every document in every collection
+during the read phase, including documents in collections configured
+with `output: false` in `_config.yml`. Excerpt generation parses the
+full document content and stores the result in `data["excerpt"]`. For
+large sites with internal reference collections that use `output: false`
+(not rendered to the site), this causes unnecessary memory usage and
+build-time overhead. Fix `generate_excerpt?` in `lib/jekyll/document.rb`
+to also check `collection.write?`, so that excerpt generation is skipped
+for documents in non-output collections.
 
-### N6: Fix timezone handling in `date_to_xmlschema` filter
+### N6: Fix `date_to_xmlschema` shifting UTC midnight dates to previous day
 
-The `date_to_xmlschema` Liquid filter produces incorrect offsets for
-dates during DST transitions when the site's `timezone` config differs
-from the system timezone. The filter converts to the site timezone
-after formatting instead of before. Fix the filter in `lib/jekyll/filters.rb`
-to apply the timezone conversion before producing the ISO 8601 string.
+The `date_to_xmlschema` Liquid filter in `lib/jekyll/filters/date_filters.rb`
+calls `time(date).xmlschema`. The private `time` helper converts the
+input with `date.to_time.dup.localtime`. When a YAML front matter field
+stores a datetime as midnight UTC — for example
+`date: 2024-03-10 00:00:00 +00:00` — `date.to_time` preserves the UTC
+representation, and `.localtime` then shifts it to the site's configured
+timezone. In a negative-offset timezone such as `America/New_York`
+(UTC−5), midnight UTC becomes `2024-03-09 19:00:00 -0500`, pushing the
+date into the previous calendar day. Pages then appear in sitemaps and
+Atom feeds with a `lastmod` or publication date of March 9 instead of
+March 10. Fix the `time` helper in `lib/jekyll/filters/date_filters.rb`
+to convert the input to the site's timezone using the timezone name from
+`site.config["timezone"]` before calling `xmlschema`, so that the
+wall-clock date is preserved regardless of the source UTC offset.
 
 ### N7: Fix `Jekyll::Reader` not filtering `_data` subdirectory entries with `exclude` config
 
@@ -132,23 +158,36 @@ The GFM parser's link handling bypasses the IAL attachment step. Fix the
 converter configuration in `lib/jekyll/converters/markdown/kramdown_parser.rb`
 to preserve IAL processing in GFM mode.
 
-### N9: Fix `Jekyll::StaticFile#destination_rel_dir` ignoring collection permalink overrides
+### N9: Fix `StaticFile` in collections producing broken URLs when permalink uses `:title`
 
-When a static file belongs to a collection with a custom `permalink`
-pattern, `StaticFile#destination_rel_dir` in `lib/jekyll/static_file.rb`
-computes the output path using only the file's relative directory from
-the source, ignoring the collection's permalink template. This causes
-static files (images, PDFs) within a collection to be written to
-unexpected paths when the collection uses a custom permalink like
-`/docs/:title/`. Fix `destination_rel_dir` to respect the owning
-collection's configured output directory structure.
+When a collection defines a permalink template that includes `:title`
+(e.g., `permalink: /docs/:title/`), `StaticFile#url` in
+`lib/jekyll/static_file.rb` builds the URL using the collection's
+`url_template` and the file's `placeholders` hash. However,
+`StaticFile#placeholders` sets `:title => ""` (empty string) for all
+static files, since static files have no front-matter title. The result
+is a URL like `/docs//filename.jpg` which, after `sanitize_url` squeezes
+slashes, collapses to `/docs/filename.jpg` — ignoring the intended
+permalink structure entirely. For collections with other `:title`-dependent
+permalink patterns, all static files end up mapped to the same collapsed
+path. Fix `StaticFile#placeholders` in `lib/jekyll/static_file.rb` to
+populate `:title` with the file's `basename` (filename without extension)
+so that the collection permalink template is honoured for static files.
 
-### N10: Fix `jsonify` filter producing invalid JSON for `nil` values in hashes
+### N10: Fix `sample` filter silently discarding all exceptions via bare `rescue`
 
-The `jsonify` Liquid filter serializes Ruby `nil` values in nested hashes
-as empty strings instead of JSON `null`. The custom serializer in
-`filters.rb` converts values to strings before JSON encoding. Fix it
-to pass `nil` through as `null` in the JSON output.
+The `sample` Liquid filter in `lib/jekyll/filters.rb` converts the
+`num` argument using `Liquid::Utils.to_integer(num) rescue 1`. The bare
+`rescue` catches every exception class, including `NoMethodError` and
+`LoadError` that indicate programming mistakes rather than bad input.
+When `num` is an invalid value, the failure is swallowed silently and
+the filter returns one element with no warning to the template developer.
+For example, passing a Hash as `num` raises `NoMethodError`, which is
+caught, and the caller receives a single-element sample instead of an
+error. Fix the `sample` filter in `lib/jekyll/filters.rb` to rescue
+only `ArgumentError` and `TypeError`, and emit a `Jekyll.logger.warn`
+message when falling back to the default of 1, so that template authors
+are informed of the incorrect argument.
 
 ## Medium
 
@@ -392,17 +431,21 @@ to `rubocop-1-57`.
 
 ### W11: Revamp CI/CD, linter config, `Rakefile`, and contributor documentation
 
-Restructure `.github/workflows/` to split `ci.yml` into three
-workflows: `test.yml` (unit tests), `cucumber.yml` (integration
-features), and `lint.yml` (RuboCop + spelling). Add a new
-`.github/workflows/release.yml` that automates gem publishing to
-RubyGems when a version tag is pushed. Update `Rakefile` to add
-a `rake docs:build` task that runs the Jekyll docs site build from
-`docs/`, a `rake release:prepare` task that bumps the version in
-`lib/jekyll/version.rb` and updates `History.markdown`, and a
-`rake lint` task unifying `.rubocop.yml` enforcement. Revise
-`.rubocop.yml` to enable `Metrics/PerceivedComplexity` and
-`Naming/PredicateName` cops, and clean out resolved entries from
-`.rubocop_todo.yml`. Update `.github/CONTRIBUTING.markdown` to
-document the Earthfile-based local development workflow and add
-a DCO requirement. Add a `SECURITY.markdown` file if missing.
+Restructure `.github/workflows/` to split the single `ci.yml` into
+three focused workflows: `test.yml` (Minitest unit tests across Ruby
+versions), `cucumber.yml` (Cucumber integration features), and `lint.yml`
+(RuboCop + spelling check). Update the existing
+`.github/workflows/release.yml` — which currently triggers on pushes
+to `master`/`*-stable` when `lib/**/version.rb` changes — to instead
+trigger on version tag pushes (e.g., `v*.*.*`) so that gem publishing
+is only initiated by an explicit release tag rather than any version
+file edit. Update `Rakefile` to add a `rake docs:build` task that runs
+the Jekyll docs site build from `docs/`, a `rake release:prepare` task
+that bumps the version in `lib/jekyll/version.rb` and updates
+`History.markdown`, and a `rake lint` task unifying `.rubocop.yml`
+enforcement. Revise `.rubocop.yml` to enable `Metrics/PerceivedComplexity`
+(currently present but only tuned via `Max`) and `Naming/PredicateName`
+cops (not currently configured), and clean out resolved entries from
+`.rubocop_todo.yml`. Update `.github/CONTRIBUTING.markdown` to document
+the Earthfile-based local development workflow and add a DCO
+requirement.

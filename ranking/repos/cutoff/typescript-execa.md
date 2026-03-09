@@ -204,39 +204,52 @@ content available but `lib/io/max-buffer.js` discards it before
 building the result. Fix the flow so `error.stdout` / `error.stderr`
 contains the data collected up to the buffer limit.
 
-### N3: Fix strip-newline not stripping \r\n on Windows for binary encoding
+### N3: Fix strip-newline not stripping final newline from last line when using lines and preserveNewlines
 
-When `stripFinalNewline: true` is used with `encoding: 'buffer'`, the
-strip-newline logic in `lib/io/strip-newline.js` correctly strips
-trailing `\n` bytes from the `Uint8Array` but does not handle `\r\n`
-(CRLF), which is standard on Windows. Fix the Uint8Array path to strip
-both `\r\n` and `\n` as final newlines.
+When `stripFinalNewline: true` is used together with `lines: true` and
+`preserveNewlines: true`, the last element of the output array retains
+its trailing newline character. The `stripNewline` function in
+`lib/io/strip-newline.js` short-circuits for array values via the
+`!Array.isArray(value)` guard, so no stripping is applied to the
+individual elements. Fix `stripNewline` to strip the trailing newline
+from the last element of the array when both `lines` and
+`stripFinalNewline` are active for the given file descriptor.
 
 ### N4: Fix parseCommandString not handling escaped quotes inside arguments
 
 `parseCommandString('echo "hello \\"world\\""')` in
-`lib/methods/command.js` fails to recognize the escaped quotes and
-splits the string incorrectly, producing `["echo", "\"hello"]` instead
-of `["echo", "hello \"world\""]`. Fix the parser to handle backslash-
-escaped double quotes within double-quoted arguments.
+`lib/methods/command.js` fails to recognize the double-quoted group
+and splits the string by the space inside the quotes, producing
+`["echo", '"hello', '\\"world\\""']` instead of
+`["echo", 'hello \\"world\\"']`. Fix the parser to support
+double-quoted argument groups so spaces inside quotes are not treated
+as delimiters and backslash-escaped quotes inside a quoted group are
+preserved.
 
-### N5: Fix verbose custom function not receiving the subprocess duration on error
+### N5: Fix VerboseFunction type hiding result from custom verbose functions
 
-When a custom `verbose` function is provided, it receives a `verboseObject`
-on subprocess completion via `lib/verbose/complete.js`. On success the
-`duration` property is populated, but on error it is `undefined` because
-`lib/verbose/error.js` dispatches the verbose event before
-`lib/return/duration.js` computes the elapsed time. Fix the ordering so
-the duration is computed and attached before the verbose error is emitted.
+When a custom `verbose` function is provided, it is typed as
+`VerboseFunction` in `types/verbose.d.ts`, whose `verboseObject`
+parameter is `MinimalVerboseObject`. That type sets `result?: never`,
+which means TypeScript reports `result` as inaccessible even though the
+property is present at runtime. Custom functions therefore cannot type-
+safely read `verboseObject.result.durationMs`, `verboseObject.result.failed`,
+or any other result field. Fix `MinimalVerboseObject` in
+`types/verbose.d.ts` to expose `result` as `VerboseObject['result']`
+so that the `result` property (including `durationMs` on both success
+and error events) is accessible to custom verbose functions.
 
-### N6: Fix IPC getOneMessage timeout not clearing internal listener on expiry
+### N6: Fix IPC getOneMessage disconnecting the channel when the filter function throws
 
-When `getOneMessage({timeout})` times out, the implementation in
-`lib/ipc/get-one.js` rejects the returned promise but does not remove
-the internal `message` event listener from the subprocess. Repeated
-timeouts accumulate stale listeners, triggering Node.js
-`MaxListenersExceededWarning`. Fix `getOneMessage` to clean up its
-listener on timeout before rejecting.
+When `getOneMessage({filter})` is called with a `filter` function that
+throws an exception, the exception propagates out of the `for await...of`
+loop in `lib/ipc/get-one.js` and is caught by the outer `try/catch`,
+which calls `disconnect(anyProcess)`. This forcibly terminates the IPC
+channel because of a user-level error in the filter function, preventing
+any further IPC communication for the lifetime of the subprocess. Fix
+`getOneMessageAsync` to isolate filter-function exceptions from genuine
+IPC errors so that `disconnect` is only called when the failure is an
+IPC-level disconnect or strict-mode error, not a filter callback error.
 
 ### N7: Fix template literal escaping not preserving backslashes before non-special characters
 
@@ -247,22 +260,30 @@ backslashes before special shell characters should be consumed as
 escapes. Fix the parser to preserve backslashes that do not precede
 a recognized escape character.
 
-### N8: Fix cancel signal not aborting the subprocess when using execaSync
+### N8: Fix validateSyncOptions not rejecting gracefulCancel in synchronous methods
 
-When `cancelSignal` is passed to `execaSync`, the sync entry path in
-`lib/methods/main-sync.js` ignores it silently without throwing an
-error. The `cancelSignal` option only works with async methods. Fix
-`main-sync.js` to throw a clear `TypeError` when `cancelSignal` is
-provided to a synchronous method, preventing silent misconfiguration.
+When `gracefulCancel: true` is passed to `execaSync`, the sync entry
+path in `lib/methods/main-sync.js` does not check for `gracefulCancel`
+in `validateSyncOptions`. Instead, `normalizeOptions` calls
+`validateGracefulCancel` from `lib/terminate/graceful.js`, which may
+throw misleading errors about `cancelSignal` or `ipc` being missing
+rather than a clear "cannot be used with synchronous methods" message.
+Fix `validateSyncOptions` to explicitly reject `gracefulCancel: true`
+with the same `throwInvalidSyncOption` helper used for other sync-
+incompatible options, ensuring users receive a consistent and
+actionable error.
 
-### N9: Fix verbose IPC logging not redacting messages when `verbose: 'short'` is set
+### N9: Fix verbose IPC logging providing no activity indication when `verbose: 'short'` is set
 
-When `verbose` is set to `'short'`, the verbose system in
-`lib/verbose/info.js` suppresses stdout/stderr output, but
-`lib/verbose/ipc.js` still logs full IPC message contents. This is
-inconsistent — IPC messages can contain sensitive data. Fix the verbose
-IPC logger to respect the `'short'` mode by logging only
-`[ipc message received]` without the message content.
+When `verbose` is set to `'short'`, the verbose system logs the command
+start and completion but gives no indication that IPC messages were
+exchanged during the subprocess run. By contrast, `verbose: 'full'`
+logs the full IPC message contents via `lib/verbose/ipc.js`. The gap
+means debugging IPC-heavy subprocesses with `'short'` mode is harder
+than necessary. Fix `lib/verbose/ipc.js` so that when the fd-specific
+verbose level is `'short'`, it logs a redacted placeholder such as
+`[ipc message]` without the message content, consistent with how
+`'short'` suppresses output content but still indicates activity.
 
 ### N10: Fix file URL conversion not handling percent-encoded spaces on Windows
 
@@ -283,7 +304,7 @@ from Node.js `process.resourceUsage()` captured via IPC from the child
 process. Requires changes to `lib/return/result.js` for the result
 schema, `lib/methods/node.js` for automatic resource collection in
 Node.js subprocesses, `lib/ipc/incoming.js` for internal resource
-messages, and `types/return/result.ts` for TypeScript types. Document
+messages, and `types/return/result.d.ts` for TypeScript types. Document
 the new `resourceUsage` property with examples in `readme.md` under the
 Result section, and add a `"resourceUsage"` keyword to `package.json`.
 
@@ -308,7 +329,7 @@ changes to the line splitter in `lib/transform/split.js` to track
 line count, the transform runner in `lib/transform/run-async.js` and
 `lib/transform/run-sync.js` to pass the context object to generators,
 `lib/transform/generator.js` for context propagation, and TypeScript
-type updates in `types/transform.ts`.
+type updates in `types/transform/normalize.d.ts`.
 
 ### M4: Add subprocess output tee to file
 
@@ -356,7 +377,7 @@ simultaneously. Requires changes to `lib/pipe/pipe-arguments.js` for
 array parsing, `lib/pipe/streaming.js` for multi-destination tee
 wiring, `lib/pipe/throw.js` for aggregated error handling across
 destinations, `lib/pipe/abort.js` for coordinated abort, and TypeScript
-types in `types/pipe.ts`.
+types in `types/pipe.d.ts`.
 
 ### M9: Implement command dry-run mode
 
@@ -534,12 +555,12 @@ command into separate jobs for type checking (`tsc` and `tsd`),
 linting (`xo`), and unit tests (`c8 ava`), allowing independent
 failure reporting and parallelism. Add a `.github/workflows/release.yml`
 workflow for automated npm publishing with provenance attestation.
-Create a `.github/codecov.yml` with per-module coverage targets for
-`lib/ipc/`, `lib/pipe/`, `lib/terminate/`, and `lib/convert/`. Add a
-`.github/security.md` vulnerability disclosure template with a
-response timeline. Update `package.json` scripts to add `test:types`,
-`test:lint`, and `test:coverage` entries with `c8` threshold
-enforcement. Update `tsconfig.json` to enable
-`exactOptionalPropertyTypes` for stricter type checking across the
-`types/` directory. Add `provenance=true` to `.npmrc` for supply chain
-security.
+Update the existing `.github/codecov.yml` to add per-module coverage
+targets for `lib/ipc/`, `lib/pipe/`, `lib/terminate/`, and
+`lib/convert/`. Update the existing `.github/security.md` vulnerability
+disclosure template to include a response timeline. Update
+`package.json` scripts to add `test:types`, `test:lint`, and
+`test:coverage` entries with `c8` threshold enforcement. Update
+`tsconfig.json` to enable `exactOptionalPropertyTypes` for stricter
+type checking across the `types/` directory. Add `provenance=true` to
+`.npmrc` for supply chain security.

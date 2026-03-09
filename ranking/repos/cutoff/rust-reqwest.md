@@ -110,16 +110,16 @@ the proxy configuration section in `README.md` to document the
 required URL-encoding format for special characters in proxy
 credentials.
 
-### N4: Fix redirect policy not restoring original request method after 307/308 redirects on the blocking client
+### N4: Fix redirect policy unconditionally overwriting user-supplied Referer header on redirect
 
-When the blocking client in `blocking/client.rs` follows a 307
-(Temporary Redirect) or 308 (Permanent Redirect), the HTTP spec
-requires preserving the original method and body. The async client
-handles this via `tower_http::FollowRedirect`'s `clone_body` method,
-but the blocking wrapper's timeout enforcement can race with the
-redirect, dropping the body before the redirected request is sent.
-Fix the blocking redirect path to ensure the body clone is completed
-before the timeout check.
+When `ClientBuilder::referer(true)` is set (the default) and a
+redirect is followed, `TowerRedirectPolicy::on_request` in
+`redirect.rs` always calls `req.headers_mut().insert(REFERER, v)`
+which overwrites any `Referer` header the user explicitly set on
+the original request via `RequestBuilder::header()`. Fix `on_request`
+in `redirect.rs` to skip setting the auto-generated referer when a
+`Referer` header is already present in the request headers, preserving
+user-supplied values.
 
 ### N5: Fix redirect policy not preserving fragment from original URL
 
@@ -339,7 +339,7 @@ Implement a body transformation pipeline:
 Support compression (gzip, brotli, zstd), encryption/decryption,
 signing/verification, content-type transformation (JSON ↔ MessagePack),
 and streaming transforms without buffering. Changes span
-`async_impl/body.rs`, `async_impl/decoder.rs`, `async_impl/request.rs`,
+`async_impl/body.rs`, `async_impl/response.rs`, `async_impl/request.rs`,
 a new transforms module, the multipart encoder, `blocking/body.rs`,
 and the WASM body types.
 
@@ -414,17 +414,22 @@ options with a compatibility matrix, and add a `cfg` check in the
 crate root that emits a `compile_error!` when incompatible TLS
 features are enabled simultaneously.
 
-### M11: Add WASM target CI testing and update Cargo.toml WASM metadata
+### M11: Expand WASM CI coverage to test optional features and add missing integration tests
 
-The CI workflow in `.github/workflows/ci.yml` does not test the WASM
-target despite `wasm32-unknown-unknown` being listed in
-`[package.metadata.docs.rs]` targets. Add a CI job that builds and
-tests the `wasm` module using `wasm-pack test --headless --chrome`.
-Update `Cargo.toml` to add `wasm-bindgen-test` as a `[target.'cfg(target_arch = "wasm32")'.dev-dependencies]` entry. Add a
-`CHANGELOG.md` entry documenting the improved WASM testing coverage.
-Update `.github/workflows/ci.yml` with the new `wasm-test` job that
-installs `wasm-pack`, runs the WASM tests, and is included in the
-required CI checks.
+The CI workflow in `.github/workflows/ci.yml` runs `wasm-pack test`
+and `cargo check --target wasm32-unknown-unknown` only with default
+features, leaving the `multipart` and `stream` WASM feature
+combinations untested. The `multipart` feature is gated in
+`src/wasm/mod.rs` and has existing `#[wasm_bindgen_test]` tests in
+`src/wasm/multipart.rs`, but they are never executed in CI. Add
+`cargo check --target wasm32-unknown-unknown --features multipart`
+and `--features stream,multipart` steps to the `wasm` job in
+`.github/workflows/ci.yml`. Add a `wasm-pack test --headless --chrome
+--features multipart` step so the existing WASM multipart tests run in
+CI. Expand tests in `src/wasm/multipart.rs` to cover edge cases (empty
+form, binary part, file-name with special characters). Add a
+`CHANGELOG.md` entry documenting the improved WASM feature test
+coverage.
 
 ### W11: Restructure Cargo.toml features and overhaul project documentation
 

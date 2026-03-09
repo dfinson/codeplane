@@ -74,13 +74,15 @@ the inner tuple's elements are not wrapped, so `str()` on the inner
 tuple bypasses escaping. Fix `_MarkupEscapeHelper.__getitem__` to
 recursively wrap nested sequences.
 
-### N3: Add Markup.join() with automatic escaping of non-Markup items
+### N3: Fix Markup.translate() incorrect return type annotation
 
-The inherited `str.join()` method does not escape items before joining.
-`Markup(", ").join(["<b>", safe])` produces `<b>, safe` without
-escaping the first element. Override `join()` in the `Markup` class to
-call `self.escape()` on each item that is not already a `Markup`
-instance before delegating to `super().join()`. Also update `README.md` to document the auto-escaping behavior of the new `join()` override with examples.
+The `translate()` method in the `Markup` class is annotated as
+returning `-> str`, but its implementation returns `self.__class__(…)`,
+which is a `Markup` (or subclass) instance. This annotation mismatch
+suppresses type errors for callers who treat the return value as plain
+`str`, losing the safety guarantee. Fix the annotation to `-> te.Self`
+and update the `# type: ignore[override]` comment accordingly so it
+matches the other overridden string methods in the class.
 
 ### N4: Fix escape() not handling objects with __html__ returning non-str
 
@@ -90,13 +92,18 @@ an object's `__html__()` returns `None` or an `int`, `Markup(None)`
 produces `"None"` which is incorrect. Add a type check after
 `__html__()` and raise `TypeError` if the return value is not a `str`.
 
-### N5: Add Markup.striptags() method for removing HTML tags
+### N5: Fix Markup.striptags() to use html.parser for robust tag removal
 
-The `Markup` class provides escaping but no way to strip HTML tags
-from a markup string. Add a `striptags()` method that removes all
-HTML/XML tags (using a simple regex or state machine), collapses
-whitespace, and returns a plain `str` (not `Markup`), useful for
-generating plain-text versions of HTML content.
+The existing `Markup.striptags()` method uses a naive `find('<')` /
+`find('>')` scan to remove HTML tags and comments. This approach
+incorrectly strips content when a `<` character appears inside an
+attribute value (e.g., `<img alt="a < b">`), and stops processing
+when it encounters an unclosed comment (`<!-- …` with no `-->`),
+leaving the comment text in the output. Rewrite `striptags()` using
+`html.parser.HTMLParser` to correctly handle attribute values with
+embedded `<` characters and malformed comment syntax, while preserving
+the existing behavior of collapsing whitespace and unescaping entities
+in the returned plain `str`.
 
 ### N6: Fix EscapeFormatter not handling !r and !s conversion flags
 
@@ -107,13 +114,18 @@ conversion flags applied before `format_field()` is called. When using
 the inner content may not be properly escaped. Ensure the `!r` output
 is escaped through `self.escape()`.
 
-### N7: Add Markup.unescape() method for reversing HTML entity encoding
+### N7: Add Markup.escape_once() classmethod to prevent double-escaping
 
-There is no method to convert HTML entities back to their original
-characters. Add `Markup.unescape()` that converts `&amp;`, `&lt;`,
-`&gt;`, `&#39;`, and `&#34;` (and numeric character references) back
-to their literal characters, returning a plain `str`. Use
-`html.unescape()` from the standard library internally.
+There is no way to escape a string that may already contain some
+HTML-encoded entities without double-escaping them. Add a
+`Markup.escape_once()` classmethod that escapes only the characters
+that are not already part of a valid HTML entity reference (e.g.,
+`&amp;`, `&#39;`, `&#34;`, `&lt;`, `&gt;`). For example,
+`Markup.escape_once("already &amp; <b>")` should return
+`Markup("already &amp; &lt;b&gt;")`, leaving the existing `&amp;`
+untouched while escaping the bare `<` and `>`. Implement using a
+regular expression to find existing entity references before applying
+character replacements.
 
 ### N8: Fix _speedups.c not handling compact strings (Python 3.12+)
 
@@ -132,15 +144,18 @@ make sense for HTML strings: truncation (`:.20` to limit length with
 an ellipsis entity `&hellip;`), and alignment (`:>30` using `&nbsp;`
 padding instead of spaces). Implement in the `__html_format__` method.
 
-### N10: Fix soft_str() not preserving Markup subclass identity
+### N10: Add fast-path type check and documentation to soft_str()
 
-The `soft_str()` function checks `isinstance(s, str)` and returns `s`
-unchanged, but this also matches `Markup` subclasses. While this
-preserves `Markup` itself, a user subclass of `Markup` (e.g.,
-`LazyMarkup`) is returned as-is, which is the correct behavior.
-However, `soft_str()` is not documented as `Markup`-aware. Add explicit
-documentation and a fast-path type check: if `type(s) is Markup`,
-return immediately without the `isinstance` check.
+The `soft_str()` function uses `isinstance(s, str)` to preserve
+`Markup` and other `str` subclasses unchanged, but the docstring does
+not document this behavior. Callers may not know that passing a
+`Markup` instance returns the same `Markup` object without converting
+it to a plain `str`. Add a `type(s) is str` fast-path check at the
+top of the function body (before the `isinstance` check) to
+short-circuit the most common case of a plain `str` input without
+paying the isinstance overhead. Update the docstring to explicitly
+state that `Markup` instances (and other `str` subclasses) are
+returned unchanged.
 
 ## Medium
 
@@ -190,7 +205,9 @@ specified visible-character length without breaking HTML entities or
 tags. `Markup("Hello &amp; World").truncate(11)` should produce
 `Markup("Hello &amp; Wo...")`, not split the `&amp;` entity. Requires
 entity-aware length calculation, an entity boundary scanner, and
-proper `Markup` return-type preservation. Also update `pyproject.toml` to add the new `truncate` method to the API reference and update `CHANGES.rst` with a feature entry.
+proper `Markup` return-type preservation. Also update `docs/html.rst`
+to document the new `truncate` method with examples, and update
+`CHANGES.rst` with a feature entry.
 
 ### M6: Implement a safe string interpolation DSL
 
@@ -356,26 +373,35 @@ notes for any behavioral changes in the escape functions.
 
 ### M11: Revise `pyproject.toml` build configuration and `MANIFEST.in` package data
 
-The `pyproject.toml` uses an older build backend configuration and
-does not declare all package data files needed for distribution.
-Update the build system configuration to use current best practices,
-add `[project.optional-dependencies]` groups for `dev` and `test`,
-and update classifiers. Revise `MANIFEST.in` to include type stubs,
-the `py.typed` marker, C extension source files, and benchmark
-scripts. Also update `.readthedocs.yaml` to configure the C
-extension build step and update `.pre-commit-config.yaml` to add
-a `cython-lint` hook for the C extension.
+The `pyproject.toml` does not declare `[project.optional-dependencies]`
+groups for users who install the package from PyPI and want optional
+extras (the existing `[dependency-groups]` sections serve development
+tooling but are not visible as pip extras). Add
+`[project.optional-dependencies]` with `dev` and `tests` groups, and
+add a `speed` extra that marks the C extension build as optional for
+pure-Python fallback use cases. Update classifiers to add the
+`Programming Language :: C` classifier. Revise `MANIFEST.in` to
+explicitly include type stubs, the `py.typed` marker, C extension
+source files, and benchmark scripts. Also update `.readthedocs.yaml`
+to add the C extension build step before the Sphinx build command and
+update `.pre-commit-config.yaml` to add a `cython-lint` hook for the C
+extension source file.
 
 ### W11: Full project configuration and documentation overhaul
 
 Perform a comprehensive non-code refresh: update `pyproject.toml`
-with current classifiers, PEP 639 license metadata, and modern
-build backend settings with C extension configuration. Revise
-`README.md` usage examples to cover all escape functions, Markup
-class methods, and format string safety. Update `CHANGES.rst` to
-use consistent formatting with contributor attribution across all
-versions. Configure `.readthedocs.yaml` for C extension builds
-and API reference generation. Update `MANIFEST.in` with
-comprehensive include and exclude patterns. Revise `.editorconfig`
-to cover C source files and type stubs. Update
-`.pre-commit-config.yaml` with current hook versions.
+with additional classifiers (including `Programming Language :: C`
+and a `speed` optional dependency for the C extension), and revise
+the build backend settings to document C extension configuration.
+Revise `README.md` usage examples to cover all escape functions,
+`Markup` class methods including `join`, `striptags`, `unescape`,
+and `format_map`, with examples showing the auto-escaping behavior.
+Update `CHANGES.rst` to use consistent formatting with contributor
+attribution across all versions. Configure `.readthedocs.yaml` to
+add the C extension compilation step before the Sphinx build and
+enable API reference generation. Update `MANIFEST.in` with
+comprehensive include and exclude patterns covering `.pyi` stubs,
+`py.typed`, C source files, and benchmark scripts. Revise
+`.editorconfig` to add rules for C source files (`.c`, `.h`) and
+type stubs (`.pyi`). Update `.pre-commit-config.yaml` with current
+hook versions and add a `cython-lint` hook for the C extension.

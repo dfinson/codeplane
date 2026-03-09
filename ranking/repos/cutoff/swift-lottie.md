@@ -189,29 +189,38 @@ references `"image_0.png"`, the provider should check for
 ### N8: Add `reduceMotion` animation fallback to show final frame
 
 The `ReducedMotionOption` in `Public/Configuration/ReducedMotionOption.swift`
-provides `.none` and `.specific` options. Add a `.showFinalFrame` option
-that, when the system has Reduce Motion enabled, immediately displays
-the animation's last frame without any animation, providing visual
-context without motion.
+controls animation behaviour when the system Reduce Motion setting is active.
+The companion `ReducedMotionMode` enum defines `.standardMotion`, `.reducedMotion`,
+and `.disabledMotion` cases (which renders the first frame statically), but has
+no case that instead displays the animation's *last* frame. Add a `.showFinalFrame`
+case to `ReducedMotionMode` and a matching convenience static var
+`ReducedMotionOption.showFinalFrame` (returning `.specific(.showFinalFrame)`) that,
+when the system has Reduce Motion enabled, immediately displays the animation's last
+frame without playing any motion, providing visual context of the end state.
 
-### N9: Fix TextLayer not applying font tracking (letter spacing)
+### N9: Fix TextLayer not applying baseline shift from TextDocument
 
-The `TextLayer` in `Private/CoreAnimation/Layers/TextLayer.swift`
-renders text from `TextDocument` model data but does not apply the
-`tracking` property (letter spacing) defined in the Lottie JSON
-text animator. Add `NSAttributedString` attribute
-`NSAttributedString.Key.kern` with the tracking value when rendering
-text in both Core Animation and Main Thread engines.
+The `TextDocument` model in `Private/Model/Text/TextDocument.swift` decodes the
+Lottie JSON `"ls"` key as a `baseline: Double?` property (the After Effects
+baseline shift / line spacing offset). Neither `TextLayer` in
+`Private/CoreAnimation/Layers/TextLayer.swift` nor `CoreTextRenderLayer` in
+`Private/MainThread/LayerContainers/Utility/CoreTextRenderLayer.swift` reads or
+applies this value when rendering text. Add a `baseline: CGFloat` property to
+`CoreTextRenderLayer` that is set from `TextDocument.baseline` in `TextLayer`, and
+apply it as `NSAttributedString.Key.baselineOffset` when building the attributed
+string, so text renders at the correct vertical position in both the Core Animation
+and Main Thread rendering engines.
 
 ### N10: Add dotLottie animation metadata accessors
 
 The `DotLottieFile` in `Public/DotLottie/DotLottieFile.swift` parses
-`.lottie` archives but does not expose the manifest metadata (author,
-description, version, theme colour). Add read-only properties for
-`author`, `description`, `version`, and `themeColor` parsed from the
-`manifest.json` within the archive. Also update `README.md` to
-document the dotLottie format support and the new metadata
-accessors in the "Features" section.
+`.lottie` archives but does not expose the manifest metadata fields
+available in `Private/Model/DotLottie/DotLottieManifest.swift` (`author`,
+`version`, `generator`). Add read-only public properties `author`,
+`version`, and `generator` to `DotLottieFile`, populated from the
+parsed `DotLottieManifest` after the archive is loaded. Also update
+`README.md` to document the dotLottie format support and the new
+metadata accessors in a "dotLottie" section.
 
 ### N11: Fix README.md not documenting rendering engine selection or dotLottie support
 
@@ -222,11 +231,9 @@ dotLottie format (`.lottie` archives) is supported in the codebase
 but not mentioned in the README or any user-facing documentation.
 The `.github/issue_template.md` does not ask reporters to specify
 which rendering engine they are using, making it difficult to
-reproduce engine-specific bugs. The `.spi.yml` file does not
-configure documentation generation targets for Swift Package Index.
-Fix `README.md` to add rendering engine selection and dotLottie
-sections, update `.github/issue_template.md` to include a rendering
-engine field, and configure `.spi.yml` for documentation generation.
+reproduce engine-specific bugs. Fix `README.md` to add rendering
+engine selection and dotLottie sections, and update
+`.github/issue_template.md` to include a rendering engine field.
 
 ## Medium
 
@@ -326,22 +333,29 @@ conformance on all model types in `Private/Model/` (layers, shapes,
 keyframes, assets, text), careful preservation of unknown JSON keys,
 and validation that re-encoded JSON plays identically.
 
-### M11: Update script/ReleaseInstructions.md and podspec for release workflow
+### M11: Fix release process documentation and podspec inconsistencies
 
-The `script/ReleaseInstructions.md` release guide references a
-manual CocoaPods `pod trunk push` workflow but does not mention
-the Swift Package Manager release process or the
-`.github/workflows/main.yml` CI pipeline. The `lottie-ios.podspec`
-and `Package.swift` specify different minimum iOS deployment
-targets with no documentation explaining the discrepancy. The
-`package.json` (used for the npm/lottie-web compatibility shim
-via `index.js`) has a `version` field that is not kept in sync
-with `Version.xcconfig`. Update `script/ReleaseInstructions.md`
-to include SPM release steps and CI verification, reconcile
-deployment targets between `lottie-ios.podspec` and
-`Package.swift` with an explanatory comment, and add a release
-checklist item to verify `package.json` version matches
-`Version.xcconfig`.
+The `script/ReleaseInstructions.md` contains a typo in step 5: the
+files are referenced as `Lottie.xframework.zip` and
+`Lottie-Static.xframework.zip` (missing the `c` in `xcframework`),
+while the correct artifact names used throughout the rest of the
+document are `Lottie.xcframework.zip` and
+`Lottie-Static.xcframework.zip`. The `lottie-ios.podspec` declares
+`s.swift_version = '5.9'` while `Package.swift` uses
+`swift-tools-version:6.0` with `swiftLanguageMode(.v5)` — this
+intentional discrepancy has no explanatory comment, confusing
+contributors. The podspec `exclude_files` patterns reference
+`Sources/Public/MacOS/**/*` (capital O) but the actual directory is
+`Sources/Public/macOS` (lowercase o); while CocoaPods resolves this
+correctly on case-insensitive macOS, the pattern is technically
+incorrect. Fix the xcframework typo in `script/ReleaseInstructions.md`,
+add an inline comment to `lottie-ios.podspec` explaining the
+`swift_version` vs `swift-tools-version` discrepancy, and correct
+the `MacOS` → `macOS` path case in `lottie-ios.podspec`'s
+`exclude_files` entries. Also add a comment to `Package.swift`
+alongside the existing sync reminder noting that `lottie-ios.podspec`
+`swift_version` must be updated whenever the minimum compiler version
+changes.
 
 ## Wide
 
@@ -420,12 +434,13 @@ display link, and `RenderingEngineOption` integration.
 ### W8: Implement a Lottie animation benchmark suite
 
 Build a comprehensive benchmark system: render-time measurement per
-frame for all three engines, memory profiling, CPU usage tracking,
-battery impact estimation, and regression detection. Include a set of
-reference animations covering all feature types. Requires an
-`XCTest`-based performance test harness, per-engine rendering
-instrumentation, metric collection and aggregation, JSON result
-export, and baseline comparison for CI integration.
+frame for both rendering engines (Main Thread and Core Animation),
+memory profiling, CPU usage tracking, battery impact estimation, and
+regression detection. Include a set of reference animations covering
+all feature types. Requires an `XCTest`-based performance test
+harness, per-engine rendering instrumentation, metric collection and
+aggregation, JSON result export, and baseline comparison for CI
+integration.
 
 ### W9: Add dynamic theming system for animations
 
@@ -448,22 +463,21 @@ definitions. Requires a builder API, ZIP archive creation via
 validation, and integration with `DotLottieFile` for round-trip
 verification.
 
-### W11: Overhaul README.md, CI workflows, and distribution configuration
+### W11: Overhaul README.md and public API documentation
 
-The `README.md` is missing documentation for SwiftUI integration
-(`LottieView`), interactive controls (`AnimatedButton`,
-`AnimatedSwitch`), dynamic properties, and the dotLottie format.
-The animated GIF examples in `_Gifs/` are referenced in the README
-but several links are broken because the filenames contain spaces.
-The `.github/workflows/main.yml` CI workflow does not test on
-macOS or build the `Example/` project. The
-`.github/workflows/stale_issues.yml` stale issue bot is configured
-with a 30-day timeout that is too aggressive for feature requests.
-The `lottie-ios.podspec` does not list all source files under
-`Sources/Private/EmbeddedLibraries/` causing CocoaPods builds to
-fail for the ZipFoundation dependency. Overhaul `README.md` with
-complete feature documentation and fix broken `_Gifs/` image links,
-add macOS and example-project build steps to
-`.github/workflows/main.yml`, adjust the stale timeout in
-`.github/workflows/stale_issues.yml`, and fix the
-`lottie-ios.podspec` source file patterns for embedded libraries.
+The `README.md` (125 lines) is missing documentation for key Lottie
+features: SwiftUI integration (`LottieView`), interactive controls
+(`AnimatedButton`, `AnimatedSwitch`, `LottieButton`, `LottieSwitch`),
+dynamic properties (value providers, `AnimationKeypath`), the dotLottie
+format (`.lottie` archives via `DotLottieFile`), and rendering engine
+selection (`LottieConfiguration.renderingEngine`). The
+`.github/issue_template.md` does not include a rendering engine field,
+making engine-specific bug reproduction difficult. Key public Swift
+files — `LottieAnimationView.swift`, `LottieView.swift`,
+`LottieAnimationLayer.swift`, `LottieConfiguration.swift`,
+`DotLottieFile.swift`, `AnimationKeypath.swift`, `LottiePlaybackMode.swift`,
+and the value provider files in `Public/DynamicProperties/ValueProviders/`
+— lack doc-comment coverage for most public members. Overhaul `README.md`
+with complete feature documentation covering all the above areas, update
+`.github/issue_template.md` to include a rendering engine field, and add
+or improve doc comments on all the listed public Swift files.

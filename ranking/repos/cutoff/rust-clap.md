@@ -196,10 +196,12 @@ text and descriptions.
 ### M1: Implement value hint-driven shell completions for common types
 
 Add rich runtime completions driven by `ValueHint`: `FilePath` triggers
-filesystem completion, `Url` suggests common schemes, `EmailAddress`
-completes from system contacts, `Hostname` reads `/etc/hosts`.
-Requires changes to all five shell generators in `clap_complete/src/shells/`,
-the `ValueHint` enum in `clap_builder`, the dynamic completer, and
+filesystem completion, `Url` suggests common URL schemes (`http://`,
+`https://`, `ftp://`), `EmailAddress` emits a descriptive placeholder
+candidate, `Hostname` reads `/etc/hosts` for candidate hostnames.
+Requires changes to all five shell generators in `clap_complete/src/aot/shells/`
+(bash, zsh, fish, elvish, powershell), the `ValueHint` enum in `clap_builder`,
+the dynamic completion engine in `clap_complete/src/engine/`, and
 integration tests per shell.
 
 ### M2: Add ArgGroup conflict diagnostics with visualization
@@ -413,31 +415,33 @@ code. Changes span a new `clap_compat` crate, proc-macro re-exports,
 API adapters in `clap_builder`, a source-rewriting tool, and
 comprehensive test suites covering both legacy APIs.
 
-### N11: Fix CHANGELOG.md not linking release version headers to GitHub compare URLs
+### N11: Fix CHANGELOG.md 5.0.0 section not using Keep a Changelog link-reference format
 
-The `CHANGELOG.md` uses `[Unreleased]` and versioned headers like
-`[4.5.60]` but several recent releases are missing their
-corresponding compare-URL references at the bottom of the file
-(e.g., `[4.5.60]: https://github.com/clap-rs/clap/compare/v4.5.59...v4.5.60`).
-Audit all version headers in `CHANGELOG.md` against the reference
-link section at the bottom and add missing compare URLs. Also fix
-the `[Unreleased]` link to compare against the latest released tag
-rather than a hardcoded old tag.
+The `CHANGELOG.md` uses link-reference format (`## [4.5.60]`, `## [Unreleased]`)
+for all version entries, with corresponding `[version]: https://...` URLs in the
+reference section at the bottom. However, the `5.0.0` entry uses the bare header
+format `## 5.0.0 - TBD` instead of `## [5.0.0] - TBD`, making it inconsistent
+with every other version and preventing it from rendering as a clickable link in
+GitHub's markdown viewer. Fix `CHANGELOG.md` to:
+1. Change `## 5.0.0 - TBD` to `## [5.0.0] - TBD`
+2. Add a `[5.0.0]: https://github.com/clap-rs/clap/compare/v4.5.60...HEAD`
+   reference link in the reference section at the bottom of the file,
+   alongside the existing `[Unreleased]` and `[4.5.60]` entries.
 
-### M11: Add cargo-deny CI enforcement and update deny.toml license policy
+### M11: Migrate advisory vulnerability checking from deprecated action to cargo-deny
 
-The `deny.toml` configuration file defines license and advisory
-policies, but the CI workflow in `.github/workflows/ci.yml` does
-not run `cargo deny check` as a required job. Add a `deny` job to
-the CI workflow that runs `cargo deny check licenses advisories`
-on every PR. Update `deny.toml` to explicitly list allowed licenses
-for all workspace crates, add the `[advisories]` section with a
-configured vulnerability database URL, and add `[sources]` policy to
-restrict crate registries. Also update `Cargo.toml` workspace metadata
-to include `license` fields in all sub-crate manifests
-(`clap_builder/Cargo.toml`, `clap_derive/Cargo.toml`,
-`clap_complete/Cargo.toml`, `clap_lex/Cargo.toml`) that reference
-the workspace license.
+The `.github/workflows/audit.yml` has two security jobs: `security_audit`
+uses the archived `actions-rs/audit-check@v1` action, and `cargo_deny`
+runs `cargo deny check bans licenses sources` but omits `advisories`.
+The `deny.toml` [advisories] section exists but has its `db-urls` field
+commented out, leaving it unconfigured. Migrate all advisory checking to
+cargo-deny: (1) configure `deny.toml` [advisories] by uncommenting and
+setting `db-urls = ["https://github.com/rustsec/advisory-db"]` and adding
+`vulnerability = "deny"`, (2) update the `cargo_deny` matrix in `audit.yml`
+to check `bans licenses sources advisories` and remove the deprecated
+`security_audit` job, (3) change `multiple-versions` in `deny.toml` [bans]
+from `"warn"` to `"deny"` to enforce stricter dependency hygiene, and
+(4) update `CONTRIBUTING.md` to document running `cargo deny check` locally.
 
 ### W11: Prepare workspace for v5 release across all non-code configuration files
 

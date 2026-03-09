@@ -76,34 +76,52 @@ Sources/SnapKit/
 
 ## Narrow
 
-### N1: Fix ConstraintMaker.updateConstraints not matching by attribute
+### N1: Fix Constraint.activateIfNeeded matching wrong constraint during update
 
-When `snp.updateConstraints` is called, the maker attempts to match
-existing constraints by attribute type to update their constants. If a
-view has multiple constraints on the same attribute (e.g., two `.top`
-constraints to different targets), the update matches the wrong one
-because it only compares the attribute, not the target. Fix the
-matching logic in `ConstraintMaker.swift` to also compare the second
-item (target view or layout guide) when resolving which constraint
-to update.
+When `snp.updateConstraints` is called, `Constraint.swift`'s
+`activateIfNeeded(updatingExisting:)` prepares a fresh `LayoutConstraint`
+and searches for a matching existing one using the `==` operator defined
+in `LayoutConstraint.swift`. That operator compares `firstAttribute`,
+`secondAttribute`, `firstItem`, and `secondItem`. When a view has two
+constraints on the same attribute pointing to different targets (e.g.,
+two `.top` constraints to different views), the freshly-created
+comparison constraint can have its `firstItem`/`secondItem` ordering
+differ from the stored constraint because `NSLayoutConstraint`
+normalizes item order internally, causing `existingLayoutConstraints.first
+{ $0 == layoutConstraint }` to fail or match the wrong entry and update
+the wrong constant. Fix `Constraint.swift`'s `activateIfNeeded` to
+match existing constraints by looking up `self.from` and `self.to`
+`ConstraintItem` target identities directly (before NSLayoutConstraint
+normalization) rather than comparing fully-constructed `NSLayoutConstraint`
+objects.
 
-### N2: Fix Constraint.deactivate leaking references to removed views
+### N2: Fix Constraint.deactivate retaining NSLayoutConstraint objects after deactivation
 
 When a view is removed from the hierarchy and its constraints are
-deactivated via `snp.removeConstraints()`, the `Constraint` objects
-retain strong references to the `ConstraintItem`'s target view,
-preventing deallocation. Fix `Constraint.swift` to nil out the
-internal layout constraint's first and second items upon deactivation
-so the view can be released.
+deactivated via `snp.removeConstraints()`, each `Constraint` object
+retains its `layoutConstraints: [LayoutConstraint]` array even after
+the underlying `NSLayoutConstraint` objects are deactivated. Because
+`NSLayoutConstraint` holds strong references to its `firstItem` and
+`secondItem`, the deactivated `Constraint` entries stored in the item's
+`constraintsSet` keep the removed view and its layout targets alive,
+preventing deallocation. Fix `Constraint.swift`'s `deactivateIfNeeded`
+to clear the `layoutConstraints` array after calling
+`NSLayoutConstraint.deactivate`, releasing the `NSLayoutConstraint`
+objects and their strong item references so the view hierarchy can be
+deallocated normally.
 
-### N3: Fix ConstraintAttributes.edges not including safeArea on iOS 11+
+### N3: Add safeArea convenience accessor to ConstraintViewDSL
 
-The `.edges` composite attribute on `ConstraintAttributes.swift`
-always resolves to `.top + .bottom + .left + .right` relative to the
-superview bounds. When the target is the safe area layout guide, the
-resolved attributes should reference the guide's anchors instead. Fix
-`ConstraintAttributes` so that `.edges` correctly respects the safe
-area when the constraint target is a `UILayoutGuide`.
+There is no shorthand in the SnapKit DSL to access a view's safe area
+layout guide. Developers must write `view.safeAreaLayoutGuide.snp.
+makeConstraints { ... }` or pass `view.safeAreaLayoutGuide.snp.top`
+as a target, which is verbose and inconsistent with the `view.snp`
+pattern. Add a `safeArea` property to `ConstraintViewDSL.swift`
+(gated `@available(iOS 11.0, tvOS 11.0, *)`) that returns a
+`ConstraintLayoutGuideDSL` wrapping `view.safeAreaLayoutGuide`, so
+callers can write `make.edges.equalTo(superview.snp.safeArea)` or
+`superview.snp.safeArea.makeConstraints { ... }`. The property reads
+`view.safeAreaLayoutGuide` from the underlying `ConstraintView`.
 
 ### N4: Fix ConstraintMakerEditable.dividedBy not guarding against zero divisor
 
@@ -143,22 +161,32 @@ atomic) for the label association.
 The `descriptionForAttribute` function in `Debugging.swift` provides
 human-readable names for all layout attributes on iOS (including
 margin variants like `topMargin`, `leadingMargin`, etc.) but the macOS
-(`#else`) branch omits these cases entirely. On macOS, any constraint
-involving margin attributes falls through to the `@unknown default`
-case and is described as "unknown". Fix the macOS branch in
-`Debugging.swift` to include descriptions for all margin attributes
-available on macOS 10.11+. Also update `Documentation/SnapKit 3.0
-Migration Guide.md` to note the macOS margin attribute support
-and add a macOS debugging section.
+(`#else`) branch omits these cases entirely. On macOS 10.11+,
+`NSLayoutAttribute` includes the same margin attributes as iOS
+(`leftMargin`, `rightMargin`, `topMargin`, `bottomMargin`,
+`leadingMargin`, `trailingMargin`, `centerXWithinMargins`,
+`centerYWithinMargins`). Any constraint involving these attributes on
+macOS falls through to the `@unknown default` case and is described
+as "unknown". Fix the macOS branch in `Debugging.swift` to include
+descriptions for all margin attributes available on macOS 10.11+.
 
-### N8: Fix ConstraintInsets.init ignoring directional insets on RTL
+### N8: Fix ConstraintConstantTarget using hardcoded layout direction default
 
-`ConstraintInsets` typedef maps to `UIEdgeInsets` which uses
-`left`/`right`, but when the constraint target uses leading/trailing
-attributes, the insets should map directionally. Fix
-`ConstraintConstantTarget` conformance for `ConstraintInsets` so that
-leading/trailing constraints apply the correct inset values based on
-the user interface layout direction.
+In `ConstraintConstantTarget.swift`, the `constraintConstantTargetValueFor`
+method maps `.leading`/`.trailing` inset values by reading
+`ConstraintConfig.interfaceLayoutDirection` — a static variable that
+defaults to `.leftToRight` and must be set manually by the developer.
+On a device configured for a right-to-left language (e.g., Arabic,
+Hebrew), if the developer does not explicitly set
+`ConstraintConfig.interfaceLayoutDirection = .rightToLeft`, leading and
+trailing insets will be mapped using the wrong side, silently producing
+incorrect layouts. Fix `ConstraintConstantTarget.swift` to derive the
+effective layout direction from the system (`UIApplication.shared.
+userInterfaceLayoutDirection` on iOS, `NSApplication.shared.
+userInterfaceLayoutDirection` on macOS) when applying insets for
+`.leading` and `.trailing` attributes, falling back to
+`ConstraintConfig.interfaceLayoutDirection` only when the application
+shared instance is unavailable.
 
 ### N9: Fix remake not deactivating constraints when superview changes
 
@@ -170,13 +198,19 @@ reference a stale view hierarchy. Fix `ConstraintMaker.swift` to
 handle stale constraints by removing them from the stored list when
 deactivation fails instead of leaving them as dangling entries.
 
-### N10: Fix equalToSuperview() crashing when called on root view
+### N10: Fix equalToSuperview() fatalError not including view description
 
-Calling `.equalToSuperview()` on a view with no superview triggers a
-force-unwrap crash because `ConstraintMakerRelatable` accesses
-`view.superview!` without a guard. Fix `ConstraintMakerRelatable.swift`
-to throw a descriptive precondition failure or assertion instead of
-force-unwrapping, providing the view's description in the error message.
+Calling `.equalToSuperview()`, `.lessThanOrEqualToSuperview()`, or
+`.greaterThanOrEqualToSuperview()` on a view with no superview
+triggers a `fatalError` in `ConstraintMakerRelatable.swift`. The
+current error message — `"Expected superview but found nil when
+attempting make constraint \`equalToSuperview\`."` — does not include
+any description of which view triggered the crash, making it hard to
+diagnose the problem in a complex view hierarchy. Fix the three
+`*ToSuperview` methods in `ConstraintMakerRelatable.swift` to include
+the view's `debugDescription` (accessed via
+`self.description.item`) in the fatal error message so the
+offending view can be immediately identified from the crash log.
 
 ### N11: Fix CONTRIBUTING.md not explaining macOS testing or CI pipeline
 
@@ -195,15 +229,24 @@ code snippets to include `.labeled()` in the example closures.
 
 ## Medium
 
-### M1: Add support for UILayoutGuide-to-UILayoutGuide constraints
+### M1: Expose SnapKit-managed constraints through the public DSL
 
-Currently constraints can only be made between views and layout guides,
-or between two views. Add support for constraining one
-`UILayoutGuide` directly to another `UILayoutGuide`. Requires extending
-`ConstraintItem.swift` to accept layout guides as both first and second
-items, updating `ConstraintMakerRelatable.swift` for the new target
-type, and adjusting `Constraint.swift` to resolve the common ancestor
-for constraint installation.
+Once constraints are created with `snp.makeConstraints`, there is no
+public way to retrieve them for later inspection or targeted updates
+short of calling `snp.updateConstraints` again. The
+`LayoutConstraintItem.constraints` property that stores all
+SnapKit-managed `Constraint` objects is marked `internal`, making it
+inaccessible to callers. Promote the `constraints` property to
+`public` in `LayoutConstraintItem.swift`, add a `constraints: [Constraint]`
+accessor to `ConstraintViewDSL.swift` and `ConstraintLayoutGuideDSL.swift`,
+extend `Constraint.swift` with `public` read-only `fromAttributes:
+ConstraintAttributes` and `toTarget: AnyObject?` properties for
+post-creation introspection, and add a `constraint(for:
+ConstraintAttributes) -> Constraint?` helper on both DSL types that
+returns the first constraint matching a given attribute so callers
+can retrieve and directly mutate (`.update(offset:)`, `.update(priority:)`)
+individual constraints by attribute without going through
+`updateConstraints`.
 
 ### M2: Implement constraint animation helpers on ConstraintViewDSL
 
@@ -450,28 +493,30 @@ accessibility policy settings.
 
 ### W11: Overhaul README.md, CodeSnippets, playground, and Documentation
 
-The `README.md` serves as the primary user-facing documentation but
-lacks a complete API reference, platform support matrix (iOS, macOS,
-tvOS), and installation instructions for Swift Package Manager
-(only CocoaPods and Carthage are covered). The `CodeSnippets/`
-directory contains two Xcode code snippets (`SnapKit Constraint
-Make.codesnippet` and `SnapKit Constraint Remake.codesnippet`) that
-do not include `updateConstraints` or safe-area examples. The
+The `README.md` has basic installation instructions but lacks a
+complete API reference, a platform support matrix (iOS, macOS, tvOS),
+and usage examples for `remakeConstraints`, `updateConstraints`,
+layout guides, and safe area. The `CodeSnippets/` directory contains
+two Xcode code snippets (`SnapKit Constraint Make.codesnippet` and
+`SnapKit Constraint Remake.codesnippet`) that do not include
+`updateConstraints` or safe-area examples. The
 `SnapKitPlayground.playground/` playground has a single
-`Contents.swift` file that demonstrates basic usage but does not
-cover `remakeConstraints`, `updateConstraints`, layout guides, or
-macOS usage. The `Documentation/SnapKit 3.0 Migration Guide.md`
-is the only migration guide and uses outdated Swift 2-era syntax
-in examples. The `CONTRIBUTING.md` does not describe the code
-review process or reference the `.github/copilot-instructions.md`
-configuration. The `.travis.yml` CI configuration does not
-include a step to verify the playground compiles.
-Overhaul `README.md` with SPM installation instructions, a
-platform support matrix, and a full API reference with examples.
-Add `updateConstraints` and safe-area code snippets to
+`Contents.swift` file that demonstrates only basic `makeConstraints`
+usage and does not cover `remakeConstraints`, `updateConstraints`,
+layout guides, or macOS usage. The `Documentation/SnapKit 3.0
+Migration Guide.md` is the only migration guide; its examples use
+the pre-5.0 API (`.equalTo(UIEdgeInsets(...))` inset patterns that
+have since been superseded by `.inset(UIEdgeInsets(...))` and the
+directional inset API). The `CONTRIBUTING.md` does not describe the
+code review process. The `.travis.yml` CI configuration references
+`xcode11` which is outdated and targets only `iPhone 8` and
+`Apple TV 4K (at 1080p)` which are legacy device names.
+Overhaul `README.md` with a platform support matrix and a full API
+reference with examples for make, remake, update, layout guides, and
+safe area. Add `updateConstraints` and safe-area code snippets to
 `CodeSnippets/`. Expand the playground with `remakeConstraints`,
-`updateConstraints`, layout guide, and macOS examples. Update
-`Documentation/SnapKit 3.0 Migration Guide.md` with modern Swift
-syntax. Update `CONTRIBUTING.md` to describe the review process
-and link to `.github/copilot-instructions.md`. Add a playground-
-build step to `.travis.yml`.
+`updateConstraints`, layout guide, and safe-area examples. Update
+`Documentation/SnapKit 3.0 Migration Guide.md` to use current
+inset and directional-inset API. Update `CONTRIBUTING.md` to
+describe the code review process. Update `.travis.yml` with a
+current `osx_image` and modern simulator destination names.

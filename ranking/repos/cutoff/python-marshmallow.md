@@ -61,25 +61,34 @@ src/marshmallow/
 
 ## Narrow
 
-### N1: Add `strict` mode to `Integer` field that rejects float inputs
+### N1: Add distinct error message for `Integer` strict mode rejections
 
-The `Integer` field in `fields.py` inherits from `Number` and accepts
-float values like `3.0`, silently truncating them to `3`. When
-deserializing API input, this can mask type errors. Add a `strict`
-parameter to `Integer` that, when `True`, raises a `ValidationError`
-if the input value is a `float` (even if it has no fractional part),
-checking `isinstance(value, float)` before conversion.
+The `Integer` field in `fields.py` has a `strict` parameter that
+rejects non-integer types via `isinstance(value, numbers.Integral)`.
+However, when strict mode rejects a value, the same generic
+`"Not a valid integer."` error message is raised as for all other
+invalid inputs, giving no indication that the value was rejected
+specifically because of a type mismatch in strict mode. Add a
+dedicated `"invalid_strict"` error key to `Integer.default_error_messages`
+with a message like `"Not a valid integer type."`, and raise it
+instead of `"invalid"` when `strict=True` and the
+`isinstance(value, numbers.Integral)` check fails.
 
-### N2: Fix `Nested` field not propagating `only` and `exclude` to nested `dump`
+### N2: Fix `Nested` field dropping dot-notation `only` entries for schema instances
 
-The `Nested` field in `fields.py` accepts `only` and `exclude`
-parameters to limit which fields are serialized in the nested schema.
-However, when `many=True` is set and the nested schema has
-`@post_dump` hooks registered via `decorators.py`, the `only`/`exclude`
-parameters are not applied consistently to the schema instance used
-within the hook. Fix the `Nested._serialize` method to ensure
-`only`/`exclude` are applied to the schema instance before both
-serialization and hook execution.
+The `Nested` field in `fields.py` handles `only` with dot-notation
+inconsistently depending on whether a schema class or schema instance
+is passed. When a schema class is used (e.g.,
+`Nested(UserSchema, only=('address.city',))`), dot-notation works
+because the newly created schema handles it internally. However, when
+a schema instance is passed, the `schema` property computes
+`set_class(self.only) & set_class(schema.fields.keys())`, which
+silently drops `'address.city'` because that string does not match
+the top-level field name `'address'`, leaving `only` as an empty set
+and excluding all fields. Fix the `Nested.schema` property to
+correctly handle dot-notation entries in `only` and `exclude` when a
+schema instance is passed, by extracting the top-level field name
+from each dot-notation path before computing the intersection.
 
 ### N3: Add `format` parameter to `TimeDelta` field for human-readable output
 
@@ -108,35 +117,45 @@ semantically different. Add a `NoneField` class to `fields.py` that
 validates input is `None` (or missing) and always serializes to `None`,
 raising `ValidationError` for any non-null input value.
 
-### N6: Fix `OrderedSet` not supporting `|` and `&` set operators
+### N6: Add `update`, `intersection_update`, and `difference_update` to `OrderedSet`
 
-The `OrderedSet` class in `orderedset.py` implements `__contains__`,
-`__iter__`, `__len__`, `add`, and `discard`, but does not implement
-the `|` (union), `&` (intersection), or `-` (difference) operators.
-Code that uses `set1 | set2` with `OrderedSet` instances raises
-`TypeError`. Add `__or__`, `__and__`, and `__sub__` methods to
-`OrderedSet` that return new `OrderedSet` instances preserving
-insertion order from the left operand.
+The `OrderedSet` class in `orderedset.py` inherits `__or__`, `__and__`,
+and `__sub__` operators from `MutableSet`, but does not implement the
+named equivalents `update()`, `intersection_update()`, and
+`difference_update()` that users familiar with Python's built-in `set`
+API expect. Code that calls `ordered_set.update([1, 2, 3])` or
+`ordered_set.difference_update(other)` raises `AttributeError`. Add
+`update`, `intersection_update`, and `difference_update` methods that
+accept an iterable and modify the `OrderedSet` in place, preserving
+insertion order and returning `None` (matching built-in `set` semantics).
 
-### N7: Add custom error message template to `Range` validator
+### N7: Add per-bound `min_error` and `max_error` parameters to `Range` validator
 
-The `Range` validator in `validate.py` generates error messages like
-`"Must be between 1 and 100."` but does not allow users to customize
-the message template with placeholders for the actual value (e.g.,
-`"Value {input} is out of range [{min}, {max}]"`). Add support for
-a `message` parameter to `Range.__init__` that accepts a format
-string with `{input}`, `{min}`, and `{max}` placeholders, and format
-it during validation.
+The `Range` validator in `validate.py` accepts an `error` parameter
+that overrides the error message for all violation types (min violated,
+max violated, or both violated) with a single string. There is no way
+to provide separate custom messages for min-only violations versus
+max-only violations while keeping the default message for the
+other case. Add `min_error` and `max_error` keyword parameters to
+`Range.__init__` that, when provided, override only the min-bound
+and max-bound error messages respectively (including `{input}`,
+`{min}`, `{max}` format placeholders), falling back to the existing
+`message_min`, `message_max`, and `message_all` class-level templates
+when not specified. The existing `error` parameter should continue to
+override all messages when set.
 
-### N8: Fix `Email` field not validating domain part against DNS standards
+### N8: Fix `Email` validator allowing hyphens at start of TLD
 
-The `Email` field in `fields.py` delegates to `validate.Email` in
-`validate.py`, which uses a regex pattern to validate email format
-but does not check that the domain part contains valid characters
-according to RFC 5321 (e.g., consecutive dots like `user@exam..ple.com`
-pass validation). Fix the `Email` validator regex to reject domain
-parts with consecutive dots, leading/trailing hyphens in labels, or
-labels exceeding 63 characters.
+The `Email` validator in `validate.py` validates domain labels to
+ensure each label starts and ends with an alphanumeric character.
+However, the final TLD portion of `DOMAIN_REGEX` uses the pattern
+`[A-Z0-9-]{2,}` which permits a hyphen as the first character,
+allowing invalid addresses like `user@example.-com` to pass
+validation. Fix `Email.DOMAIN_REGEX` so the TLD alternative
+`[A-Z0-9-]{2,}` is replaced with a pattern that requires the TLD
+to start and end with an alphanumeric character (e.g.,
+`[A-Z0-9][A-Z0-9-]*[A-Z0-9]|[A-Z0-9]`), while still accepting
+single-character TLDs and TLDs of any valid length.
 
 ### N9: Add `ErrorStore.merge` method for combining error stores
 
@@ -148,13 +167,22 @@ errors. Add a `merge(other: ErrorStore)` method that combines the
 errors from another `ErrorStore` instance, preserving field paths and
 avoiding duplicate messages.
 
-### N10: Add `load_default` display in `repr` for Field instances
+### N10: Condense verbose `Field.__repr__` to show only non-default values
 
-The `Field.__repr__` in `fields.py` shows the field class name but
-does not include the `load_default` value, making it difficult to
-inspect schema definitions in debugging sessions. Add the
-`load_default` value to the `__repr__` output when it is not
-`missing`, e.g., `<fields.String(load_default='anonymous')>`.
+The `Field.__repr__` in `fields.py` always outputs all nine
+parameters (`dump_default`, `attribute`, `validate`, `required`,
+`load_only`, `dump_only`, `load_default`, `allow_none`,
+`error_messages`), making repr output extremely verbose for the
+common case where most parameters hold their default values. For
+example, `fields.String(required=True)` shows a multi-attribute
+repr even though only `required` is non-default. Refactor
+`Field.__repr__` to omit parameters that hold their default/sentinel
+values: skip `attribute` when `None`, skip `validate` when empty,
+skip `dump_default` and `load_default` when equal to `missing_`,
+skip `load_only`, `dump_only`, `required`, and `allow_none` when
+`False`, and skip `error_messages` when it equals the class-level
+`default_error_messages`, so that the repr only shows explicitly
+configured options.
 
 ## Medium
 
@@ -382,34 +410,54 @@ detection (diff between original model and loaded data). Changes span
 `validate.py` (database-aware validators like unique checks), a new
 `orm.py` module for ORM integration, and `exceptions.py` (ORM errors).
 
-### N11: Restructure `AUTHORS.rst` and add a maintainers section
+### N11: Add maintainer role descriptions to `AUTHORS.rst` Leads section
 
-The `AUTHORS.rst` file is a flat list of contributor names without
-organization. Restructure it to separate Core Maintainers from
-Contributors, add GitHub handles alongside names, and include a brief
-description of each maintainer's area of responsibility. Update the
-formatting to use consistent reStructuredText list markup.
+The `AUTHORS.rst` file has 'Leads' and 'Contributors (chronological)'
+sections with GitHub handles for all entries. However, the Leads
+section does not include descriptions of each lead's role or area
+of responsibility, making it difficult for new contributors to know
+whom to contact for specific topics. Add a brief one-line
+responsibility description to each entry in the 'Leads' section
+(e.g., 'Core development, schema design' or 'Release management,
+API review') and rename the 'Leads' section heading to
+'Core Maintainers' to align with standard open source project
+conventions.
 
-### M11: Revise `tox.ini` test environments and update `RELEASING.md` release process
+### M11: Expand `RELEASING.md` release checklist and add coverage configuration
 
-The `tox.ini` does not include dedicated environments for type checking
-or documentation building. Add `typecheck` (mypy), `docs` (sphinx),
-and `lint` (ruff) environments with appropriate dependency lists.
-Update `RELEASING.md` to include steps for running the new tox
-environments before release, add a release checklist section, and
-document the version bumping procedure. Also update
-`.readthedocs.yml` to reference the tox docs environment and
-update `.pre-commit-config.yaml` hook versions.
+The `RELEASING.md` is a minimal 4-step document that does not mention
+running the existing `lint`, `mypy`, or `docs` tox environments before
+release, nor does it include a post-release checklist. Separately,
+`pyproject.toml` has no `[tool.coverage.run]` or
+`[tool.coverage.report]` sections, so running `pytest --cov` produces
+unconfigured coverage output with no source pinning or pass/fail
+threshold. Expand `RELEASING.md` to include: a pre-release checklist
+section (run `tox -e lint,mypy`, build docs with `tox -e docs`,
+run `tox -e py313`, verify `CHANGELOG.rst` entries), a version bumping
+procedure, and post-release steps. Add `[tool.coverage.run]` and
+`[tool.coverage.report]` sections to `pyproject.toml` with
+`source = ["marshmallow"]`, `branch = true`, and a `fail_under`
+threshold. Changes touch `RELEASING.md` and `pyproject.toml`.
 
 ### W11: Full project configuration and documentation overhaul
 
-Perform a comprehensive non-code refresh: update `pyproject.toml`
-with current classifiers, PEP 639 license metadata, and restructured
-optional dependency groups. Revise `CONTRIBUTING.rst` to add sections
-on schema development guidelines, test writing conventions, and
-documentation contribution workflow. Restructure `AUTHORS.rst` with
-maintainer roles and responsibilities. Update `tox.ini` with
-comprehensive test environments. Revise `RELEASING.md` with a
-detailed release checklist. Update `SECURITY.md` with the current
-vulnerability disclosure policy. Update `.pre-commit-config.yaml`
-hook versions and add `ruff` formatting hooks.
+Perform a comprehensive non-code refresh: (1) update `pyproject.toml`
+to use PEP 639 `license-expression = "MIT"` and
+`license-files = ["LICENSE"]` fields instead of the current
+`license = { file = "LICENSE" }` format, add `[tool.coverage.run]`
+and `[tool.coverage.report]` sections with `source = ["marshmallow"]`,
+`branch = true`, and a `fail_under` threshold, and restructure
+optional dependency groups so `tests` and `docs` extras are clearly
+separated from `dev`; (2) revise `CONTRIBUTING.rst` to add sections
+on schema development guidelines (field naming, metaclass behaviour),
+test writing conventions (pytest fixture patterns, parametrize usage),
+and documentation contribution workflow (Sphinx rst conventions,
+building docs locally); (3) update `AUTHORS.rst` to rename 'Leads'
+to 'Core Maintainers' and add role descriptions; (4) expand
+`RELEASING.md` into a detailed release checklist including
+pre-release validation (`tox -e lint,mypy,docs`), version bump
+procedure, CHANGELOG verification, tagging, and post-release
+announcement steps; (5) update `SECURITY.md` to document supported
+version ranges, expected response timeline, and disclosure process;
+(6) update `.pre-commit-config.yaml` to add `check-yaml`, `check-toml`,
+and `end-of-file-fixer` hooks from the `pre-commit-hooks` package.

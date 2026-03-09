@@ -75,12 +75,17 @@
 
 ### N1: Fix actuator health endpoint returning 503 for partial failures
 
-When a health indicator reports DOWN but is configured with
-`management.health.*.show-details=always`, the overall health
-endpoint returns HTTP 503 even when the DOWN indicator is in a
-non-critical group. Fix the health status aggregation to distinguish
-between critical and non-critical health groups when determining
-the HTTP status code.
+The primary `/actuator/health` endpoint aggregates all health indicators
+using `AutoConfiguredHealthEndpointGroups`, which builds the primary group
+with an `ALL` predicate. When a DOWN indicator is placed in a named health
+group (e.g., `management.endpoint.health.group.secondary.include=db`), it
+still contributes to the primary endpoint's HTTP status because there is no
+way to mark a named group as non-status-contributing. Fix
+`HealthEndpointProperties.Group` to add a `statusContributing` property
+(defaulting to `true`) and update `AutoConfiguredHealthEndpointGroups` to
+build the primary group's member predicate so that indicators belonging only
+to groups with `statusContributing=false` are excluded from the primary
+HTTP status code calculation.
 
 ### N2: Add `@ConditionalOnExactBean` condition
 
@@ -92,11 +97,15 @@ context.
 
 ### N3: Fix Docker Compose integration not detecting custom compose file names
 
-The `spring-boot-docker-compose` module only looks for `docker-compose.yml`
-and `compose.yml` in the project root. If the compose file has a custom
-name (set via `COMPOSE_FILE` environment variable or `.env` file), the
-integration fails to find it. Fix the compose file discovery to respect
-`COMPOSE_FILE` and `.env`.
+The `spring-boot-docker-compose` module searches for compose files using a
+fixed `SEARCH_ORDER` list (`compose.yaml`, `compose.yml`, `docker-compose.yaml`,
+`docker-compose.yml`) in the working directory. If the compose file has a
+custom name set via the `COMPOSE_FILE` environment variable or a `.env` file
+in the project root, the `DockerComposeFile.find()` method ignores it and
+returns `null`. Fix the compose file discovery in `DockerComposeFile` to
+check the `COMPOSE_FILE` environment variable and parse the project root's
+`.env` file for a `COMPOSE_FILE` entry before falling back to the default
+search order.
 
 ### N4: Fix property binding failure for records with single-arg constructors
 
@@ -105,7 +114,7 @@ When binding configuration properties to Java records using
 with a single component as a scalar value rather than a composite.
 This causes `BindException` when the record component is itself a
 complex type. Fix the `JavaBeanBinder` and `ValueObjectBinder` to
-correctly detect record types regardless of component count. Also update `gradle.properties` to add a `recordBindingFixVersion` property tracking the minimum Java version tested for record binding, and add a note in `CONTRIBUTING.adoc` under "Code Conventions" about testing record-based `@ConfigurationProperties` classes.
+correctly detect record types regardless of component count.
 
 ### N5: Fix Logback auto-configuration ignoring custom appender patterns in native image
 
@@ -126,13 +135,17 @@ Fix the lazy port resolution in `WebTestClientAutoConfiguration` and
 `SpringBootWebTestClientBuilderCustomizer` in the
 `spring-boot-webtestclient` module.
 
-### N7: Fix `@ConditionalOnProperty` not supporting relaxed binding for enum values
+### N7: Fix `@ConditionalOnProperty` not supporting relaxed binding for property key names
 
-`@ConditionalOnProperty(havingValue = "ALWAYS")` fails to match
-when the actual property value is `always` or `Always`. The condition
-evaluator uses exact string comparison instead of the relaxed binding
-rules used elsewhere. Fix `OnPropertyCondition` to apply case-insensitive
-matching for enum-like property values.
+`@ConditionalOnProperty(name = "myFeature.enabled")` fails to match when
+the property is defined as `my-feature.enabled=true` in `application.properties`,
+even though Spring Boot's `@ConfigurationProperties` relaxed binding treats
+`myFeature.enabled` and `my-feature.enabled` as equivalent. The
+`OnPropertyCondition.collectProperties` method passes the annotation's key
+string directly to `PropertyResolver.containsProperty()`, which performs an
+exact-match lookup and does not apply canonical kebab-case normalization. Fix
+`OnPropertyCondition` to normalize multi-word property names to kebab-case
+before lookup, consistent with the relaxed binding rules applied in `Binder`.
 
 ### N8: Fix actuator metrics endpoint OOM with high-cardinality tags
 
@@ -183,16 +196,20 @@ Add properties under `spring.http.client.retry.*` for max-attempts,
 backoff-delay, retryable status codes, and timeout-per-attempt.
 Create a `RetryableClientHttpRequestFactoryDecorator` that wraps
 configured factories with retry logic. Register Micrometer metrics
-for retry count and timeout events. Also document the new `spring.http.client.retry.*` properties in the `README.adoc` "Getting Started" section with a usage example, and update `CONTRIBUTING.adoc` to mention the retry integration test requirements under the testing conventions.
+for retry count and timeout events.
 
 ### M3: Implement startup time analysis actuator
 
-Add an actuator endpoint that breaks down application startup time
-by phase: context preparation, bean definition scanning, auto-config
-evaluation, bean creation (sorted by duration), embedded server
-startup, and runner execution. The endpoint should accept a threshold
-parameter to filter beans that took longer than N ms to create.
-Add a `StartupTimeline` API for programmatic access.
+The existing `/actuator/startup` endpoint (`StartupEndpoint`) returns raw
+buffered `ApplicationStartup` events but does not categorize them by phase
+or support filtering by duration threshold. Extend `StartupEndpoint` to
+accept an optional `threshold` query parameter (in milliseconds) that
+filters out events shorter than the given duration. Add phase categorization
+to the `StartupDescriptor` response that groups events into named phases:
+context preparation, bean definition scanning, auto-config evaluation, bean
+creation (sorted by duration descending), embedded server startup, and
+runner execution. Update `StartupTimeline` in `core/spring-boot` to expose
+phase grouping methods for programmatic access.
 
 ### M4: Add GraalVM native image build report
 
@@ -245,18 +262,18 @@ context. Support custom topic provisioning via `@KafkaTest(topics=...)`.
 Include a `KafkaTestUtils` helper for consuming and asserting messages.
 Register appropriate auto-configuration exclusions and filters.
 
-### M9: Add Pulsar dead letter topic auto-configuration with monitoring
+### M9: Add Pulsar dead letter topic monitoring auto-configuration
 
-Add auto-configuration to the `spring-boot-pulsar` module for dead
-letter topic (DLT) handling. The module already has
-`PulsarAutoConfiguration`, `PulsarProperties`, and
-`PulsarContainerFactoryCustomizer` but no DLT support. Add
-properties under `spring.pulsar.consumer.dead-letter-policy.*` for
-max-redeliver-count, dead-letter-topic name pattern, and retry-letter
-topic. Create auto-configuration that applies `DeadLetterPolicy`
-to Pulsar consumer builders. Add a health indicator that monitors
-DLT message backlog depth and an actuator endpoint listing DLT
-message counts per subscription.
+The `spring-boot-pulsar` module already supports dead letter topic (DLT)
+configuration via `PulsarProperties.Consumer.DeadLetterPolicy` and
+`DeadLetterPolicyMapper`, which apply `DeadLetterPolicy` to Pulsar consumer
+builders via `PulsarPropertiesMapper`. What is missing is observability for
+DLT processing. Add a `PulsarDeadLetterTopicHealthIndicator` that monitors
+DLT message backlog depth via the Pulsar admin API and reports DOWN when
+backlog exceeds a configurable threshold. Add a
+`PulsarDeadLetterTopicEndpoint` actuator endpoint that lists DLT message
+counts per subscription. Create `PulsarDeadLetterTopicAutoConfiguration`
+conditional on the Pulsar client and admin API being on the classpath.
 
 ### M10: Add WebSocket session tracking and metrics auto-configuration
 

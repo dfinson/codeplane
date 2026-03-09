@@ -130,14 +130,20 @@ because the exception bypasses the unlock path. Fix `StreamHandler.php`
 to ensure `flock()` is released in a `finally` block regardless of
 write outcome.
 
-### N2: Fix RotatingFileHandler not pruning old files when date format changes
+### N2: Fix RotatingFileHandler not supporting hour-granularity rotation
 
-`RotatingFileHandler` computes the rotated filename using a date format
-string, but the glob pattern used for pruning assumes the default
-`Y-m-d` format. When users configure a custom date format (e.g.,
-`Y-m-d-H`), old files are never cleaned up. Fix the glob construction
-in `RotatingFileHandler.php` to derive the pattern from the configured
-date format.
+`RotatingFileHandler` enforces a strict date-format validation regex in
+`setDateFormat()` that only accepts formats up to daily granularity
+(`Y`, `Y-m`, `Y-m-d` with various separators). Attempting to configure
+an hourly date format such as `Y-m-d-H` throws an
+`\InvalidArgumentException`. Furthermore, `getGlobPattern()` only
+substitutes the `Y`, `y`, `m`, and `d` date characters with wildcard
+patterns, so even if finer formats were accepted the pruning glob would
+not match the generated filenames. Fix `RotatingFileHandler.php` by
+updating `setDateFormat()`'s validation regex to also allow an optional
+hour specifier (`H`), updating `getGlobPattern()` to substitute `H`
+with `[0-2][0-9]`, and updating `getNextRotation()` to compute an
+hourly boundary when the `H` specifier is present.
 
 ### N3: Fix JsonFormatter encoding errors silently producing empty output
 
@@ -297,15 +303,21 @@ pattern, and context keys. Requires a new `ConditionalHandler.php`,
 a `RecordMatcher.php` utility for predicate evaluation, and
 integration with `HandlerInterface` for proper bubbling behavior.
 
-### M7: Add batched Elasticsearch bulk indexing with retry logic
+### M7: Add client-side buffering and retry logic to ElasticsearchHandler
 
-Extend `ElasticsearchHandler` to batch records and flush them using
-the Elasticsearch `_bulk` API at configurable intervals or buffer
-thresholds. Add exponential backoff retry on `429` and `503` responses.
-Changes span `ElasticsearchHandler.php` for the batching and retry
-logic, `ElasticsearchFormatter.php` for proper bulk-format serialization,
-and `BufferHandler.php` patterns as reference for flush-on-close
-behavior.
+`ElasticsearchHandler::write()` currently sends each individual log
+record as a separate Elasticsearch `_bulk` API request (a bulk call
+containing only one document). This creates high per-request overhead
+for high-throughput logging. Additionally, transient failures
+(HTTP 429 rate-limit and 503 service-unavailable responses) are not
+retried — they are either silently ignored or immediately re-thrown
+with no backoff. Extend `ElasticsearchHandler.php` to buffer incoming
+records internally and flush them as a single batch `_bulk` request
+when the buffer reaches a configurable threshold or the handler is
+closed. Add exponential backoff retry logic in `bulkSend()` for 429
+and 503 responses. Also update `ElasticsearchFormatter.php` to ensure
+each document's metadata action line is included correctly in the
+batched body.
 
 ### M8: Implement log sampling with per-channel and per-level rates
 
@@ -326,32 +338,41 @@ Requires a new `ValidatingProcessor.php` in `Processor/`, a
 `RecordSchema.php` definition class, and integration with
 `NormalizerFormatter.php` for type coercion.
 
-### M10: Implement handler-level log level override with runtime adjustment
+### M10: Add level-change propagation and Logger convenience API for runtime level adjustment
 
-Add `AbstractHandler::setLevel(Level)` that allows changing the minimum
-log level of a handler at runtime without reconstructing the handler
-stack. When combined with `GroupHandler` or `BufferHandler`, the level
-change must propagate to wrapped handlers via a `LevelAware` interface.
-Changes span `AbstractHandler.php` for the setter and thread-safe
-level storage, `AbstractProcessingHandler.php` for level-check
-updating, `GroupHandler.php` for propagation to child handlers,
-`BufferHandler.php` for re-filtering buffered records on level change,
-and `Logger.php` for a `setHandlerLevel(string $handlerClass, Level)`
-convenience method.
+`AbstractHandler` already exposes `setLevel(Level)`, but calling it on
+a `GroupHandler` only changes the group's own level filter and does not
+propagate the new level to its wrapped child handlers. Similarly,
+`BufferHandler` does not re-filter records that were buffered before a
+level change, so already-buffered records below the new minimum remain
+in the buffer and will be dispatched on flush. There is also no
+convenience method on `Logger` to change the level of a specific
+handler by class name without iterating the handler stack manually.
+Add a `LevelAwareInterface` with a `setLevelRecursive(Level)` method.
+Implement it in `GroupHandler.php` to propagate the level change to
+each child handler that also implements the interface. Add level-aware
+re-filtering to `BufferHandler.php` so that buffered records below the
+new level are discarded when `setLevel()` is called. Add
+`Logger::setHandlerLevel(string $handlerClass, Level)` in `Logger.php`
+as a convenience method to find and adjust a handler by class name.
 
-### M11: Update documentation and configuration for handler discovery
+### M11: Update documentation and configuration for discoverability and accuracy
 
-The `doc/02-handlers-formatters-processors.md` documents handler
-configuration but is missing entries for `SamplingHandler`,
-`OverflowHandler`, and `FallbackGroupHandler` that were added in
-recent releases. Update the documentation to cover these handlers
-with configuration examples. Update `composer.json` to add `psr-3`
-and `observability` to the `keywords` array for better Packagist
-discoverability. Update `UPGRADE.md` to add a "4.0 Migration"
-section documenting the removal of `Monolog\DateTimeImmutable` and
-the `LogRecord` constructor changes. Update `phpstan.neon.dist` to
-remove the `PHPConsoleHandler.php` exclusion (the handler was
-removed in 3.x) and verify analysis still passes.
+`doc/02-handlers-formatters-processors.md` lists `SamplingHandler`,
+`OverflowHandler`, and `FallbackGroupHandler` with only one-line
+descriptions and no constructor-parameter tables or usage examples.
+Add detailed configuration examples for each, matching the depth of
+the existing `FingersCrossedHandler` and `BufferHandler` documentation.
+Update `composer.json` to add `observability` to the `keywords` array
+(alongside the existing `psr-3` entry) for better Packagist
+discoverability. Expand `UPGRADE.md`'s existing `4.0.0` section
+(currently only one line) to document all known breaking changes
+introduced in Monolog 4, such as the rename of
+`Monolog\DateTimeImmutable` to `Monolog\JsonSerializableDateTimeImmutable`
+and any `LogRecord` constructor or immutability changes. Update
+`phpstan.neon.dist` to raise the analysis level from `8` to `9`,
+adding or updating baseline entries in `phpstan-baseline.neon` for any
+new findings.
 
 ## Wide
 
@@ -484,18 +505,21 @@ loggers.
 
 ### W11: Overhaul CI, static analysis, and project documentation
 
-The `.github/workflows/continuous-integration.yml` runs tests and
-PHPStan in a single job matrix. Restructure the workflow to separate
-PHPStan into its own job that runs at level 9 (currently level 8 in
-`phpstan.neon.dist`), resolve or baseline new findings, and add a
-dedicated PHP-CS-Fixer job using `.php-cs-fixer.php`. Update
-`phpunit.xml.dist` to add `failOnRisky="true"`,
-`failOnWarning="true"`, and a `<source>` element with explicit
-inclusion paths. Update `_config.yml` to configure the GitHub Pages
-Jekyll theme with a navigation structure for the `doc/` directory.
-Add a new `doc/05-testing.md` documenting how to use `TestHandler`
-for assertion-based log testing. Update `CHANGELOG.md` with a
-template section for the next unreleased version. Update
-`.github/SECURITY.md` to reference a `SECURITY.md` at the repo root
-for consistency, and update `.github/dependabot.yml` to check
-Composer dependencies weekly.
+The project has separate `phpstan.yml` and `continuous-integration.yml`
+workflows, but PHPStan currently runs at level 8 in `phpstan.neon.dist`;
+raise it to level 9, resolve or baseline new findings in
+`phpstan-baseline.neon` and `phpstan-baseline-8.2.neon`. Add a
+dedicated PHP-CS-Fixer workflow (`.php-cs-fixer.php` already exists
+but has no CI job) as `.github/workflows/php-cs-fixer.yml`. Update
+`phpunit.xml.dist` to add `failOnRisky="true"` and
+`failOnWarning="true"` to the `<phpunit>` root element (the
+`<source>` inclusion block already exists). Update `_config.yml` to
+configure the GitHub Pages Jekyll theme with a navigation structure for
+the `doc/` directory. Add a new `doc/05-testing.md` documenting how to
+use `TestHandler` for assertion-based log testing, covering
+`hasRecordThatContains`, `hasRecordThatMatches`, and related assertion
+helpers. Update `CHANGELOG.md` with an `## Unreleased` template
+section at the top. Create a `SECURITY.md` at the repository root
+with the same content as `.github/SECURITY.md` for consistency with
+GitHub's security policy discovery. Update `.github/dependabot.yml`
+to add a `composer` package-ecosystem entry with a weekly schedule.

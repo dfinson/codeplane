@@ -281,8 +281,8 @@
       "fork": "dfinson/assertj",
       "fork_ready": true,
       "audit": {
-        "status": "pending",
-        "attempts": 1
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -301,8 +301,8 @@
       "fork": "dfinson/guava",
       "fork_ready": true,
       "audit": {
-        "status": "pending",
-        "attempts": 1
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -340,8 +340,8 @@
       "fork": "dfinson/kafka",
       "fork_ready": true,
       "audit": {
-        "status": "pending",
-        "attempts": 1
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -398,8 +398,8 @@
       "fork": "dfinson/flysystem",
       "fork_ready": true,
       "audit": {
-        "status": "pending",
-        "attempts": 1
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -418,8 +418,8 @@
       "fork": "dfinson/monolog",
       "fork_ready": true,
       "audit": {
-        "status": "pending",
-        "attempts": 1
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -438,7 +438,8 @@
       "fork": "dfinson/phpunit",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -457,7 +458,8 @@
       "fork": "dfinson/click",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -476,7 +478,8 @@
       "fork": "dfinson/flask",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -495,7 +498,8 @@
       "fork": "dfinson/jinja",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -514,7 +518,8 @@
       "fork": "dfinson/markupsafe",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -533,7 +538,8 @@
       "fork": "dfinson/marshmallow",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -552,7 +558,8 @@
       "fork": "dfinson/requests",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -571,7 +578,8 @@
       "fork": "dfinson/rich",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -590,7 +598,8 @@
       "fork": "dfinson/typer",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -609,7 +618,8 @@
       "fork": "dfinson/devise",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -628,7 +638,8 @@
       "fork": "dfinson/faraday",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -647,7 +658,8 @@
       "fork": "dfinson/puma",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -666,7 +678,8 @@
       "fork": "dfinson/sidekiq",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -685,7 +698,8 @@
       "fork": "dfinson/clap",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -704,7 +718,8 @@
       "fork": "dfinson/crossbeam",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -723,7 +738,8 @@
       "fork": "dfinson/hyper",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -742,7 +758,8 @@
       "fork": "dfinson/reqwest",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -761,7 +778,8 @@
       "fork": "dfinson/Kingfisher",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -780,7 +798,8 @@
       "fork": "dfinson/lottie-ios",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -799,7 +818,8 @@
       "fork": "dfinson/Moya",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -818,7 +838,8 @@
       "fork": "dfinson/SnapKit",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -837,7 +858,8 @@
       "fork": "dfinson/commander.js",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -856,7 +878,8 @@
       "fork": "dfinson/date-fns",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -875,7 +898,8 @@
       "fork": "dfinson/execa",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -894,7 +918,8 @@
       "fork": "dfinson/fastify",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -913,7 +938,8 @@
       "fork": "dfinson/trpc",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -974,7 +1000,8 @@
       "fork": "dfinson/opencv",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1076,7 +1103,8 @@
       "fork": "dfinson/caddy",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1095,7 +1123,8 @@
       "fork": "dfinson/gitea",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1114,7 +1143,8 @@
       "fork": "dfinson/gson",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1133,7 +1163,8 @@
       "fork": "dfinson/okhttp",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1152,7 +1183,8 @@
       "fork": "dfinson/spring-boot",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1171,7 +1203,8 @@
       "fork": "dfinson/composer",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1190,7 +1223,8 @@
       "fork": "dfinson/guzzle",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1209,7 +1243,8 @@
       "fork": "dfinson/framework",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1228,7 +1263,8 @@
       "fork": "dfinson/django",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1247,7 +1283,8 @@
       "fork": "dfinson/fastapi",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1266,7 +1303,8 @@
       "fork": "dfinson/httpx",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1285,7 +1323,8 @@
       "fork": "dfinson/jekyll",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"
@@ -1304,7 +1343,8 @@
       "fork": "dfinson/rack",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1323,7 +1363,8 @@
       "fork": "dfinson/rails",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1342,7 +1383,8 @@
       "fork": "dfinson/ripgrep",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_n": {
         "status": "pending"

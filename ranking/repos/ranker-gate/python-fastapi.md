@@ -86,7 +86,7 @@ newline terminates the current field and corrupts the event stream.
 The SSE specification forbids newlines in `id` and `event` fields.
 Fix by validating that these fields do not contain newline characters
 and raising `ValueError` if they do. Update the SSE documentation in
-`docs/en/docs/advanced/server-sent-events.md` to document the validation
+`docs/en/docs/tutorial/server-sent-events.md` to document the validation
 behavior and the error raised for invalid field values.
 
 ### N4: Fix `_endpoint_context_cache` unbounded memory growth

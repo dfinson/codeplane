@@ -139,14 +139,16 @@ all `application/*` parsers). Add an optional glob-style matching mode
 to `remove()` that removes all registered parsers whose content-type
 matches the pattern.
 
-### N6: Fix head-route not copying schema from GET route
+### N6: Fix HEAD route generation including response schema unnecessarily
 
-The `generateHeadRoute()` function in `head-route.js` creates automatic
-HEAD routes for GET routes, but does not copy the `schema` property
-from the original GET route options. This means HEAD routes lack
-validation schemas, causing inconsistent behavior when schema-based
-plugins are used. Copy the `schema` (excluding `body` and `response`)
-from the GET route to the generated HEAD route.
+In `route.js`, auto-generated HEAD routes are created using
+`headOpts = { ...options }`, which copies the full `schema` from the GET
+route including `schema.response`. Since HEAD responses never include a
+body, the `response` schema triggers unnecessary serializer compilation
+via `compileSchemasForSerialization()`, adding startup overhead for every
+GET route that has a response schema. Strip `schema.response` from
+`headOpts` in `route.js` before registering the HEAD route so that
+response serializers are not compiled for HEAD routes.
 
 ### N7: Add request ID format validation to req-id-gen-factory
 
@@ -175,13 +177,16 @@ returns the number of compiled schemas, cache hit/miss counts, and
 total compilation time, useful for diagnosing slow startup in
 applications with many routes.
 
-### N10: Fix noop-set missing Symbol.iterator implementation
+### N10: Fix noop-set missing forEach method and size property
 
-The `NoopSet` class in `noop-set.js` is used as a disabled-feature
-placeholder but does not implement `Symbol.iterator`, causing
-`for...of` loops over the set to throw `TypeError`. Add a
-`[Symbol.iterator]()` method that returns an empty iterator, matching
-the native `Set` interface contract.
+The `noopSet()` factory function in `noop-set.js` is used as a
+disabled-feature placeholder for the native `Set` in `server.js`. It
+implements `add`, `delete`, `has`, and `[Symbol.iterator]`, but does not
+implement the `forEach(callbackFn)` method or the `size` getter. Code
+that calls `keepAliveConnections.forEach(...)` or reads
+`keepAliveConnections.size` will throw a `TypeError` or return
+`undefined` instead of `0`. Add a no-op `forEach()` method and a `size`
+getter returning `0` to complete the `Set` interface contract.
 
 ## Medium
 
@@ -206,15 +211,20 @@ content-type. Support gzip, deflate, and Brotli. Integrate with
 pipeline for content-length recalculation, and the TypeScript definitions
 in `types/reply.d.ts`.
 
-### M3: Implement request body validation error customization
+### M3: Add per-field validation error aggregation with early-exit control
 
-The validation pipeline in `validation.js` generates error responses
-from schema validation failures, but the error format is fixed. Add
-a `validationErrorFormatter` option that transforms validation errors
-into custom response shapes. Integrate with `compileSchemasForValidation()`
-for error formatting, `Reply.prototype.send()` for error serialization,
-the error handler in `error-handler.js` for fallback formatting, and
-update `types/route.d.ts` for the formatter type.
+The validation pipeline in `validation.js` uses AJV and stops at the
+first invalid field per validation phase (body, querystring, headers,
+params) because each compile call uses a separate validator. Add an
+`allErrors` option (defaulting to the existing AJV `allErrors` setting)
+to route definitions that forces AJV to collect all validation errors
+across all fields before returning, and expose a new
+`validationErrorAggregator` hook on the route context that receives the
+full array of AJV errors and can return a unified error object. Integrate
+with `compileSchemasForValidation()` in `validation.js` for error
+collection, `wrapValidationError()` for aggregation, `context.js` for
+the aggregator option, `route.js` for route-level `allErrors` config,
+and `types/route.d.ts` for the option type.
 
 ### M4: Add graceful shutdown with in-flight request tracking
 
@@ -256,15 +266,18 @@ hooks and flows through `preParsing`, `preValidation`, `preHandler`,
 and `preSerialization` hooks. Integrate with `handle-request.js` for
 context initialization and `request.js` for the context property.
 
-### M8: Add route-level timeout configuration
+### M8: Add onHandlerTimeout lifecycle hook
 
-The timeout handling in `route.js` (`handleTimeout()`) uses a global
-`connectionTimeout` but does not support per-route timeouts. Add a
-`timeout` option to route definitions that overrides the global
-timeout for specific routes. Integrate with `routeHandler()` for
-per-route timer setup, `Reply.prototype.send()` for timer cleanup,
-the 408 response generation in `handle-request.js`, and
-`types/route.d.ts` for the option type.
+The per-route `handlerTimeout` option in `route.js` fires a
+`setTimeout()` that directly calls `reply.send(new FST_ERR_HANDLER_TIMEOUT(...))`
+when the handler exceeds the configured time, with no hook for
+customization. Add an `onHandlerTimeout` lifecycle hook that is called
+instead of the automatic 408 response, giving applications control over
+the timeout response format, logging, or cleanup. Integrate with
+`hooks.js` to register and run `onHandlerTimeout` hooks, `route.js` in
+`routeHandler()` to call the hook runner when the handler timer fires,
+`context.js` to initialize the hook array, and `types/hooks.d.ts` for
+the hook type definition.
 
 ### M9: Implement response schema validation in development mode
 
@@ -418,15 +431,17 @@ for tenant-isolated plugin contexts, `hooks.js` for tenant lifecycle
 hooks, `decorate.js` for tenant-scoped decorators, `error-handler.js`
 for tenant error handlers, and `types/instance.d.ts` for tenant types.
 
-### N11: Fix .borp.yaml test configuration not separating unit and integration test timeouts
+### N11: Fix CI workflows missing job-level timeout-minutes
 
-The `.borp.yaml` test runner configuration does not distinguish between
-fast unit tests in `test/` and slower integration tests in
-`integration/`. Long-running integration tests may flake in CI due to
-default timeout values. Add a dedicated test pattern for `integration/**`
-with an extended timeout in `.borp.yaml`, and update
-`.github/workflows/ci.yml` to run integration tests as a separate job
-with a higher `timeout-minutes` value.
+Neither `.github/workflows/ci.yml` nor `.github/workflows/integration.yml`
+set `timeout-minutes` on any of their jobs, leaving them exposed to
+GitHub Actions' default 6-hour limit. A single hanging test can block
+CI for hours. Add appropriate `timeout-minutes` values to the unit-test
+and lint jobs in `ci.yml` (e.g., 20 minutes) and to each job in
+`integration.yml` (e.g., 30 minutes). Also update the `coverage` script
+in `package.json` to pass `--timeout 60000` to borp, since
+coverage-instrumented runs are measurably slower than plain test runs
+and can exceed the default 30-second per-test timeout.
 
 ### M11: Add contributor documentation and project governance updates
 
@@ -435,29 +450,26 @@ hooks to `hooks.js`, defining error codes in `errors.js` with the
 `FST_ERR_*` prefix convention, and creating TypeScript type definitions
 in `types/`. Add a `docs/Guides/Error-Codes.md` listing all `FST_ERR_*`
 codes with descriptions and error resolution guidance. Update
-`README.md` to include badges for CI status from
-`.github/workflows/ci.yml`, npm version, and code coverage. Update
-`.github/dependabot.yml` to add a weekly schedule for npm dependency
-updates and `actions` updates for GitHub Actions workflows. Add a
-plugin development guide to `docs/Guides/Plugin-Development.md`
-explaining the encapsulation model in `plugin-override.js` and
-decorator inheritance via `decorate.js`.
+`README.md` to add a code coverage badge (the existing CI and npm
+version badges are already present). Update `.github/dependabot.yml` to
+change the schedule from `monthly` to `weekly` for both the `npm` and
+`github-actions` package ecosystems. Add a plugin development guide to
+`docs/Guides/Plugin-Development.md` explaining the encapsulation model
+in `plugin-override.js` and decorator inheritance via `decorate.js`.
 
 ### W11: Consolidate CI workflows and overhaul developer tooling
 
-Consolidate the 19 GitHub Actions workflow files under
+Consolidate the 20 GitHub Actions workflow files under
 `.github/workflows/` by merging related workflows: combine
 `coverage-nix.yml` and `coverage-win.yml` into a single cross-platform
 coverage workflow, merge `ci.yml` and `ci-alternative-runtime.yml` into
 one with a runtime matrix, and consolidate `integration.yml` and
 `integration-alternative-runtimes.yml`. Add a `package.json` script for
 validating the TypeScript declarations in `types/` against `fastify.d.ts`.
-Create a `.github/workflows/docs.yml` workflow that builds documentation
-from `docs/` on pushes to main and deploys to GitHub Pages. Update
-`eslint.config.js` to add rules for `lib/` that enforce the `FST_ERR_*`
-error code prefix pattern. Update `.gitpod.yml` to pre-install
-dependencies and start the test watcher. Update `GOVERNANCE.md` to
-document the release process, versioning strategy, and the relationship
-between `package.json` `version` and `build/sync-version.js`. Add
-`.markdownlint-cli2.yaml` ignore patterns for generated documentation
-output.
+Update `eslint.config.js` to add rules for `lib/` that enforce the
+`FST_ERR_*` error code prefix pattern. Update `.gitpod.yml` to
+pre-install dependencies and start the test watcher. Update
+`GOVERNANCE.md` to document the release process, versioning strategy,
+and the relationship between `package.json` `version` and
+`build/sync-version.js`. Add `.markdownlint-cli2.yaml` ignore patterns
+for generated documentation output.

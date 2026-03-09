@@ -75,68 +75,97 @@ that prints the version string and exits. Wire it through the
 ### N2: Fix `get_params_from_function` not handling `*args` parameters
 
 The `get_params_from_function` utility in `utils.py` introspects
-function signatures to extract parameter metadata but silently ignores
-`*args` (VAR_POSITIONAL) parameters. When a callback like
-`def cmd(files: list[str], *extra: str)` is registered, the `extra`
-parameter is lost. Fix `get_params_from_function` to detect
-VAR_POSITIONAL parameters and either convert them to a variadic
-`Argument` or raise a clear error explaining the limitation.
+function signatures to extract parameter metadata but does not detect
+`*args` (VAR_POSITIONAL) parameters as unsupported. When a callback
+like `def cmd(files: list[str], *extra: str)` is registered,
+`get_params_from_function` processes `extra` as a regular parameter,
+but invocation fails at runtime with a `TypeError` because click
+passes all resolved values as keyword arguments while the function
+expects `extra` as variadic positional. Fix `get_params_from_function`
+in `utils.py` to detect `inspect.Parameter.VAR_POSITIONAL` parameters
+and raise a clear `ValueError` explaining that `*args` is not
+supported, directing users to use `list` or `tuple` annotations
+instead.
 
-### N3: Add `min_value` and `max_value` support to integer `Option` parameters
+### N3: Add `Decimal` type support to Typer's type system
 
-When a Typer callback declares `count: int = Option(...)`, there is
-no way to specify valid value bounds directly in the `Option` call. The
-user must write a custom callback for range validation. Add `min` and
-`max` parameters to `Option` in `params.py` that generate a
-`click.IntRange` type when the annotated type is `int`, and update
-the `OptionInfo` model in `models.py` to carry the bounds through to
-the click parameter construction in `main.py`. Also update `mkdocs.yml` to add a documentation page for the new `min`/`max` option parameters.
+When a Typer callback declares a parameter with `decimal.Decimal`
+annotation (e.g., `amount: Decimal = Option(...)`), Typer raises
+`RuntimeError: Type not yet supported: <class 'decimal.Decimal'>` when
+building the click command. Add `Decimal` support to `get_click_type`
+in `main.py` by mapping the `Decimal` annotation to `click.STRING`
+for input capture, and add a `Decimal` entry to
+`determine_type_convertor` in `main.py` so that the parsed string is
+converted to a `Decimal` instance before the callback is invoked.
+Update `typer/__init__.py` to re-export `Decimal` for convenience.
 
 ### N4: Fix Rich help panel not respecting `no_args_is_help` for TyperGroup
 
 When a `TyperGroup` is invoked with no arguments and `no_args_is_help`
-is set, the Rich help formatter in `rich_utils.py` is bypassed and
-click's plain-text help is shown instead. This happens because the
-`TyperGroup.invoke` method in `core.py` calls the parent `invoke`
-before the Rich formatter can intercept. Fix `TyperGroup.invoke` to
-use the Rich formatter when displaying the "no arguments" help message.
+is `True`, click raises `NoArgsIsHelpError`. In Typer's `_main`
+function in `core.py`, this exception is caught as a
+`click.ClickException` and dispatched to `rich_format_error` in
+`rich_utils.py`. However, `rich_format_error` returns early (does
+nothing) for `NoArgsIsHelpError` without ever calling `e.show()`,
+which means the Rich-formatted help is never displayed. Fix
+`rich_format_error` in `rich_utils.py` to call `e.show()` when the
+exception is `NoArgsIsHelpError`, so that `TyperGroup.format_help`
+(which delegates to `rich_format_help`) is invoked and the Rich help
+panel is rendered correctly.
 
-### N5: Add `deprecated` parameter to `@app.command()` decorator
+### N5: Add `deprecated` parameter to `Option()` and `Argument()` builders
 
-The `Typer` class in `main.py` supports adding commands via
-`@app.command()` but has no way to mark a command as deprecated.
-Add a `deprecated: bool = False` parameter to `CommandInfo` in
-`models.py` and to the `@app.command()` decorator in `main.py`.
-When `deprecated=True`, prefix the help text with "[deprecated]" in
-`rich_utils.py` and emit a warning via `click.echo` when the command
-is invoked.
+Click 8.x supports a `deprecated: bool | str = False` parameter on
+`click.Option` and `click.Argument` that emits a deprecation warning
+when the parameter is used. Typer exposes `deprecated` only at the
+command level (`CommandInfo` in `models.py`), but not at the
+individual parameter level. Add a `deprecated: bool | str = False`
+field to `ParameterInfo` in `models.py` so that `OptionInfo` and
+`ArgumentInfo` inherit it. Expose the parameter in the `Option()` and
+`Argument()` builders in `params.py`. Wire it through
+`get_click_param` in `main.py` so it is passed to the `TyperOption`
+and `TyperArgument` constructors in `core.py`, which then forward it
+to click's underlying option and argument classes.
 
-### N6: Fix shell completion not working for `Enum` type parameters
+### N6: Fix `BashComplete.format_completion` to include completion item type
 
-When a Typer callback uses an `Enum` type annotation (e.g.,
-`color: Color` where `Color` is a `str` enum), the shell completion
-system in `_completion_classes.py` does not provide completion
-candidates for the enum values. Fix the completion flow to detect
-`Enum` types in `TyperOption` and `TyperArgument` in `core.py` and
-generate `CompletionItem` entries for each enum member.
+Typer's `BashComplete` class in `_completion_classes.py` overrides
+`format_completion` to return only `item.value`, stripping the item
+type. Click's own `BashComplete.format_completion` returns
+`f"{item.type},{item.value}"` so that the shell completion script can
+distinguish plain-text completions from file and directory completions.
+Because Typer strips the type, Bash shell completion for `Path`-typed
+parameters and custom completion providers that return typed
+`CompletionItem` objects (e.g., `type="file"`) never trigger
+filesystem completion. Fix `BashComplete.format_completion` in
+`_completion_classes.py` to include the item type prefix, and update
+the `COMPLETION_SCRIPT_BASH` template in `_completion_shared.py` to
+correctly parse and dispatch on the type field.
 
-### N7: Add `envvar` display to Rich help output
+### N7: Fix metavar display for `count=True` options in Rich help
 
-When an option is configured with `envvar="MY_VAR"`, click stores the
-environment variable name but Typer's Rich help formatter in
-`rich_utils.py` does not display it alongside the option in the help
-panel. Add environment variable display (e.g., `[env: MY_VAR]`) to the
-option rows generated by the Rich help formatter, reading the `envvar`
-attribute from each `click.Option` parameter.
+When an option uses `count=True` (e.g., `verbose: int = Option(0, '--verbose', '-v', count=True)`),
+Typer's Rich help formatter in `_print_options_panel` in `rich_utils.py`
+displays `INTEGER` in the metavar column even though a count option
+does not accept a value on the command line. Boolean flag options are
+already skipped (`if metavar_str != "BOOLEAN"`), but count options
+follow a different path. Fix `_print_options_panel` in `rich_utils.py`
+to detect when a `click.Option` has `count=True` and suppress the
+metavar display for those options, consistent with how flag options
+are handled.
 
-### N8: Fix `CliRunner` not capturing Rich-formatted output in tests
+### N8: Fix `CliRunner` not providing clean text output for Rich-formatted help
 
 The `CliRunner` in `testing.py` wraps click's `CliRunner` but when
-Rich formatting is enabled, the output includes ANSI escape sequences
-that make assertion matching difficult. Add a `rich_output` parameter
-to the `invoke` method that strips ANSI codes from the result's output
-string, or alternatively captures the Rich console's text-only output
-by injecting a non-color `Console` via environment variable.
+Rich formatting is enabled, the help output contains Rich panel
+decorations (box-drawing characters, extensive whitespace padding,
+and panel borders) that make string-based assertions fragile. Add a
+`strip_ansi: bool = False` parameter to the `invoke` method in
+`testing.py` that, when `True`, post-processes the result's output
+string to remove ANSI escape sequences and optionally strips Rich
+panel decorations by setting `TERM=dumb` and `NO_COLOR=1` in the
+environment before invoking the command, forcing Rich to produce
+plain text output.
 
 ### N9: Add `confirmation` parameter to dangerous commands
 
@@ -146,27 +175,37 @@ parameter to `CommandInfo` in `models.py` and the `@app.command()`
 decorator in `main.py` that inserts a click `confirm()` prompt before
 calling the user's callback in `TyperCommand.invoke` in `core.py`.
 
-### N10: Fix `TyperChoice` not supporting case-insensitive matching
+### N10: Add `case_insensitive_enums` flag to `Typer` for global Enum matching
 
-The `TyperChoice` class in `_types.py` wraps `click.Choice` but does
-not pass through the `case_sensitive` parameter when constructed from
-an `Enum` type. When a user enters a value with different casing (e.g.,
-`"Red"` vs `"red"`), the validation fails even when case-insensitive
-matching would be appropriate. Fix the `TyperChoice` construction path
-in `main.py` to propagate `case_sensitive=False` when the `Enum`
-members all have lowercase values.
+When building CLI applications with multiple `Enum`-typed parameters,
+users must individually set `case_sensitive=False` on each `Option()`
+or `Argument()` call. There is no way to configure case-insensitive
+Enum matching globally for an entire `Typer` application. Add a
+`case_insensitive_enums: bool = False` parameter to `Typer.__init__`
+in `main.py` and carry it through `TyperInfo` in `models.py`. In
+`get_click_type` in `main.py`, when `case_insensitive_enums` is
+`True` on the solved `TyperInfo`, create all `TyperChoice` instances
+for `Enum`-annotated parameters with `case_sensitive=False` regardless
+of the per-parameter setting, unless the user has explicitly set
+`case_sensitive=True` on that parameter.
 
 ## Medium
 
-### M1: Implement parameter groups for organizing help output
+### M1: Implement option dependency validation (`requires` / `conflicts_with`)
 
-Add support for grouping related options under named sections in the
-Rich help output. Introduce a `group` parameter to `Option()` in
-`params.py` that assigns an option to a named group. Modify
-`OptionInfo` in `models.py` to carry the group name, update the
-click parameter construction in `main.py` to attach group metadata,
-and update `rich_utils.py` to render options in grouped panels
-instead of a single flat list.
+There is no built-in way in Typer to declare that one option requires
+another to be set, or that two options are mutually exclusive. Users
+must write manual validation in the command body. Add `requires` and
+`conflicts_with` parameters to `Option()` in `params.py` that each
+accept a list of option names. Store these on `OptionInfo` in
+`models.py`. During click parameter construction in `main.py`, attach
+the dependency metadata as custom attributes on the `TyperOption`
+instance. In `TyperCommand.invoke` in `core.py`, after click resolves
+all parameter values, iterate the `TyperOption` instances and validate
+that required companions are present and conflicting options are
+absent, raising a `click.UsageError` on violation. Update
+`rich_utils.py` to display `requires:` and `conflicts with:` hints
+in the option help panel.
 
 ### M2: Add support for `pydantic.BaseModel` as command parameter type
 
@@ -182,12 +221,19 @@ models with dot-separated option names. Changes touch `main.py`
 
 ### M3: Implement command chaining with result passing
 
-Add a `chain=True` parameter to `Typer` that enables command chaining
-where the return value of one command is passed as input to the next.
-Requires modifications to `TyperGroup` in `core.py` to enable click's
-chain mode, `main.py` to handle return value propagation via the
-`Context` object, and `testing.py` to support testing chained
-invocations with assertions on intermediate results.
+Typer already supports `chain=True` and `result_callback` (inherited
+from click) for running multiple commands in one invocation. However,
+there is no Typer-native mechanism to automatically pass the return
+value of one chained command as an injected context variable to the
+next command in the chain. Implement a `pipe=True` parameter for
+`Typer` that, when combined with `chain=True`, captures each command's
+return value via a custom `TyperGroup.invoke` override in `core.py`
+and stores it in the click `Context` object so that subsequent
+commands can declare a `ctx: typer.Context` parameter and access the
+previous command's result via `ctx.obj`. Changes touch `core.py`
+(TyperGroup.invoke override), `main.py` (pipe flag and result
+injection), `models.py` (TyperInfo pipe field), and `testing.py`
+(helper assertions for piped results).
 
 ### M4: Add automatic `--dry-run` flag injection for side-effectful commands
 
@@ -358,15 +404,19 @@ point), `core.py` (interactive command execution), `models.py`
 
 ### W8: Add comprehensive type system extensions
 
-Extend Typer's type system to support complex Python types: `dict`
-parameters (parsed as `key=value` pairs), `set` parameters
-(deduplicated lists), `tuple` parameters (fixed-length typed
-sequences), `Union` types (try each type in order), `Optional[X]`
-with sentinel-based None detection, and `Literal` types (auto-generated
-`Choice`). Each type needs conversion logic in `main.py`, click type
-generation in `core.py`, Rich help rendering in `rich_utils.py`,
+Extend Typer's type system to support additional Python types that
+currently raise `RuntimeError: Type not yet supported`. Specifically:
+`dict` parameters (parsed as `key=value` pairs from repeated
+`--opt key=value` flags), `set` parameters (deduplicated lists using
+the existing multiple-option mechanism), and `Union` types (try each
+type converter in order, accepting the first that succeeds). Each
+type needs conversion logic in `main.py` (`get_click_type`,
+`get_click_param`, `determine_type_convertor`), click type generation
+in `core.py` (TyperOption/TyperArgument metavar overrides), Rich help
+rendering in `rich_utils.py` (metavar display for dict and set),
 completion support in `_completion_shared.py`, typing utilities in
-`_typing.py`, and model updates in `models.py`.
+`_typing.py` (is_dict_type, is_set_type helpers), and model updates
+in `models.py` (convertor metadata).
 
 ### W9: Implement a CLI application scaffolding generator
 
@@ -394,33 +444,45 @@ metadata), `_completion_shared.py` (translatable completion output),
 `params.py` (translatable default help text), and a new `i18n.py`
 module for translation catalog management.
 
-### N11: Update `CITATION.cff` metadata and revise citation format
+### N11: Update `CITATION.cff` metadata with missing required fields
 
-The `CITATION.cff` file contains outdated author information and does
-not follow the latest Citation File Format specification. Update the
-author list with current maintainers, add the `repository-code` and
-`license` fields, include the `doi` identifier, and update the
-`date-released` to the upcoming release date.
+The `CITATION.cff` file is missing several fields required by the
+Citation File Format 1.2 specification. Specifically, `identifiers`
+has no entries (the `doi` field is absent), `date-released` is missing
+entirely, and `version` is not present. Update `CITATION.cff` to add
+a `doi` identifier under `identifiers`, add the `date-released` field
+with the current release date, and add the `version` field matching
+the version in `typer/__init__.py`. Verify that the `cff-version`,
+`title`, `authors`, `repository-code`, and `license` fields (which
+are already correctly set) are preserved unchanged.
 
-### M11: Restructure `mkdocs.yml` navigation and update `pyproject.toml` documentation dependencies
+### M11: Restructure `mkdocs.yml` navigation for completion and Rich sections
 
-The `mkdocs.yml` navigation does not include sections for the newer
-features like completion and Rich integration. Restructure the `nav`
-key to add top-level sections for CLI Features, Completion, Rich
-Output, and Migration Guide. Update `mkdocs.env.yml` with matching
-navigation structure. Add a `docs` optional dependency group in
-`pyproject.toml` with pinned documentation build dependencies. Also
-update `.pre-commit-config.yaml` to add a markdown-link-check hook
-for documentation files.
+The `mkdocs.yml` navigation does not include dedicated sections for
+shell completion features or Rich output customization, even though
+Typer has significant functionality in both areas (completion scripts,
+install/show completion, Rich markup modes, help panel styling). The
+`nav` key currently buries completion under `tutorial/options-autocompletion.md`
+with no Rich output section at all. Restructure the `nav` key in
+`mkdocs.yml` to add a top-level "Shell Completion" section grouping
+all completion-related pages, and a "Rich Output" section covering
+markup modes and help customization. Update `.pre-commit-config.yaml`
+to add a `markdown-link-check` hook that validates internal links in
+the restructured documentation. Verify the `mkdocs.env.yml` markdown
+extension settings are still compatible with the updated nav.
 
 ### W11: Comprehensive project metadata and documentation configuration overhaul
 
-Perform a full non-code refresh: update `pyproject.toml` with current
-classifiers, PEP 639 license metadata, and refined dependency
-constraints. Restructure `mkdocs.yml` with a complete navigation
-overhaul including API reference, tutorials, and migration guides.
-Revise `CONTRIBUTING.md` with updated development setup instructions,
-testing guidelines, and documentation contribution workflow. Update
-`SECURITY.md` with the current vulnerability reporting policy.
-Update `.pre-commit-config.yaml` hook versions and add `ruff` and
-`mdformat` hooks. Revise `CITATION.cff` with current metadata.
+Perform a full non-code refresh across all project configuration and
+documentation files. Update `pyproject.toml` classifiers to add
+`"Development Status :: 5 - Production/Stable"` and Python 3.14
+classifier, and refine dependency version constraints. Restructure
+`mkdocs.yml` with a complete navigation overhaul including API
+reference, tutorials, and migration guides. Revise `CONTRIBUTING.md`
+with updated development setup instructions using `uv`, testing
+guidelines, and documentation contribution workflow. Update
+`SECURITY.md` with the current vulnerability reporting policy and
+supported versions table. Update `.pre-commit-config.yaml` hook
+versions to their latest releases and add an `mdformat` hook for
+consistent Markdown formatting. Revise `CITATION.cff` to add the
+missing `doi`, `date-released`, and `version` fields.

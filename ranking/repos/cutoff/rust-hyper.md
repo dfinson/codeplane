@@ -139,14 +139,18 @@ value (e.g., `FFFFFFFFFFFFFFFF`), causing allocation of a huge buffer.
 Add a configurable `max_chunk_size` limit to the decoder state machine
 that returns a parse error when exceeded.
 
-### N3: Add reason phrase preservation for HTTP/1.1 client responses
+### N3: Fix reason phrase stored even when matching canonical phrase
 
-The `ReasonPhrase` extension in `ext/h1_reason_phrase.rs` allows
-setting custom reason phrases on server responses, but the HTTP/1.1
-client parser in `proto/h1/role.rs` (`Client::parse()`) discards the
-reason phrase from response status lines. Store the parsed reason
-phrase in the response extensions via `ReasonPhrase::from_bytes()` so
-client code can access non-standard reason phrases.
+The `ReasonPhrase` documentation in `ext/h1_reason_phrase.rs` states
+that a `ReasonPhrase` extension is present on a client response only
+"if the reason phrase is different from the canonical reason phrase for
+the response's status code." However, the `Client::parse()` method in
+`proto/h1/role.rs` stores the parsed reason phrase unconditionally
+whenever `httparse` returns a non-empty reason — including when it
+matches the canonical phrase (e.g., `200 OK`). Fix `Client::parse()`
+to compare the parsed reason bytes against
+`http::StatusCode::canonical_reason()` and only insert the
+`ReasonPhrase` extension when the phrases differ.
 
 ### N4: Fix H2 keep-alive ping not respecting graceful shutdown
 
@@ -157,24 +161,30 @@ connection should drain existing streams without initiating new ping
 cycles. Check the shutdown state in the ping timer's `poll()` method
 and suppress pings when shutting down.
 
-### N5: Add informational response callback for HTTP/1.1 client
+### N5: Add connection-level informational response callback to HTTP/1.1 client Builder
 
-The `ext/informational.rs` module handles 1xx informational responses
-for the server side, but the HTTP/1.1 client connection in
-`client/conn/http1.rs` silently discards `100 Continue` and other 1xx
-responses during parsing. Add an `on_informational` callback to the
-client `Builder` that is invoked with the status code and headers of
-each 1xx response before the final response is returned.
+The `ext/informational.rs` module provides `on_informational()` to
+register a callback for 1xx responses on a per-request basis by
+inserting it into request extensions. However, the HTTP/1.1 client
+`Builder` in `client/conn/http1.rs` has no way to register a
+connection-level default callback that fires for all 1xx informational
+responses on every request sent over that connection. Add an
+`on_informational` method to the client `Builder` (and its internal
+`Opts` struct) that stores a shared `OnInformational` callback, and
+integrate it into `proto/h1/conn.rs` so it is used as a fallback when
+no per-request callback is present in the request extensions.
 
-### N6: Fix date header cache producing stale values across time zones
+### N6: Fix date header cache not recovering from backward system clock adjustments
 
 The `common/date.rs` module caches the formatted `Date` header value
-and updates it once per second. However, the cache uses process-level
-`Instant` for timing without accounting for system clock adjustments
-(e.g., NTP jumps). If the system clock is adjusted backward, the
-cached date can remain stale for an extended period. Use
-`SystemTime::now()` for cache validation instead of relying solely
-on `Instant` elapsed comparison.
+and refreshes it when `SystemTime::now()` advances past `next_update`.
+However, if the system clock is adjusted backward (e.g., by NTP), the
+condition `now > self.next_update` remains false indefinitely, so the
+cached date is never refreshed and the stale value is served for an
+arbitrarily long time. Fix `CachedDate::check()` to also force a
+refresh when `now` is significantly earlier than `next_update` (e.g.,
+more than two seconds behind), indicating a backward clock jump, so
+the cache recovers promptly after such adjustments.
 
 ### N7: Add max header count configuration to HTTP/1.1 server builder
 
@@ -182,39 +192,49 @@ The HTTP/1.1 server `Builder` in `server/conn/http1.rs` exposes
 `max_headers()` to limit the number of headers parsed per request, but
 the default is `None` (unlimited). Server instances receiving requests
 with thousands of headers consume excessive memory in `httparse`. Set
-a sensible default (e.g., 100) and document the option, matching the
-behavior of the client-side builder where `max_headers` also defaults
-to unlimited. Also add the new default value to `CHANGELOG.md` as a
-behavior change and update `docs/MSRV.md` to note that this default
-requires `httparse` version 1.9+.
+a sensible default (e.g., 100) in the `Builder` and document the
+option. Also add the new default value to `CHANGELOG.md` as a
+behavior change.
 
-### N8: Fix Rewind I/O not correctly replaying partial reads
+### N8: Add peek() method to Rewind I/O for non-destructive prefix inspection
 
-The `Rewind` reader in `common/io/rewind.rs` allows peeking at the
-start of a stream and replaying it, but when a `poll_read` returns
-fewer bytes than the rewound buffer contains, the remaining rewound
-bytes are lost on the next read. Fix the `Rewind` implementation to
-track the read position into the prefix buffer and continue serving
-prefix bytes across multiple reads before delegating to the inner
-reader.
+The `Rewind` reader in `common/io/rewind.rs` combines a prefix
+`Bytes` buffer with an inner I/O type for peeked-and-replayed reads,
+but provides no way to inspect the remaining prefix bytes without
+consuming the `Rewind` via `into_inner()`. Code that needs to branch
+on the prefix content (e.g., protocol detection) must reconstruct the
+buffer or use `into_inner()` prematurely. Add a `pub(crate) fn
+peek(&self) -> Option<&Bytes>` method that returns a shared reference
+to the pending prefix bytes (if any) without taking ownership or
+affecting subsequent reads.
 
 ### N9: Add Content-Length validation to incoming body
 
 The `Incoming` body in `body/incoming.rs` receives data frames but
 does not validate that the total bytes received match the declared
 `Content-Length` header. If a sender sends fewer bytes than declared,
-the body stream blocks indefinitely. Add content-length tracking that
-returns an error when the stream ends with fewer bytes than expected,
-using the length information from `body/length.rs`.
+the body stream ends with `Poll::Ready(None)` without signaling an
+error, silently delivering a truncated body to the caller. Add
+content-length tracking that returns an error when the stream ends
+with fewer bytes than expected, using the length information from
+`body/length.rs`.
 
-### N10: Fix Error::is_timeout returning false for H2 timeouts
+### N10: Fix Error::is_timeout missing doc comment and HeaderTimeout cfg inconsistency
 
-The `Error::is_timeout()` method in `error.rs` checks for timeout
-errors but only matches the internal `Kind::Timer` variant. H2
-connection-level timeouts (keep-alive ping timeout, header read
-timeout) produce errors with different internal kinds that
-`is_timeout()` does not recognize. Extend the `is_timeout()` check to
-also match H2-sourced timeout errors from the `h2` crate.
+The `Error::is_timeout()` method in `error.rs` has no `///` doc
+comment explaining which error conditions it matches. The check for
+`Kind::HeaderTimeout` is gated behind
+`#[cfg(all(feature = "http1", feature = "server"))]`, but
+`new_header_timeout()` creates a `Kind::HeaderTimeout` error without
+any `TimedOut` source, so the fallback `find_source::<TimedOut>()` can
+never detect it. This means that if feature flags change the cfg
+evaluation, header-timeout errors become undetectable. Fix
+`new_header_timeout()` to include a `TimedOut` cause so that the
+`find_source::<TimedOut>()` fallback in `is_timeout()` reliably
+detects header-timeout errors independent of feature flags, and remove
+the now-redundant `#[cfg]` guard from the `HeaderTimeout` match arm.
+Add a `///` doc comment to `is_timeout()` describing the matched
+conditions.
 
 ## Medium
 
@@ -241,7 +261,7 @@ body stream. Integrate with `server/conn/http1.rs` and
 for early rejection with `413 Payload Too Large`. Also update
 `Cargo.toml` to add the `body-size-limit` feature flag that gates
 the size enforcement code, and document the feature in
-`docs/ROADMAP.md` under the stability section.
+`docs/ROADMAP.md` under the new features section.
 
 ### M3: Implement HTTP/1.1 pipelining support for the server
 
@@ -477,19 +497,17 @@ feature flag and its effective MSRV. Also update `CONTRIBUTING.md`
 to require contributors to check feature-MSRV compatibility when
 adding new optional dependencies.
 
-### M11: Add CI benchmark workflow and update Cargo.toml feature documentation
+### M11: Update CI benchmark workflow and Cargo.toml feature documentation
 
-The `.github/workflows/` directory has a `bench.yml` workflow but it
-only runs on manual dispatch and does not track performance
-regressions across PRs. Update `bench.yml` to run on every PR
+The `.github/workflows/bench.yml` workflow runs on pushes to `master`
+but does not run on pull requests, so performance regressions are not
+caught before merging. Update `bench.yml` to also trigger on every PR
 targeting `master`, archive benchmark results as CI artifacts, and
-post a comment with performance comparison against the base branch.
-Update `Cargo.toml` to add documentation comments for each feature
-flag in the `[features]` section explaining what it enables and its
-stability status. Add a `.github/workflows/external-types.toml`
-configuration that lists allowed public-API types. Update
-`CHANGELOG.md` with a "Performance" subsection template for tracking
-benchmark changes per release.
+post a performance comparison comment against the base branch.
+Update `Cargo.toml` to add inline documentation comments for each
+feature flag in the `[features]` section explaining what it enables
+and its stability status. Update `CHANGELOG.md` with a "Performance"
+subsection template for tracking benchmark changes per release.
 
 ### W11: Overhaul project documentation and release configuration
 
@@ -497,15 +515,14 @@ Comprehensively update all non-code project files for the hyper 1.x
 stable release series. Rewrite `docs/ROADMAP.md` to reflect the
 post-1.0 stability guarantees, HTTP/3 timeline, and planned feature
 additions. Update `docs/VISION.md` to describe the three-crate
-ecosystem (hyper, hyper-util, hyper-tls) and separation of concerns.
-Revise `CONTRIBUTING.md` to add sections on the review process,
-bugfix backporting policy, and security-sensitive change procedures.
-Update `Cargo.toml` to reorganize features into groups (`client`,
-`server`, `http1`, `http2`, `ffi`) with inline documentation
-comments. Add a `SECURITY.md` file with vulnerability reporting
-instructions, supported version matrix, and disclosure timeline.
-Update `.github/workflows/CI.yml` to add MIRI testing for unsafe
-code in `proto/h1/io.rs` and `common/buf.rs`, add a semver-checks
-job using `cargo-semver-checks`, and add a docs-deployment job.
-Update `docs/TENETS.md` with correctness-first HTTP implementation
-principles.
+ecosystem (hyper, hyper-util, hyper-tls) and separation of concerns
+more explicitly. Revise `CONTRIBUTING.md` to add sections on the
+review process, bugfix backporting policy, and security-sensitive
+change procedures. Update `Cargo.toml` to reorganize features into
+groups (`client`, `server`, `http1`, `http2`, `ffi`) with inline
+documentation comments. Update `SECURITY.md` to add a supported
+version matrix and a disclosure timeline section to the existing
+reporting instructions. Update `.github/workflows/CI.yml` to add a
+docs-deployment job that publishes rustdoc to GitHub Pages on each
+push to `master`. Update `docs/TENETS.md` with correctness-first HTTP
+implementation principles.

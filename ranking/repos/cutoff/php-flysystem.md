@@ -134,43 +134,62 @@ to `file`, leading to unintended overwrites. Fix `normalizePath`
 to reject paths containing segments with trailing dots by throwing
 `CorruptedPathDetected`.
 
-### N2: Fix MountManager.copy not working across different filesystem mounts
+### N2: Fix MountManager.moveAcrossFilesystems leaving orphaned destination on partial failure
 
-In `src/MountManager.php`, the `copy` method resolves source and
-destination filesystems via `determineFilesystemAndPath`. When source
-and destination are on different mounts, it calls `copy` on the
-source filesystem with the destination path, which fails because the
-source adapter cannot access the destination. Fix `copy` to detect
-cross-mount operations and fall back to read-then-write using
-`readStream` from source and `writeStream` to destination. Also
-add a `cross-mount` test group in `phpunit.xml.dist` so these
-integration tests can be run in isolation.
+In `src/MountManager.php`, `moveAcrossFilesystems` performs a move
+by calling `$this->copy()` followed by `$this->delete()`. If `copy`
+succeeds but `delete` fails (e.g., the source adapter throws
+`UnableToDeleteFile`), the method catches the exception and rethrows
+it as `UnableToMoveFile`, but makes no attempt to remove the
+already-created destination file. The caller receives an error yet
+the destination file now exists as an orphan. Fix
+`moveAcrossFilesystems` to detect this partial-failure case — when
+`delete` throws after a successful `copy` — and attempt to delete the
+destination file before rethrowing `UnableToMoveFile`, so that a
+failed cross-mount move does not leave orphaned files behind.
 
-### N3: Fix Filesystem.publicUrl not falling back to adapter when PublicUrlGenerator is null
+### N3: Fix Filesystem.setVisibility not validating visibility value before delegating
 
-In `src/Filesystem.php`, the `publicUrl` method checks for a
-configured `PublicUrlGenerator` and throws
-`UnableToGeneratePublicUrl` when none is set. However, some adapters
-(e.g., `AwsS3V3Adapter`) implement `PublicUrlGenerator` themselves.
-Fix `publicUrl` to check if the adapter implements
-`PublicUrlGenerator` as a fallback before throwing.
+In `src/Filesystem.php`, the `setVisibility` method passes the
+supplied visibility string directly to the adapter without first
+checking that it is a valid value (`Visibility::PUBLIC` or
+`Visibility::PRIVATE`). Passing an invalid string (e.g.,
+`"readable"`) does not immediately throw an error at the `Filesystem`
+layer; behavior depends on whether the specific adapter validates
+internally. `PortableVisibilityGuard::guardAgainstInvalidInput`
+already exists for this purpose and is used by
+`UnixVisibility/PortableVisibilityConverter`. Fix `Filesystem::setVisibility`
+to call `PortableVisibilityGuard::guardAgainstInvalidInput` before
+delegating to the adapter, so `InvalidVisibilityProvided` is always
+thrown for invalid inputs regardless of which adapter is in use.
 
-### N4: Fix DirectoryListing.filter not preserving generator laziness
+### N4: Fix DirectoryListing.map and filter sharing generator state across multiple calls
 
-In `src/DirectoryListing.php`, the `filter` method applies a
-callable to filter `StorageAttributes` entries. The implementation
-collects all entries into an array before filtering, losing the
-lazy evaluation benefit of the generator-based listing. Fix `filter`
-to return a new `DirectoryListing` wrapping a `Generator` that
-applies the filter lazily without materializing the full list.
+In `src/DirectoryListing.php`, `map()` and `filter()` each create a
+new generator by passing `$this->listing` to an immediately-invoked
+function. When `$this->listing` is a `Generator` (as returned by
+`Filesystem::listContents`), both the original and the newly created
+generators share the same underlying generator object. Iterating the
+first derived listing exhausts the shared generator, causing any
+second derived listing produced from the same source to yield no
+results. Fix `map` and `filter` to detect when `$this->listing` is
+an instance of `\Generator` and materialise it via `toArray()` before
+wrapping it in a new lazy generator, ensuring that multiple
+independent transformations of the same `DirectoryListing` each see
+the full contents.
 
-### N5: Fix PathPrefixer not handling empty prefix correctly for root-level operations
+### N5: Fix PathPrefixer.stripPrefix not validating that the path starts with the prefix
 
-In `src/PathPrefixer.php`, when an empty string prefix is configured,
-`prefixPath` prepends an empty string, resulting in paths starting
-with `/` (e.g., `/file.txt` instead of `file.txt`). Fix
-`prefixPath` to return the path unchanged when the prefix is empty,
-and `stripPrefix` to handle the corresponding case.
+In `src/PathPrefixer.php`, `stripPrefix` and `stripDirectoryPrefix`
+call `substr($path, strlen($this->prefix))` unconditionally, without
+first checking that `$path` actually begins with `$this->prefix`.
+When an underlying adapter returns a path that does not start with
+the expected prefix (e.g., an absolute path from a misconfigured
+storage backend), `stripPrefix` silently returns a garbled
+sub-string instead of surfacing an error. Fix `stripPrefix` to use
+`str_starts_with` to assert the prefix is present and throw
+`\InvalidArgumentException` when it is absent; update
+`stripDirectoryPrefix` to rely on the corrected `stripPrefix`.
 
 ### N6: Fix Config.extend not performing deep merge for nested arrays
 
@@ -181,34 +200,50 @@ extended with `['metadata' => ['b' => 2]]`), the nested array is
 replaced instead of merged. Fix `extend` to recursively merge
 nested associative arrays while preserving numeric array behavior.
 
-### N7: Fix InMemoryFilesystemAdapter.move not preserving file visibility
+### N7: Fix InMemoryFilesystemAdapter.createDirectory ignoring directory visibility config
 
-In `src/InMemory/InMemoryFilesystemAdapter.php`, the `move` method
-internally calls `copy` followed by `delete`. The `copy`
-implementation creates a new `InMemoryFile` with the default
-visibility instead of preserving the source file's visibility. Fix
-`move` (and `copy`) to carry over the source file's visibility to
-the destination.
+In `src/InMemory/InMemoryFilesystemAdapter.php`, `createDirectory`
+creates a placeholder dummy file via an internal call to `write`,
+passing the original `Config` object unchanged. The `write` method
+reads visibility from `Config::OPTION_VISIBILITY` (`'visibility'`),
+but callers conventionally supply directory visibility under
+`Config::OPTION_DIRECTORY_VISIBILITY` (`'directory_visibility'`).
+As a result, `createDirectory('mydir', new Config([Config::OPTION_DIRECTORY_VISIBILITY => Visibility::PRIVATE]))`
+creates the placeholder with the adapter's default visibility instead
+of the requested directory visibility. Fix `createDirectory` to
+construct a derived `Config` that promotes `OPTION_DIRECTORY_VISIBILITY`
+to `OPTION_VISIBILITY` (when `OPTION_VISIBILITY` is not already
+explicitly set) before calling `write`.
 
-### N8: Fix Filesystem.checksum not catching adapter exceptions when falling back to stream
+### N8: Fix CalculateChecksumFromStream wrapping security exceptions in UnableToProvideChecksum
 
-In `src/Filesystem.php`, the `checksum` method first tries the
-adapter's native checksum (if the adapter implements `ChecksumProvider`).
-If the adapter throws `ChecksumAlgoIsNotSupported`, it falls back
-to computing from a stream. However, if the adapter throws a
-different `FilesystemException` (e.g., `UnableToReadFile`), the
-exception is caught by a broad `Throwable` catch that wraps it in
-`UnableToProvideChecksum`, losing the original exception context.
-Fix the catch to only catch `ChecksumAlgoIsNotSupported` for the
-fallback and re-throw other exceptions.
+In `src/CalculateChecksumFromStream.php`, the
+`calculateChecksumFromStream` trait method wraps every `FilesystemException`
+thrown by `readStream` inside a new `UnableToProvideChecksum`. This
+includes security-critical exceptions such as `PathTraversalDetected`
+and `CorruptedPathDetected` (both implement `FilesystemException`),
+which should never be reclassified as a checksum failure. Callers
+and security logging systems lose the true reason for the error. Fix
+the catch block to only wrap `UnableToReadFile` in
+`UnableToProvideChecksum` (the expected case where the file simply
+cannot be read for hashing), and re-throw any other
+`FilesystemException` — especially path-security exceptions —
+without wrapping.
 
-### N9: Fix FileAttributes.jsonSerialize losing extra metadata fields
+### N9: Fix FileAttributes and DirectoryAttributes.withPath bypassing constructor path normalization
 
-In `src/FileAttributes.php`, the `jsonSerialize` method returns a
-fixed set of fields (`path`, `visibility`, `fileSize`, etc.) but
-does not include the `extraMetadata` array that adapters can attach.
-Fix `jsonSerialize` to include `extraMetadata` in the serialized
-output when it is non-empty.
+In `src/FileAttributes.php` and `src/DirectoryAttributes.php`, the
+`withPath(string $path)` method assigns the provided string directly
+to `$clone->path` without applying the same normalization performed
+by the constructor. `FileAttributes::__construct` does
+`ltrim($this->path, '/')` and `DirectoryAttributes::__construct`
+does `trim($this->path, '/')`. A call such as
+`$attrs->withPath('/dir/file.txt')` therefore produces an instance
+where `path()` returns `'/dir/file.txt'` instead of `'dir/file.txt'`,
+breaking the invariant that stored paths never begin (or end, for
+directories) with a slash. Fix `withPath` in both classes to apply
+the same path-stripping normalization as their respective
+constructors.
 
 ### N10: Fix MountManager.listContents not supporting deep listing across mounts
 

@@ -67,33 +67,50 @@
 
 ## Narrow
 
-### N1: Fix issue comment count not updated after bulk delete
+### N1: Fix issue comment count not updated when review is submitted
 
-When an admin bulk-deletes spam comments from an issue, the issue's
-`num_comments` field is not decremented. The count only updates when
-comments are deleted individually through the API or UI. Fix the bulk
-delete operation to update the issue's comment count atomically.
+When a pull request review is submitted, a `CommentTypeReview` comment
+is created via `updateCommentInfos` in `models/issues/comment.go`. This
+function calls `UpdateIssueNumComments` for `CommentTypeComment` but not
+for `CommentTypeReview`, even though `ConversationCountedCommentType()`
+includes both types. As a result, `num_comments` is not incremented when
+a review is posted but IS decremented when a review comment is deleted
+(via `DeleteComment`'s `CountedAsConversation()` check), causing the
+count to drift. Fix `updateCommentInfos` to call `UpdateIssueNumComments`
+for the `CommentTypeReview` case.
 
-### N2: Add "copy branch name" button to PR page
+### N2: Add "copy fingerprint" button to SSH key settings page
 
-On the pull request page, there's no easy way to copy the source branch
-name (for checking out locally). Add a clipboard copy button next to
-the branch name display, similar to the existing "copy clone URL"
-button on the repository page.
+On the user settings SSH keys page
+(`templates/user/settings/keys_ssh.tmpl`), each key's fingerprint is
+displayed as plain text with no clipboard button. Users must manually
+select and copy the fingerprint string. Add a clipboard copy button
+next to each SSH key's fingerprint, consistent with the existing
+`data-clipboard-target` copy buttons used elsewhere in the UI (e.g.,
+the clone URL copy button in `templates/repo/clone_panel.tmpl`).
 
-### N3: Fix webhook delivery retries using wrong HTTP method
+### N3: Fix webhook API creation ignoring configured HTTP method
 
-When a webhook delivery fails and is retried, the retry uses POST
-regardless of what method was configured for the webhook. The original
-HTTP method is not persisted in the webhook delivery record. Fix the
-retry logic to use the configured HTTP method.
+When creating a webhook via the REST API, the handler in
+`routers/api/v1/utils/hook.go` hardcodes `HTTPMethod: "POST"` instead
+of reading the method from the request's `Config` map. The web UI
+correctly reads `HTTPMethod` from the submitted form (accepting POST
+or GET via the `binding:"Required;In(POST,GET)"` tag in
+`services/forms/repo_form.go`), but the API always creates webhooks
+with POST regardless of any `http_method` key passed in `config`. Fix
+the API handler to read `http_method` from `form.Config` and validate
+it, matching the web UI behavior.
 
-### N4: Fix milestone progress percentage rounding to zero for 1-2 issues
+### N4: Fix milestone progress percentage truncating to zero for sparse milestones
 
-When a milestone has only 1 or 2 issues and one is closed, the progress
-bar shows 0% because integer division truncates the percentage. Fix the
-milestone progress calculation to use proper rounding for small issue
-counts.
+The milestone `Completeness` field in `models/issues/milestone.go` is
+calculated as `m.NumClosedIssues * 100 / m.NumIssues` using integer
+division. For milestones with very few closed issues relative to the
+total (e.g., 1 closed out of 201 total: `1*100/201 = 0`), integer
+truncation rounds the result down to 0%, making the milestone appear
+to have no progress. Fix the calculation to use proper rounding (e.g.,
+`(m.NumClosedIssues*100 + m.NumIssues/2) / m.NumIssues`) so that any
+milestone with at least one closed issue shows at least 1% completion.
 
 ### N5: Add `Closes #N` auto-linking in commit messages for wiki pages
 
@@ -102,20 +119,31 @@ Commit messages on repository code support auto-closing issues via
 auto-close. Fix the wiki commit handler to parse and process issue
 close keywords.
 
-### N6: Fix user profile heatmap showing wrong day for timezone edge cases
+### N6: Fix activity feed date filter using server timezone instead of UTC
 
-The contribution heatmap on user profiles shows the wrong day for
-contributions made near midnight in timezones far from UTC. The
-server-side date grouping uses UTC without adjusting for the user's
-configured timezone. Fix the heatmap query to group by the user's
-local date.
+The `FeedDateCond` function in `models/activities/action.go` parses the
+`?date=YYYY-MM-DD` filter parameter using `setting.DefaultUILocation`
+(the server's configured timezone). When a user clicks a day on the
+contribution heatmap, the client derives a local date string (via
+`toDateString()` in `web_src/js/features/heatmap.ts`) and sets it as
+the `date` query parameter. The server interprets midnight in the server
+timezone, not UTC, so on instances with a non-UTC `DEFAULT_UI_LOCATION`
+the displayed activity entries span the wrong hours. Fix `FeedDateCond`
+to parse the date string as UTC midnight so the filter is
+timezone-consistent regardless of the server's configured locale.
 
-### N7: Fix repository transfer not updating webhook delivery URLs
+### N7: Fix repository transfer not firing webhook event for external subscribers
 
-When a repository is transferred to a new owner, webhooks configured
-with repository-relative URLs still point to the old owner's URL path.
-The transfer operation does not update webhook URLs. Fix repository
-transfer to update webhook URLs or mark them for review.
+When a repository is transferred to a new owner, the
+`webhookNotifier` in `services/webhook/notifier.go` does not implement
+`TransferRepository`, so no webhook event is dispatched. The notifier
+interface (defined in `services/notify/notifier.go`) includes
+`TransferRepository`, but the webhook notifier inherits the no-op from
+`NullNotifier`. External CI/CD systems and integrations that subscribe
+to `repository` events are not notified when ownership changes. Implement
+`TransferRepository` on `webhookNotifier` to fire a `HookEventRepository`
+webhook with an `"transferred"` action, carrying the old owner name and
+updated repository payload.
 
 ### N8: Add "Copy commit SHA" button on the commit detail page
 
@@ -123,21 +151,31 @@ The commit detail page shows the full SHA but has no clipboard button.
 Add a click-to-copy button next to the commit SHA, consistent with
 the existing copy buttons on the repository clone URL and branch name.
 
-### N9: Fix LFS file edit in web editor creating corrupt LFS pointer
+### N9: Fix missing LFS badge on file view page for LFS-tracked files
 
-When editing an LFS-tracked file through Gitea's web editor, the saved
-content is written directly to the repository instead of going through
-the LFS pipeline. The result is a non-LFS file that looks like a
-corrupt LFS pointer. Fix the web editor to route LFS file saves
-through the LFS storage backend.
+When viewing an LFS-tracked file in the repository file browser,
+`routers/web/repo/view_file.go` sets `ctx.Data["IsLFSFile"] = true`
+but the file header template `templates/repo/view_file.tmpl` never
+reads this value and shows no LFS indicator. By contrast, the diff
+view in `templates/repo/diff/box.tmpl` already renders
+`<span class="ui label">LFS</span>` when `$file.IsLFSFile` is set.
+Add an LFS badge to the file header in `templates/repo/view_file.tmpl`
+so users can tell at a glance that the displayed pointer file is
+stored in LFS, consistent with the diff view.
 
-### N10: Fix email notification subject truncating unicode characters mid-codepoint
+### N10: Fix email notification subject corrupted by emoji replacement after MIME encoding
 
-When an issue title contains multi-byte unicode characters and the
-subject is truncated to fit the email subject length limit, the
-truncation can split a multi-byte character. This produces invalid
-UTF-8 in the email subject. Fix the truncation to respect unicode
-codepoint boundaries.
+In `services/mailer/mail_issue_common.go`, the subject is built by
+calling `sanitizeSubject(mailSubject.String())` which truncates the
+string and encodes it with `mime.QEncoding.Encode("utf-8", ...)`,
+producing a properly encoded RFC 2047 word. Immediately after,
+`emoji.ReplaceAliases(subject)` is called on the already-encoded
+string. If an issue title contains emoji aliases such as `:smile:`,
+the alias text can survive Q encoding intact (colons are not encoded),
+and `ReplaceAliases` then injects raw Unicode emoji characters into
+the encoded word, producing a malformed MIME header. Fix the ordering
+so that `emoji.ReplaceAliases` is applied to the raw subject string
+before `sanitizeSubject` performs the MIME encoding.
 
 ## Medium
 
@@ -150,9 +188,9 @@ field to the `Release` struct and a cron task in `services/cron/`
 that publishes releases when their scheduled time is reached.
 Update `services/release/release.go` to handle the scheduling logic
 and `routers/api/v1/repo/release.go` to expose the field in the API.
-Update the `Makefile` to add a `release-schedule` target for testing
-the scheduling cron locally, and document the scheduling feature in
-`CONTRIBUTING.md`'s Release Cycle section.
+Update the database migration in `models/migrations/` to add the new
+column, and document the scheduling feature in `CONTRIBUTING.md`'s
+Release Cycle section.
 
 ### M2: Add saved replies for issue and PR comments
 
@@ -215,8 +253,8 @@ the filters when building the refspec list. Add filter configuration
 fields to the push mirror API in `routers/api/v1/repo/mirror.go`
 and the web UI form in `routers/web/repo/setting/` templates.
 Update `CONTRIBUTING.md`'s API section to document the new mirror
-filter fields, and add filter parameter validation to the
-`pull-compliance.yml` CI workflow.
+filter fields, and add glob pattern validation for the filter fields
+in `modules/validation/` alongside the existing validation helpers.
 
 ### M8: Add deploy key scoping with read/write per-branch permissions
 

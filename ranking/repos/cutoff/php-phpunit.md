@@ -141,51 +141,25 @@ src/
 
 ## Narrow
 
-### N1: Fix IsEqualWithDelta constraint not propagating delta to nested object comparisons
+### N1: Fix IsEqualWithDelta::toString() displaying delta as zero for very small values
 
-`IsEqualWithDelta` accepts a `$delta` parameter for float comparison
-tolerance, but when comparing objects or arrays containing nested
-float values, the delta is not propagated through the internal
-comparator. Objects like `new Coord(1.0, [2.001])` vs
-`new Coord(1.0, [2.002])` fail with delta `0.01` even though all
-floats are within tolerance. Fix `IsEqualWithDelta.php` to ensure the
-delta is passed through to the recursive comparison in the
-`evaluate()` method.
+`IsEqualWithDelta::toString()` formats the delta value using `sprintf('%F', $this->delta)`, which always produces exactly 6 decimal places. For very small delta values such as `1.0E-7`, this format rounds to `0.000000`, producing a constraint description like `is equal to ... with delta <0.000000>`. This makes the failure message appear as though no delta tolerance was set, concealing the actual configured value. Fix `IsEqualWithDelta.php` so that `toString()` formats the delta with sufficient precision to always display a non-zero value — for example by using `var_export()` or a trimmed high-precision `sprintf` — so that small deltas remain visible in assertion failure messages.
 
-### N2: Fix TestCase::expectException not clearing between data provider iterations
+### N2: Fix TestCase::expectExceptionMessageMatches not validating the regex pattern
 
-When a test method uses both `expectException()` and a data provider,
-the expected exception set in one iteration carries over to the next
-if the subsequent iteration does not call `expectException()` again.
-Fix `TestCase.php` to reset the expected exception state between data
-provider iterations in the lifecycle reset logic.
+`TestCase::expectExceptionMessageMatches()` stores the provided string as the expected exception message pattern without validating that it is a valid PCRE regular expression. If a caller passes a malformed pattern (e.g., a string that is missing delimiters or contains invalid syntax), `expectExceptionMessageMatches()` silently accepts it. The error only surfaces later when the `ExceptionMessageMatchesRegularExpression` constraint tries to use `preg_match()` against the actual exception message, producing a cryptic PHP warning or unexpected assertion failure instead of an immediate, clear error. Fix `TestCase.php` so that `expectExceptionMessageMatches()` validates the pattern immediately using `@preg_match()` and throws an `InvalidArgumentException` with a descriptive message if the pattern is not a valid regular expression.
 
-### N3: Fix AttributeParser not handling #[Depends] with class-qualified method names
+### N3: Fix AttributeParser silently mishandling #[Depends] with a class-qualified method name
 
-`AttributeParser` parses `#[Depends]` attributes but fails when the
-dependency specifies a full class-qualified method name (e.g.,
-`#[Depends('OtherTest::testSetup')]`). The parser attempts to split on
-`::` but does not handle namespace backslashes in the class portion,
-causing the dependency to be silently dropped. Fix
-`AttributeParser.php` to correctly parse fully qualified class names
-with namespace separators in `#[Depends]` attribute values.
+`AttributeParser` parses `#[Depends]` attributes by passing the entire argument string directly to `Metadata::dependsOnMethod()` as the method name on the current class. When a developer writes `#[Depends('OtherTest::testSetup')]` intending to declare a cross-class dependency, the full string `'OtherTest::testSetup'` is used as the method name without any splitting or validation. The dependency is registered against a method whose name contains `::`, which never matches any real method, so the declared dependency is silently ignored. Fix `AttributeParser.php` so that when a `#[Depends]` value contains `::`, it detects this case and throws an `InvalidAttributeException` with a message directing the developer to use `#[DependsExternal]` (or `#[DependsExternalUsingDeepClone]` / `#[DependsExternalUsingShallowClone]`) for cross-class dependencies.
 
-### N4: Fix Count constraint failing on generators that have already started
+### N4: Fix Count constraint throwing a generic exception for all Generator values
 
-The `Count` constraint calls `iterator_count()` on generators, but if
-the generator has already yielded values, the count only reflects
-remaining elements, not the total. Fix `Count.php` to detect partially
-consumed generators and report an informative failure message instead
-of an incorrect count.
+The `Count` constraint detects `Generator` instances in `getCountOf()` and immediately throws `GeneratorNotSupportedException` for every generator, regardless of whether it has been started. A generator whose `key()` is `null` and `valid()` returns `true` is a fresh, unconsumed generator that could be iterated to obtain a count via `iterator_count()` without loss of data. Fix `Count.php` so that `getCountOf()` allows fresh generators (where `$generator->key() === null && !$generator->valid()` is false but no values have been consumed) to be counted with `iterator_count()`, while still throwing `GeneratorNotSupportedException` with an informative message for generators that have already yielded values (detectable by `$generator->key() !== null`).
 
-### N5: Fix MockBuilder::onlyMethods silently ignoring non-existent method names
+### N5: Fix TestDoubleBuilder::onlyMethods accepting private methods that cannot be overridden
 
-`MockBuilder::onlyMethods()` accepts an array of method names to mock
-but does not validate that the methods exist on the mocked class. If a
-method name is misspelled, the mock silently ignores it, leading to
-confusing test behavior. Fix `MockBuilder.php` to throw an
-`InvalidArgumentException` when a method name does not exist on the
-target class.
+`TestDoubleBuilder::onlyMethods()` validates that each specified method exists on the target class using `ReflectionClass::hasMethod()`, throwing `CannotUseOnlyMethodsException` when a method is not found. However, it does not check whether the matched method is `private`. Private methods cannot be overridden in a subclass, so a mock generated with a private method name in `onlyMethods()` either fails at code-generation time with a cryptic error or silently produces a mock that does not intercept the private method. Fix `TestDoubleBuilder.php` to also check the method's visibility after `hasMethod()` succeeds, and throw `CannotUseOnlyMethodsException` (with an appropriate message) when the named method is declared `private`.
 
 ### N6: Fix ProgressPrinter not accounting for multi-byte characters in alignment
 
@@ -205,7 +179,7 @@ symlinks with `realpath()` before applying the exclusion list.
 
 ### N8: Fix Configuration Loader not validating duplicate testSuite names in XML
 
-`Configuration/Loader.php` parses `<testsuite>` elements from
+`TextUI/Configuration/Xml/Loader.php` parses `<testsuite>` elements from
 `phpunit.xml` but accepts duplicate `name` attributes without error.
 When two suites share a name, the `--testsuite` CLI filter matches
 only the first one, silently dropping tests. Fix the loader to detect
@@ -214,35 +188,17 @@ Also update `phpunit.xsd` to add an XSD `unique` constraint on the
 `name` attribute of `<testsuite>` elements so that XML-level
 validation catches duplicates before the loader runs.
 
-### N9: Fix JUnitXmlLogger emitting invalid XML for assertion messages with CDATA
+### N9: Fix JUnitXmlLogger double-encoding special characters in failure messages
 
-`JUnitXmlLogger` wraps failure messages in CDATA sections, but if the
-assertion message itself contains `]]>`, the resulting XML is
-malformed. Fix `JUnitXmlLogger.php` to escape or split CDATA sections
-when the message contains the CDATA end delimiter.
+`JunitXmlLogger` passes failure message text through `Xml::prepareString()` before setting it as element text content via `DOMDocument::createElement()`. `Xml::prepareString()` calls `htmlspecialchars()` to encode characters such as `&` to `&amp;`, `<` to `&lt;`, and `>` to `&gt;`. However, `DOMDocument::createElement()` accepts a raw text value and the DOM re-encodes it during serialization, resulting in double-encoding: a literal `&` in a failure message becomes `&amp;amp;` in the JUnit XML output instead of the correct `&amp;`. Fix `JunitXmlLogger.php` to not pre-encode the text content with `htmlspecialchars()` before passing it to the DOM; instead use only the character-stripping portion of `Xml::prepareString()` (removing invalid XML control characters) and let the DOM handle the XML escaping.
 
-### N10: Fix Event Dispatcher not catching subscriber exceptions during Test::Prepared
+### N10: Fix DirectDispatcher misclassifying subscriber-triggered PHPUnit exceptions as internal errors
 
-When `Dispatcher.php` fires `Test\Prepared` events, an exception
-thrown by one subscriber aborts dispatch to subsequent subscribers and
-propagates into the runner, causing the test to be marked as errored
-rather than simply logging the subscriber failure. Fix the dispatcher
-to catch subscriber exceptions during `Prepared` events and report
-them via a warning instead.
+`DirectDispatcher::handleThrowable()` uses `isThrowableFromThirdPartySubscriber()` to decide whether to log a subscriber exception as a PHPUnit warning or rethrow it as an internal error. That check uses `$t->getFile()` — the file where the exception was instantiated — to determine whether the exception originated in third-party code. When a third-party extension subscriber calls a PHPUnit utility method that internally throws a `Throwable`, the exception file points to a PHPUnit-internal source file, so `isThrowableFromThirdPartySubscriber()` returns `false` and the exception is rethrown into the runner, marking the test as errored rather than logging a subscriber warning. Fix `DirectDispatcher.php` to inspect the exception's stack trace frames to find the subscriber dispatch frame and determine if that frame belongs to third-party code, rather than relying solely on the exception's originating file.
 
-### N11: Fix `phpunit.xsd` schema not validating the `displayDetailsOnPhpunitDeprecations` attribute
+### N11: Fix stale PHPStan result cache path in phpstan.neon
 
-The `phpunit.xsd` XML Schema file defines the `phpUnitType` complex
-type with attributes for `beStrictAboutOutputDuringTests`,
-`failOnRisky`, `failOnWarning`, and other settings, but does not
-include the `displayDetailsOnPhpunitDeprecations` attribute that was
-added in PHPUnit 13.1 and is used in the project's own `phpunit.xml`.
-This causes XML validators to report the attribute as invalid. Add
-the missing `xs:attribute` definition to `phpunit.xsd` with
-`type="xs:boolean"` and `default="false"`. Also update
-`schema/13.0.xsd` to add the attribute for consistency, and update
-`DEPRECATIONS.md` to reference the schema version where the attribute
-was introduced.
+`phpstan.neon` specifies `resultCachePath: %tmpDir%/phpunit-13.0.php` as the PHPStan analysis result cache location, but the repository is now at version 13.1. Using a cache path that references the previous series means the cached analysis data from 13.0 analysis runs may be reused unexpectedly, masking new issues that arise from 13.1 code changes. Fix `phpstan.neon` to update `resultCachePath` to `%tmpDir%/phpunit-13.1.php` so that PHPStan uses a fresh cache bucket for the current series.
 
 ## Medium
 
@@ -264,7 +220,7 @@ Add a `#[Retry(times: 3)]` attribute that causes a failing test to be
 re-executed up to the specified number of times before being marked as
 failed. Changes span `Metadata/Parser/AttributeParser.php` for
 parsing the new attribute, `Metadata/Metadata.php` for the retry
-metadata type, `Runner/TestRunner.php` for the retry loop, and
+metadata type, `Framework/TestRunner/TestRunner.php` for the retry loop, and
 `Event/Events/Test/` for new `Retried` event emission.
 
 ### M3: Add parallel data provider execution within a test method
@@ -272,9 +228,9 @@ metadata type, `Runner/TestRunner.php` for the retry loop, and
 Implement `#[ParallelDataProvider]` that runs data provider iterations
 concurrently using PHP fibers or child processes. Results are collected
 and reported once all iterations complete. Changes span
-`Framework/DataProvider/DataProvider.php` for parallel scheduling,
+`Metadata/Api/DataProvider.php` for parallel scheduling,
 `Framework/TestCase.php` for fiber-based iteration,
-`Runner/TestRunner.php` for result aggregation, and
+`Framework/TestRunner/TestRunner.php` for result aggregation, and
 `Event/Events/Test/` for per-iteration event granularity.
 
 ### M4: Implement constraint composition DSL with named matchers
@@ -291,10 +247,10 @@ protocol support.
 
 Implement `MockBuilder::enableCallRecording()` that records all method
 calls on a mock and provides `assertCallSequence()` to verify specific
-orderings. Changes span `MockObject/MockBuilder.php` for the
-configuration, `MockObject/MockObject.php` for the recording
-interface, new `MockObject/CallRecorder.php` for storage, and
-`MockObject/Rule/InvocationOrder.php` for sequence validation
+orderings. Changes span `Framework/MockObject/MockBuilder.php` for the
+configuration, `Framework/MockObject/Runtime/Interface/MockObject.php` for the recording
+interface, new `Framework/MockObject/CallRecorder.php` for storage, and
+`Framework/MockObject/Runtime/Rule/InvocationOrder.php` for sequence validation
 integration.
 
 ### M6: Implement test impact analysis using metadata dependencies
@@ -302,9 +258,9 @@ integration.
 Add `--affected-since=<commit>` that uses `@covers` and `@depends`
 metadata to determine which tests are affected by changed classes.
 Changes span `TextUI/Command/Command.php` for the CLI option,
-`Metadata/Registry.php` for coverage-to-test mapping,
+`Metadata/Parser/Registry.php` for coverage-to-test mapping,
 `Runner/TestSuiteLoader.php` for filtering the suite based on
-affected classes, and `TextUI/Configuration/TestSuiteMapper.php` for
+affected classes, and `TextUI/Configuration/Xml/TestSuiteMapper.php` for
 integration with suite construction.
 
 ### M7: Add structured test result output in JSON format
@@ -313,16 +269,16 @@ Implement `--result-format=json` that emits a JSON document with test
 results, durations, assertion counts, and failure details. Changes
 span `TextUI/Command/Command.php` for the option,
 `TextUI/Output/Json/JsonResultPrinter.php` as a new printer
-implementation, `Runner/TestRunner.php` for wiring the printer, and
-`Event/Subscriber/Subscriber.php` for a JSON-emitting subscriber.
+implementation, `TextUI/TestRunner.php` for wiring the printer, and
+`Event/Subscriber.php` for a JSON-emitting subscriber.
 
 ### M8: Implement mock generation caching for faster test startup
 
 Add a disk cache for generated mock class code, keyed by the mocked
 class signature hash. On subsequent runs, load cached mock classes
 instead of regenerating them. Changes span
-`MockObject/Generator/Generator.php` for cache lookup and storage,
-`MockObject/MockBuilder.php` for cache path configuration,
+`Framework/MockObject/Generator/Generator.php` for cache lookup and storage,
+`Framework/MockObject/MockBuilder.php` for cache path configuration,
 `TextUI/Configuration/Configuration.php` for the cache directory
 setting, and `Util/` for cache invalidation utilities.
 
@@ -330,7 +286,7 @@ setting, and `Util/` for cache invalidation utilities.
 
 Implement `<constraint>` elements in `phpunit.xml` that register
 custom constraint classes for use in assertions without requiring
-explicit imports. Changes span `TextUI/Configuration/Loader.php` for
+explicit imports. Changes span `TextUI/Configuration/Xml/Loader.php` for
 parsing constraint registrations, `TextUI/Configuration/Configuration.php`
 for storing them, `Framework/Assert.php` for looking up registered
 constraints by alias, and `Framework/Constraint/Constraint.php` for
@@ -373,7 +329,7 @@ with ordered execution and cross-class hook inheritance. Changes span
 `Metadata/Parser/AttributeParser.php` for new attributes,
 `Metadata/Metadata.php` for hook metadata types,
 `Framework/TestCase.php` for lifecycle invocation rewrite,
-`Runner/TestRunner.php` for suite-level hook execution,
+`Framework/TestRunner/TestRunner.php` for suite-level hook execution,
 `Event/Events/Test/` for hook-specific events, and
 `TextUI/Output/` for hook failure reporting.
 
@@ -383,9 +339,9 @@ Implement `#[RunInSeparateProcess]` improvements that fork test
 execution while sharing expensive fixtures (database connections,
 service containers) via shared memory or Unix sockets. Changes span
 `Framework/TestCase.php` for process forking,
-`Runner/TestRunner.php` for process management and result collection,
+`Framework/TestRunner/TestRunner.php` for process management and result collection,
 `Framework/TestSuite.php` for fixture sharing protocol,
-`Event/Dispatcher.php` for cross-process event marshaling,
+`Event/Dispatcher/DirectDispatcher.php` for cross-process event marshaling,
 `Logging/` for aggregating results from child processes, and
 `Util/` for IPC helper classes.
 
@@ -395,9 +351,9 @@ Add a `CoverageDriver` plugin interface that supports custom coverage
 backends beyond Xdebug and PCOV — including AST-based instrumentation
 and sampling profilers. Changes span new `Coverage/` directory with
 driver interface and built-in implementations,
-`TextUI/Configuration/Loader.php` for driver selection,
+`TextUI/Configuration/Xml/Loader.php` for driver selection,
 `TextUI/Command/Command.php` for `--coverage-driver` option,
-`Runner/TestRunner.php` for driver lifecycle management,
+`Framework/TestRunner/TestRunner.php` for driver lifecycle management,
 `Logging/` for coverage report generation with driver-specific data,
 and `Metadata/` for `#[CoversClass]` integration with custom drivers.
 
@@ -408,9 +364,9 @@ test events to connected clients in real-time. Support filtered
 subscriptions per suite or test name pattern. Changes span
 `TextUI/Command/Command.php` for the `--live` option,
 new `TextUI/Output/Live/` WebSocket server classes,
-`Event/Dispatcher.php` for streaming subscriber integration,
+`Event/Dispatcher/DirectDispatcher.php` for streaming subscriber integration,
 `Event/Events/` for serialization of all event types,
-`Runner/TestRunner.php` for server lifecycle management, and
+`TextUI/TestRunner.php` for server lifecycle management, and
 `TextUI/Configuration/` for live output configuration.
 
 ### W5: Implement dependency injection container for test fixtures
@@ -423,8 +379,8 @@ auto-wiring from type hints. Changes span new
 `Metadata/Parser/AttributeParser.php` for `#[Inject]` parsing,
 `Framework/TestCase.php` for injected construction,
 `Framework/TestSuite.php` for container scoping,
-`Runner/TestRunner.php` for container lifecycle,
-and `TextUI/Configuration/Loader.php` for XML-based service
+`Framework/TestRunner/TestRunner.php` for container lifecycle,
+and `TextUI/Configuration/Xml/Loader.php` for XML-based service
 registration.
 
 ### W6: Add parameterized test suite generation from external data sources
@@ -433,8 +389,8 @@ Implement `#[ExternalDataProvider(source: 'api://...')]` that fetches
 test data from external sources (REST APIs, databases, CSV files) and
 generates parameterized tests at suite construction time. Support
 caching, schema validation, and incremental fetching. Changes span
-`Framework/DataProvider/` for external source adapters, new
-`Framework/DataProvider/External/` classes for each source type,
+`Metadata/Api/DataProvider.php` for external source adapters, new
+`Metadata/Api/DataProvider/External/` classes for each source type,
 `Metadata/Parser/AttributeParser.php` for the new attribute,
 `Runner/TestSuiteLoader.php` for deferred suite construction,
 `TextUI/Configuration/` for source credentials and caching config,
@@ -449,7 +405,7 @@ suite nesting. Changes span `Metadata/Parser/AttributeParser.php`
 for tag parsing, `Metadata/` for tag expression evaluation,
 `Runner/Filter/` for tag-based filtering with boolean expressions,
 `TextUI/Command/Command.php` for enhanced `--filter` syntax,
-`TextUI/Configuration/Loader.php` for XML tag groups, and
+`TextUI/Configuration/Xml/Loader.php` for XML tag groups, and
 `Runner/TestSuiteLoader.php` for tag-based suite pruning. Also update
 `phpunit.xsd` to add a `<tagGroups>` element definition that allows
 named tag groups to be defined in `phpunit.xml`, and update
@@ -462,8 +418,8 @@ Implement `--mutation-testing` mode that instruments source code with
 mutations and re-runs relevant tests to calculate mutation score.
 Leverage `@covers` metadata to map tests to mutated code. Changes span
 new `MutationTesting/` directory with mutator engine and operators,
-`Metadata/Registry.php` for test-to-source mapping,
-`Runner/TestRunner.php` for selective test re-execution,
+`Metadata/Parser/Registry.php` for test-to-source mapping,
+`Framework/TestRunner/TestRunner.php` for selective test re-execution,
 `Framework/Assert.php` for mutation-killed detection,
 `Logging/` for mutation score reporting, and
 `TextUI/Command/Command.php` for mutation testing configuration.
@@ -477,8 +433,8 @@ graph data and an HTML report. Changes span new `Profiling/` classes
 for instrumentation and report generation,
 `Framework/TestCase.php` for lifecycle timing hooks,
 `Framework/Assert.php` for assertion duration tracking,
-`MockObject/Generator/Generator.php` for generation timing,
-`Runner/TestRunner.php` for profiling lifecycle management, and
+`Framework/MockObject/Generator/Generator.php` for generation timing,
+`Framework/TestRunner/TestRunner.php` for profiling lifecycle management, and
 `TextUI/Output/` for profile summary display.
 
 ### W10: Add cross-suite test dependency resolution with topological ordering
@@ -490,7 +446,7 @@ automatic skip propagation when a dependency suite fails. Changes span
 `Metadata/Parser/AttributeParser.php` for suite dependency attributes,
 `Framework/TestSuite.php` for dependency graph construction,
 `Runner/TestSuiteLoader.php` for topological sorting,
-`Runner/TestRunner.php` for ordered execution with skip propagation,
+`Framework/TestRunner/TestRunner.php` for ordered execution with skip propagation,
 `Framework/TestCase.php` for cross-suite fixture access,
 and `Event/Events/TestSuite/` for dependency lifecycle events.
 
@@ -501,8 +457,8 @@ major release. Create `schema/14.0.xsd` by copying `schema/13.0.xsd`
 and adding new elements for baseline configuration, tag groups, and
 diff format settings. Update `phpunit.xsd` (the root-level schema)
 to reflect the 14.0 structure. Update `phpunit.xml` to reference
-the new schema via `xsi:noNamespaceSchemaLocation="phpunit.xsd"`
-and set `failOnPhpunitDeprecation="true"`. Update `DEPRECATIONS.md`
+the new schema via `xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/14.0/phpunit.xsd"`
+and add `failOnNotice="true"`. Update `DEPRECATIONS.md`
 to add a "14.0 Hard Deprecations" section listing features scheduled
 for removal. Update `build.xml` to add a `validate-schema` target
 that runs `xmllint` against the XSD files in `schema/`. Update

@@ -100,16 +100,19 @@ value, headers), making construction error-prone. Add a static
 `.partition()`, `.key()`, `.timestamp()`, and `.headers()` methods,
 validating that `topic` is non-null.
 
-### N2: Fix MockProducer ignoring explicit partition and not tracking partitioner calls
+### N2: Add partitioner invocation tracking to MockProducer
 
-`MockProducer` in `clients/producer/MockProducer.java` always calls
-the configured `Partitioner` in `send()` even when the `ProducerRecord`
-has an explicitly set partition, whereas the real `KafkaProducer` skips
-the partitioner when a partition is already specified. Add a check in
-the private `partition()` helper so that `record.partition() != null`
-short-circuits partitioner invocation and returns the record's partition
-directly. Additionally, expose a `partitionerCallCount()` method for
-test assertions to verify how many times the partitioner was consulted.
+`MockProducer` in `clients/producer/MockProducer.java` provides a
+test double for `KafkaProducer` but does not track how many times the
+configured `Partitioner` is actually invoked. The private `partition()`
+helper correctly skips the partitioner when `record.partition() != null`,
+but there is no way for test code to assert partitioner interaction counts.
+Add an `int` field `partitionerCallCount` to `MockProducer`, increment it
+inside the `partition()` helper each time the partitioner is consulted
+(i.e., when `record.partition() == null` and a non-null `Partitioner` is
+set), and expose it via a public `partitionerCallCount()` accessor method.
+Also add a `resetPartitionerCallCount()` method so tests can reset the
+counter between successive assertions in the same test instance.
 
 ### N3: Add ConsumerRecord.hasKey() and hasValue() convenience methods
 
@@ -136,10 +139,13 @@ detected.
 ### N5: Add Header.toString() with value decoding
 
 The `Header` interface in `common/header/Header.java` stores values as
-`byte[]`, but the default `RecordHeader.toString()` prints the raw
-byte array reference. Override `toString()` in `RecordHeader` to
-decode the value as UTF-8 (with fallback to hex representation for
-non-UTF-8 bytes) for readable log output.
+`byte[]`. The existing `RecordHeader.toString()` in
+`common/header/internals/RecordHeader.java` renders the value using
+`Arrays.toString(value())`, which produces unreadable decimal byte
+sequences (e.g., `[72, 101, 108, 108, 111]` for `Hello`) rather than
+human-readable text. Override `toString()` in `RecordHeader` to
+attempt decoding the value as UTF-8 (with fallback to hex representation
+for non-UTF-8 bytes) for readable log output.
 
 ### N6: Fix RoundRobinPartitioner not handling topic additions
 
@@ -419,34 +425,44 @@ request processing pipeline, metrics collection, and the admin client.
 Changes span `server/`, `server-common/`, `clients/admin/`, `common/`,
 and configuration.
 
-### N11: Fix checkstyle/suppressions.xml not suppressing false positives in generated protocol code
+### N11: Consolidate per-file ImportControl suppressions into import-control.xml allow rules
 
-The `checkstyle/suppressions.xml` defines suppression rules for
-checkstyle violations but does not include suppressions for
-automatically generated protocol classes under
-`clients/src/generated/`. These generated files trigger
-`MagicNumber`, `LineLength`, and `ParameterNumber` violations that
-are false positives and add noise to the build output. Add
-suppression entries in `checkstyle/suppressions.xml` matching the
-`clients/src/generated/**/*.java` pattern for the specific check
-modules. Also update `checkstyle/import-control.xml` to add an
-`<allow>` rule for the generated protocol package imports.
+Several source files in the `clients` and `server` modules suppress the
+`ImportControl` checkstyle check via individual per-file entries in
+`checkstyle/suppressions.xml` — specifically `ApiVersionsResponse.java`,
+`BrokerRegistrationRequestTest.java`, `MetadataRequestTest.java`, and
+`JaasTestUtils.java` — because they import packages (`org.apache.kafka.common.message.*`
+generated protocol classes, or `kafka.security.*` from `core`) not yet
+listed as allowed in their respective subpackage rules in
+`checkstyle/import-control.xml`. Consolidate these suppressions by:
+(1) adding `<allow pkg="org.apache.kafka.common.message" />` entries to
+the `requests` subpackage section and the relevant test-only sections in
+`checkstyle/import-control.xml`, and (2) removing the now-redundant
+individual `ImportControl` suppression entries for those files from
+`checkstyle/suppressions.xml`.
 
-### M11: Add Gradle local build-cache activation and CI cache steps
+### M11: Add Gradle local build-cache activation and developer ergonomics improvements
 
 `gradle.properties` does not set `org.gradle.caching=true`, so Gradle's
-local build cache (already structurally configured with `enabled = true`
-in `settings.gradle`) is never actually activated for local or CI runs,
-causing full task re-execution on every run. Add
-`org.gradle.caching=true` to `gradle.properties`. Update
-`.github/workflows/build.yml` to add `actions/cache` steps for Gradle
-home (`~/.gradle/caches`, `~/.gradle/wrapper`) using the workflow's
-`hashFiles` key so that CI hits the local cache between workflow runs.
-Split the single build job in `build.yml` into per-module matrix jobs
-(`clients`, `streams`, `connect`, `server`) to enable parallel test
-execution and reduce wall-clock time. Add a separate `rat` step that
-runs Apache Rat license header checks (`./gradlew rat`) independent of
-the main test jobs.
+local build cache — already structurally configured with `enabled = true`
+in `settings.gradle`'s `buildCache` block — is never activated for local
+developer builds. (CI jobs already pass `--build-cache` explicitly through
+`.github/actions/run-gradle/action.yml` and the validate step in
+`.github/workflows/build.yml`, so CI is unaffected.) For local runs,
+every `./gradlew` invocation performs full task re-execution instead of
+restoring cached outputs. Additionally, `maxTestForks` in `build.gradle`
+defaults to `Runtime.runtime.availableProcessors()` with no upper bound,
+which can cause memory exhaustion on high-core-count developer machines
+when combined with the `maxHeapSize = "3g"` per-JVM cap. Improve the
+developer build experience by: (1) adding `org.gradle.caching=true` to
+`gradle.properties`; (2) adding `org.gradle.workers.max=8` to cap the
+Gradle worker pool for local builds; (3) changing the `maxTestForks`
+default in `build.gradle` to `Math.min(Runtime.runtime.availableProcessors(), 8)`
+so tests do not over-subscribe RAM on large machines; (4) updating the
+`settings.gradle` `buildCache.local` block with a `directory` property
+pointing to `"${rootDir}/.gradle/build-cache"` so the local cache can
+be targeted by a `**/build-cache/**` `.gitignore` entry; and (5) adding
+that `.gitignore` exclusion to avoid accidentally committing cache files.
 
 ### W11: Overhaul Gradle build, checkstyle rules, CI workflows, and documentation
 

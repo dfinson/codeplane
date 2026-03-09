@@ -261,11 +261,14 @@ introspection via `$factory->getAppliedStates()`.
 ### M9: Add database schema diffing for migration generation
 
 Implement `php artisan make:migration --diff` that compares the current
-database schema with the Doctrine DBAL representation and generates a
-migration with the changes. Support column type changes, index
-additions/removals, foreign key modifications, and table renames.
-Generate both `up()` and `down()` methods. Add a `--dry-run` flag
-that prints the SQL without creating the migration file.
+database schema (inspected via `Schema::getTables()`, `Schema::getColumns()`,
+`Schema::getIndexes()`, and `Schema::getForeignKeys()`) against the
+migrations already run and generates a migration file containing the
+detected changes. Support column type changes, index additions/removals,
+foreign key modifications, and table renames. Generate both `up()` and
+`down()` methods. Add a `--dry-run` flag that prints the SQL without
+creating the migration file. Implement in `MigrationCreator` and a new
+`SchemaComparator` class under `Illuminate\Database\Migrations`.
 
 ### M10: Add notification channel throttling with per-user rate limits
 
@@ -332,15 +335,17 @@ migration, tenant-aware `artisan` commands (`--tenant=`), and a
 `TenantServiceProvider` that bootstraps all scoping. Support tenant
 seeding and per-tenant migration state.
 
-### W5: Implement full-text search across Eloquent, Scout, and database drivers
+### W5: Implement full-text search across Eloquent and database drivers
 
 Add `Model::search('query')` that dispatches to a full-text search
 driver. Implement a database driver using MySQL `MATCH AGAINST` and
-PostgreSQL `tsvector/tsquery`. Add Scout integration so models can
-switch between database and Algolia/Meilisearch drivers transparently.
-Support field weighting, fuzzy matching, highlighting, and faceted
-search results. Add a Blade component for rendering highlighted
-search results. Cross-cuts Database, Scout, View, and Collections.
+PostgreSQL `tsvector/tsquery`. Add a `Searchable` trait that marks
+model columns as searchable and registers the necessary indexes via
+a `SearchIndex` migration generator. Support field weighting, fuzzy
+matching, highlighting, and faceted search results. Add a Blade
+component for rendering highlighted search results. Add a
+`SearchManager` that resolves drivers from `config/database.php`.
+Cross-cuts Database, Eloquent, View, and Collections subsystems.
 
 ### W6: Add end-to-end request tracing across HTTP, queue, events, and mail
 
@@ -384,14 +389,18 @@ Database, Events, and Broadcasting subsystems.
 
 ### W10: Add pluggable authentication with multi-guard SSO and session migration
 
-Implement an SSO bridge that delegates authentication to SAML and
-OIDC providers, mapping external claims to local user attributes.
-Support multiple guards simultaneously (e.g., `web` guard with
-session, `api` guard with JWT, `admin` guard with SSO). Add session
-migration on login so existing anonymous session data (cart, preferences)
-transfers to the authenticated session. Integrate with notifications
-to send login alerts via mail and SMS. Touches Auth, Session, Routing,
-Notifications, and Mail subsystems.
+Implement a generic external authentication provider bridge with a
+`ExternalAuthProvider` contract that maps incoming token claims to
+local user attributes. Add an `SsoGuard` that accepts opaque tokens
+or signed JWTs, verifies them via pluggable `TokenVerifier` drivers,
+and resolves or provisions local users. Support multiple guards
+simultaneously (e.g., `web` guard with session, `api` guard with
+JWT, `admin` guard with SSO). Add session migration on login so
+existing anonymous session data (cart, preferences) transfers to
+the authenticated session. Integrate with notifications to send
+login alerts via mail and SMS. Implement `SsoGuard`, `TokenVerifier`,
+`ExternalAuthProvider`, and a `SsoServiceProvider` in the Auth
+subsystem. Touches Auth, Session, Routing, Notifications, and Mail.
 
 ### N11: Fix `docker-compose.yml` using deprecated `version` key and end-of-life MySQL image
 
@@ -420,9 +429,11 @@ a checklist for config-stub updates that must accompany new features.
 
 Update `pint.json` to add PHP 8.2-specific rules including
 `readonly` property formatting, `enum` case spacing, and
-disjunctive normal form type formatting. Extend
-`phpstan.src.neon.dist` paths to cover recently added subsystems
-(`Concurrency`, `ContextualBinding`). Update `.styleci.yml` finder
+disjunctive normal form type formatting. Update
+`phpstan.src.neon.dist` to raise the analysis level and reduce
+overly broad `ignoreErrors` patterns, adding targeted suppressions
+for known false positives in the `Concurrency` subsystem and the
+`Container` contextual binding classes. Update `.styleci.yml` finder
 exclusions for new JavaScript build output directories. Modernize
 `phpunit.xml.dist` to use PHPUnit 11.x `<source>` element instead
 of the deprecated coverage configuration. Add development services

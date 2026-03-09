@@ -107,87 +107,106 @@ faraday/
 
 ## Narrow
 
-### N1: Fix Connection#build_url not preserving fragment identifiers
+### N1: Fix Connection#dup not preserving proxy configuration
 
-In `lib/faraday/connection.rb`, the `build_url` method constructs a
-full URL by merging `url_prefix` with the provided path and params.
-URL fragments (e.g., `#section`) in the path argument are silently
-stripped during URI parsing. Fix `build_url` to preserve fragment
-identifiers when present in the path, passing them through to the
-final URI.
+In `lib/faraday/connection.rb`, `Connection#dup` creates a new
+connection instance passing `headers`, `params`, `builder`, `ssl`,
+and `request` options, but omits the `proxy` option. When a
+connection has a manually-set proxy (via `Connection#proxy=` or the
+`:proxy` constructor option), duplicating it via `dup` silently drops
+the proxy, causing the duplicate to fall back to the environment proxy
+or no proxy. Fix `dup` to include the current `proxy` value in the
+options hash passed to the new `Connection`.
 
-### N2: Fix Headers#replace not maintaining case-insensitive key lookup for replaced headers
+### N2: Fix Headers#parse creating phantom headers from malformed lines
 
-In `lib/faraday/utils/headers.rb`, the `Headers` class provides
-case-insensitive key access. When `replace(new_hash)` is called to
-bulk-replace all headers, the internal `@names` mapping (which tracks
-the canonical case) is not rebuilt. Subsequent lookups for keys with
-different casing fail. Fix `replace` to rebuild the `@names` hash
-from the new headers.
+In `lib/faraday/utils/headers.rb`, `Headers#parse` processes raw HTTP
+response header strings by splitting on `\r\n` and filtering with
+`.reject { |p| p[0].nil? }`. A header line that contains no colon
+(e.g., a server sending a malformed status continuation or a bare
+token) produces a single-element array from `split(/:\s*/, 2)` where
+`p[0]` is the line text and `p[1]` is `nil`. Since `p[0]` is not nil,
+the line passes the filter and `add_parsed` is called with a nil
+value, storing a phantom header entry with a nil value in the hash.
+Fix `parse` to also reject entries where `p[1]` is nil (lines with no
+colon separator).
 
-### N3: Fix RaiseError middleware not including response headers in the exception
+### N3: Fix RaiseError middleware not supporting Range values in allowed_statuses
 
 In `lib/faraday/response/raise_error.rb`, the `RaiseError` middleware
-raises `Faraday::ClientError` or `Faraday::ServerError` with the
-response body, but the response headers are not attached to the
-exception object. Downstream error handlers cannot access rate-limit
-headers (e.g., `Retry-After`, `X-RateLimit-Remaining`). Fix
-`RaiseError` to include the response headers in the raised exception
-via the existing `response` attribute hash. Also update
-`CHANGELOG.md` to document this behavioral change and update
-`docs/middleware/included/raising-errors.md` (or its parent
-`docs/middleware/index.md`) to note that response headers are now
-available on the exception object.
+supports an `allowed_statuses` option to suppress errors for specific
+status codes. The check `Array(options[:allowed_statuses]).include?(env[:status])`
+only works for scalar integer values; passing a Range such as
+`allowed_statuses: 400..499` does not match because `Array(400..499)`
+wraps the range as a single element, and `[400..499].include?(404)`
+returns `false`. Fix `on_complete` to use case-equality (`===`) when
+checking each element of `allowed_statuses` so that both integer
+values and Range values suppress error raising correctly.
 
-### N4: Fix NestedParamsEncoder not encoding boolean values correctly
+### N4: Fix NestedParamsEncoder not omitting nil-valued parameters
 
 In `lib/faraday/encoders/nested_params_encoder.rb`,
 `NestedParamsEncoder.encode` converts parameter values to strings
 via `to_s`. Ruby's `true.to_s` produces `"true"` and `false.to_s`
 produces `"false"`, but some APIs expect `"1"`/`"0"` or have custom
 boolean serialization. More critically, `nil` values are encoded as
-the string `""` when they should be omitted entirely per HTTP
-conventions. Fix the encoder to omit `nil`-valued parameters instead
-of encoding empty strings.
+bare keys without a value (e.g., `{a: nil}` encodes as `"a"` with no
+`=`) rather than being omitted entirely, which is non-standard
+behavior per HTTP conventions. Fix the encoder to omit `nil`-valued
+parameters instead of encoding bare keys.
 
-### N5: Fix ProxyOptions.from not parsing proxy credentials from URI string
+### N5: Fix ProxyOptions.from not normalizing schemeless URI strings in Hash input
 
-In `lib/faraday/options/proxy_options.rb`, `ProxyOptions.from(string)`
-parses a proxy URL string like `"http://user:pass@proxy:8080"` into
-a `ProxyOptions` instance. The `user` and `password` fields are
-extracted from the URI but not URI-decoded, so special characters
-in credentials (e.g., `%40` for `@`) remain encoded. Fix `from` to
-URI-decode `user` and `password` after extraction from the URI.
+In `lib/faraday/options/proxy_options.rb`, `ProxyOptions.from` handles
+a String proxy value by prepending `"http://"` when the string does
+not contain `"://"`, then parsing it as a URI. However, the
+`Hash`/`Options` branch does not apply the same normalization to the
+`:uri` key. Passing `{uri: 'proxy.example.com:8080'}` calls
+`Utils.URI('proxy.example.com:8080')` directly, which interprets
+`proxy.example.com` as the URI scheme instead of the host, resulting
+in `nil` for both `host` and `port`. Fix the `when Hash, Options`
+branch to normalize the `:uri` string value by prepending `"http://"`
+when it does not contain `"://"`, matching the behavior of the
+`when String` branch.
 
 ### N6: Fix Connection#initialize not validating URL scheme
 
 In `lib/faraday/connection.rb`, the `Connection` initializer accepts
 any string as the base URL without validating the scheme. Passing a
 URL without a scheme (e.g., `"example.com/api"`) silently creates a
-connection with `url_prefix` set to `"http:/example.com/api"` (note
-single slash from the default `"http:/"`). Fix the initializer to
-validate that the URL has a recognized scheme (`http` or `https`)
-and raise `ArgumentError` for invalid URLs.
+connection with `url_prefix` set to `"/example.com/api"` (treated as
+an absolute path rather than a host), and attempts to build a URL from
+this prefix later raise a `URI::BadURIError` because both URIs are
+relative. Fix the initializer to validate that the URL, when provided,
+has a recognized scheme (`http` or `https`) and raise `ArgumentError`
+for URLs with a missing or unrecognized scheme.
 
-### N7: Fix Json request middleware not setting Content-Type when body is already a string
+### N7: Fix Json request middleware MIME_TYPE_REGEX not matching structured +json types
 
-In `lib/faraday/request/json.rb`, the `Json` middleware checks if
-the request body responds to `to_json` and serializes it. When the
-body is already a JSON string (plain `String`), the middleware skips
-serialization but also skips setting the `Content-Type` header to
-`application/json`. Fix the middleware to always set the content
-type header when the request body is a non-empty string and no
-content type is already set.
+In `lib/faraday/request/json.rb`, `MIME_TYPE_REGEX =
+%r{^application/(vnd\..+\+)?json$}` matches `application/json` and
+`application/vnd.*+json` vendor types, but does not match other
+structured-syntax `+json` media types such as
+`application/problem+json`, `application/merge-patch+json`, or
+`application/ld+json`. By contrast, the response `Json` middleware
+defaults to `/\bjson$/`, which correctly handles all these types. When
+a request is made with `Content-Type: application/problem+json`, the
+request middleware's `process_request?` returns `false`, so the body
+is not encoded and the content type is not set. Fix `MIME_TYPE_REGEX`
+to also match media types with a non-vendor `+json` suffix, making it
+consistent with the response middleware's approach.
 
-### N8: Fix Test adapter stubs not matching requests with query parameters in the path
+### N8: Fix Test adapter stubs not checking URL scheme, allowing http/https mismatch
 
-In `lib/faraday/adapter/test.rb`, the `Test` adapter matches stubs
-by HTTP method and path. When a stub is registered with a path
-containing query parameters (e.g., `get("/api?page=1")`) and the
-actual request has the same query parameters in the `params` hash
-instead of the path string, the stub does not match. Fix the stub
-matching logic to normalize both stub and request paths by
-extracting and comparing query parameters separately.
+In `lib/faraday/adapter/test.rb`, `Stubs#new_stub` stores the host
+extracted from the stub path via `Utils.URI(path).host` but does not
+store the URI scheme. `Stub#matches?` checks `host.nil? || host ==
+request_host`, so a stub registered for
+`get("https://api.example.com/path")` also matches an HTTP request to
+`http://api.example.com/path` because only the host is compared. Fix
+`new_stub` and `Stub` to also extract and store the URI scheme, and
+update `Stub#matches?` to require that the scheme matches when the
+stub was registered with an absolute URL.
 
 ### N9: Fix Authorization middleware Bearer token not being refreshed for retried requests
 
@@ -200,26 +219,33 @@ attempt. Fix the middleware to always re-evaluate the proc on
 each `on_request` call, replacing any existing `Authorization`
 header.
 
-### N10: Fix FlatParamsEncoder.decode not handling duplicate keys
+### N10: Fix FlatParamsEncoder nil values producing broken encode/decode round-trip
 
 In `lib/faraday/encoders/flat_params_encoder.rb`,
-`FlatParamsEncoder.decode` parses a query string into a hash. When
-the query contains duplicate keys (e.g., `"a=1&a=2"`), only the
-last value is retained. Fix `decode` to collect duplicate keys into
-arrays, matching the behavior of `NestedParamsEncoder.decode`.
+`FlatParamsEncoder.encode` encodes `nil` values as bare keys without
+a `=` sign (e.g., `{a: nil}` encodes as `"a"`). However,
+`FlatParamsEncoder.decode` treats bare keys as `true` (boolean) via
+`pair[1] = true if pair[1].nil?`. This creates a broken round-trip:
+encoding `{a: nil}` and then decoding the result produces `{"a" =>
+true}`, not `{"a" => nil}`. Fix `encode` to omit parameters with
+`nil` values entirely, matching standard HTTP query string conventions
+and ensuring the encoded output can be meaningfully decoded.
 
-### N11: Fix docs/getting-started/quick-start.md containing outdated default adapter references
+### N11: Fix docs/getting-started/quick-start.md misleading default adapter example
 
-The `docs/getting-started/quick-start.md` guide references
-`Faraday.default_adapter = :net_http` as optional, but since Faraday
-2.x the `net_http` adapter is bundled and no longer requires separate
-configuration. The guide also omits the `faraday-net_http` gem
-dependency note that appears in the `README.md`. Additionally, the
-`.rubocop_todo.yml` contains stale `Metrics/MethodLength` exclusions
-for files that were refactored in 2.x. Fix `docs/getting-started/quick-start.md`
-to reflect the current adapter defaults, reconcile the dependency
-instructions with `README.md`, and clean up the stale entries in
-`.rubocop_todo.yml`.
+The `docs/getting-started/quick-start.md` guide includes a code block
+showing `Faraday.default_adapter = :async_http # defaults to :net_http`.
+The comment correctly states that `:net_http` is the default since
+Faraday 2.x, but the example substitutes `:async_http` without noting
+that this adapter requires the `faraday-async_http` gem (not bundled
+with Faraday). The `README.md` includes this gem dependency note for
+non-default adapters, but `quick-start.md` does not. Additionally,
+`.rubocop_todo.yml` has `Metrics/MethodLength: Max: 33` (a broad global
+override masking 28 long methods) instead of per-method suppressions
+that would make the actual offenses visible. Fix `quick-start.md` to
+add a note that non-default adapters require a separate gem, consistent
+with `README.md`, and update `.rubocop_todo.yml` to suppress
+`Metrics/MethodLength` per-file rather than globally.
 
 ## Medium
 
@@ -319,17 +345,23 @@ files or inline, validation logic with error collection,
 configurable behavior (raise vs. warn), schema caching by URL
 pattern, middleware registration, and specs.
 
-### M11: Update UPGRADING.md and docs/ for middleware deprecation notices
+### M11: Update UPGRADING.md, add v1-to-v2 migration guide, and improve PR template
 
-The `UPGRADING.md` file does not document the deprecation of
-positional arguments in `Faraday.new` (keyword arguments are now
-preferred), and the `docs/customization/` section lacks a guide on
-migrating custom middleware from the v1 API to v2. The
-`.github/PULL_REQUEST_TEMPLATE.md` does not include a checklist item
-for updating documentation when adding new middleware. Update
-`UPGRADING.md` with a deprecation table and migration examples,
-add `docs/customization/migration-v1-to-v2.md` covering middleware
-API changes, and add a documentation checklist item to
+`UPGRADING.md` covers the Faraday 2.0 adapter and middleware moves but
+lacks a dedicated section documenting the `Faraday::Request#method` →
+`#http_method` rename introduced in 2.0 with concrete before/after
+code examples. The `docs/customization/` directory has guides on
+connection and request options but no standalone migration guide for
+custom middleware authors moving from the v1 API (the deprecated
+`dependency` method, `Faraday::Response::Middleware` base class, and
+old `register_middleware` array syntax) to the v2 API. The
+`.github/PULL_REQUEST_TEMPLATE.md` Todos checklist only includes
+`Tests` and `Documentation`, with no `UPGRADING.md` item to remind
+contributors introducing breaking changes to update the upgrade guide.
+Update `UPGRADING.md` with a `#http_method` rename section, add
+`docs/customization/migration-v1-to-v2.md` covering the v1-to-v2
+custom middleware API changes, add a `docs/_sidebar.md` entry for the
+new guide, and add an `- [ ] UPGRADING.md` checklist item to
 `.github/PULL_REQUEST_TEMPLATE.md`.
 
 ## Wide
@@ -439,19 +471,34 @@ strategies, `lib/faraday/failover/circuit.rb` for per-backend
 circuit state, `Connection` configuration for backend list,
 automatic retry on backend failure, and specs.
 
-### W11: Overhaul docs/ documentation site and CI configuration
+### W11: Overhaul docs/ for completeness, consistency, and CI hardening
 
-The `docs/` documentation site (served via docsify with
-`docs/index.html`) is missing coverage for several built-in
-middleware and adapter combinations. The `docs/_sidebar.md`
-navigation does not include links for the `Authorization`,
-`Instrumentation`, or `Json` middleware pages. The
-`docs/adapters/index.md` adapter overview does not mention the
-test adapter. The `.github/workflows/ci.yml` CI workflow does not
-run on documentation-only PRs (no path filter), wasting CI minutes,
-and the `.github/workflows/publish.yml` publishing workflow lacks a
-step to validate documentation links. Overhaul `docs/_sidebar.md`
-to include all middleware and adapter pages, add missing
-`docs/adapters/test-adapter.md` and middleware documentation pages,
-add a path filter to `.github/workflows/ci.yml`, and add a
-link-checking step to `.github/workflows/publish.yml`.
+The `docs/getting-started/errors.md` errors table omits
+`Faraday::ParsingError` (raised by the JSON response middleware on
+malformed bodies) and `Faraday::InitializationError` (raised for
+invalid middleware options), both defined in `lib/faraday/error.rb`.
+The `docs/middleware/included/raising-errors.md` example code uses
+`e.response[:status]` but never mentions the `e.response_status`,
+`e.response_headers`, and `e.response_body` convenience methods on
+`Faraday::Error`, and also does not document the
+`Faraday::UnprocessableEntityError` legacy alias for
+`Faraday::UnprocessableContentError` (defined in `lib/faraday/error.rb`
+and still in use by existing code). The `docs/adapters/custom/testing.md`
+page does not mention the `#close` method that adapter implementations
+should define for connection teardown (documented in
+`docs/adapters/custom/index.md` but omitted from the testing guide).
+The `docs/index.html` CDN script tags use `@latest` and unversioned
+URLs for `docsify-darklight-theme`, `docsify-copy-code`, and
+`docsify-edit-on-github`, making the docs site vulnerable to
+unintentional breaking changes from upstream package updates. The
+`.github/workflows/ci.yml` workflow runs on all pull requests with no
+path filter, running the full Ruby test matrix for documentation-only
+changes. The `.github/workflows/publish.yml` release workflow has no
+link-validation step before publishing. Update
+`docs/getting-started/errors.md` to add the missing error classes,
+update `docs/middleware/included/raising-errors.md` to document the
+convenience accessors and the `UnprocessableEntityError` alias, update
+`docs/adapters/custom/testing.md` to mention `#close`, pin all CDN
+versions in `docs/index.html`, add a `paths-ignore` filter for
+docs-only paths to `.github/workflows/ci.yml`, and add a link-check
+step to `.github/workflows/publish.yml`.

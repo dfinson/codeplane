@@ -91,23 +91,30 @@ the intended display width. Fix `do_truncate` to optionally measure
 display width using `unicodedata.east_asian_width()` when a
 `width_aware` parameter is set to `True`.
 
-### N3: Add `is mapping` template test to `tests.py`
+### N3: Add `is nan` template test to `tests.py`
 
-The built-in tests in `tests.py` include `is iterable`, `is sequence`,
-and `is string`, but there is no `is mapping` test to check whether a
-value implements the `Mapping` ABC. Add a `test_mapping` function to
-`tests.py` that returns `True` for dict-like objects, and register it
-in `DEFAULT_TESTS` in `defaults.py`. Also add a documentation entry in `CHANGES.rst` describing the new `is mapping` test with usage examples.
+The built-in tests in `tests.py` include `is number`, `is integer`, and
+`is float` for numeric type checking, but there is no `is nan` test to
+distinguish IEEE 754 NaN values from regular floats. Template authors
+working with data pipelines that may produce NaN (e.g., from failed
+numeric computations) have no built-in way to guard against them. Add a
+`test_nan` function to `tests.py` using `math.isnan()` that returns
+`True` for float NaN values and `False` for all other values (including
+non-numeric types), and register it as `"nan"` in the `TESTS` dict in
+`tests.py`.
 
-### N4: Fix `FileSystemLoader` not normalizing path separators on Windows
+### N4: Fix `FileSystemLoader` not normalizing `searchpath` before computing cache keys
 
-The `FileSystemLoader` in `loaders.py` uses `os.path.join` to construct
-template file paths, but template names use forward slashes by
-convention. When a template name like `"partials/header.html"` is
-loaded on Windows, the path separator mismatch can cause cache misses
-in the bytecode cache (`bccache.py`) because the cache key includes the
-un-normalized path. Fix the loader to normalize separators before
-computing the cache key.
+The `FileSystemLoader` in `loaders.py` stores search paths via
+`os.fspath()` without normalizing them (e.g., no `os.path.normpath()`
+call). When two loader instances are constructed with logically
+equivalent but textually different paths (e.g., `"./templates"` vs
+`"templates"`, or `"/tmp/tpl/"` vs `"/tmp/tpl"`), the filename passed
+to `BytecodeCache.get_cache_key()` in `bccache.py` differs, causing
+cache misses even when the same template file is being compiled. Fix
+`FileSystemLoader.__init__` in `loaders.py` to normalize each search
+path with `os.path.normpath` so that equivalent paths always produce
+identical cache keys.
 
 ### N5: Add `lineno` context to `UndefinedError` messages
 
@@ -119,35 +126,41 @@ the `Undefined._fail_with_undefined_error` method to include the
 current template name and line number in the error message when the
 information is available from the call stack.
 
-### N6: Add `do_unique` filter to remove duplicate values from sequences
+### N6: Add `do_zip` filter to combine multiple sequences element-by-element
 
-The `filters.py` module has `do_sort`, `do_reverse`, `do_batch`, and
-`do_slice` for sequence manipulation, but no filter for removing
-duplicates while preserving order. Add a `do_unique` filter that accepts
-an optional `attribute` parameter (like `do_sort`) for deduplicating
-objects by a specific attribute, and uses an `OrderedDict` or `dict`
-key-tracking internally to preserve insertion order. Register it in
-`DEFAULT_FILTERS`.
+The `filters.py` module has `do_sort`, `do_reverse`, `do_batch`,
+`do_slice`, and `do_unique` for sequence manipulation, but no filter
+for combining multiple sequences element-by-element (like Python's
+built-in `zip()`). Add a `do_zip` filter that accepts one or more
+additional sequences alongside the input and returns an iterator of
+tuples pairing corresponding elements. Register it as `"zip"` in the
+`FILTERS` dict in `filters.py`.
 
-### N7: Fix `Optimizer` not folding `Concat` nodes with all-constant operands
+### N7: Fix `Optimizer` not eliminating dead `If` branches with constant conditions
 
-The `Optimizer` in `optimizer.py` constant-folds `Expr` nodes by
-calling `as_const()`, but `Concat` nodes (which represent
-`{{ "a" ~ "b" }}`) are not folded even when all operands are constant
-strings. This is because `Concat` is not a subclass of `Expr` that
-`as_const()` handles for concatenation. Fix the optimizer to detect
-`Concat` nodes with all-`Const` children and replace them with a single
-`Const` node containing the concatenated string.
+The `Optimizer` in `optimizer.py` uses `generic_visit` to constant-fold
+`Expr` nodes, which means `If.test` expressions that are constant (e.g.,
+`{% if true %}` or `{% if false %}`) are reduced to a `Const` node.
+However, the `Optimizer` has no `visit_If` method and never removes the
+`If` statement itself — the dead branch (the never-taken body or else
+clause) remains in the compiled AST. Fix the optimizer by adding a
+`visit_If` method that, after visiting children, checks whether `If.test`
+is a `Const` and replaces the whole `If` node with either the `body`
+nodes (if the condition is truthy) or the `elif_`/`else_` nodes (if the
+condition is falsy), discarding the dead branch entirely.
 
-### N8: Add `ignore_missing` parameter to `ChoiceLoader`
+### N8: Add `OSError` handling to `ChoiceLoader` for resilient template lookup
 
-The `ChoiceLoader` in `loaders.py` iterates through its list of loaders
-and raises `TemplateNotFound` if none can locate the template. However,
-there is no way to make it silently skip loaders that raise import
-errors or configuration errors during initialization. Add an
-`ignore_missing` parameter to `ChoiceLoader.__init__` that catches
-`TemplateNotFound` (and optionally `OSError`) from individual loaders
-and continues to the next one, only raising if all loaders fail.
+The `ChoiceLoader` in `loaders.py` already catches `TemplateNotFound`
+from each loader and falls through to the next, but it does not catch
+`OSError`. When a loader raises `OSError` (for example, due to
+permission errors, a missing NFS mount, or a broken symlink in a
+`FileSystemLoader` searchpath), the error propagates immediately
+instead of trying the next loader in the list. Add an `ignore_errors`
+parameter to `ChoiceLoader.__init__` (defaulting to `False`) that,
+when `True`, also catches `OSError` from individual loaders in both
+`get_source` and `load`, continuing to the next loader rather than
+aborting.
 
 ### N9: Fix `TokenStream.expect` not including available token types in error
 
@@ -429,23 +442,29 @@ collection, aggregation, and output formatting.
 
 ### N11: Add migration notes and deprecation notices to `CHANGES.rst`
 
-The `CHANGES.rst` file does not include forward-looking deprecation
-notices or migration guidance for upcoming breaking changes. Add a
-new section for the upcoming release with entries documenting deprecated
-APIs, their replacements, and the planned removal timeline. Include
-cross-references to the relevant documentation pages for migration
-instructions.
+The `CHANGES.rst` file documents the `__version__` deprecation in the
+3.2.0 unreleased section but provides no migration guidance — no
+before/after code examples showing how callers should update their code.
+Add a dedicated "Migration Notes" sub-section to the 3.2.0 entry in
+`CHANGES.rst` that documents each deprecated API with an explicit
+before/after code snippet and the planned removal version. Include at
+minimum a migration example for the `__version__` deprecation, showing
+the equivalent `importlib.metadata.version("jinja2")` call.
 
-### M11: Update `pyproject.toml` build configuration and `.readthedocs.yaml` for API docs
+### M11: Update `pyproject.toml`, `.editorconfig`, and `.readthedocs.yaml` for missing configuration
 
-The `pyproject.toml` uses an older build backend configuration and
-lacks optional dependency groups for documentation tooling. Add
-`[project.optional-dependencies]` groups for `docs` and `dev`.
-Update `.readthedocs.yaml` to use the new dependency group,
-configure the build OS, and add a custom build step for API
-reference generation via `sphinx-autodoc`. Also update
-`.pre-commit-config.yaml` to add template-syntax checking hooks
-and pin existing hook versions.
+The `pyproject.toml` is missing per-version Python classifiers (e.g.,
+`"Programming Language :: Python :: 3.10"` through `"Programming Language
+:: Python :: 3.13"`) in the `[project]` classifiers list. The
+`.editorconfig` has no section for Jinja2 template file extensions
+(`.j2`, `.jinja2`), leaving template files without editor-enforced
+indentation and whitespace rules. The `.readthedocs.yaml` build only
+invokes `sphinx-build` for the narrative docs but does not run
+`sphinx-apidoc` to generate an API reference page from the source
+docstrings. Update all three files: add the Python version classifiers
+to `pyproject.toml`, add a `[*.{j2,jinja2}]` section to `.editorconfig`
+matching the existing whitespace settings, and extend `.readthedocs.yaml`
+to invoke `sphinx-apidoc` before the main documentation build.
 
 ### W11: Full documentation and configuration overhaul across non-code files
 

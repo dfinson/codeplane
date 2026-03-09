@@ -95,9 +95,9 @@ sidekiq/
 
 ## Narrow
 
-### N1 – Fix retry delay calculation overflow for large retry counts
+### N1 – Fix retry delay calculation lacks an upper bound for large retry counts
 
-When a job exceeds 20 retries, the exponential backoff formula in job_retry.rb produces a delay value that overflows Ruby's integer-to-time conversion, causing a NoMethodError. The calculation should cap the delay at a configurable maximum rather than growing unboundedly.
+The exponential backoff formula in `job_retry.rb` computes the delay as `count**4 + 15` seconds. Ruby uses arbitrary-precision integers so there is no arithmetic overflow, but there is no upper cap on the result. When operators configure a non-default `max_retries` value much larger than the default 25, the delay grows to astronomical values (e.g., count=100 yields ~1.16 million seconds, over 13 days), making the job effectively unreachable. Fix `job_retry.rb` to cap the computed delay at a configurable maximum (e.g., defaulting to `MAX_RETRY_DELAY = 86_400` seconds) before adding jitter.
 
 ### N2 – Scheduled poller skips jobs when system clock drifts backward
 
@@ -117,56 +117,47 @@ string to a reasonable maximum (e.g., 200 characters). Also update
 overflow toggle on the job arguments cell, so that even non-exception
 large payloads render without blowing up the page layout.
 
-### N4 – Fetch strategy does not respect queue weights under low load
+### N4 – BasicFetch brpop timeout is hardcoded and not configurable
 
-The BasicFetch strategy is documented to perform weighted random queue selection, but under low job volumes the implementation in fetch.rb degenerates to round-robin. The queue ordering array is shuffled without accounting for weight distribution, so queues with higher weights are not polled proportionally more often.
+The `BasicFetch` class in `fetch.rb` declares `TIMEOUT = 2` as a module constant and uses it as both the `brpop` blocking timeout and the sleep duration when the queue list is empty. This value is not present in `Sidekiq::Config::DEFAULTS` in `config.rb` and cannot be tuned by operators. Under graceful shutdown, each worker thread must wait up to `TIMEOUT` seconds before detecting the `@done` flag; with 25 concurrent threads all blocked simultaneously, shutdown responsiveness scales with this constant. Fix `fetch.rb` to read the timeout from `config[:fetch_timeout]` with a fallback of 2, and add `fetch_timeout: 2` to `Sidekiq::Config::DEFAULTS` in `config.rb`.
 
 ### N5 – Logger context lost after middleware chain exception
 
 When a server middleware raises and the exception propagates through the chain, the structured logging context (job ID, queue name) set by the processor is cleared before the error handler runs. The error log entry lacks the job context needed for debugging.
 
-### N6 – Scheduled poller Enq does not handle Lua script eviction gracefully on replica failover
+### N6 – Scheduled poller zpopbyscore retries NOSCRIPT without a depth limit
 
-The `Enq` class in `scheduled.rb` caches the SHA of the
-`LUA_ZPOPBYSCORE` script in `@lua_zpopbyscore_sha` and retries once
-on `NOSCRIPT` error. However, during a Redis replica failover the new
-primary has no cached scripts, and if multiple pollers race to reload
-the script simultaneously, the retry path can encounter a second
-`NOSCRIPT` error from a stale SHA computed against the old primary.
-Fix `scheduled.rb` to nil out `@lua_zpopbyscore_sha` before retrying
-so the reload always uses a fresh `SCRIPT LOAD` against the current
-primary.
+The `zpopbyscore` method in `scheduled.rb` rescues `NOSCRIPT` errors,
+sets `@lua_zpopbyscore_sha = nil`, and calls `retry` with no guard on
+the number of attempts. If the Redis server repeatedly returns
+`NOSCRIPT` after a fresh `SCRIPT LOAD` — for example when
+`maxmemory-policy` is configured to evict Lua scripts immediately, or
+after a failover where the new primary rejects the freshly loaded
+script before the connection is fully established — the method loops
+infinitely rather than surfacing the error to the caller. Fix
+`scheduled.rb` to track the number of NOSCRIPT retries and raise the
+original `RedisClient::CommandError` after more than one attempt, so
+persistent script-loading failures propagate to the `Poller#enqueue`
+error handler instead of hanging the scheduler thread.
 
 ### N7 – Dead job display truncates large payloads in web UI
 
-The morgue view in the web dashboard truncates job argument display at 100 characters without providing an expand option. For jobs with large serialized payloads, this makes it impossible to inspect the full arguments from the dashboard.
+The `display_args` helper in `web/helpers.rb` truncates each argument string to 2000 characters with no expand option. For jobs with large serialized payloads, this makes it impossible to inspect the full arguments from the morgue view in the dashboard.
 
-### N8 – Redis connection pool exhaustion not reported in health check
+### N8 – Web application lacks a lightweight health endpoint for readiness probes
 
-When the Redis connection pool is fully checked out and threads are waiting, the health endpoint in the web application still returns 200 OK. It should report a degraded status when pool contention exceeds a configurable threshold so load balancers can react.
+The Sidekiq web application exposes a `/stats` JSON endpoint that returns full queue and Redis statistics, but there is no dedicated lightweight health endpoint suitable for Kubernetes readiness probes or load-balancer health checks. Add a `/health` route to the web application that performs a minimal Redis ping and returns HTTP 200 with a JSON body when the Redis connection is available, or HTTP 503 when it is not. The endpoint should also report a degraded status when the Redis connection pool is fully checked out beyond a configurable threshold.
 
-### N9 – Signal handler raises ThreadError on JRuby
+### N9 – INFO signal silently fails on Linux, leaving no signal-triggered backtrace mechanism
 
-The TSTP signal handler installed by cli.rb calls Thread.new inside a signal trap, which raises ThreadError on JRuby. The handler should defer thread creation by writing to a self-pipe that the main loop reads, matching the approach used for other signals.
+The `INFO` signal is a BSD/macOS-specific signal that is not available on Linux. In `cli.rb`, `Signal.trap("INFO")` raises `ArgumentError` on Linux; this is caught and printed to stdout with `puts "Signal INFO not supported"` rather than through the logger, so the failure is invisible in structured log streams. The TTIN deprecation message in the same file tells users to "use the INFO signal for backtraces", but on Linux this is silently a no-op. Fix `cli.rb` to detect when `INFO` registration fails (rescue `ArgumentError`), log the warning through the configured logger rather than `puts`, and register the same backtrace-dump handler on `USR1` as a Linux fallback. Update the TTIN deprecation message to mention the `USR1` fallback for non-BSD platforms.
 
 ### N10 – i18n fallback missing for relative time helpers on dashboard
 
 The web helpers that display relative time strings (e.g., "3 hours ago") fall back to English when the selected locale is missing the relative_time key, but the fallback bypasses Rails I18n.fallbacks and instead hard-codes "en", ignoring any configured fallback chain.
-### N11 – Fix web/locales/en.yml missing translation keys for metrics and filtering pages
+### N11 – Non-English locale files missing translation keys added for metrics, filtering, and profiles pages
 
-The `web/locales/en.yml` file does not contain translation keys for
-the metrics page (`web/views/metrics.html.erb`) or the filtering
-page (`web/views/filtering.html.erb`), which were added after the
-initial locale file was created. These pages fall back to hard-coded
-English strings embedded in the ERB templates. Additionally, the
-`.github/ISSUE_TEMPLATE/bug_report.md` template does not ask
-reporters to specify their locale setting, making it difficult to
-reproduce i18n-related dashboard bugs. Fix `web/locales/en.yml` to
-add all missing keys for the metrics and filtering views, update at
-least three other locale files (`web/locales/ja.yml`,
-`web/locales/de.yml`, `web/locales/fr.yml`) with placeholder
-translations, and add a locale field to
-`.github/ISSUE_TEMPLATE/bug_report.md`.
+The `web/locales/en.yml` file contains all required translation keys including newer entries for the metrics page (`Metrics`, `TotalExecutionTime`, `AvgExecutionTime`, `NoJobMetricsFound`, `NoDataFound`), the filtering page (`Filter`, `AnyJobContent`), and the profiles page (`Profiles`, `Data`, `View`, `Token`, `ElapsedTime`, `Context`). However, over half of the 30 locale files under `web/locales/` are missing these newer keys, causing mixed-language rendering on the metrics, filtering, and profiles pages for non-English users. Additionally, the `.github/ISSUE_TEMPLATE/bug_report.md` template does not ask reporters to specify their locale setting, making it difficult to reproduce i18n-related dashboard bugs. Audit all 30 `web/locales/*.yml` files to add all keys present in `en.yml` that are absent in each locale (using the English string as a placeholder), and add a locale field to `.github/ISSUE_TEMPLATE/bug_report.md`.
 ## Medium
 
 ### M1 – Add batch job support with completion callbacks
@@ -181,9 +172,9 @@ Add the ability to pause and resume individual queues. The fetch strategy should
 
 Implement a uniqueness layer that prevents duplicate jobs from being enqueued. Support multiple strategies (until_executing, until_completed, while_executing) configured per worker class. The check should happen in client middleware using Redis locks, and lock cleanup should happen in server middleware at the appropriate lifecycle point for each strategy.
 
-### M4 – Extend retry subsystem with per-job retry timing overrides
+### M4 – Add per-attempt retry lifecycle hook to the retry subsystem
 
-The retry system uses a global exponential backoff formula. Allow individual worker classes to specify a custom retry timing function via a sidekiq_retry_in method. The job_retry module should check for this method on the worker class before falling back to the default formula, and the web retry view should display the custom next-retry time.
+The retry subsystem in `job_retry.rb` provides `sidekiq_retries_exhausted` (called when all retries are exhausted) and `sidekiq_retry_in` (to customize delay), but has no hook that fires on each individual retry attempt. Add a `sidekiq_on_retry` class method to `Sidekiq::Job` in `lib/sidekiq/job.rb` that accepts a block receiving the retry count, exception, and job hash, storing it as `sidekiq_on_retry_block`. Invoke this block from `process_retry` in `job_retry.rb` before scheduling the retry delay, with the same error-handling guard used by `sidekiq_retry_in_block`. Support the wrapped-class pattern (ActiveJob) by also checking the `wrapped` class for the hook, matching the existing `sidekiq_retry_in_block` lookup. Expose the hook in the web retries view to indicate which job classes have custom retry handlers, and add a convenience accessor in `lib/sidekiq/api.rb` `Job` so callers can check `retry_handler_registered?`.
 
 ### M5 – Build a middleware profiling system
 
@@ -218,14 +209,17 @@ execution sequence. The `docs/7.0-Upgrade.md` guide does not
 mention the breaking change to middleware argument passing
 introduced in version 7. The `docs/internals.md` file references
 the fetch-process-retry cycle but does not link to the middleware
-documentation. The `.github/contributing.md` still references the
-old `bundle exec rake test` command instead of the current test
-command. Update `docs/middleware.md` with an execution-order
+documentation. The `.github/contributing.md` Beginner's Guide
+instructs contributors to run `bundle exec rake` but does not
+explain that this single command runs three tasks in sequence:
+`standard` (Ruby linting), `lint:herb` (ERB linting), and `test`
+(the full test suite), which matters when contributors want to run
+only one stage. Update `docs/middleware.md` with an execution-order
 diagram and client vs. server middleware comparison,
 update `docs/7.0-Upgrade.md` with the middleware argument change,
 add cross-references from `docs/internals.md` to
-`docs/middleware.md`, and fix the test command in
-`.github/contributing.md`.
+`docs/middleware.md`, and expand the contributing.md testing section
+to document the three individual Rake tasks.
 
 ## Wide
 

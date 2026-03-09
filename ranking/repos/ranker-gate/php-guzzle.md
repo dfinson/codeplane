@@ -162,13 +162,19 @@ fail), and half-open (test one request) states. Combine with the
 existing retry middleware so retries respect the circuit state. Add
 configurable failure detection (status codes, timeouts, exceptions).
 
-### M2: Add request/response body streaming with progress callbacks
+### M2: Add chunked download streaming with backpressure and pause/resume
 
-Implement streaming body support with progress reporting. For uploads,
-add a `progress` callback option that receives bytes sent / total bytes.
-For downloads, add a streaming response body that yields chunks with
-progress tracking. Support pause/resume for large transfers. Add a
-`StreamHandler` that wraps the existing cURL handler with stream support.
+The existing `progress` callback option reports byte counts for uploads
+and downloads but provides no way to pause or resume a transfer and no
+way to consume a response body incrementally as chunks arrive. Implement
+a `StreamingBody` decorator for PSR-7 response bodies that wraps the
+handler's raw stream and exposes a `read(int $chunkSize): ?string` method
+yielding one chunk at a time. Add a `pause()` / `resume()` API backed by
+a flag that the progress callback checks before reading the next chunk.
+Extend `CurlFactory` and `StreamHandler` to attach a `StreamingBody`
+when a new `stream_response` request option is set to `true`. Add a
+`ProgressSubscriber` helper that wires the chunk events to a user-supplied
+callable with `(int $downloaded, int $total)` signature.
 
 ### M3: Implement connection pooling with keep-alive management
 
@@ -188,16 +194,22 @@ a numeric priority and optional `depends_on` / `before` constraints.
 Resolve ordering with topological sort. Detect and report circular
 dependencies at stack compilation time instead of at request time.
 
-### M5: Implement automatic request decompression negotiation
+### M5: Extract decompression logic into `DecompressionMiddleware` and add Brotli support
 
-Add middleware that automatically sets the `Accept-Encoding` header
-to advertise supported compression algorithms (`gzip`, `deflate`,
-`br`), then transparently decompresses the response body based on
-the `Content-Encoding` header. Handle edge cases: chunked transfer
-encoding combined with compression, partial content (206 responses),
-and servers that compress without being asked. Register it in the
-default `HandlerStack` in the appropriate position relative to
-other middleware.
+Guzzle's response decompression is currently split between `Client.php`
+(which sets the `Accept-Encoding` header for the `decode_content` option)
+and each handler: `CurlFactory` delegates to cURL's built-in
+`CURLOPT_ENCODING`, while `StreamHandler` manually inflates `gzip` and
+`deflate` but has no `br` (Brotli) support. Extract all decompression
+logic into a new `DecompressionMiddleware` class that (1) adds
+`Accept-Encoding: gzip, deflate, br` to outgoing requests when
+`decode_content` is enabled, (2) decompresses the response body using
+`zlib_decode()` for gzip/deflate and `brotli_decode()` (when the
+`brotli` PHP extension is available) for `br`, (3) strips the
+`Content-Encoding` header from the decoded response. Register the
+middleware in `HandlerStack::create()` in place of the current per-handler
+decode logic. Handle edge cases: partial content (206), identity encoding,
+and unknown encoding values.
 
 ### M6: Add structured logging middleware with PSR-3 integration
 
@@ -389,18 +401,19 @@ element (`backupGlobals`, `convertDeprecationsToExceptions`), and
 ensure the test suite configuration remains compatible with both
 PHPUnit 9.x and 10.x.
 
-### M11: Update Sphinx documentation and modernize `Makefile` targets
+### M11: Add missing `Makefile` targets and create `docs/migration.rst`
 
-The `docs/overview.rst` still references Guzzle 6.x API patterns
-and outdated handler examples. Rewrite it to cover the v7 middleware
-pipeline and `HandlerStack` architecture. Add new `Makefile` targets
-for running Psalm (`make static-psalm`), generating Clover XML
-coverage reports (`make coverage-clover`), and running all static
-analysis tools in parallel (`make static-all`). Update
-`docs/conf.py` with the current project version string and
-`docs/requirements.txt` with pinned Sphinx dependency versions.
-Add a `docs/migration.rst` guide covering the v6-to-v7 upgrade
-path with before/after code examples.
+The `Makefile` is missing two useful targets: `coverage-clover` (run
+PHPUnit with `--coverage-clover=build/artifacts/coverage.xml`) and
+`static-all` (run `static-phpstan`, `static-psalm`, and
+`static-codestyle-check` in parallel using `make -j3`). Add both
+targets. Update `docs/conf.py` to reflect the current project version
+string (`7.10`) and tighten `docs/requirements.txt` to pin minor
+versions of the Sphinx dependencies (`Sphinx`, `guzzle_sphinx_theme`,
+`jinja2`, `markupsafe`) so documentation builds are reproducible.
+Create a new `docs/migration.rst` guide covering the v6-to-v7 upgrade
+path with before/after code examples for the changed handler and
+middleware APIs.
 
 ### W11: Overhaul project infrastructure and contributor documentation
 
@@ -408,8 +421,9 @@ Update `Dockerfile` from the outdated PHP 7.3 base image to PHP 8.3
 with a multi-stage build that installs dependencies and runs the
 test suite during image construction. Modernize `composer.json` by
 adding a `scripts` section with `test`, `lint`, `analyze`, and
-`cs-fix` commands. Migrate `phpstan.neon.dist` to enable level 9
-and remove the baseline file dependency. Update `psalm.xml` to use
+`cs-fix` commands. Migrate `phpstan.neon.dist` to remove the
+`phpstan-baseline.neon` include and resolve all reported issues
+directly in the source. Update `psalm.xml` to use
 strict mode with no baseline. Refresh `UPGRADING.md` with a new
 section preparing users for v8.0 breaking changes. Add a
 `CONTRIBUTING.md` file documenting the PR workflow, coding standards

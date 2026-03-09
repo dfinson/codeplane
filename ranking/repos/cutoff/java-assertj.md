@@ -183,15 +183,20 @@ manually (e.g., `TimeUnit.SECONDS.toMillis(5)`). Add
 is non-negative in the new overloads, throwing `IllegalArgumentException`
 with a descriptive message when it is not.
 
-### N5: Fix VerboseCondition not including the mapped value in the failure description
+### N5: Add no-descriptor factory to VerboseCondition that uses StandardRepresentation
 
 In `assertj-core/src/main/java/org/assertj/core/condition/VerboseCondition.java`,
-when the wrapped condition fails, the error message shows only the
-condition description but not the actual value that was tested. The
-`describedAs` method on the inner condition is not updated with the
-actual value's representation. Fix `VerboseCondition.matches` to include
-the `StandardRepresentation` of the tested value in the failure
-description.
+the only factory method `verboseCondition(Predicate<T>, String, Function<T, String>)`
+requires callers to supply an explicit `objectUnderTestDescriptor` function even
+when a simple default description (the standard `toString`-style representation)
+would suffice. Add a two-argument overload
+`verboseCondition(Predicate<T> predicate, String description)` to
+`VerboseCondition` that defaults to using
+`StandardRepresentation.STANDARD_REPRESENTATION.toStringOf(actual)` as the
+object descriptor. Modify `buildVerboseDescription` in `VerboseCondition.java`
+to fall back to `StandardRepresentation` when no explicit descriptor was
+provided at construction time. No changes outside `VerboseCondition.java` and
+`presentation/StandardRepresentation.java` are required.
 
 ### N6: Fix Offset.strictOffset Javadoc examples using wrong factory method and Numbers.assertIsCloseTo wrong file reference
 
@@ -211,12 +216,16 @@ correctly passes for strict offsets when `diff == 0` (since `0 < any positive st
 ### N7: Fix MappedCondition.toString not including the mapping function description
 
 In `assertj-core/src/main/java/org/assertj/core/condition/MappedCondition.java`,
-calling `toString()` on a `MappedCondition` returns only the inner
-condition's description, omitting the mapping function name passed to
-the constructor. When this condition is used in `has(mappedCondition)`,
-the error message does not indicate what mapping was applied. Fix
-`toString` and `descriptionText` to include the mapping description
-provided at construction time.
+`MappedCondition` uses the no-arg `Condition()` constructor, which sets the
+description to the simple class name `"MappedCondition"`. The `mappingDescription`
+and inner `condition` description are only incorporated into `toString()` after
+`matches()` is called, because the description is overwritten via
+`describedAs(buildMappingDescription(...))` inside `matches`. When the
+condition is inspected (e.g., logged or included in a compound condition) before
+`matches()` has been called, `toString()` returns the uninformative class name.
+Override `toString()` in `MappedCondition` to eagerly compose a meaningful
+description from `mappingDescription` and the inner condition's description
+without requiring `matches()` to be called first.
 
 ### N8: Fix DeepDifference treating two empty Optional values as different
 
@@ -228,19 +237,21 @@ implementation differences across JDK versions. Fix `deepEquals` to
 check for `Optional` and compare by `Optional.equals` semantics before
 falling through to field-level comparison.
 
-### N9: Fix AbstractCharSequenceAssert.doesNotMatch missing Pattern overload
+### N9: Fix AbstractCharSequenceAssert.containsIgnoringCase missing varargs overload
 
 In `assertj-core/src/main/java/org/assertj/core/api/AbstractCharSequenceAssert.java`,
-`doesNotMatch(CharSequence regex)` compiles a pattern from the string at
-call time without flags. When users need flag-sensitive negative matching
-(e.g., case-insensitive), they must embed inline flags (`(?i)`) in the
-regex string. A `doesNotMatch(java.util.regex.Pattern pattern)` overload
-accepting a pre-compiled `Pattern` is absent (unlike `containsPattern`,
-which already has both `CharSequence` and `Pattern` overloads). Add
-`doesNotMatch(Pattern pattern)` to `AbstractCharSequenceAssert` that
-delegates to `Strings.assertDoesNotMatch(AssertionInfo, CharSequence, Pattern)`
-in `internal/Strings.java`, adding that internal method alongside the
-existing `assertDoesNotMatch(AssertionInfo, CharSequence, Pattern)` logic.
+`containsIgnoringCase(CharSequence sequence)` accepts only a single value,
+creating an asymmetry with `doesNotContainIgnoringCase(CharSequence... values)`,
+which already accepts multiple values. There is no
+`containsIgnoringCase(CharSequence... sequences)` varargs overload, forcing users
+who need to assert that multiple substrings are present (ignoring case) to chain
+multiple single-value calls instead of one fluent call. Add
+`containsIgnoringCase(CharSequence... sequences)` to
+`AbstractCharSequenceAssert` that calls
+`Strings.assertContainsIgnoringCase(AssertionInfo, CharSequence, CharSequence...)`
+in `internal/Strings.java`, adding that multi-value internal method alongside
+the existing single-value `assertContainsIgnoringCase(AssertionInfo, CharSequence, CharSequence)`.
+The existing single-value overload must remain unchanged.
 
 ### N10: Fix AbstractMapAssert.containsExactlyInAnyOrderEntriesOf not reporting value mismatches for same keys
 
@@ -270,14 +281,17 @@ add the JSONPath library dependency (`com.jayway.jsonpath:json-path`)
 to `assertj-core/pom.xml` as an `<optional>true</optional>` dependency
 and update `assertj-bom/pom.xml` to include it in the BOM.
 
-### M2: Add temporal assertion support for java.time.YearMonth
+### M2: Add temporal assertion support for java.time.MonthDay
 
-Implement `AbstractYearMonthAssert` with assertions: `isBefore`,
-`isAfter`, `isBetween`, `hasYear`, `hasMonth`, and `isIn`. Requires
-a new assert class in `api/`, a `YearMonths.java` comparison helper
-in `internal/`, error message factories in `error/`, an
-`assertThat(YearMonth)` entry point in `Assertions.java` and
-`BDDAssertions.java`, and `SoftAssertions` support.
+Implement `AbstractMonthDayAssert` for `java.time.MonthDay` with
+assertions: `isBefore(MonthDay)`, `isAfter(MonthDay)`, `isBetween(MonthDay,
+MonthDay)`, `hasMonth(Month)`, `hasDayOfMonth(int)`, and `isIn(MonthDay...)`.
+Requires a new `MonthDayAssert.java` and `AbstractMonthDayAssert.java` in
+`api/`, a `MonthDays.java` comparison helper in `internal/`, error message
+factories in `error/` (e.g., `ShouldBeBeforeMonthDay.java`), an
+`assertThat(MonthDay)` entry point in `Assertions.java` and
+`BDDAssertions.java`, and `SoftAssertions` support via
+`WithAssertions.java`.
 
 ### M3: Implement assertion chaining with transforming extractors
 
@@ -300,25 +314,38 @@ the error factories in `error/ElementsShouldBe.java` and
 `error/ElementsShouldHave.java`, and static factory methods in
 `Assertions.java`.
 
-### M5: Implement custom representation per assertion instance
+### M5: Add block-level representation configuration to SoftAssertions
 
-Add `withRepresentation(Representation)` to `AbstractAssert` that
-overrides the global representation for a single assertion chain.
-Requires changes to `AbstractAssert.java` to store an instance-level
-`Representation`, propagation through `Failures.java` and
-`MessageFormatter.java` in `error/`, `DescriptionFormatter.java`
-updates, recursive comparison support in `RecursiveComparisonConfiguration`,
-and `SoftAssertions` proxy support.
+`AbstractSoftAssertions` has no mechanism for setting a default
+`Representation` for all assertions created within a soft assertions block.
+Users must either call the global `AbstractAssert.setCustomRepresentation()`
+(which affects every thread) or chain `.withRepresentation(r)` on every
+individual assertion. Add `withRepresentation(Representation)` to
+`AbstractSoftAssertions` that configures the representation for all
+proxy-generated assertion instances within the block. Requires changes to
+`AbstractSoftAssertions.java` to store the representation and pass it to
+newly created proxies, `SoftProxies.java` to apply the configured
+representation when creating proxy instances via `WritableAssertionInfo`,
+`WritableAssertionInfo.java` for representation propagation, and
+`SoftAssertionsProvider.java` to expose the new method through the
+interface. The existing global `AbstractAssert.setCustomRepresentation()`
+must remain unchanged.
 
-### M6: Add fluent exception cause chain assertions
+### M6: Add Consumer-based message assertion to AbstractThrowableAssert
 
-Implement `assertThatExceptionOfType(Class).isThrownBy(ThrowingCallable).havingRootCause()`
-that navigates to the root cause and returns a new
-`AbstractThrowableAssert` for it. Requires changes to
-`AbstractThrowableAssert.java` for `havingRootCause()`, a
-`RootCause.java` helper in `internal/`, error messages in
-`error/ShouldHaveRootCause.java`, and integration with
-`ThrowableAssertAlternative` in `api/`.
+`AbstractThrowableAssert` and `ThrowableAssertAlternative` have no method
+that passes the exception message to an arbitrary `Consumer<String>` for
+flexible message assertions, forcing users to call `.hasMessage(exact)`,
+`.hasMessageContaining(sub)`, or to manually extract the message.
+Add `hasMessageSatisfying(Consumer<String> messageRequirements)` to
+`AbstractThrowableAssert` that passes the actual exception message (or
+fails if the message is null) to the consumer. Add the corresponding
+`withMessageSatisfying(Consumer<String> messageRequirements)` to
+`ThrowableAssertAlternative`. Requires changes to
+`AbstractThrowableAssert.java`, `ThrowableAssertAlternative.java`,
+`internal/Throwables.java` for the null-message guard, and a new
+`error/ShouldHaveMessageSatisfyingRequirements.java` factory for the
+null-message failure case.
 
 ### M7: Implement iterable assertion windowing for sliding comparisons
 
@@ -463,54 +490,49 @@ import rewriting, Maven/Gradle plugin for bulk migration, dry-run
 mode with diff output, and integration tests with sample Hamcrest
 test files.
 
-### N11: Fix assertj-bom/pom.xml not listing assertj-guava in the bill of materials
+### N11: Fix assertj-bom/pom.xml not managing the Guava transitive dependency version
 
-The `assertj-bom/pom.xml` defines a Maven BOM for consistent version
-management but only includes `assertj-core` — it does not include
-`assertj-guava` as a managed dependency. Projects importing the BOM
-via `<dependencyManagement>` must separately specify the
-`assertj-guava` version, risking version mismatches. Add
-`assertj-guava` to the `assertj-bom/pom.xml`
-`<dependencyManagement>` section with `${project.version}`. Also
-add a comment block in the BOM POM explaining the inclusion criteria
-for managed artifacts.
+The `assertj-bom/pom.xml` manages `assertj-core` and `assertj-guava` versions
+but does not manage their shared transitive dependency `com.google.guava:guava`.
+Projects that import the AssertJ BOM and also declare a direct Guava dependency
+may see version resolution conflicts because the BOM provides no guidance on the
+Guava version. Add `com.google.guava:guava` at version `33.5.0-jre` (matching
+the version declared in `assertj-guava/pom.xml`) to the `<dependencyManagement>`
+section of `assertj-bom/pom.xml`. Also add an XML comment block before the
+`<dependencyManagement>` element explaining the criteria for including a
+dependency in the BOM.
 
-### M11: Add binary compatibility checking to CI and update assertj-parent/pom.xml
+### M11: Improve binary compatibility checking and add release documentation
 
-The `.github/workflows/binary-compatibility.yml` workflow exists but
-uses an outdated `japicmp-maven-plugin` configuration that does not
-check for `@API(status = INTERNAL)` accidental exposure. Update the
-`assertj-parent/pom.xml` to configure `japicmp-maven-plugin` with
-`<onlyModified>true</onlyModified>` and exclusion patterns for
-internal packages (`org.assertj.core.internal.*`). Update the CI
-workflow to run compatibility checks against the latest released
-version rather than a hardcoded baseline. Add an
-`.editorconfig` rule enforcing 2-space indentation for XML files
-(POM files). Update `.github/dependabot.yml` to add Maven ecosystem
-monitoring with weekly schedule. Add a `RELEASING.md` document
-describing the release process, version bump procedure, and
-compatibility verification steps.
+The `.github/workflows/binary-compatibility.yml` workflow exists and the
+`assertj-parent/pom.xml` `japicmp-maven-plugin` configuration already has
+`<onlyModified>true</onlyModified>`, but it is missing `<excludes>` patterns
+for internal implementation packages. Classes in `org.assertj.core.internal.*`
+are not part of the public API surface but are currently included in
+compatibility reports, producing false-positive failures when internal details
+change. Add an `<excludes>` configuration block to the `japicmp-maven-plugin`
+in `assertj-parent/pom.xml` to exclude `org.assertj.core.internal.*` and any
+other non-public packages from binary compatibility checks. Also add a comment
+in the `binary-compatibility.yml` workflow explaining the exclusion rationale.
+Finally, add a `RELEASING.md` document at the repository root describing the
+release process, version-bump procedure, and compatibility verification steps.
 
 ### W11: Overhaul Maven build, CI workflows, migration scripts, and documentation
 
 Comprehensively update all non-code project files for the AssertJ 4.x
-release. Restructure the root `pom.xml` to add
-`maven-enforcer-plugin` with minimum Maven 3.8.8 and JDK 17 rules.
-Update `assertj-parent/pom.xml` to configure `maven-surefire-plugin`
-with `--add-opens` for JDK 17+ module access, add
-`maven-compiler-plugin` `<release>17</release>` configuration, and
-add `spotless-maven-plugin` for consistent code formatting. Update
-`.github/workflows/main.yml` to add a JDK 17/21 test matrix, add
-a `qodana.yml` code quality scan with baseline, and add a
-`release.yml` workflow for automated Maven Central publishing via
-`maven-deploy-plugin`. Update the migration scripts in `scripts/`
+release. Update the root `pom.xml` to add `<requireMavenVersion>` (minimum
+3.8.8) and `<requireJavaVersion>` (minimum 17) rules to the existing
+`maven-enforcer-plugin` configuration so users get clear errors when their
+toolchain is incompatible. Update `.github/workflows/main.yml` to add an LTS
+JDK matrix job running Java 17 and 21 (in addition to the existing early-access
+matrix for 26/27/loom/leyden/valhalla), enabling verification on long-term
+support releases. Update the migration scripts in `scripts/`
 (`convert-junit-assertions-to-assertj.sh`,
 `convert-junit5-assertions-to-assertj.sh`) to add support for JUnit
-5.10+ assertion patterns and add a new
-`convert-hamcrest-to-assertj.sh` script. Update `README.md` to add
-a migration guide from AssertJ 3.x to 4.x, refresh the feature
-overview, and add a comparison table with other assertion libraries.
-Update `CONTRIBUTING.md` with the updated build process, test naming
-conventions, and PR review checklist. Add `SECURITY.md` with
-vulnerability reporting instructions. Update `CODE_OF_CONDUCT.md`
-to the Contributor Covenant v2.1.
+5.10+ assertion patterns (e.g., `assertInstanceOf`, multi-headed `assertAll`
+lambdas) and add a new `convert-hamcrest-to-assertj.sh` script that converts
+the most common Hamcrest `assertThat(x, matcher)` patterns to AssertJ
+equivalents. Update `README.md` to add a migration guide from AssertJ 3.x to
+4.x covering module renames, removed methods, and new features. Update
+`CONTRIBUTING.md` with the updated build process, test naming conventions,
+and PR review checklist.

@@ -111,14 +111,15 @@ is measured as zero height instead of one line. Fix the cell height
 calculation in `table.py` to ensure empty cells occupy at least one
 line when `show_lines` is enabled.
 
-### N5: Add escape_markup() utility to markup module
+### N5: Add unescape() utility to markup module
 
-The `markup.py` module provides `render()` for parsing markup tags, but
-there is no public utility to escape literal bracket characters in
-user-provided strings before interpolation into markup templates. Add
-`escape_markup(text)` to `markup.py` that replaces `[` with `\[` so
-user content can be safely embedded in markup strings without triggering
-style parsing.
+The `markup.py` module provides `escape()` to protect bracket characters
+from being interpreted as markup tags, but there is no inverse function
+to undo that escaping. Add `unescape(markup: str) -> str` to `markup.py`
+that reverses escaped sequences by replacing `\[` with `[` and `\\` with
+`\`, so callers can recover the original user-supplied string from a
+previously escaped markup value. Also export `unescape` in
+`markup.__all__` alongside `escape` and `render`.
 
 ### N6: Fix Segment.split_cells not handling zero-width characters
 
@@ -137,9 +138,12 @@ recursively sorting subtrees when `recursive=True` is passed.
 ### N8: Fix Panel title truncation not adding ellipsis
 
 When a `Panel` title is longer than the panel width, the title is
-hard-truncated without any visual indicator. Fix `Panel._render_title()`
-to add an ellipsis (`…`) when the title must be truncated, preserving
-one character of width for the ellipsis character.
+hard-truncated without any visual indicator. Inside
+`Panel.__rich_console__()` in `panel.py`, the inner `align_text()`
+function calls `text.truncate(width)` with no overflow indicator. Fix
+`align_text()` to detect when truncation has occurred and append an
+ellipsis (`…`) to the title text, reserving one cell of width for it, so
+users can tell the title was cut short.
 
 ### N9: Add IntPrompt with range validation to prompt module
 
@@ -151,14 +155,15 @@ against the range and re-prompt with a message like
 `"Please enter a value between 1 and 100"` when the constraint is
 violated.
 
-### N10: Add max_string_length parameter to Pretty for large string truncation
+### N10: Add max_lines parameter to Pretty for large output truncation
 
-The `pretty.py` module's `Pretty` renderable and the `_traverse()`
-function render all data structures in full, which can produce
-megabytes of output for objects containing large strings (e.g., base64
-blobs). Add a `max_string_length` parameter to the `Pretty` class and
-the `pretty_repr()` / `_traverse()` functions that truncates string
-values beyond the limit with an `"..."` suffix.
+The `pretty.py` module's `Pretty` renderable and `pretty_repr()` function
+have no way to limit the total number of output lines, so deeply nested
+or wide structures can produce hundreds of lines of output. Add a
+`max_lines` parameter to the `Pretty` class, `pretty_repr()`, and the
+internal `_Layout.__rich_console__()` rendering path that caps the
+rendered output at the given line count and appends a
+`"... (+N lines)"` continuation indicator when truncation occurs.
 
 ## Medium
 
@@ -258,16 +263,22 @@ collected values. Changes span `live.py` for input handling, new widget
 modules, `console.py` for raw-mode input, `segment.py` for cursor
 positioning, and `style.py` for focus-state styles.
 
-### W2: Add HTML export with faithful style reproduction
+### W2: Enhance HTML export with table layouts and interactive features
 
-Implement `Console.save_html()` that renders console output as an HTML
-page with CSS styles matching the terminal appearance. Support all
-style attributes (colors, bold, italic, strikethrough, links),
-preserve table layouts using CSS grid, render syntax highlighting
-with Pygments CSS classes, and include a dark/light theme toggle.
-Changes span `console.py` for the export entry point, a new
-`html_export.py` module, `style.py` for CSS conversion, `table.py`
-for grid layout, and `syntax.py` for CSS class integration.
+The existing `Console.export_html()` and `Console.save_html()` in
+`console.py` render all output as styled `<span>` elements, losing
+structural information: tables are flattened to text, syntax blocks
+use inline styles instead of Pygments CSS classes, and there is no
+dark/light theme toggle. Enhance the HTML export pipeline by: adding
+`Table.__rich_html__()` in `table.py` that emits a `<table>` element
+with CSS grid layout; adding `Syntax.highlight_to_html()` in
+`syntax.py` that returns Pygments CSS classes instead of inline
+rules; adding `Style.to_css()` in `style.py` and `Theme.to_css()`
+in `theme.py` for stylesheet generation; extracting the HTML
+template and JavaScript dark/light toggle into a new
+`_html_export.py` module; and updating `Console.export_html()` to
+use the new structural rendering path. Also update `Console.save_html()`
+to accept a `theme_toggle` boolean parameter.
 
 ### W3: Implement a dashboard layout system with auto-refreshing panels
 
@@ -355,24 +366,27 @@ overlay rendering, `console.py` for screen buffer compositing,
 `segment.py` for z-order layering, `style.py` for notification-level
 theming, and `layout.py` for overlay positioning.
 
-### N11: Restructure `CHANGELOG.md` with categorized change sections
+### N11: Add [Unreleased] section to CHANGELOG.md
 
-The `CHANGELOG.md` uses a flat list of changes per version without
-categorization. Restructure the unreleased section to group entries
-under Added, Changed, Fixed, and Deprecated headings following
-Keep a Changelog format. Add hyperlinks to GitHub compare URLs for
-each version heading so readers can see the full diff.
+The `CHANGELOG.md` follows Keep a Changelog format but has no
+`[Unreleased]` section at the top to accumulate changes that have not
+yet been assigned a version. Add an `## [Unreleased]` heading immediately
+after the introductory paragraph with empty `### Added`, `### Changed`,
+and `### Fixed` subsections, and add a corresponding
+`[Unreleased]: https://github.com/Textualize/rich/compare/v14.3.3...HEAD`
+link entry at the bottom of the file alongside the existing version
+comparison URLs.
 
-### M11: Revise `tox.ini` and `Makefile` to add documentation and benchmark targets
+### M11: Add benchmark tox environment and Makefile target
 
-The `tox.ini` defines basic test environments but lacks dedicated
-environments for documentation building and benchmark runs. Add a
-`docs` environment that builds Sphinx documentation with warnings-as-
-errors, a `bench` environment that runs `asv` benchmarks against the
-current branch, and update the `Makefile` to add `make docs` and
-`make bench` targets. Also update `.readthedocs.yml` to use the
-new tox docs environment and update `.coveragerc` to exclude
-benchmark files from coverage reports.
+The `tox.ini` has `lint` and `docs` environments but no dedicated
+environment for running the `asv` benchmarks under `benchmarks/`.
+Add a `bench` tox environment that installs `asv` and runs
+`asv run --quick` against the current working tree. Update the
+`Makefile` to add a `make bench` target that invokes the new tox
+environment. Also update `.coveragerc` to add `benchmarks/` to the
+`omit` list so benchmark helper code is excluded from coverage
+reports.
 
 ### W11: Comprehensive project configuration and documentation overhaul
 

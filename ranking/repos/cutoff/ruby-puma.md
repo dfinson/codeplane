@@ -100,14 +100,16 @@ header injection (UUID v4) when the incoming request does not already
 carry one, making the ID available in the Rack env as
 `HTTP_X_REQUEST_ID` and in log output via `LogWriter`.
 
-### N3: Fix ThreadPool not logging thread death from unhandled exceptions
+### N3: Fix ThreadPool not logging thread death through LogWriter
 
 The `ThreadPool` in `thread_pool.rb` spawns worker threads that catch
-exceptions in the processing block, but if a thread dies from an
-unexpected error (e.g., `NoMemoryError`), it is silently reaped with no
-log entry. Add a thread-death callback that logs the exception via the
-server's `LogWriter` and increments a dead-thread counter accessible
-through `stats`.
+exceptions in the processing block via `rescue Exception => e`, but if a
+thread dies from an unexpected error (e.g., `NoMemoryError`), the exception
+message is written directly to `STDERR` via `STDERR.puts` rather than
+routed through the server's `LogWriter`, and the thread death is not
+reflected in the pool's `stats`. Add a thread-death callback that logs the
+exception via the server's `LogWriter` and increments a dead-thread counter
+accessible through `stats`.
 
 ### N4: Add DSL option for configuring TCP keepalive on listener sockets
 
@@ -117,7 +119,7 @@ set `SO_KEEPALIVE` or the associated parameters (`TCP_KEEPIDLE`,
 count:)` to the DSL in `dsl.rb`, pass the values through
 `Configuration`, and apply them in `Binder#add_tcp_listener` using
 `Socket#setsockopt`. Also add a `tcp_keepalive` section to
-`docs/compile_options.md` documenting the new DSL option with
+`docs/deployment.md` documenting the new DSL option with
 example values, and update `History.md` with an entry noting the
 new feature.
 
@@ -171,18 +173,22 @@ Add a `drain_timeout` parameter (defaulting to 30 seconds) that waits
 for active `ThreadPool` tasks to finish before forcibly closing
 connections, and expose it via the DSL.
 
-### N11: Fix docs/signals.md not documenting SIGINFO behavior on BSD systems
+### N11: Fix docs/signals.md not documenting single-mode signal behavior
 
-The `docs/signals.md` file documents signal handling for `SIGUSR1`,
-`SIGUSR2`, `SIGTERM`, `SIGHUP`, and `SIGINT` but omits `SIGINFO`,
-which is available on BSD-derived systems (macOS, FreeBSD) and can
-be used to print thread backtraces for debugging hung workers.
-The `CONTRIBUTING.md` file also does not mention the requirement
-to update `docs/signals.md` when adding new signal handlers.
-Fix `docs/signals.md` to document `SIGINFO` behavior and
-platform availability, and update `CONTRIBUTING.md` to include
-a checklist item for updating the signals documentation when
-modifying signal handling code.
+The `docs/signals.md` file documents signal handling only under a
+"Puma cluster responds to these signals" section, with no corresponding
+section for single mode (workers = 0). In single mode, `TTIN`, `TTOU`,
+`CHLD`, and `URG` are not registered; `USR2` triggers a full server
+restart reloading configuration, `USR1` triggers a hot restart without
+config reload, `TERM` and `INT` trigger graceful shutdown, and `HUP`
+reopens log files defined in `stdout_redirect` or triggers shutdown if
+none are configured. This divergence is not documented anywhere.
+The `CONTRIBUTING.md` file also does not mention the requirement to
+update `docs/signals.md` when adding or modifying signal handlers.
+Fix `docs/signals.md` to add a "Single mode signals" section
+documenting which signals apply and their behavior, and update
+`CONTRIBUTING.md` to include a checklist item for updating the signals
+documentation when modifying signal handling code.
 
 ## Medium
 
@@ -268,14 +274,22 @@ Requires timestamping in `ThreadPool#<<`, duration calculation in the
 worker block, a sliding-window statistics collector, and integration
 with `ServerPluginControl`.
 
-### M10: Implement worker preloading with copy-on-write optimisation
+### M10: Add per-worker log file routing in cluster mode
 
-Add a `preload_app!` mode in `Cluster` that loads the Rack application
-in the master process before forking workers, enabling copy-on-write
-memory sharing. Handle the lifecycle correctly: `before_fork` hooks for
-closing database connections, `after_worker_fork` for re-establishing
-them, and `nakayoshi_fork` integration in `Util`. Requires changes to
-`Cluster`, `Launcher`, `DSL`, and `Worker`.
+The `stdout_redirect` DSL option in `runner.rb` routes all cluster
+workers to the same log file path. When multiple workers write to a
+single file concurrently, log lines interleave without worker
+identification. Add a `per_worker_stdout_redirect(pattern)` DSL option
+in `dsl.rb` where a `%d` placeholder in the pattern is replaced by the
+worker index (e.g., `"log/puma-worker-%d.log"`). When configured, each
+worker process after forking opens its own log file, reopens `STDOUT`
+and `STDERR` to it, and creates a worker-specific `LogWriter` instance
+for the `Server`. Requires changes to `dsl.rb` for the new DSL method,
+`configuration.rb` to register the default, `runner.rb` for the
+per-worker redirect logic, `cluster/worker.rb` to apply the redirect
+and create the worker-specific `LogWriter` after fork, `cluster.rb` to
+pass the per-worker log option when spawning workers, and `log_writer.rb`
+to support instantiation with a custom output path.
 
 ### M11: Overhaul docs/deployment.md and docs/kubernetes.md with modern deployment guidance
 
@@ -286,12 +300,13 @@ readiness and liveness probe configuration examples that work with
 puma's built-in control server. The `6.0-Upgrade.md` upgrade guide
 does not mention the removal of `daemonize` and its impact on systemd
 unit files documented in `docs/systemd.md`. The
-`.github/pull_request_template.md` does not ask contributors
-whether documentation updates are needed. Update `docs/deployment.md`
+`.github/pull_request_template.md` has no checklist item for updating
+`History.md` with a changelog entry, which is expected for non-trivial
+changes per project conventions. Update `docs/deployment.md`
 with Docker deployment patterns, update `docs/kubernetes.md` with
 probe configuration examples, reconcile `6.0-Upgrade.md` with
 `docs/systemd.md` regarding daemonization removal, and add a
-documentation checkbox to `.github/pull_request_template.md`.
+`History.md` changelog checklist item to `.github/pull_request_template.md`.
 
 ## Wide
 
@@ -401,14 +416,16 @@ formatting, broken internal cross-references, and outdated
 configuration examples. The `5.0-Upgrade.md` and `6.0-Upgrade.md`
 upgrade guides do not cross-reference each other or link to the
 relevant `docs/` pages. The `docs/architecture.md` architectural
-overview does not include the `Reactor` or `Plugin` components in
-its diagram. The `SECURITY.md` policy references an email address
+overview does not include the `Plugin` component in its diagram or
+text. The `SECURITY.md` policy references an email address
 but does not mention GitHub's private vulnerability reporting.
-The `.github/workflows/tests.yml` CI matrix does not test against
-JRuby, despite `docs/java_options.md` documenting JRuby-specific
-configuration. Overhaul all `docs/*.md` files for consistent
-formatting and cross-references, update both upgrade guides with
-links to relevant documentation pages, update `docs/architecture.md`
-with a complete component diagram, update `SECURITY.md` with
-GitHub vulnerability reporting instructions, and add JRuby to
-the `.github/workflows/tests.yml` CI matrix.
+The `docs/java_options.md` file documents JRuby-specific system
+properties and environment variables but is not linked from `README.md`
+or `docs/architecture.md`, leaving JRuby users without a clear
+discovery path for this configuration. Overhaul all `docs/*.md` files
+for consistent formatting and cross-references, update both upgrade
+guides with links to relevant documentation pages, update
+`docs/architecture.md` with a complete component diagram that includes
+the Plugin and Reactor components, update `SECURITY.md` with
+GitHub vulnerability reporting instructions, and add a link to
+`docs/java_options.md` from `README.md` and `docs/architecture.md`.

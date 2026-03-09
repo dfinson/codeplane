@@ -109,9 +109,9 @@ Bearer token authentication. Add a `BearerAuth(Auth)` class that sets the
 optional `token_getter` callable parameter: when provided, if the initial
 request gets a 401 response, `BearerAuth` should call `token_getter()` to
 obtain a fresh token and retry the request. Export `BearerAuth` in
-`__init__.py`. Also add a documentation page at
-`docs/advanced/authentication.md` covering Bearer token usage with examples,
-and update the `nav` section in `mkdocs.yml` to include the new page.
+`__init__.py`. Also update the existing `docs/advanced/authentication.md`
+to add a Bearer token section covering usage with examples (the file and
+its `mkdocs.yml` nav entry already exist).
 
 ### N7: Add `default_encoding` parameter to top-level convenience functions
 
@@ -143,16 +143,21 @@ the actual phrase from the WSGI app. Parse the reason phrase from the status
 string and include it (along with `http_version`) in
 `Response(extensions={"reason_phrase": ..., "http_version": ...})`.
 
-### N10: Fix `_guess_content_type` returning `None` for files without extensions
+### N10: Fix `_guess_content_type` returning `None` for unnamed file uploads
 
 In `_multipart.py`, `_guess_content_type(filename)` returns `None` when
-`mimetypes.guess_type()` cannot determine the type — for example when the
-filename has no extension (like `"upload"` or `"Makefile"`). When this
-happens, `FileField` omits the `Content-Type` header entirely from that
-multipart part, which is non-conformant with RFC 2388 §3 (which specifies
-a default of `application/octet-stream`). Add a fallback to
-`application/octet-stream` in `_guess_content_type` when the file content
-is binary and the type cannot be guessed from the filename.
+`filename` is `None` or an empty string — i.e., when the user supplies a
+file-like object with no explicit filename. In that case `FileField` skips
+setting the `Content-Type` header entirely, which is non-conformant with
+RFC 2388 §3 (which specifies a default of `application/octet-stream` when
+no content type is available). Note that when a non-empty filename is
+provided but has no recognisable extension (e.g., `"upload"` or
+`"Makefile"`), `mimetypes.guess_type()` returns `None` but the existing
+`or "application/octet-stream"` fallback already handles that case
+correctly. The fix is to remove the early `return None` guard for
+`None`/empty filenames and instead always return `"application/octet-stream"`
+as the final fallback, so that unnamed binary file parts always carry a
+`Content-Type` header.
 
 ## Medium
 
@@ -265,14 +270,22 @@ this through a `request.extensions["trace"]` dict. Add structured logging
 integration that emits trace events. Update the mock transport to support
 trace simulation for testing.
 
-### W3: Add HTTP/3 (QUIC) transport support
+### W3: Add Server-Sent Events (SSE) streaming support
 
-Implement an HTTP/3 transport using the QUIC protocol. Support 0-RTT
-connection resumption, connection migration on network change, and
-Alt-Svc header parsing for HTTP/3 discovery. Fall back to HTTP/2 when
-QUIC is unavailable. This requires a new transport implementation,
-connection pool changes for QUIC connections, and Alt-Svc response
-processing in the response handling pipeline.
+Implement first-class Server-Sent Events support in httpx. Add a
+`ServerSentEvent` model (with `id`, `event`, `data`, and `retry` fields)
+in a new `_sse.py` module. Add `Client.stream_events(url, ...)` and
+`AsyncClient.stream_events(url, ...)` context-manager methods that open a
+persistent `text/event-stream` response and yield `ServerSentEvent`
+objects. Implement automatic reconnection: if the connection drops, the
+client reopens it after the server-specified `retry` interval, sending
+`Last-Event-ID` in the reconnect request. Update `_api.py` with a
+top-level `stream_events()` convenience function. Export `ServerSentEvent`
+and `stream_events` in `__init__.py`. Add a `docs/advanced/event-source.md`
+documentation page and update `mkdocs.yml` nav. This crosses `_sse.py`
+(new), `_models.py`, `_client.py`, `_api.py`, `_types.py`, `__init__.py`,
+`_transports/mock.py` (test helpers), and the new docs page — 8+ files,
+15+ definitions.
 
 ### W4: Implement a comprehensive middleware system
 

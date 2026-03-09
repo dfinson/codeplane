@@ -62,13 +62,9 @@ gson/src/main/java/com/google/gson/
 
 ## Narrow
 
-### N1: Fix `@SerializedName` ignored on record components
+### N1: Fix `RecordReflectionData.finalize()` swallowing constructor exceptions as `RuntimeException`
 
-Java records with `@SerializedName` on constructor parameters do not
-use the annotated name during serialization. Gson's reflection logic
-finds the annotation on the canonical constructor parameter but not on
-the generated field. Fix the `ReflectiveTypeAdapterFactory` to check
-record component annotations for `@SerializedName`.
+When Gson deserializes a Java record and the canonical constructor throws (for example, because a required component fails validation with `Objects.requireNonNull()`), `RecordReflectionData.finalize()` in `ReflectiveTypeAdapterFactory` catches the `InvocationTargetException` and rethrows it as a generic `RuntimeException`. A `// TODO: JsonParseException ?` comment in the same catch block acknowledges this is wrong. Fix `finalize()` to rethrow the cause as a `JsonSyntaxException` (with a message that identifies the record class and the argument array), preserving the original exception as the cause so callers receive a Gson-typed exception with useful context instead of an opaque `RuntimeException`.
 
 ### N2: Add `@JsonAdapter` support for enum constants
 
@@ -81,10 +77,13 @@ logic.
 ### N3: Fix `JsonReader` incorrect line number after `skipValue()`
 
 After calling `skipValue()` to skip a large nested JSON object,
-`JsonReader.getPath()` reports the wrong line number in subsequent
-error messages. The line counter does not track newlines within the
-skipped content. Fix `skipValue()` to correctly count newlines even
-when skipping. Also add an entry to `CHANGELOG.md` under "Unreleased" documenting the line-number tracking fix in `skipValue()`.
+subsequent error messages produced by `JsonReader.locationString()` report
+the wrong line number. The `lineStart` cursor is not updated when
+`skipValue()` advances past newlines inside unquoted values via
+`skipUnquotedValue()`, which returns at `'\n'` without incrementing
+`lineNumber` or updating `lineStart`. Fix `skipUnquotedValue()` to
+track newlines so that `locationString()` always reports accurate
+line and column information after a skip. Also add an entry to `CHANGELOG.md` under "Unreleased" documenting the line-number tracking fix in `skipValue()`.
 
 ### N4: Fix `TypeToken` failing for intersection types in generic bounds
 
@@ -94,13 +93,13 @@ When a class declares a field with a type like `<T extends Serializable & Compar
 
 When pretty-printing is enabled via `setIndent()`, the output of `JsonWriter` does not end with a trailing newline after the root value closes. Most JSON formatting tools produce a final newline. Fix `JsonWriter.close()` to append a newline character when indentation is active and the root value has been completed.
 
-### N6: Fix `GsonBuilder.setDateFormat()` silently ignoring invalid patterns
+### N6: Fix `ConstructorConstructor` swallowing constructor exceptions as `RuntimeException`
 
-Passing an invalid `SimpleDateFormat` pattern string to `GsonBuilder.setDateFormat()` does not throw until the first serialization attempt, at which point the error message is confusing and does not reference the builder call. Validate the pattern eagerly inside `setDateFormat()` and throw an `IllegalArgumentException` with a clear message identifying the bad pattern.
+When Gson instantiates a class via its no-arg constructor and that constructor throws, `ConstructorConstructor` catches the `InvocationTargetException` and rethrows it as a generic `RuntimeException` with a message like "Failed to invoke constructor ... with no args". A `// TODO: JsonParseException ?` comment in the same catch block acknowledges this is wrong. Fix the catch block to rethrow the wrapped cause as a `JsonSyntaxException` (with a message that identifies the class being constructed), preserving the original cause. This gives callers a Gson-typed exception with actionable context instead of an opaque `RuntimeException`.
 
-### N7: Fix `JsonObject.entrySet()` mutation not reflected in serialization
+### N7: Fix `JsonObject.getAsJsonObject()`, `getAsJsonArray()`, and `getAsJsonPrimitive()` throwing unhelpful `ClassCastException`
 
-Removing entries from the `Set` returned by `JsonObject.entrySet()` correctly removes them from the underlying map, but adding entries through `Set.add()` silently succeeds without updating the map on some code paths. Ensure the returned entry set is either fully backed by the map or is unmodifiable to prevent silent data loss.
+`JsonObject.getAsJsonPrimitive(memberName)`, `getAsJsonArray(memberName)`, and `getAsJsonObject(memberName)` perform an unchecked cast on the map value. When the stored type does not match, the JVM throws a `ClassCastException` whose message names the source and target classes but does not mention the property name or the actual `JsonElement` value. This makes it hard to diagnose which key in a deeply nested structure caused the error. Fix all three methods to detect the type mismatch before casting and throw a descriptive `JsonSyntaxException` (or `ClassCastException`) that includes the member name and the actual type of the stored value.
 
 ### N8: Fix `Gson.fromJson(Reader)` not closing the reader on parse error
 
@@ -206,9 +205,9 @@ Implement both JSON Merge Patch and JSON Patch as first-class operations on Gson
 
 Add a `@JsonPolymorphic` annotation and `@JsonSubType` repeatable annotation that together enable polymorphic deserialization without requiring a `RuntimeTypeAdapterFactory`. The discriminator field name, position (property, wrapper-object, wrapper-array), and subtype mappings should all be declarative. Implement a `PolymorphicTypeAdapterFactory` that reads these annotations, registers itself during `Gson.getAdapter()` resolution, and handles missing or unknown discriminators gracefully with configurable fallback behavior.
 
-### W7: Add full `java.time` type adapter suite with configurable formatting
+### W7: Add ISO-8601 encoding mode to the existing `java.time` type adapter suite
 
-Implement type adapters for all major `java.time` types: `Instant`, `LocalDate`, `LocalTime`, `LocalDateTime`, `ZonedDateTime`, `OffsetDateTime`, `Duration`, `Period`, `Year`, `YearMonth`, and `MonthDay`. Support ISO-8601 by default and allow per-type format overrides through `GsonBuilder.setTemporalFormat(Class, DateTimeFormatter)`. Register adapters via a `JavaTimeTypeAdapterFactory` that participates in the standard factory chain and composes with `@JsonAdapter`.
+The existing `JavaTimeTypeAdapters` serializes all `java.time` types using a field-based integer encoding that mirrors internal JDK representation (e.g., `Instant` serializes as `{"seconds":1234,"nanos":0}` rather than `"2009-02-13T23:31:30Z"`). This encoding is not human-readable and is incompatible with the ISO-8601 strings produced by other JSON libraries and consumed by most REST APIs. Implement an alternative ISO-8601 string encoding for all supported types (`Instant`, `LocalDate`, `LocalTime`, `LocalDateTime`, `ZonedDateTime`, `OffsetDateTime`, `OffsetTime`, `Duration`, `Period`, `Year`, `YearMonth`, `MonthDay`, `ZoneId`, `ZoneOffset`) using appropriate `DateTimeFormatter` constants. Make ISO-8601 the new default encoding, expose `GsonBuilder.useLegacyJavaTimeAdapters()` to opt back into the old field-based encoding for backward compatibility, and add `GsonBuilder.setTemporalFormat(Class<? extends TemporalAccessor>, DateTimeFormatter)` for per-type format overrides. Introduce a `TemporalAdapterConfig` value class to carry the per-type formatter map through `GsonBuilder` and `Gson`. Wire everything through `JavaTimeTypeAdapters`, `GsonBuilder`, `Gson`, and add comprehensive round-trip tests for every type in both encoding modes.
 
 ### W8: Implement structural logging and diagnostics for serialization
 

@@ -100,11 +100,21 @@ Add a `max_concurrent_requests` field that, when set, uses a
 semaphore to limit active handler invocations and returns
 `503 Service Unavailable` when the limit is reached.
 
-### N5: Fix `file_server` browse mode not HTML-escaping filenames
+### N5: Fix `file_server` browse template unescaped canonical link path
 
-The directory listing in `file_server browse` renders filenames as raw
-HTML. A file named `<script>alert(1)</script>.txt` creates an XSS
-vulnerability. Fix the browse template to HTML-escape filenames.
+The browse template in `modules/caddyhttp/fileserver/browse.html` is
+rendered with Go's `text/template` (imported in `browse.go`) rather
+than `html/template`, which relies on explicit escaping throughout.
+While filename display uses `{{html .Name}}` consistently, the
+canonical link at line 309 of `browse.html` outputs the directory path
+directly: `<link rel="canonical" href="{{.Path}}/" />`. A directory
+whose path contains `"` or `<` would produce malformed HTML. Fix
+`browse.go`'s `makeBrowseTemplate` to switch from `text/template` to
+`html/template`, which provides automatic context-aware escaping and
+makes the explicit `{{html ...}}` calls throughout `browse.html`
+redundant (they become no-ops since `html/template` escapes
+automatically). Remove the now-redundant `html` function calls in
+`browse.html` after the switch.
 
 ### N6: Add built-in `threshold` circuit breaker for `reverse_proxy`
 

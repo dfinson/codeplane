@@ -88,20 +88,31 @@ included a TTL. Implement a response cache in the DoH client that
 respects the DNS record TTL from the response. Add a configuration
 option for maximum cache size.
 
-### N3: Fix `EventListener.callEnd` not called on cancelled calls
+### N3: Distinguish cancellation failures in `EventListener.callFailed`
 
-When a `Call` is cancelled via `call.cancel()`, the `EventListener`
-receives `callFailed` but not `callEnd`. The contract says `callEnd`
-is always the last event. Fix the cancellation path to emit `callEnd`
-after `callFailed` when the call is cancelled. Also add an entry to `CHANGELOG.md` under the next unreleased version documenting the `EventListener` lifecycle fix.
+When a call is explicitly cancelled via `call.cancel()` and subsequently
+fails, `EventListener.callFailed` is invoked with a plain
+`IOException("Canceled")` that is identical to any other I/O error.
+Applications using `EventListener` cannot programmatically tell whether
+a failure was due to cancellation or a genuine network problem. Fix
+`RealCall` so that when a call fails because `isCanceled()` is true, the
+exception passed to `callFailed` is a dedicated `CallCancelledException`
+(extending `IOException`) with a message identifying the explicit
+cancellation. Add an entry to `CHANGELOG.md` under the next unreleased
+version documenting the new exception type.
 
-### N4: Fix certificate pinning bypass on redirects to different hosts
+### N4: Log `CertificatePinner` failures during HTTP/2 connection coalescing
 
-When a request is redirected from a pinned host to a different host
-that also has pins configured, the certificate pins for the original
-host are applied instead of the redirect target's pins. Fix the
-`CertificatePinner` lookup in the redirect-following path to resolve
-pins against the current request URL rather than the original URL.
+When `RealConnection.isEligible()` performs a certificate-pin check for
+HTTP/2 connection coalescing, any `SSLPeerUnverifiedException` thrown by
+`CertificatePinner.check()` is silently caught and the coalescing attempt
+is rejected with no diagnostic information:
+`} catch (_: SSLPeerUnverifiedException) { return false }`. Developers
+have no way to distinguish a coalescing rejection due to pin mismatch from
+one due to IP-address mismatch or protocol mismatch. Fix `isEligible()` to
+log the pin verification failure message via `Platform.get().log()` before
+returning false, and add a unit test that verifies the log output when
+coalescing is rejected due to a pin mismatch.
 
 ### N5: Correct `Content-Length` mismatch on retried POST requests
 

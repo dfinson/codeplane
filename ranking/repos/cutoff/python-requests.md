@@ -66,11 +66,14 @@ src/requests/
 ### N1: Add elapsed time breakdown to Response object
 
 The `Response` object in `models.py` exposes `elapsed` as a single
-`timedelta` covering the entire request, but does not break it down into
-DNS resolution, connection establishment, TLS handshake, and
-time-to-first-byte. Add `elapsed_connect` and `elapsed_ttfb` attributes
-to `Response` and populate them in `HTTPAdapter.build_response()` in
-`adapters.py` by extracting timing data from the urllib3 response.
+`timedelta` covering the entire request, but does not provide a
+time-to-first-byte measurement. Add `elapsed_ttfb` (a `timedelta | None`,
+defaulting to `None`) to `Response` in `models.py`. In
+`HTTPAdapter.send()` in `adapters.py`, wrap the `conn.urlopen()` call
+with `time.monotonic()` timing so that the duration from request send to
+headers received (TTFB) is computed and stored on the raw urllib3
+response as a private attribute. Then read that attribute in
+`HTTPAdapter.build_response()` and populate `response.elapsed_ttfb`.
 
 ### N2: Fix merge_setting not deep-merging nested proxy dictionaries
 
@@ -89,14 +92,16 @@ authentication (RFC 6750). Add an `HTTPBearerAuth(AuthBase)` class that
 sets the `Authorization: Bearer <token>` header, supporting both static
 tokens and a callable that returns a token for dynamic refresh. Also add a usage entry in `HISTORY.md` documenting the new authentication class with examples.
 
-### N4: Add Retry-After header parsing to TooManyRedirects exception
+### N4: Add Retry-After header parsing to RetryError exception
 
-When a server responds with `429 Too Many Requests` and a `Retry-After`
-header, the `SessionRedirectMixin.resolve_redirects()` method in
-`sessions.py` raises `TooManyRedirects` without exposing the retry
-delay. Add a `retry_after` attribute to the `TooManyRedirects` exception
-in `exceptions.py` and populate it by parsing the `Retry-After` header
-(both delta-seconds and HTTP-date formats) in `resolve_redirects()`.
+The `RetryError` exception class in `exceptions.py` does not expose
+the retry delay when a server responds with `429 Too Many Requests`
+and a `Retry-After` header. Add a `retry_after` attribute to
+`RetryError` in `exceptions.py` (defaulting to `None`) and populate
+it in `HTTPAdapter.send()` in `adapters.py` when converting a urllib3
+`MaxRetryError` to `RetryError`, by parsing the `Retry-After` header
+(both delta-seconds integer and HTTP-date formats) from the urllib3
+response that triggered retry exhaustion.
 
 ### N5: Fix CaseInsensitiveDict.copy() returning a plain dict-like copy
 
@@ -118,12 +123,12 @@ domains (effective TLDs) and raises `CookieConflictError`.
 ### N7: Fix check_header_validity not detecting non-ASCII header names
 
 The `check_header_validity()` function in `utils.py` validates header
-names and values using regex patterns, but the name pattern allows
-non-ASCII bytes that violate RFC 7230 Section 3.2.6. When a header
-name contains characters like `ü` or `é`, no `InvalidHeader` exception
-is raised. Tighten the `_CLEAN_HEADER_REGEX_BYTE` and
-`_CLEAN_HEADER_REGEX_STR` patterns to reject non-ASCII characters in
-header names.
+names and values using regex patterns defined in `_internal_utils.py`,
+but the name patterns allow non-ASCII characters that violate RFC 7230
+Section 3.2.6. When a header name contains characters like `ü` or `é`,
+no `InvalidHeader` exception is raised. Tighten the
+`_VALID_HEADER_NAME_RE_BYTE` and `_VALID_HEADER_NAME_RE_STR` patterns
+in `_internal_utils.py` to reject non-ASCII characters in header names.
 
 ### N8: Add SOCKS proxy authentication support to resolve_proxies
 

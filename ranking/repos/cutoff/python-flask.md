@@ -75,61 +75,80 @@ src/flask/
 
 ## Narrow
 
-### N1: Add `etag` parameter to `send_file` for custom ETag generation
+### N1: Extend `send_file` `etag` parameter to accept a callable
 
-The `send_file` function in `helpers.py` sets the `Last-Modified`
-header but does not generate an `ETag` header for cache validation.
-Clients cannot use conditional requests (`If-None-Match`) for static
-files served via `send_file`. Add an `etag` parameter that, when
-`True`, generates an ETag from the file's size and modification time,
-and returns a `304 Not Modified` response when the request's
-`If-None-Match` header matches.
+The `send_file` function in `helpers.py` accepts `etag: bool | str = True`,
+where `True` auto-generates an ETag from the file's modification time and
+size, and a string literal is used as the ETag value directly. There is no
+way to compute an ETag dynamically — for example by hashing file content or
+combining the path with an application version — without calling `send_file`
+with `etag=False` and manually setting the header on the returned response.
+Extend the `etag` parameter to also accept a `Callable[[str], str]` that
+receives the resolved absolute file path and returns the ETag string. Update
+`_prepare_send_file_kwargs` in `helpers.py` to evaluate the callable and
+resolve it to a string before delegating to Werkzeug's `send_file`.
 
-### N2: Fix `Config.from_mapping` not accepting `ChainMap` instances
+### N2: Add `**load_kwargs` forwarding to `Config.from_file`
 
-The `Config.from_mapping` method in `config.py` accepts any mapping
-type but internally iterates with `.items()`, which works for `dict`
-but fails silently with `ChainMap` instances that shadow keys across
-multiple maps — the method does not deduplicate keys, potentially
-setting a value and then overwriting it with a shadowed value. Fix
-`from_mapping` to resolve `ChainMap` into a flat dict before iteration.
+The `Config.from_file` method in `config.py` accepts a `load` callable
+but provides no mechanism to pass additional keyword arguments to it.
+Users who need loader options — for example, `json.load` with
+`parse_float=decimal.Decimal` for precise numeric handling, or a custom
+TOML parser that accepts an `encoding` argument — must wrap their
+callable with `functools.partial` before passing it to `from_file`. Add
+a `**load_kwargs` parameter to `Config.from_file` that is forwarded
+verbatim to the `load` callable at invocation time.
 
-### N3: Add `response_class` parameter to `jsonify` for custom response types
+### N3: Add configurable `indent` to `DefaultJSONProvider` pretty-printing
 
-The `jsonify` function in `json/__init__.py` always returns a
-`Response` instance, but applications that use custom response classes
-(set via `Flask.response_class`) expect `jsonify` to use their class.
-Fix `jsonify` to use `current_app.response_class` instead of the
-hard-coded `Response` import when constructing the response object. Also add a changelog entry in `CHANGES.rst` documenting the fix and its impact on custom response class users.
+The `DefaultJSONProvider.response()` method in `json/provider.py`
+hard-codes an indentation of `2` spaces when non-compact (pretty-printed)
+JSON output is produced. Applications that prefer a different indentation
+depth — for example `4` spaces for readability, or `0` to produce
+single-line output without compact separators — cannot customize this
+without subclassing `DefaultJSONProvider` and overriding the entire
+`response()` method. Add an `indent` class attribute to
+`DefaultJSONProvider` defaulting to `2`, and replace the literal `2` in
+`response()` with a reference to `self.indent`.
 
-### N4: Fix `FlaskCliRunner` not propagating environment variables to commands
+### N4: Add `use_script_info` parameter to `FlaskCliRunner.invoke`
 
-The `FlaskCliRunner` in `testing.py` wraps click's `CliRunner` but
-does not pass the `env` parameter through to the underlying runner
-when invoking Flask CLI commands. Tests that need to set environment
-variables (e.g., `FLASK_ENV`, `DATABASE_URL`) for CLI command testing
-cannot do so through the runner. Fix `FlaskCliRunner.invoke` to accept
-and forward an `env` parameter.
+The `FlaskCliRunner` in `testing.py` automatically injects a
+`ScriptInfo` instance as the `obj` parameter of every `invoke` call,
+even when testing a plain Click command that was attached to the app's
+`cli` group but does not use `ScriptInfo` as its context object. When
+such a command supplies its own `obj` via `@pass_context` or
+`standalone_mode=False`, the automatic injection silently overwrites
+the caller-supplied value. Add a `use_script_info` keyword argument
+(defaulting to `True`) to `FlaskCliRunner.invoke` that, when `False`,
+skips the automatic `ScriptInfo` injection so the caller-supplied `obj`
+— or `None` — is used as-is.
 
-### N5: Add timestamp precision parameter to `SecureCookieSessionInterface`
+### N5: Add `SESSION_COOKIE_SALT` config key to `SecureCookieSessionInterface`
 
-The `SecureCookieSessionInterface` in `sessions.py` uses
-`URLSafeTimedSerializer` from `itsdangerous` for session signing but
-does not expose the timestamp precision. The default precision is
-seconds, but for high-frequency session updates, sub-second precision
-would reduce signature collisions. Add a `timestamp_precision`
-parameter to the session interface that configures the serializer's
-timestamp resolution.
+The `SecureCookieSessionInterface` in `sessions.py` derives its signing
+salt from the `salt` class attribute (`'cookie-session'` by default).
+While the attribute can be overridden by subclassing, there is no way to
+configure the salt via `app.config` without deploying a custom session
+interface subclass. This matters for applications that share a
+`SECRET_KEY` across multiple services and need distinct per-service
+salts to prevent session tokens from being replayed cross-service. Add
+support for a `SESSION_COOKIE_SALT` configuration key: in
+`get_signing_serializer`, read `app.config.get('SESSION_COOKIE_SALT')`
+and use it as the salt when present, falling back to the class-level
+`salt` attribute.
 
-### N6: Fix `url_for` not encoding unicode path segments correctly
+### N6: Add `_blueprint` parameter to `url_for` for out-of-request endpoint resolution
 
-The `url_for` function in `helpers.py` delegates to Werkzeug's URL
-building but does not handle unicode path segments that contain
-characters requiring percent-encoding beyond ASCII. When a route
-parameter contains characters like em-dashes or smart quotes,
-`url_for` may produce URLs with un-encoded characters that fail in
-strict HTTP clients. Fix `url_for` to apply proper IRI-to-URI encoding
-to the generated path.
+The `url_for` function in `helpers.py` and `app.url_for` in `app.py`
+support dot-prefixed endpoints (e.g., `url_for('.index')`) that are
+resolved relative to the current request's blueprint. Outside a request
+context — for example, in background tasks or email generation — there is
+no active blueprint, so dot-prefixed endpoints raise a `BuildError` with
+no useful indication that a blueprint prefix is required. Add a `_blueprint`
+keyword parameter to both `helpers.url_for` and `Flask.url_for` that, when
+provided, is prepended to a dot-prefixed endpoint name to resolve it, making
+blueprint-relative URL generation usable outside of a request context.
 
 ### N7: Add `flash` message expiration support
 
@@ -140,15 +159,19 @@ not consumed. Add a `ttl` parameter to `flash` that stores a timestamp
 alongside the message, and filter expired messages in
 `get_flashed_messages` before returning them.
 
-### N8: Fix `Blueprint` static file serving not respecting `url_prefix`
+### N8: Add `host`/`subdomain` conflict validation to `BlueprintSetupState`
 
-When a `Blueprint` is registered with a `url_prefix` and has a
-`static_folder` configured, the static file URL does not consistently
-include the blueprint's URL prefix in all routing scenarios. This
-occurs because the static URL rule is added during `Blueprint.register`
-in `blueprints.py` before the prefix is fully resolved from the
-`BlueprintSetupState` in `sansio/blueprints.py`. Fix the static route
-registration order to ensure the prefix is applied.
+The `BlueprintSetupState.__init__` in `sansio/blueprints.py` reads
+`subdomain` from registration options and stores it as `self.subdomain`,
+but does not handle the `host` keyword argument. Werkzeug URL rules
+treat `host` and `subdomain` as mutually exclusive: passing both to a
+`Rule` raises a cryptic `AssertionError` deep in Werkzeug's routing
+layer with no indication that blueprint registration was the source of
+the conflict. Add a validation check in `BlueprintSetupState.__init__`
+that raises `ValueError` with a descriptive message when both `host`
+and `subdomain` are present in the registration options, and extract
+`host` into `self.host` (parallel to `self.subdomain`) so it is applied
+consistently in `add_url_rule`.
 
 ### N9: Add structured logging format to Flask's default logger
 
@@ -162,7 +185,7 @@ message as structured fields.
 ### N10: Fix `TaggedJSONSerializer` not handling `set` type correctly
 
 The `TaggedJSONSerializer` in `json/tag.py` handles `dict`, `tuple`,
-`bytes`, `Markup`, `UUID`, `datetime`, and `date` types for session
+`bytes`, `Markup`, `UUID`, and `datetime` types for session
 data, but does not handle `set` objects. When a set is stored in the
 session, it is serialized as a list and deserialized as a list, losing
 the type information. Add a `TagSet` class to `tag.py` that serializes
@@ -269,16 +292,24 @@ and session locking for concurrent requests. Changes touch `sessions.py`
 `json/tag.py` (session data serialization), and `config.py` (session
 storage configuration keys).
 
-### M10: Add async view function support with sync/async detection
+### M10: Add per-method request hooks and `MethodView.method_decorators`
 
-Implement automatic detection and handling of `async def` view
-functions. When an async view is registered, Flask should run it in
-an event loop (or the existing loop if running under an ASGI server).
-Support async `before_request`, `after_request`, and `teardown_request`
-hooks. Changes touch `app.py` (async dispatch in `ensure_sync` and
-`full_dispatch_request`), `sansio/scaffold.py` (async decorator
-handling), `sansio/app.py` (async hook registration), `ctx.py` (async
-context management), and `views.py` (async `MethodView`).
+Add method-level `before_request` and `after_request` hooks that run
+only for specific HTTP methods, and a matching `method_decorators` class
+variable on `MethodView`. Currently `before_request` and `after_request`
+hooks run for every HTTP method; applications that need authentication
+only on write methods must inspect `request.method` inside the hook.
+Add `before_method_request(methods)` and `after_method_request(methods)`
+decorator factories to `sansio/scaffold.py` that register hooks scoped
+to a list of HTTP methods, and store them in a new
+`before_method_request_funcs` / `after_method_request_funcs` dict in
+`sansio/app.py`. Apply them in `app.py`'s `full_dispatch_request` after
+the unscoped hooks. Also add a `method_decorators: ClassVar[dict[str,
+list[Callable]]]` attribute to `MethodView` in `views.py`, applied in
+`dispatch_request` before calling the handler. Merge method-scoped hook
+registries during blueprint registration in `sansio/blueprints.py`.
+Changes touch `sansio/scaffold.py`, `sansio/app.py`, `app.py`,
+`views.py`, and `sansio/blueprints.py`.
 
 ## Wide
 
@@ -405,35 +436,48 @@ registration), `blueprints.py` (admin blueprint), `views.py` (admin
 new `admin/` sub-package with modules for views, forms, filters, and
 dashboard.
 
-### N11: Add deprecation notices and migration notes to `CHANGES.rst`
+### N11: Expand deprecation notices and migration notes in `CHANGES.rst`
 
-The `CHANGES.rst` file does not include forward-looking deprecation
-notices or migration guidance for the upcoming major release. Add a
-new unreleased section with entries documenting deprecated APIs, their
-replacements, and the planned removal timeline. Use consistent
-reStructuredText formatting with issue cross-references and contributor
-attribution.
+The `CHANGES.rst` unreleased section for version 3.2.0 contains some
+deprecation announcements (`RequestContext` alias, `should_ignore_error`)
+but does not document planned removal timelines, migration alternatives, or
+the broader set of APIs scheduled for removal. Add entries to the existing
+unreleased section documenting the full set of deprecated APIs introduced in
+3.2.0 — including the old `AppContext`/`RequestContext` split, the old
+dispatch method signatures that accepted no `AppContext` parameter, and any
+other APIs marked with deprecation warnings in the source — specifying their
+replacements and the version in which removal is planned. Use consistent
+reStructuredText formatting with `:issue:` cross-references and
+`:user:` contributor attribution on each entry.
 
-### M11: Revise `pyproject.toml` dependency groups and `.readthedocs.yaml` versioned docs config
+### M11: Add pip-compatible extras to `pyproject.toml` and extend pre-commit hooks
 
-The `pyproject.toml` lacks structured optional dependency groups for
-testing, documentation, and development tooling. Add
-`[project.optional-dependencies]` groups for `dev`, `test`, and
-`docs` with pinned versions. Update `.readthedocs.yaml` to use the
-new `docs` dependency group, configure multi-version documentation
-builds, and set the build OS and Python version. Also update
-`.pre-commit-config.yaml` to add `ruff` and `blacken-docs` hooks
-and pin existing hook versions.
+The `pyproject.toml` uses `[dependency-groups]` (PEP 735, requires uv)
+for `dev`, `docs`, `tests`, and `typing` groups but does not expose
+corresponding pip-installable extras via `[project.optional-dependencies]`.
+Users with standard pip cannot install development, documentation, or
+testing dependencies without uv. Add `[project.optional-dependencies]`
+entries for `dev`, `test`, and `docs` that mirror the corresponding
+`[dependency-groups]` contents. Update `.readthedocs.yaml` to add a
+`formats` key listing additional documentation output formats and
+configure the `submodules` policy. Add a `blacken-docs` pre-commit hook
+to `.pre-commit-config.yaml` to auto-format Python code blocks embedded
+in reStructuredText and Markdown documentation files.
 
 ### W11: Comprehensive configuration and documentation overhaul
 
-Perform a full non-code refresh: update `pyproject.toml` with
-current classifiers, PEP 639 license metadata, and entry point
-declarations. Revise `CHANGES.rst` to use consistent formatting
-with contributor attribution and issue cross-references across all
-versions. Update `README.md` quickstart examples to show modern
-patterns including async views and type hints. Configure
-`.readthedocs.yaml` for multi-version documentation builds with
-custom build steps. Update `.pre-commit-config.yaml` hook versions
-and add documentation-related hooks. Revise `.editorconfig` to
-cover template file extensions (`.html`, `.j2`).
+Perform a full non-code project hygiene refresh. Update `pyproject.toml`
+classifiers to add Python version classifiers (`Programming Language ::
+Python :: 3.10` through `3.13`) that reflect the supported range declared
+in `requires-python`. Revise `CHANGES.rst` to apply consistent
+reStructuredText formatting across all versions: entries should use
+`:issue:` and `:pr:` cross-references and `:user:` attribution where
+missing. Update `README.md` quickstart examples to show the modern
+method-based route decorators (`app.get`, `app.post`) and add type
+annotations to the example view functions. Configure `.readthedocs.yaml`
+for multi-version documentation builds by adding a `versions` block that
+builds both `stable` and `latest`. Add documentation-related hooks to
+`.pre-commit-config.yaml` (`blacken-docs` for code blocks in docs,
+`doc8` for RST style checks). Revise `.editorconfig` to add sections for
+`.j2`, `.jinja`, and `.jinja2` template file extensions with indent
+settings that match the existing HTML rule.

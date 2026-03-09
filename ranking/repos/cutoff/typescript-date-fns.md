@@ -138,11 +138,13 @@ bug where the interval was constructed backwards. Add a `strict` option
 
 ### N6: Fix formatDistance rounding error for durations near threshold boundaries
 
-`formatDistance()` shows "about 1 hour" for a difference of exactly 44
-minutes because the rounding logic rounds 44 up to 45, which crosses
-the hour threshold. Fix the rounding in `formatDistance/` to use
-floor-based thresholds so that 44 minutes remains "44 minutes" and the
-hour label only triggers at 45 minutes.
+`formatDistance()` shows "about 1 hour" for a difference of 44 minutes
+and 30 seconds because `Math.round((seconds - offsetInSeconds) / 60)`
+rounds the computed minute value up to 45, crossing the `minutes < 45`
+hour threshold in `formatDistance/index.ts`. Fix the rounding in
+`formatDistance/` to use `Math.floor` instead of `Math.round` when
+computing `minutes`, so that durations below 45 whole minutes remain
+"44 minutes" and the hour label only triggers at a full 45 minutes.
 
 ### N7: Fix addMonths not preserving time-of-day across DST transitions
 
@@ -154,13 +156,14 @@ instead of preserving the original `02:30` time. Fix the month addition
 to detect and compensate for DST-induced hour shifts after setting the
 new month.
 
-### N8: Fix toDate helper not rejecting non-finite numeric inputs
+### N8: Fix toDate not rejecting non-finite numeric inputs
 
-The internal `toDate()` helper in `_lib/toDate/` accepts `Infinity` and
-`-Infinity` as numeric inputs and converts them to an Invalid Date
-without throwing. Other functions that rely on `toDate()` then silently
-propagate the Invalid Date. Fix `toDate()` to throw a `RangeError` for
-non-finite numeric inputs.
+The `toDate()` function in `toDate/index.ts` accepts `Infinity` and
+`-Infinity` as numeric inputs and silently converts them to an Invalid
+Date via `constructFrom`. Other functions that call `toDate()` then
+propagate the Invalid Date without a clear error. Fix `toDate()` to
+throw a `RangeError` for non-finite numeric inputs before passing them
+to `constructFrom`.
 
 ### N9: Fix eachDayOfInterval not respecting step values greater than the interval span
 
@@ -183,15 +186,15 @@ before computing the calendar-day difference.
 
 ## Medium
 
-### M1: Implement transpose() for bulk date shifting with overflow policy
+### M1: Implement shiftDates() for bulk date shifting with overflow policy
 
-Add `transpose(dates, duration, options)` that applies a `Duration`
+Add `shiftDates(dates, duration, options)` that applies a `Duration`
 shift to an array of dates and returns the shifted array. Unlike calling
-`add()` in a loop, `transpose` should accept an `overflow` policy
+`add()` in a loop, `shiftDates` should accept an `overflow` policy
 (`"clamp"` or `"reject"`) for month-end overflow cases. Requires a new
-`transpose/` module under `src/`, integration with `add/` for the
+`shiftDates/` module under `src/`, integration with `add/` for the
 underlying arithmetic, a new `OverflowPolicy` type in `types.ts`, and
-a corresponding `fp/` curried variant. Add a `./transpose` export
+a corresponding `fp/` curried variant. Add a `./shiftDates` export
 entry to `package.json`'s `exports` map with CJS and ESM sub-paths,
 and document the function with usage examples in `README.md` under the
 "Date Helpers" section.
@@ -281,14 +284,20 @@ Requires a validation module under `src/_lib/validateLocale/`, type
 integration with the `Locale` type from `types.ts`, and test coverage
 for at least the `en-US` locale.
 
-### M10: Add tree-shakeable sub-path exports to package.json
+### M10: Add typesVersions compatibility field for older TypeScript consumers
 
-Restructure the package's `exports` map in `package.json` to expose
-each function as a sub-path export (e.g., `date-fns/addDays`), each
-locale as `date-fns/locale/en-US`, and each FP variant as
-`date-fns/fp/addDays`. Requires updating `package.json` exports,
-verifying that bundlers (webpack, esbuild, rollup) correctly tree-shake
-unused functions, and ensuring the `fp/` re-exports resolve correctly.
+The `package.json` `exports` map provides full sub-path exports but
+lacks a `typesVersions` field. TypeScript projects using
+`"moduleResolution": "node"` (TypeScript < 4.7) cannot use the
+`exports` field for type resolution and receive "Cannot find module
+'date-fns/addDays'" errors. Extend `scripts/build/indices.ts` (the
+script that auto-generates the `exports` map) to also emit a
+`typesVersions` entry mapping `"*"` to glob patterns covering all
+public functions, locales, and `fp/` variants. Update `package.json`
+with the generated field, add a verification step using `pnpm attw`
+in `attw_tests.yaml`, and ensure the `src/fp/index.ts` and
+`src/locale/index.ts` barrel exports continue to resolve under the new
+mapping.
 
 ## Wide
 
@@ -400,17 +409,17 @@ module, integration with `types.ts` types for inference, validators for
 each major type, error message formatting using locale-aware date
 rendering via `format/`, and `fp/` curried variants.
 
-### N11: Fix package.json exports map missing fp/ sub-path entries for recently added functions
+### N11: Fix scripts/build/indices.ts generating wrong extension for root import default
 
-The `exports` field in `package.json` has explicit entries for each
-public function with CJS and ESM sub-paths, but several recently added
-functions (e.g., `previousDay`, `nextDay`, `intlFormatDistance`) lack
-corresponding `/fp/previousDay`, `/fp/nextDay`, `/fp/intlFormatDistance`
-sub-path entries. Consumers using the `fp/` curried variants of these
-functions receive a "Package subpath not defined" error. Audit all
-`fp/` wrapper modules under `src/fp/` and add matching CJS and ESM
-sub-path exports to `package.json` for each that currently lacks an
-entry.
+The `generatePackageJSON` function in `scripts/build/indices.ts`
+hard-codes `"./index.ts"` as the `import.default` value for the root
+`"."` export entry, while the `mapExports` helper correctly uses
+`"./index.js"` for every other entry. Re-running the script would
+overwrite `package.json` and set the root import path to the TypeScript
+source file instead of the compiled JavaScript output, breaking ESM
+consumers of the published package. Fix `generatePackageJSON` to use
+`"./index.js"` (and `"./fp.js"`, `"./locale.js"` for the other
+top-level entries) consistent with what `mapExports` generates.
 
 ### M11: Add CI workflow for bundle size tracking and API diff reporting
 

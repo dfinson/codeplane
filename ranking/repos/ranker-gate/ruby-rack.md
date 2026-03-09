@@ -88,13 +88,16 @@ semantics mean the response must not be cached, attaching an ETag is
 contradictory. Fix `skip_caching?` to also return true when `no-store`
 is present in the `Cache-Control` header.
 
-### N4: Fix `Rack::Multipart` boundary detection failing on mixed-case Content-Type
+### N4: Fix `Rack::Multipart` encoding detection ignoring mixed-case Content-Type parts
 
-`Rack::Multipart` extracts the boundary parameter from the `Content-Type`
-header using a case-sensitive match, causing multipart parsing to fail
-when clients send `Boundary=` instead of `boundary=`. Fix the boundary
-extraction regex in `multipart/parser.rb` to be case-insensitive per
-RFC 2046 Section 5.1.
+`Rack::Multipart::Parser#tag_multipart_encoding` in `multipart/parser.rb`
+detects `text/plain` parts to apply charset decoding, but the comparison
+`TEXT_PLAIN == type_subtype` is case-sensitive. When a multipart part
+carries `Content-Type: TEXT/PLAIN; charset=utf-8` or `Text/Plain;
+charset=utf-8`, the comparison fails and the charset is not applied,
+leaving the part body with the wrong encoding. Fix `tag_multipart_encoding`
+to downcase `type_subtype` before comparing it against `TEXT_PLAIN` per
+RFC 2045 Section 5.1.
 
 ### N5: Add `REQUEST_METHOD` validation in `Rack::Request`
 
@@ -130,15 +133,17 @@ most specific one (per RFC 7231 Section 5.3.2 precedence rules). Fix
 the tie-breaking logic to prefer entries with more specific media type
 parameters and longer type strings.
 
-### N9: Fix `Rack::Recursive` not restoring original env on forwarding error
+### N9: Fix `Rack::Recursive` not enforcing a maximum forward depth limit
 
-`Rack::Recursive` in `recursive.rb` enables internal redirects via
-`Rack::ForwardRequest`. When the forwarded request raises an exception,
-the modified env (with changed `PATH_INFO`, `SCRIPT_NAME`, and
-`REQUEST_METHOD`) is not restored to its original state. This corrupts
-error-handling middleware that reads these values from the env hash.
-Fix the recursive call handler to save and restore the original env
-values when the forwarded request raises.
+`Rack::Recursive` in `recursive.rb` allows applications to redirect
+internally by rescuing `Rack::ForwardRequest` in `_call` and calling
+`call(env.merge(req.env))` recursively. There is no depth limit: if an
+application keeps raising `ForwardRequest` (e.g. due to a misconfigured
+route or loop), each rescue spawns a new stack frame and the process
+eventually crashes with `SystemStackError`. Fix `_call` to track the
+current forward depth and raise a `Rack::Recursive::ForwardLimitExceeded`
+error (returning a 500 response) after a configurable maximum (default 10)
+is exceeded.
 
 ### N10: Fix `Rack::TempfileReaper` not cleaning up temp files on body iteration error
 
@@ -370,26 +375,27 @@ logging to prevent log flooding from repeated errors.
 
 ## Non-code
 
-### N11: Fix `.github/workflows/test.yaml` not testing against Ruby 3.4 release builds
+### N11: Remove EOL Ruby versions from CI matrix and clean up `continue-on-error`
 
-The CI workflow in `.github/workflows/test.yaml` defines a Ruby version
-matrix that includes `ruby-head` and `truffleruby-head` but does not
-include the `3.4` stable release, which shipped several breaking changes
-to the `Regexp` engine affecting `Rack::Multipart` boundary parsing.
-Add `3.4` to the matrix, pin the `bundler-cache` action version, and
-update the `continue-on-error` conditional to no longer skip `2.4`
-and `2.5` (which are past EOL and should be removed from the matrix).
+The CI workflow in `.github/workflows/test.yaml` still includes Ruby
+`2.4` and `2.5` in the version matrix even though both versions have
+been past end-of-life for years. Their presence is guarded by
+`continue-on-error` conditionals that suppress failures, producing
+misleading green builds. Remove `2.4` and `2.5` from the matrix and
+delete the associated `continue-on-error` lines from both the
+`ruby/setup-ruby` step and the `bundle exec rake` step.
 
 ### M11: Overhaul `rack.gemspec` metadata, `CHANGELOG.md` formatting, and `CONTRIBUTING.md` guidelines
 
-Update `rack.gemspec` metadata to include `funding_uri` pointing to
-the project's Open Collective page and add `documentation_uri`
-pointing to the versioned RubyDoc. Reformat `CHANGELOG.md` to
-strictly follow the Keep a Changelog 1.1.0 format — add missing
-`### Deprecated` and `### Removed` sections, normalize link
-references, and add release date annotations to all version headers.
-Revise `CONTRIBUTING.md` to document the current branch strategy
-(PRs target `main`, backports to `3-x-stable`), add a DCO sign-off
+Update `rack.gemspec` metadata to add `funding_uri` pointing to the
+project's Open Collective page and update the existing `documentation_uri`
+to point to the versioned RubyDoc page
+(`https://rubydoc.info/gems/rack/#{Rack::VERSION}`). Reformat `CHANGELOG.md`
+to strictly follow the Keep a Changelog 1.1.0 format — add missing
+`### Deprecated` and `### Removed` sections to the Unreleased entry,
+normalize link references, and add release date annotations to all
+version headers. Revise `CONTRIBUTING.md` to document the current branch
+strategy (PRs target `main`, backports to `3-x-stable`), add a DCO sign-off
 requirement, and include a section on running the `.rubocop.yml`
 linter configuration locally before submitting.
 

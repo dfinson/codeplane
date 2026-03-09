@@ -75,14 +75,21 @@ named group, so `--help` output renders options under labeled sections
 `option.js` for storage and `help.js` `formatHelp()` for grouped
 rendering, falling back to the default list for ungrouped options.
 
-### N2: Fix DualOptions not handling chained short flags correctly
+### N2: Fix DualOptions.valueFromOption() collision when positive value matches negative preset
 
-The `DualOptions` class in `option.js` splits combined flags
-(e.g., `--no-color`) into positive and negative forms. When a short
-flag is combined with other short flags (e.g., `-vn` where `-n` is a
-negated flag), `DualOptions` does not recognize the negation in the
-combined context. Fix `DualOptions` to correctly detect negated short
-flags within combined flag sequences.
+The `DualOptions` class in `option.js` tracks paired positive/negative
+option forms (e.g., `--format` / `--no-format`) and its `valueFromOption()`
+method determines whether the current stored value came from the positive
+option or the negative one. The logic computes `option.negate === (negativeValue === value)`,
+where `negativeValue` is the negative option's `presetArg` (defaulting to
+`false`). When a custom `presetArg` is set on the negative option (e.g.,
+`"none"`) and the positive option is explicitly given the same value
+(e.g., `--format=none`), `valueFromOption()` incorrectly returns `false`
+for the positive option, treating it as though the negative option was
+used instead. This causes `_parseOptionsImplied()` in `command.js` to
+skip applying the positive option's implied values. Fix `valueFromOption()`
+in `option.js` to correctly handle this collision, for example by tracking
+the value source separately rather than inferring it from the stored value.
 
 ### N3: Add option value history tracking
 
@@ -113,14 +120,22 @@ in `option.js` and use in `command.js` `_parseCommand()`. Add the
 `typings/index.d.ts` and add a type-level test case in
 `typings/index.test-d.ts`.
 
-### N6: Fix Help.wrap() breaking words inside ANSI escape sequences
+### N6: Fix Help.boxWrap() losing ANSI reset codes at line break boundaries
 
-The `wrap()` method in `help.js` wraps lines at the terminal width
-but treats ANSI escape codes as visible characters when calculating
-positions. This causes incorrect line breaks inside styled text.
-Use `stripColor()` for width calculation while preserving the escape
-sequences in the output, and handle the case where a break point
-falls inside an escape sequence.
+The `boxWrap()` method in `help.js` correctly uses `displayWidth()` (which
+calls `stripColor()`) to calculate the visible width of each whitespace-
+delimited chunk. However, when a line break is introduced by the wrapping
+logic, the method trims leading whitespace from the first chunk of the new
+line using `chunk.trimStart()`. If the chunk begins with a whitespace
+character followed immediately by an ANSI reset or color code (e.g., a
+trailing reset that got placed after the last visible character in a word),
+`trimStart()` can shift that reset sequence to appear at the start of the
+following wrapped line rather than at the end of the preceding one. This
+causes the terminal color state to leak across the wrap boundary, resulting
+in incorrectly colored subsequent lines. Fix `boxWrap()` to ensure that
+ANSI SGR sequences adjacent to whitespace are associated with the correct
+output line when wrapping occurs, so that no color state leaks across
+wrapped line boundaries.
 
 ### N7: Add argument value validation callbacks
 
@@ -131,13 +146,17 @@ function receiving the parsed value and throwing
 `InvalidArgumentError` on failure. Invoke it in `command.js` during
 `_parseCommand()` after argument processing.
 
-### N8: Fix option.env() not trimming whitespace from environment values
+### N8: Fix _parseOptionsEnv() not trimming whitespace from environment values
 
-The `parseValueFromEnv()` method in `option.js` reads environment
-variable values verbatim, including any trailing newline or whitespace
-that may be present (e.g., from `export PORT="8080 "`). Trim
-whitespace from environment variable values before processing them
-through the option's `parseArg` function.
+The `_parseOptionsEnv()` method in `command.js` reads environment variable
+values verbatim via `process.env[option.envVar]` before emitting the
+`optionEnv:` event. Any trailing newline or surrounding whitespace present
+in the environment variable (e.g., from `export PORT="8080 "` or shell
+command substitution) is passed unchanged into the option's `parseArg`
+function and stored as the option value. Trim whitespace from the raw
+environment variable string in `_parseOptionsEnv()` before it is
+passed to the `optionEnv:` event emission, so that values like `"8080 "`
+are normalized to `"8080"` regardless of how the variable was set.
 
 ### N9: Add hidden arguments support
 
@@ -159,17 +178,22 @@ Call `restoreStateBeforeParse()` in the error handling path of
 
 ## Medium
 
-### M1: Implement option dependency declarations
+### M1: Implement option dependency declarations with dependsOn
 
-Add `option.implies({name: value, ...})` and
-`option.dependsOn(otherOption)` for declaring relationships between
-options. When `--format json` is set, it could imply `--no-color`.
-When `--output` depends on `--format`, omitting `--format` should
-produce a clear error. Requires post-parse validation in `command.js`,
-dependency graph cycle detection, error messages in `error.js`, and
-help text integration in `help.js`. Document the `implies()` and
-`dependsOn()` API in `Readme.md` under a new "Option Dependencies"
-section, and add a `CHANGELOG.md` entry describing the feature.
+The `Option` class in `option.js` already supports `option.implies()`
+for automatically setting other option values, and `option.conflictsWith()`
+for declaring mutual exclusions. What is missing is `option.dependsOn(name)`
+for declaring that one option requires another option to be explicitly
+provided on the command line. When `--output` has `.dependsOn('format')`,
+omitting `--format` while providing `--output` should produce a clear error.
+Add `option.dependsOn(...names)` in `option.js` for storage, add
+post-parse validation in `command.js` (a new `_checkForMissingDependencies()`
+method analogous to `_checkForConflictingOptions()`), add error messages
+with appropriate `commander.missingDependency` error code, and include
+help text integration in `help.js`. Add the `dependsOn()` method signature
+to `typings/index.d.ts`. Document the `dependsOn()` API in `Readme.md`
+under the existing option-related section alongside `conflictsWith()`, and
+add a `CHANGELOG.md` entry describing the feature.
 
 ### M2: Add config file support as a parameter source
 
@@ -218,24 +242,41 @@ automatically parses to `Number`, validates NaN, and displays
 with `option.js` parsing, `argument.js`, `help.js` for display, and
 `typings/index.d.ts` for TypeScript support.
 
-### M7: Implement command aliases with completion support
+### M7: Extend multi-alias support across help, suggestions, and completions
 
-Add `command.alias('rm')` that registers short aliases for
-subcommands. Aliases should appear in help text alongside the primary
-name, resolve during parsing, and be included in completion output.
-Requires changes to `command.js` for alias registration and lookup,
-`help.js` for formatting aliases in the subcommand list, and the
-existing `_aliases` array handling for multiple alias registration.
+The `command.alias()` / `command.aliases()` mechanism in `command.js`
+already registers multiple aliases, but only the first alias is
+leveraged: `subcommandTerm()` in `help.js` appends only `cmd._aliases[0]`
+to the subcommand name in help output, and the unknown-command suggestion
+path in `command.js` calls `command.alias()` (first alias only) when
+building `candidateNames` for `suggestSimilar`. Add
+`command.aliasesForHelp(names)` to control which aliases appear in the
+help listing versus which are parse-only, update `subcommandTerm()` in
+`help.js` to render all help-visible aliases (e.g., `name|alias1|alias2`),
+update the `suggestSimilar` candidate-building code in `command.js` to
+include all aliases of every subcommand so that any registered alias
+triggers a "Did you mean?" hint, and add a `visibleAliases(cmd)` helper
+in `help.js` analogous to `visibleOptions()`. Add the `aliasesForHelp()`
+method signature to `typings/index.d.ts` and document the full multi-alias
+behaviour in `Readme.md`.
 
-### M8: Add middleware/hook system for command execution lifecycle
+### M8: Extend hook system with error hooks and globally-inherited hooks
 
-Implement `command.hook('preAction', fn)` and
-`command.hook('postAction', fn)` for the full lifecycle: `preSubcommand`,
-`preAction`, `postAction`. Support async hooks that return promises.
-Extend the existing `_lifeCycleHooks` system with error handling hooks
-(`onError`) and globally registered hooks that apply to all
-subcommands. Requires changes to `command.js` invocation pipeline and
-error handling.
+The `command.hook(event, fn)` system in `command.js` already supports
+`preSubcommand`, `preAction`, and `postAction` events via
+`_lifeCycleHooks`, with async support through the promise chain in
+`_chainOrCallHooks()`. What is missing is: (1) an `onError` lifecycle
+event that fires before `process.exit()` is called from `command.error()`,
+allowing hooks to log or transform errors; (2) a way to register a hook
+on a parent command that automatically applies to all descendant
+subcommands without requiring each subcommand to register its own hook;
+and (3) a `postSubcommand` event symmetric to `preSubcommand`. Extend
+`_lifeCycleHooks` to accept the new events, add `onError` hook invocation
+inside `command.error()`, implement inherited-hook propagation in
+`_chainOrCallHooks()` by walking ancestor commands for hooks with an
+`inherit` flag, and update `typings/index.d.ts` with the new event
+literals. Requires changes to `command.js` error handling and invocation
+pipeline.
 
 ### M9: Implement output format negotiation for commands
 
@@ -359,15 +400,19 @@ middleware, rate limiting, and CORS support. Changes span a new
 parsing, response serialization, `command.js` invocation, and type
 definitions.
 
-### N11: Fix jest.config.js not collecting coverage for all library source files
+### N11: Fix jest.config.js missing collectCoverageFrom configuration
 
-The `jest.config.js` configuration collects coverage from files in
-`lib/` but the `collectCoverageFrom` patterns omit
-`lib/suggestSimilar.js` and `lib/error.js`. Changes to these files
-show 0% coverage in reports. Add the missing file patterns to
-`collectCoverageFrom` in `jest.config.js`. Also update
-`.github/workflows/tests.yml` to add a coverage upload step and
-publish coverage results as a PR comment.
+The `jest.config.js` configuration enables `collectCoverage: true` but
+does not specify a `collectCoverageFrom` array, so Jest determines coverage
+scope automatically based on which files are imported by tests rather than
+explicitly tracking all source files in `lib/`. Files that are lightly
+tested or only imported transitively may show incomplete coverage data.
+Add a `collectCoverageFrom` array to `jest.config.js` that explicitly
+includes all library source files: `lib/command.js`, `lib/option.js`,
+`lib/argument.js`, `lib/help.js`, `lib/error.js`, and
+`lib/suggestSimilar.js`. Also update `.github/workflows/tests.yml` to
+add a coverage upload step so that coverage results are published as part
+of CI.
 
 ### M11: Add comprehensive example documentation and project configuration
 
@@ -391,12 +436,11 @@ verification job. Add a `.github/workflows/release.yml` for automated
 npm publishing with provenance. Create a `docs/migration/` directory
 with `v11-to-v12.md` and `v12-to-v13.md` migration guides covering
 API changes, renamed methods, and updated option parsing behavior.
-Update `CHANGELOG.md` structure to follow Keep a Changelog format with
-categorized entries (Added, Changed, Deprecated, Removed, Fixed,
-Security). Update `package.json` to add an `engines` field specifying
-minimum Node.js version, a `packageManager` field, and `funding`
-configuration. Add `.github/dependabot.yml` for automated dependency
-updates on a weekly schedule. Update `.prettierrc.js` to enforce
+Update `package.json` to add a `packageManager` field and `funding`
+configuration (the `engines` field already exists). Update
+`.github/dependabot.yml` (which already exists) to change the npm
+package-ecosystem schedule from `monthly` to `weekly` and add a
+scope for `lib/` path monitoring. Update `.prettierrc.js` to enforce
 consistent formatting across `lib/`, `typings/`, `examples/`, and
 `docs/`. Update `.editorconfig` to add settings for `.mjs` and `.d.ts`
 files.

@@ -92,14 +92,21 @@ Sources/Kingfisher/
 
 ## Narrow
 
-### N1: Fix ImageDownloader not cancelling duplicate requests on timeout
+### N1: Fix SessionDelegate race between callback removal and task removal
 
-When two callers request the same URL and the first request times out,
-the second caller's completion handler is never invoked because the
-download task's session delegate entry is removed on timeout without
-notifying pending callbacks. Fix the timeout handling in
-`SessionDelegate.swift` to invoke all registered completion handlers
-for the URL before removing the entry.
+In `SessionDelegate.swift`, `onCompleted(task:result:)` calls
+`sessionTask.removeAllCallbacks()` to collect pending callbacks, then
+calls `sessionTask.onTaskDone.call(...)` (which may take time to
+process images), and only afterward calls `remove(sessionTask)` to
+unregister the task from the `tasks` dictionary. Because
+`remove(sessionTask)` acquires the session lock independently,
+a concurrent call to `addDownloadTask` can observe the task still in
+`tasks` during this window, call `sessionDelegate.append(existingTask,
+callback:)`, and add a new callback to a task whose callbacks have
+already been drained. That new callback is never invoked. Fix
+`SessionDelegate.swift` so that `remove(sessionTask)` is called before
+`onTaskDone.call` is dispatched, or so that the append path detects a
+completed task and starts a fresh download instead.
 
 ### N2: Fix MemoryStorage not synchronizing config property access during cleanup
 
@@ -115,13 +122,17 @@ partially from the old config and partially from the new. Fix
 handler to ensure config changes are atomic with respect to
 in-progress cleanup operations.
 
-### N3: Fix DiskStorage calculating wrong file size for expiration check
+### N3: Fix DiskStorage crashing on negative file size from URLResourceValues
 
-`DiskStorage` uses `FileManager.attributesOfItem(atPath:)` to read
-file sizes for the total-size expiration policy, but it reads
-`FileAttributeKey.size` as an `Int` instead of `UInt64`, causing
-overflow on large caches. Fix the size calculation in
-`DiskStorage.swift` to use the correct numeric type.
+`DiskStorage.Backend` reads file sizes via `URLResourceValues.fileSize`
+(which returns `Int?`) and stores them as `FileMeta.fileSize: Int`.
+When the accumulated total is computed in `totalSize()` and in
+`removeExpired()`, the code converts each size with `UInt(meta.fileSize)`.
+Swift's `UInt(_:)` initializer traps at runtime if the argument is
+negative. While Apple's frameworks rarely return negative file sizes,
+corrupt filesystem metadata or NFS-mounted volumes can produce such
+values, causing a crash. Fix `DiskStorage.swift` to guard against
+negative file sizes by clamping to zero before the `UInt` conversion.
 
 ### N4: Fix CacheSerializer not preserving image scale on deserialization
 
@@ -139,59 +150,74 @@ view controller is deallocated mid-prefetch, the closure keeps it
 alive, causing a memory leak. Fix `ImagePrefetcher.swift` to use
 weak capture and cancel outstanding prefetch tasks on `deinit`.
 
-### N6: Fix GIFAnimatedImage not validating nil frames from corrupt image sources
+### N6: Fix GIFAnimatedImage failing entirely when a single frame cannot be decoded
 
-When `GIFAnimatedImage` in `Image/GIFAnimatedImage.swift` decodes
-frames from a `CGImageSource`, it uses `CGImageSourceGetCount()` to
-determine the frame count and then iterates up to that count calling
-`CGImageSourceCreateImageAtIndex()`. When the image source is created
-from corrupt or truncated GIF data, the reported frame count may
-exceed the actual number of decodable frames. Frames that fail to
-decode return `nil`, which is passed through without validation,
-causing `nil` entries in the frame array and a crash during animation
-playback. Fix `GIFAnimatedImage.swift` to validate each frame result
-and skip or terminate early if a `nil` frame is encountered.
+`GIFAnimatedImage.init?(from:options:)` in `Image/GIFAnimatedImage.swift`
+iterates over all frame indices and uses a `guard let imageRef =
+frameSource.frame(at: i) else { return nil }` pattern. If any single
+frame fails to decode — which can happen with partially-corrupt or
+truncated GIF data where the reported frame count is accurate but one
+or more frames cannot be rendered — the entire initializer returns
+`nil`, preventing any animation from being displayed even when most
+frames are valid. Fix `GIFAnimatedImage.swift` to skip undecodable
+frames (continuing the loop rather than returning `nil`) so that a
+partially-corrupt GIF still animates with whatever frames are intact.
 
-### N7: Fix SessionDataTask not cancelling underlying URLSession task when last callback is removed
+### N7: Fix SessionDataTask.forceCancel reading callbacksStore without the lock
 
-When multiple callers download the same URL and each cancels
-independently, `cancel(token:)` in `SessionDataTask.swift` removes
-the caller's callback from `callbacksStore` but does not check
-whether the store is now empty. The orphaned URLSession data task
-continues downloading data that no caller wants, wasting bandwidth.
-Fix `cancel(token:)` to also cancel the underlying task when no
-callbacks remain.
+`SessionDataTask.forceCancel()` in `Networking/SessionDataTask.swift`
+iterates `callbacksStore.keys` to collect tokens and then calls
+`cancel(token:)` for each one. The key iteration is performed without
+acquiring the `NSLock` that guards all other `callbacksStore`
+accesses (`addCallback`, `removeCallback`, `removeAllCallbacks`).
+If `addCallback` is called concurrently from another thread while
+`forceCancel` is iterating, the dictionary is mutated during iteration,
+which is undefined behavior in Swift and can crash the process. Fix
+`SessionDataTask.swift` to acquire the lock before reading
+`callbacksStore.keys` in `forceCancel()`, copying the key set first,
+then releasing the lock before cancelling each token.
 
-### N8: Fix ImageCache.retrieveImage returning expired disk entry
+### N8: Fix ImageCache not removing corrupt disk cache entries on deserialization failure
 
-`ImageCache.retrieveImage()` checks disk cache without verifying
-the entry's expiration date, returning stale images when the disk
-cache has not yet been cleaned. Fix the retrieval path in
-`ImageCache.swift` to check the file's expiration metadata before
-returning a disk-cached result.
+When `ImageCache.retrieveImageInDiskCache` successfully reads bytes
+from `DiskStorage` but `cacheSerializer.image(with:options:)` returns
+`nil` (e.g., the stored data is corrupt or was written by an
+incompatible serializer), the completion handler receives
+`.success(nil)` — a cache miss — but the corrupt file is left on disk.
+Every subsequent request for that key triggers the same unnecessary
+disk read, serializer failure, and cache-miss round-trip. Fix
+`ImageCache.swift` to detect a `nil` deserialization result after a
+successful disk read and remove the corrupt entry from `DiskStorage`
+before returning the cache-miss result.
 
-### N9: Fix AnimatedImageView not stopping display link when removed from view hierarchy
+### N9: Fix AnimatedImageView not pausing display link when autoPlayAnimatedImage is false
 
-`AnimatedImageView` in `Views/AnimatedImageView.swift` uses a
-`CADisplayLink` (or platform equivalent via `DisplayLinkCompatible`)
-to drive frame-by-frame animation. The display link is invalidated
-in `deinit`, but the view does not override `didMoveToSuperview()`
-or `didMoveToWindow()` to pause or invalidate the link when removed
-from the view hierarchy. When an `AnimatedImageView` is removed from
-its superview but retained by other references, the display link
-continues firing on every screen refresh, consuming CPU for invisible
-animation. Fix `AnimatedImageView.swift` to pause the display link
-when `window` becomes `nil` and resume when re-added.
+`AnimatedImageView` in `Views/AnimatedImageView.swift` overrides
+`didMoveToWindow()` and `didMoveToSuperview()` and calls `didMove()`,
+which pauses the display link when both `superview` and `window` become
+`nil`. However, `didMove()` is guarded by `autoPlayAnimatedImage &&
+animator != nil`. When `autoPlayAnimatedImage` is set to `false` and
+the caller manually starts animation via `startAnimating()`, removing
+the view from the window does not pause the display link because the
+guard short-circuits. The display link continues firing on every
+screen refresh, consuming CPU for animation that is not visible. Fix
+`AnimatedImageView.swift` to pause the display link when `window`
+becomes `nil` regardless of the `autoPlayAnimatedImage` flag.
 
-### N10: Fix Indicator view not removed from superview after image load cancellation
+### N10: Fix ImageIndicator missing animatingCount reference counting
 
-When an image view's download task is cancelled via
-`cancelDownloadTask()`, the `Indicator`'s `stopAnimatingView()` is
-called but the indicator view itself remains in the view hierarchy
-as an invisible subview. Over repeated load-cancel cycles, orphaned
-indicator views accumulate in `Indicator.swift`. Fix the indicator to
-remove its view from the superview when animation stops due to
-cancellation.
+`ActivityIndicator` in `Views/Indicator.swift` uses an `animatingCount`
+counter so that concurrent downloads sharing the same image view each
+increment the count on start and decrement it on stop; the indicator
+is hidden only when the count reaches zero. `ImageIndicator` (the
+variant that shows a GIF as a loading spinner) does not implement this
+counter: `startAnimatingView()` unconditionally shows the view and
+`stopAnimatingView()` unconditionally hides it. When two downloads share
+the same image view (e.g., a cell is reused while the first download is
+still running), the stale download's `stopAnimatingView()` call hides
+the indicator while the new download is still in progress. Fix
+`Indicator.swift` to add the same `animatingCount` reference-counting
+pattern to `ImageIndicator` that `ActivityIndicator` already uses.
 
 ### N11: Fix CHANGELOG.md missing entries for cache serialization format changes
 
@@ -281,14 +307,17 @@ alongside the existing GIF path, update `ImageFormat.swift` to
 detect WebP, and modify `GIFAnimatedImage.swift` to share the
 frame-provider protocol with the new WebP decoder.
 
-### M8: Add request-priority and bandwidth-throttling to ImageDownloader
+### M8: Add bandwidth-throttling and typed priority levels to ImageDownloader
 
-Implement download priority levels (`.high`, `.normal`, `.low`) and
-a bandwidth throttle that limits concurrent bytes-per-second. Add a
-`DownloadPriority` enum, integrate priority into the URLSession task
-configuration in `ImageDownloader.swift`, add a throttle controller
-in `SessionDelegate.swift` that schedules task resumptions, and
-expose `.downloadPriority` and `.bandwidthLimit` options in
+`ImageDownloader.swift` already exposes a `.downloadPriority(Float)`
+option that maps directly to `URLSessionTask.priority`. However, there
+is no bandwidth-throttling mechanism and no higher-level typed priority
+enum. Add a `DownloadPriority` enum with `.high`, `.normal`, and `.low`
+cases that map to the corresponding `URLSessionTask` priority constants,
+replace the raw `Float` option with the new enum in
+`KingfisherOptionsInfo.swift`, add a bandwidth throttle controller in
+`SessionDelegate.swift` that caps the total bytes-per-second across
+concurrent tasks, and expose a `.bandwidthLimit(Int)` option in
 `KingfisherOptionsInfo.swift`.
 
 ### M9: Add placeholder transition with blur-to-sharp animation
@@ -299,35 +328,37 @@ full-resolution image when the download completes. Add a
 `BlurPlaceholder` conforming to `Placeholder` in `Placeholder.swift`,
 implement the blur generation in `ImageDrawing.swift`, wire the
 transition into `ImageTransition.swift`, and update
-`UIImageView+Kingfisher.swift` to apply the transition sequence.
+`ImageView+Kingfisher.swift` to apply the transition sequence.
 
-### M10: Implement cache-aware ImagePrefetcher with priority queue
+### M10: Add caller-supplied priority queue to ImagePrefetcher
 
-Redesign `ImagePrefetcher` to check both memory and disk caches
-before scheduling downloads, skip already-cached URLs, and order
-pending downloads by a caller-supplied priority. Add a priority
-queue data structure, update `ImagePrefetcher.swift` to query
-`ImageCache` before enqueuing, modify `ImageDownloader.swift` to
-accept priority-ordered tasks, and update `KingfisherManager.swift`
-to surface prefetch progress to callers.
+`ImagePrefetcher.swift` already checks both memory and disk caches
+before scheduling a download (via `imageCachedType` in
+`startPrefetching`) and skips already-cached URLs. However, all
+pending downloads are queued with equal priority; there is no way for
+callers to specify that certain URLs should be fetched before others.
+Add a `PrefetchPriority` enum and a priority queue data structure,
+update `ImagePrefetcher.swift` to accept per-URL priorities and drain
+the queue in priority order, modify `ImageDownloader.swift` to forward
+the per-task priority to the underlying `URLSessionTask`, and update
+`KingfisherManager.swift` to surface prefetch priority through the
+existing options system.
 
-### M11: Update docs/architecture.md and README.md to document cache and networking features
+### M11: Update docs/architecture.md, README.md, and CONTRIBUTING.md with missing coverage
 
-The `docs/architecture.md` file describes the original module
-layout but does not cover the `SwiftUI/` directory, the
-`FormatIndicatedCacheSerializer`, or the `ImagePrefetcher`
-component. The `README.md` "Features" list does not mention
-progressive JPEG support or the prefetcher API. The
-`CONTRIBUTING.md` file does not describe how to run the test
-suite on different platforms (iOS vs macOS vs tvOS) or reference
-the `fastlane/Fastfile` CI configuration. The
-`.github/workflows/build.yaml` and `.github/workflows/test.yaml`
-CI workflows do not test on watchOS. Update `docs/architecture.md`
-with SwiftUI and prefetcher sections, update `README.md` with
-complete feature coverage, update `CONTRIBUTING.md` with
-platform-specific testing instructions referencing
-`fastlane/Fastfile`, and add watchOS to the CI test matrix in
-`.github/workflows/test.yaml`.
+The `docs/architecture.md` file does not document
+`FormatIndicatedCacheSerializer` or explain how it differs from
+`DefaultCacheSerializer`. The `README.md` "Features" list does not
+mention progressive JPEG support (`ImageProgressive.swift`). The
+`CONTRIBUTING.md` file does not describe how to run the test suite on
+different platforms (iOS vs macOS vs tvOS vs watchOS) or reference the
+`fastlane/Fastfile` CI configuration. Update `docs/architecture.md`
+with a `FormatIndicatedCacheSerializer` entry in the storage layer
+table and an explanation of format-indicated serialization, update
+`README.md` with progressive JPEG in the features list, and update
+`CONTRIBUTING.md` with platform-specific testing instructions
+referencing `fastlane/Fastfile` and the
+`.github/workflows/test.yaml` matrix.
 
 ## Wide
 
@@ -458,22 +489,19 @@ per-variant cache keys, and add `.enableContentNegotiation` to
 ### W11: Overhaul documentation, CONTRIBUTING.md, and CI/distribution pipeline
 
 The `docs/` directory contains seven markdown files that are not
-cross-linked and have no index page. The `docs/build-system.md` file
-describes the Xcode project structure but does not mention Swift
-Package Manager or the `Package.swift` / `Package@swift-5.9.swift`
-dual-manifest setup. The `docs/testing.md` guide does not explain
-how to run tests via `fastlane` or how the
-`.github/workflows/test.yaml` CI pipeline works. The
-`Kingfisher.podspec` and `Package.swift` specify different minimum
-deployment targets with no documentation explaining why. The
-`CONTRIBUTING.md` does not describe the branch naming convention
-or the release process. The `.spi.yml` Swift Package Index
-configuration does not include documentation generation targets.
-Add a `docs/README.md` index page linking all documentation files,
-update `docs/build-system.md` to cover SPM and CocoaPods
-side-by-side, update `docs/testing.md` with CI pipeline context
-and `fastlane/Fastfile` reference, reconcile deployment targets
-between `Kingfisher.podspec` and `Package.swift` with
-documentation explaining the rationale, update `CONTRIBUTING.md`
-with branching and release process, and configure `.spi.yml` for
-documentation generation.
+cross-linked and have no index page (`docs/README.md` does not exist).
+The `docs/build-system.md` file covers Swift Package Manager and
+CocoaPods but does not explain the `Package@swift-5.9.swift`
+version-specific manifest or why it exists alongside `Package.swift`.
+The `docs/testing.md` guide mentions `fastlane` commands but does not
+explain how the `.github/workflows/test.yaml` CI matrix is structured
+or which destinations map to which platforms. The `CONTRIBUTING.md`
+file contains almost no technical content — it does not describe
+branch naming conventions, the release process, or how to run tests
+on any platform. Add a `docs/README.md` index page linking all
+documentation files, update `docs/build-system.md` to explain the
+dual `Package.swift` / `Package@swift-5.9.swift` manifest setup,
+update `docs/testing.md` with a CI matrix overview referencing
+`.github/workflows/test.yaml`, and update `CONTRIBUTING.md` with
+branching conventions, release process steps, and platform-specific
+testing instructions.

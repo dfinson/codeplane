@@ -204,17 +204,19 @@ feather). Enable parallel tile processing via the `parallel_for_`
 infrastructure in `modules/core/src/parallel.cpp`. Support both
 CPU and GPU (UMat) processing paths.
 
-### M6: Add AVIF image format read/write support
+### M6: Add QOI image format read/write support
 
-Add AVIF (AV1 Image File Format) codec support to
-`modules/imgcodecs/`. Implement `AvifDecoder` and `AvifEncoder`
-classes following the existing codec pattern (e.g., `grfmt_png.cpp`).
+Add QOI (Quite OK Image Format) codec support to
+`modules/imgcodecs/`. Implement `QoiDecoder` and `QoiEncoder`
+classes following the existing codec pattern (e.g., `grfmt_png.cpp`,
+`grfmt_webp.cpp`). Bundle the reference single-header implementation
+under `3rdparty/qoi/` (similar to how OpenCV bundles `3rdparty/libpng/`).
 Register the codec with the decoder/encoder factory in
-`loadsave.cpp`. Support 8-bit and 10-bit images, alpha channel,
-and ICC color profile embedding. Add signature-based format detection
-for AVIF files. Also update `cmake/OpenCVFindAVIF.cmake` to detect
-the system libavif library and version, and add codec documentation
-to `doc/tutorials/` describing AVIF usage and build requirements.
+`modules/imgcodecs/src/loadsave.cpp` and add the include to
+`modules/imgcodecs/src/grfmts.hpp`. Support 8-bit RGB and RGBA images.
+Add magic-bytes-based format detection (`qoif` signature) and
+add codec documentation to `doc/tutorials/` describing QOI usage
+and when to prefer it over PNG for lossless images.
 
 ### M7: Implement video stabilization module
 
@@ -226,10 +228,12 @@ processing. Include quality metrics (stability score, crop ratio).
 ### M8: Add image quality assessment metrics
 
 Implement image quality assessment functions: SSIM (structural
-similarity), PSNR (peak signal-to-noise ratio), BRISQUE (blind
-image quality), and NIQE (natural image quality). Support batch
-evaluation for comparing sets of images. Include GPU-accelerated
-paths for SSIM and PSNR.
+similarity), BRISQUE (blind image quality), and NIQE (natural image
+quality). Note that `cv::PSNR` already exists in
+`modules/core/include/opencv2/core.hpp` and must not be duplicated.
+The new functions should be added to the `imgproc` or `core` module.
+Support batch evaluation for comparing sets of images. Include a
+GPU-accelerated path for SSIM using the existing UMat infrastructure.
 
 ### M9: Add DNN model input preprocessing pipeline
 
@@ -367,25 +371,32 @@ The `cmake/` directory contains find-modules for many libraries
 (`OpenCVFindAVIF.cmake`, `FindCUDNN.cmake`, `FindONNX.cmake`, etc.)
 but several are outdated or missing version range support. Update
 `cmake/OpenCVFindAVIF.cmake` to support `find_package` version ranges
-and add a `AVIF_MIN_VERSION` variable to `cmake/OpenCVMinDepVersions.cmake`.
-Update the root `CMakeLists.txt` to expose an `OPENCV_ENABLE_AVIF`
-option. Add a CI matrix entry in `.github/workflows/PR-4.x.yaml` that
-builds with AVIF enabled on Ubuntu and tests codec round-trip. Update
-`CONTRIBUTING.md` to document how to add new codec dependencies.
+(the current file uses `find_package(libavif QUIET)` without version
+constraints) and add an `AVIF_MIN_VERSION` variable to
+`cmake/OpenCVMinDepVersions.cmake` (the file currently has no AVIF
+entry). The existing CMake option is `WITH_AVIF` in the root
+`CMakeLists.txt`; update the option description and add a version
+check that errors if the installed libavif is older than
+`AVIF_MIN_VERSION`. Add an inline CI job to `.github/workflows/PR-4.x.yaml`
+that builds with `-DWITH_AVIF=ON` on Ubuntu and tests AVIF codec
+round-trip. Update `CONTRIBUTING.md` to document how to add new codec
+dependencies.
 
 ### W11: Overhaul CI workflows, build system documentation, and platform configs
 
-Modernize the CI and platform support infrastructure. Refactor
-`.github/workflows/4.x.yml` and `.github/workflows/PR-4.x.yaml` to
-use reusable workflows with a build matrix covering GCC, Clang, and
-MSVC across Ubuntu, macOS, and Windows. Add a
+Modernize the CI and platform support infrastructure. The existing
+`.github/workflows/4.x.yml` and `.github/workflows/PR-4.x.yaml` call
+reusable workflows from `opencv/ci-gha-workflow` but lack a
+`.github/workflows/docs.yml` for documentation deployment. Add
 `.github/workflows/docs.yml` that builds Doxygen documentation from
 `doc/Doxyfile.in` and deploys to GitHub Pages on tagged releases.
-Update `platforms/js/` build scripts to support Emscripten 3.x and
-add a wasm32 CI job. Update `platforms/android/` Gradle configuration
-in `support/build.gradle` to target SDK 34. Overhaul `doc/Doxyfile.in`
-to enable `EXTRACT_ALL`, add `DOT_GRAPH_MAX_NODES` limit, and
-configure `HTML_EXTRA_STYLESHEET` to use `doc/stylesheet.css`.
-Update `cmake/OpenCVPackaging.cmake` and `cmake/OpenCVInstallLayout.cmake`
-to support CPack-based binary packaging with `.deb`, `.rpm`, and
-`.msi` generators.
+Extend `.github/workflows/PR-4.x.yaml` with additional jobs for
+Clang static analysis and a WASM build. Update `platforms/js/`
+build scripts to support Emscripten 3.x and add a wasm32 CI job.
+Update `platforms/android/aar-template/build.gradle` (the Gradle
+build file at `platforms/android/aar-template/`) to target SDK 34.
+Overhaul `doc/Doxyfile.in` to enable `EXTRACT_ALL`, add
+`DOT_GRAPH_MAX_NODES` limit, and configure `HTML_EXTRA_STYLESHEET`
+to use `doc/stylesheet.css`. Update `cmake/OpenCVPackaging.cmake`
+and `cmake/OpenCVInstallLayout.cmake` to support CPack-based binary
+packaging with `.deb`, `.rpm`, and `.msi` generators.

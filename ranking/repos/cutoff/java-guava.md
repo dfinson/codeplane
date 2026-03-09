@@ -130,12 +130,15 @@ The sibling `readFrom(InputStream, Funnel)` already calls
 ### N6: Fix Strings.padStart and Strings.padEnd not validating negative minLength
 
 Both `Strings.padStart(String, int, char)` and `Strings.padEnd(String,
-int, char)` silently return the original string when `minLength` is
-negative, masking caller bugs. Neither method throws or documents this
-edge case, while the related `Strings.repeat(String, int)` does throw
-`IllegalArgumentException` for negative `count`. Fix both `padStart()`
-and `padEnd()` in `Strings.java` to throw `IllegalArgumentException`
-when `minLength < 0`, making them consistent with `Strings.repeat()`.
+int, char)` currently document and accept negative `minLength` values,
+silently returning the original string — for example, the Javadoc says
+"Can be zero or negative, in which case the input string is always
+returned." This differs from `Strings.repeat(String, int)`, which
+throws `IllegalArgumentException` for a negative `count`. Fix both
+`padStart()` and `padEnd()` in `Strings.java` to throw
+`IllegalArgumentException` when `minLength < 0`, and update their
+Javadoc to remove the statement that negative values are allowed,
+making them consistent with `Strings.repeat()`.
 
 ### N7: Fix InternetDomainName.isValid not handling null input gracefully
 
@@ -317,15 +320,21 @@ static analysis annotations marking deprecated Guava APIs with their
 Java 8+ replacements. Changes span `base/`, `collect/`, `cache/`,
 `util/concurrent/`, and a new `migration/` package.
 
-### W2: Add reactive streams support to util.concurrent
+### W2: Add ListenableFuture and Service integration adapters for util.concurrent
 
-Implement `Publisher` and `Subscriber` adapters for
-`ListenableFuture`, `Service`, and `ServiceManager`: stream of service
-state transitions, future-to-publisher conversion, publisher-to-future
-conversion, and backpressure handling. Add
-`MoreExecutors.reactiveExecutor()` for scheduling. Changes span
-`util/concurrent/`, new reactive adapter classes, `Service`,
-`ServiceManager`, `ListenableFuture`, and `Futures`.
+Implement a comprehensive set of interoperability adapters within
+`util/concurrent/` that bridge Guava's own concurrency primitives:
+`Futures.toCompletableFuture(ListenableFuture<V>)` and
+`Futures.fromCompletableFuture(CompletableFuture<V>)` for bidirectional
+conversion with `java.util.concurrent.CompletableFuture`,
+`MoreExecutors.sequentialPublisher(ListeningExecutorService)` for
+ordered task sequencing, `ServiceManager.asSupplier()` returning a
+`Supplier<ServiceManager.State>` that blocks until healthy, and
+`Service.asCallable()` to wrap a one-shot service as a `Callable`.
+Add `Futures.combineAll(Iterable<ListenableFuture<V>>)` returning a
+`ListenableFuture<ImmutableList<V>>` that collects all results. Changes
+span `Futures.java`, `MoreExecutors.java`, `ServiceManager.java`,
+`Service.java`, and `AbstractService.java`.
 
 ### W3: Implement persistent (immutable) collection variants
 
@@ -346,24 +355,37 @@ matching. Each algorithm must work with `Graph`, `ValueGraph`, and
 `Network` generically. Changes span `graph/`, new algorithm classes,
 result types, and integration with `Traverser`.
 
-### W5: Add serialization framework for Guava types
+### W5: Add a pluggable serialization framework for Guava collection types
 
-Implement a pluggable serialization framework so all Guava collection
-types, `Optional`, `Table`, `RangeSet`, `Multimap`, `TypeToken`, and
-graph types can be serialized to JSON, Protocol Buffers, or custom
-formats. Add `GuavaSerializers.json()`, `GuavaSerializers.proto()`, and
-a `SerializerModule` SPI. Changes span `collect/`, `base/`, `graph/`,
-`hash/`, `reflect/`, and a new `serial/` package.
+Implement a pluggable serialization framework in a new
+`com.google.common.io.serial` package so that Guava collection types
+(`ImmutableList`, `ImmutableMap`, `ImmutableSet`, `ImmutableMultimap`,
+`Table`, `RangeSet`), `Optional`, `TypeToken`, and graph types can be
+serialized to and from a compact custom binary format using the JDK
+`DataOutputStream`/`DataInputStream` API (no external dependencies).
+Define a `TypeSerializer<T>` interface with `write(T, DataOutput)` and
+`read(DataInput)` methods and a `TypeSerializerRegistry` that maps
+types to serializers. Register built-in serializers for core Guava
+types. Add a `TypeSerializers` factory class with static accessors.
+Changes span a new `io/serial/` sub-package, `collect/` for exposing
+internal structure needed by serializers, `reflect/TypeToken` for
+runtime type info, and `graph/` for graph serializers.
 
-### W6: Implement a cache monitoring and management system
+### W6: Implement a cache monitoring and management system using JMX
 
-Add JMX and micrometer integration to `CacheBuilder`-built caches:
-expose hit/miss/eviction/load metrics as MBeans and Micrometer meters,
-add `Cache.policy()` for runtime inspection of eviction policies, and
-implement `Cache.asMap().listeners()` for entry-level event
-notification. Add a cache inspector that can dump cache contents and
-statistics to structured output. Changes span `cache/`, `util/concurrent/`
-for thread-pool metrics, and a new `cache/management/` sub-package.
+Add JMX integration to `CacheBuilder`-built caches using the JDK's
+`javax.management` API (no external dependencies): expose
+hit/miss/eviction/load metrics as MBeans registered under a configurable
+`ObjectName`, add `Cache.policy()` on the `Cache` interface returning a
+`CachePolicy` value object (maximum size, expiry settings, refresh
+interval, stats enabled) for runtime introspection, and implement
+`Cache.asMap().entrySet()` event listeners via a `RemovalListener`
+bridge. Add a `CacheMonitor` class in a new `cache/management/`
+sub-package that can register and unregister cache MBeans.
+Changes span `Cache.java` for `policy()`, a new `CachePolicy.java`,
+`CacheBuilder.java` for capturing settings, `LocalCache.java` for the
+implementation, a new `CacheMonitor.java`, and the new
+`cache/management/` package.
 
 ### W7: Add defensive-copy and immutability-enforcement annotations
 
@@ -409,49 +431,49 @@ for multi-release JAR plugin setup, the `guava/pom.xml` for
 `maven-compiler-plugin` multi-release output configuration, and
 `.github/workflows/ci.yml` for JDK 11/17/21 matrix testing.
 
-### N11: Fix pom.xml maven-enforcer-plugin not requiring minimum Maven version
+### N11: Fix pom.xml maven-enforcer-plugin requiring outdated minimum Maven version
 
-The parent `pom.xml` configures numerous Maven plugins but does not
-use `maven-enforcer-plugin` to require a minimum Maven version.
-Building with Maven 3.6.x silently produces incorrect multi-module
-reactor ordering, while 3.8+ handles it correctly. Add a
-`maven-enforcer-plugin` execution in the parent `pom.xml` with a
-`requireMavenVersion` rule requiring `[3.8.0,)`. Also add a
-`requireJavaVersion` rule matching the `surefire.toolchain.version`
-property, and update `CONTRIBUTING.md` to document the minimum
-Maven and JDK versions required for building.
+The parent `pom.xml` configures a `maven-enforcer-plugin` execution
+with a `requireMavenVersion` rule requiring `3.0.5` and a
+`requireJavaVersion` rule requiring `1.8.0`. These thresholds are
+dangerously low: Maven 3.0.5 predates multi-module reactor ordering
+fixes that were resolved in 3.8+, and accepting any Java 8+ JVM
+means the build may silently succeed on an unsupported JVM. Update the
+`requireMavenVersion` version to `[3.8.0,)` and the `requireJavaVersion`
+version to `[8,)` in the parent `pom.xml` enforcer execution. Also
+update `CONTRIBUTING.md` to document the resulting minimum Maven 3.8
+and JDK 8 requirements for building.
 
-### M11: Add Dependabot configuration and update parent pom.xml dependency management
+### M11: Enable Dependabot Maven updates and improve contribution tooling
 
-The repository has a `.github/dependabot.yml` file but it only
-monitors GitHub Actions versions, not Maven dependency updates.
-Update `dependabot.yml` to add a `maven` package ecosystem entry
-with weekly schedule, targeting the parent `pom.xml`. Add a
-`dependabot` label configuration for auto-labeling PRs. Update the
-parent `pom.xml` `<dependencyManagement>` section to pin all test
-dependencies (`junit`, `truth`, `mockito`) to specific versions
-rather than ranges, enabling Dependabot to propose version bumps.
-Add a `.github/workflows/scorecard.yml` OpenSSF Scorecard workflow
-for supply chain security monitoring. Update
-`.github/pull_request_template.md` to include a checklist item for
-dependency version justification.
+The repository has a `.github/dependabot.yml` file that only monitors
+GitHub Actions versions; the Maven ecosystem block is present but
+commented out with a TODO. Enable the commented-out `maven`
+package-ecosystem entries (one targeting `pom.xml`, one targeting
+`android/pom.xml`) with a weekly schedule and add a `dependabot` label
+configuration so that Dependabot PRs are auto-labeled. Add a
+`.github/workflows/license-check.yml` workflow that runs
+`mvn license:check` to gate PRs on license header compliance. Update
+`.github/pull_request_template.md` to include a checklist item
+reminding contributors to justify any new or updated dependency
+versions. Changes span `dependabot.yml`, the new
+`license-check.yml` workflow, and `pull_request_template.md`.
 
 ### W11: Overhaul Maven build configuration and project documentation
 
 Comprehensively update all non-code project files for modern build
-practices. Restructure the parent `pom.xml` to extract shared
-plugin configuration into `<pluginManagement>`, add
-`maven-wrapper-validation` enforcement, and configure reproducible
-builds via `project.build.outputTimestamp`. Update `guava-bom/pom.xml`
-to include version-aligned entries for all published modules
-(`guava`, `guava-testlib`, `guava-gwt`). Add a
-`.mvn/maven-build-cache-config.xml` for local build caching. Update
-`.github/workflows/ci.yml` to add a JDK compatibility matrix
-(8, 11, 17, 21), add a `mvn verify -Pguava-bom` job for BOM
-validation, and add dependency license scanning. Rewrite
+practices. Add `maven-wrapper-validation` enforcement to the existing
+`maven-enforcer-plugin` execution in the parent `pom.xml` to ensure
+the Maven wrapper JAR has not been tampered with. Add a
+`.mvn/maven-build-cache-config.xml` for local build caching to speed
+up incremental development builds. Update `.github/workflows/ci.yml`
+to add a dedicated `mvn verify -Pguava-bom` job for BOM artifact
+validation (confirming all BOM-managed artifacts resolve correctly)
+and add a dependency license-scanning step using
+`mvn license:check`. Add a `SECURITY.md` with vulnerability reporting
+instructions following the GitHub security advisory process. Rewrite
 `CONTRIBUTING.md` to add sections on the code review process, test
 requirements (unit test for every public method), and the release
-process. Update `README.md` to refresh the feature overview,
-add migration examples from `java.util` to Guava equivalents, and
-add a "Version Compatibility" matrix. Add `SECURITY.md` with
-vulnerability reporting instructions.
+process. Update `README.md` to refresh the feature overview, add
+migration examples from `java.util` to Guava equivalents, and add a
+"Version Compatibility" matrix documenting supported JDK versions.

@@ -69,20 +69,28 @@ match exists among the normalized choices.
 
 ### N2: Add ANSI escape sequence awareness to custom text wrapper
 
-Click's custom text wrapper in `_textwrap.py` uses `_wlen()` to compute
-visible string width, but it does not strip ANSI escape sequences (e.g.,
-`\x1b[31m`) before measuring. When styled text is passed through the
-help formatter, ANSI codes inflate the measured width and cause premature
-line breaks. Fix `_wlen()` in `_textwrap.py` to exclude ANSI escape
-sequence byte lengths from the width calculation.
+Click's custom `TextWrapper` class in `_textwrap.py` inherits
+`_wrap_chunks()` from `textwrap.TextWrapper`, which uses `len()` to
+measure chunk widths. When styled text containing ANSI escape sequences
+(e.g., `\x1b[31m`) is passed through the help formatter, the ANSI
+codes inflate the measured width and cause premature line breaks.
+`_compat.py` already provides `strip_ansi()`. Add a `_wlen()` method to
+`TextWrapper` in `_textwrap.py` that calls `strip_ansi()` before
+computing visible string length, and override `_wrap_chunks()` to use
+`self._wlen()` instead of `len()` when measuring chunks.
 
-### N3: Fix echo() silently swallowing UnicodeEncodeError on redirected stdout
+### N3: Fix echo() raising bare UnicodeEncodeError on narrow-encoding streams
 
-When stdout is redirected to a file with a narrow encoding (e.g.,
-ASCII), `echo()` silently swallows `UnicodeEncodeError` instead of
-raising a clear error or using a replacement strategy. Fix `echo()` in
-the utils module to apply `errors='replace'` or `errors='backslashreplace'`
-when writing to a non-UTF-8 stream rather than silently dropping output. Also update `CHANGES.rst` to document the new error handling behavior for redirected streams.
+When `echo()` writes to a stream with a narrow encoding (e.g., a file
+opened with `encoding='ascii'` and `errors='strict'`), a
+`UnicodeEncodeError` is raised from the bare `file.write(out)` call
+with no contextual message, making it difficult for users to diagnose
+the encoding problem. Fix `echo()` in `utils.py` to catch
+`UnicodeEncodeError` at the `file.write()` call and re-encode the
+output using `errors='replace'` as a fallback, emitting a warning or
+replacing unencodable characters rather than aborting with a raw
+exception. Also update `CHANGES.rst` to document the new encoding
+fallback behavior for narrow-encoding streams.
 
 ### N4: Add glob expansion support to Path type
 
@@ -102,13 +110,17 @@ no human is available. Add a `timeout` parameter (in seconds) to
 within the specified duration, using `select()` or `threading.Timer` for
 the timeout mechanism.
 
-### N6: Fix HelpFormatter indentation breaking with very long option names
+### N6: Fix HelpFormatter.write_dl() ignoring current indentation in text width
 
-When an option has a very long metavar (e.g., `--output-format FORMAT_STRING`),
-the `HelpFormatter.write_dl()` method overflows the column width and
-produces misaligned help text. Fix the definition-list writer to wrap
-the help text onto the next line when the term exceeds the column width,
-matching the behavior of `argparse`.
+`HelpFormatter.write_dl()` in `formatting.py` computes the help-text
+column width as `max(self.width - first_col - 2, 10)`, but does not
+subtract `self.current_indent`. Since `write_dl` is always called
+inside a `section()` context that increments `self.current_indent`,
+the resulting `text_width` is `self.current_indent` characters wider
+than the remaining terminal space. On narrow terminals this allows
+wrapped help text to extend past the intended right margin. Fix by
+computing `text_width = max(self.width - self.current_indent - first_col - 2, 10)`
+so the help text is constrained to the actual available width.
 
 ### N7: Add value normalization hook to _NumberRangeBase
 
@@ -127,14 +139,18 @@ causing the shell to misinterpret the completions. Fix the completion
 formatting in the shell-completion module to properly quote or escape
 values for each supported shell (bash, zsh, fish).
 
-### N9: Add CliRunner.charset parameter for encoding-specific testing
+### N9: Add encoding errors parameter to CliRunner for non-UTF-8 testing
 
-The `CliRunner` in `testing.py` defaults to UTF-8 encoding for its
-isolated streams, but there is no way to simulate a console with a
-different encoding (e.g., `latin-1` or `ascii`) to test how commands
-handle encoding limitations. Add a `charset` parameter to `CliRunner`
-that configures the encoding of the isolated stdin/stdout/stderr streams
-so developers can write tests for non-UTF-8 environments.
+`CliRunner` in `testing.py` has a `charset` parameter for configuring
+stream encoding, but the isolated stdout stream created in `invoke()` is
+constructed via `_NamedTextIOWrapper` without an `errors` argument,
+leaving it at the default `errors="strict"`. When `charset` is set to a
+narrow encoding such as `ascii`, writing any non-ASCII character raises
+`UnicodeEncodeError` rather than applying a replacement strategy. Add a
+`charset_errors` parameter (default `"strict"`) to `CliRunner.__init__`
+that is forwarded to the `_NamedTextIOWrapper` instances wrapping stdin
+and stdout inside `invoke()`, so developers can write tests for
+encoding-limited consoles without unexpected exceptions.
 
 ### N10: Add structured error context to MissingParameter exception
 
@@ -184,14 +200,21 @@ description. Requires a new formatter backend alongside `HelpFormatter`,
 integration with `Command.format_help()`, and registration of the
 format option as a special eager parameter.
 
-### M5: Implement environment variable prefix support for nested command groups
+### M5: Add context-level flag to display auto-derived environment variable names in help
 
-Add support for automatically mapping environment variables to options
-using a hierarchical prefix derived from the command path. For example,
-a `--port` option on `myapp server start` would read from
-`MYAPP_SERVER_START_PORT`. Requires changes to context creation to
-track the command path, option resolution to construct the env var
-name, and help text generation to display the expected variable name. Also update the `README.md` examples section to document the environment variable prefix convention.
+Click's `Context` supports `auto_envvar_prefix` which automatically
+maps `--option` flags to `PREFIX_OPTION` environment variables,
+propagating hierarchically through nested command groups. However,
+these auto-derived env var names are never shown in option help text
+unless `show_envvar=True` is set individually on every option.
+Add a `show_default_envvars` boolean parameter (default `False`) to
+`Context.__init__` that, when enabled, causes every option that would
+read from a `{auto_envvar_prefix}_{name.upper()}` env var to include
+the env var name in its help output — without requiring per-option
+`show_envvar=True`. Requires changes to `Context.__init__` and its
+`make_info_name` path, `Option.get_help_extra()` to check the new
+context flag, `Command.make_context()` to forward the parameter, and
+the `@click.command` / `@click.group` decorators to expose it.
 
 ### M6: Add retry and timeout decorators for commands that call external services
 
@@ -282,16 +305,24 @@ violations, and integrate with help text to display constraints. Changes
 span the core module, parameter processing, help formatting, error
 handling, and the testing module.
 
-### W5: Add internationalization support for help text and error messages
+### W5: Add per-Context gettext support for runtime-switchable translations
 
-Implement i18n across click's user-facing output. All error messages,
-help text labels ("Usage:", "Options:", "Commands:"), and built-in
-strings should be translatable via gettext or a custom catalog. Support
-user-provided translations for parameter help text and command
-descriptions. Include locale detection from environment variables.
-Changes span error messages in exceptions, help formatting, the type
-system error paths, the core module's built-in strings, and the
-completion module's output.
+Click already uses `from gettext import gettext as _` at module level in
+every source file, so built-in strings are extractable and the standard
+gettext locale lookup works. What is missing is the ability to supply a
+different translation function per `Context` — e.g., to serve different
+locales in the same process or to inject test doubles. Add a `gettext`
+callable parameter (default: the standard `gettext.gettext`) to
+`Context.__init__`; store it as `self.gettext` and `self.ngettext`. Replace
+all bare module-level `_()` and `ngettext()` calls in `core.py`,
+`exceptions.py`, `formatting.py`, `parser.py`, `termui.py`,
+`_termui_impl.py`, and `shell_completion.py` with `ctx.gettext()` /
+`ctx.ngettext()`, threading the context through where it is already
+available. Update `Context.__repr__`, error formatting, and help
+formatting paths so they all resolve through the context's translation
+callable. Add a `locale` utility helper that constructs a gettext
+translator from a `.po` catalog for a given locale string and returns a
+`Context`-compatible gettext function.
 
 ### W6: Implement a middleware/hook system for command lifecycle
 
@@ -346,31 +377,47 @@ documentation. Changes span a new documentation generator module,
 the help formatter for structured extraction, the core module for
 metadata access, and the type system for type name rendering.
 
-### N11: Update `CHANGES.rst` with categorized changelog entries for the upcoming release
+### N11: Update `CHANGES.rst` with categorized changelog entries and anchor labels
 
-The `CHANGES.rst` file has grown disorganized with entries lacking consistent
-categorization. Restructure the unreleased section to group changes under
-headings — Bug Fixes, Features, Deprecations, and Breaking Changes. Add
-anchor links for each version section so documentation cross-references
-resolve correctly when the changelog is rendered on ReadTheDocs.
+The `CHANGES.rst` file's unreleased section currently uses a flat list
+with no category groupings, and no version section has RST anchor labels,
+so Sphinx cross-references to specific versions do not resolve on
+ReadTheDocs. Restructure the unreleased section to group entries under
+subsection headings — Bug Fixes, Features, Deprecations, and Breaking
+Changes — placing the existing entry under Bug Fixes and adding
+placeholder subheadings for future use. Add RST anchor labels (e.g.,
+``.. _changelog-8-3-1:``) before each released version heading so that
+documentation pages can cross-reference specific changelog sections.
 
-### M11: Revise `pyproject.toml` optional dependencies and `.readthedocs.yaml` build config
+### M11: Add `[project.optional-dependencies]` extras to pyproject.toml
 
-The `pyproject.toml` does not declare optional dependency groups for
-development, testing, and documentation tooling, forcing contributors to
-read scattered comments across files. Add `[project.optional-dependencies]`
-groups for `dev`, `test`, and `docs`. Update `.readthedocs.yaml` to
-reference the new `docs` dependency group in its build step and configure
-the Python version and build commands. Also update `.pre-commit-config.yaml`
-to pin hook versions to current releases.
+The `pyproject.toml` uses PEP 735 `[dependency-groups]` (a uv-specific
+format) for development, testing, and documentation dependencies, but
+does not declare `[project.optional-dependencies]` extras. Without
+extras, users installing with standard pip cannot install subsets of
+dependencies via `pip install click[dev]` or `pip install click[docs]`.
+Add `[project.optional-dependencies]` groups `dev`, `test`, and `docs`
+that mirror the corresponding `[dependency-groups]` entries. Update
+`.readthedocs.yaml` to install via the `docs` extra in its pip install
+step (in addition to or instead of the uv group) so the build works
+in ReadTheDocs' standard pip environment. Update the contributing docs
+or inline comments in `pyproject.toml` to explain the distinction
+between the two dependency mechanisms.
 
-### W11: Overhaul project metadata, README examples, and CI configuration
+### W11: Overhaul project metadata, README examples, and configuration files
 
-Perform a comprehensive non-code refresh: update `pyproject.toml` with
-current classifiers, project URLs, and license metadata following PEP 639.
-Revise the `README.md` quickstart examples to show modern usage patterns
-including shell completion setup and type annotations. Update `CHANGES.rst`
-to use a consistent entry format with contributor attribution. Revise
-`.pre-commit-config.yaml` hook versions and add a `ruff` hook. Update
-`.editorconfig` to cover new file types (`.yml`, `.toml`). Update
-`.readthedocs.yaml` to use the build.os key and specify the Python version.
+Perform a comprehensive non-code refresh across project configuration and
+documentation files. Update `pyproject.toml` classifiers to include
+Python version and implementation classifiers (e.g., `"Programming
+Language :: Python :: 3.10"` through `"Programming Language :: Python
+:: 3.13"`, `"Programming Language :: Python :: Implementation ::
+CPython"`). Revise the `README.md` "A Simple Example" section to show
+modern usage patterns including type annotations on command callbacks and
+a shell completion setup snippet. Update `CHANGES.rst` to use a
+consistent entry format with contributor attribution (`:pr:` and
+`:issue:` references) throughout the unreleased section, and add RST
+anchor labels to each version heading for Sphinx cross-reference
+support. Update `.editorconfig` to cover `.toml` files with a dedicated
+`[*.toml]` section specifying appropriate indent settings. Update
+`.pre-commit-config.yaml` to add a `check-yaml` hook from the
+pre-commit-hooks repo alongside the existing hooks.
