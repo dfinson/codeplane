@@ -1,0 +1,8 @@
+FAILED cutoff/MediatR exit=137 (576s)
+FAILED cutoff/Polly exit=137 (2806s)
+FAILED cutoff/aspnetcore exit=137 (1118s)
+TIMEOUT cutoff/kafka (1800s)
+TIMEOUT cutoff/lottie-ios (1800s)
+TIMEOUT eval/Catch2 (2048s)
+FAILED eval/grpc exit=1 (276s)
+FAILED eval/xunit exit=137 (551s)
