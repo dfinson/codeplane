@@ -1,12 +1,12 @@
-| Field    | Value                                              |
-|----------|----------------------------------------------------|
-| URL      | https://github.com/heartcombo/devise                |
-| License  | MIT                                                 |
-| Language | Ruby                                                |
-| Scale    | Medium                                              |
-| Category | Authentication / Rails                              |
-| Set      | cutoff                                              |
-| Commit   | `ecdd02b2991e26af67c017de2df5956d21be891a`          |
+| Field | Value |
+|-------|-------|
+| **URL** | https://github.com/heartcombo/devise |
+| **License** | MIT |
+| **Language** | Ruby |
+| **Scale** | Medium |
+| **Category** | Authentication / Rails |
+| **Set** | cutoff |
+| **Commit** | `ecdd02b2991e26af67c017de2df5956d21be891a` |
 
 ## Why this repo
 
