@@ -43,6 +43,8 @@ LOGS_DIR = DATA_DIR / "logs"
 STAGES = ["audit", "exec_n", "exec_m", "exec_w", "review"]
 DEFAULT_CONCURRENCY = 10
 MAX_ATTEMPTS = 3
+RATE_LIMIT_RETRIES = 4
+RATE_LIMIT_BACKOFF = [30, 60, 120, 300]  # seconds between retries
 
 MODELS = {
     "audit": "claude-sonnet-4.6",
@@ -164,6 +166,25 @@ def validate_non_ok_schema(data: dict) -> list[str]:
 
 
 # ── Custom tools ──
+
+# Retryable error detection — prefer typed exceptions, fall back to heuristics
+
+def _is_retryable(exc: Exception) -> bool:
+    """Determine if an exception is a transient/rate-limit error worth retrying."""
+    try:
+        from copilot.jsonrpc import JsonRpcError, ProcessExitedError
+        if isinstance(exc, JsonRpcError):
+            # HTTP 429 or server-side rate limit codes
+            if isinstance(exc.code, int) and exc.code in (429, -32000, -32001, -32603):
+                return True
+        if isinstance(exc, ProcessExitedError):
+            return True  # CLI crashed — always retry
+    except ImportError:
+        pass
+
+    # Fallback: string heuristic for errors that don't use typed exceptions
+    err = str(exc).lower()
+    return any(k in err for k in ("rate limit", "429", "too many", "throttl", "capacity", "overloaded", "try again later", "service unavailable", "503"))
 
 # These are defined as functions that will be wrapped with @define_tool
 # at session creation time (they need closure over the SessionRunner).
@@ -331,6 +352,22 @@ class SessionRunner:
         self.log(f"{self.repo_id}/{self.stage} cwd={clone_dir}", "START")
         self.status_line = "initializing..."
 
+        for attempt in range(RATE_LIMIT_RETRIES):
+            try:
+                await self._run_session(clone_dir)
+                return  # success
+            except Exception as e:
+                if _is_retryable(e) and attempt < RATE_LIMIT_RETRIES - 1:
+                    wait = RATE_LIMIT_BACKOFF[attempt]
+                    self.log(f"Retryable error, waiting {wait}s (attempt {attempt + 1}/{RATE_LIMIT_RETRIES}): {e}", "ERROR")
+                    self.status_line = f"⏳ retry in {wait}s"
+                    await asyncio.sleep(wait)
+                    continue
+                raise  # not retryable, or exhausted retries
+
+    async def _run_session(self, clone_dir: Path) -> None:
+        from copilot import CopilotClient, PermissionHandler
+
         client = CopilotClient({
             "cwd": str(clone_dir),
             "log_level": "warning",
@@ -338,7 +375,6 @@ class SessionRunner:
         await client.start()
 
         try:
-            from copilot import PermissionHandler
             session = await client.create_session({
                 "model": MODELS[self.stage],
                 "tools": self.build_tools(),
@@ -351,7 +387,6 @@ class SessionRunner:
                 if etype == "assistant.message":
                     content = getattr(event.data, "content", "") or ""
                     self.log(f"ASSISTANT: {content[:300]}")
-                    # Update status with last meaningful line
                     for line in reversed(content.split("\n")):
                         line = line.strip()
                         if line and len(line) > 5:
