@@ -1,7 +1,7 @@
 """Object ranker — LightGBM LambdaMART model (Model 1).
 
 Scores P(relevant | query, object) for each candidate DefFact.
-See §2.1 of ranking-design.md.
+See §2.1 of recon-lab/README.md.
 """
 
 from __future__ import annotations

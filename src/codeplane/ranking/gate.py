@@ -2,7 +2,7 @@
 
 Classifies (query, repo) as OK / UNSAT / BROAD / AMBIG before
 committing to the ranker + cutoff pipeline.
-See §2.3 of ranking-design.md.
+See §2.3 of recon-lab/README.md.
 """
 
 from __future__ import annotations

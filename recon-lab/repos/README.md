@@ -1,6 +1,6 @@
 # Repo Selection & Tasks
 
-30 repos across 10 languages, 3 scale tiers each (§5.1 of ranking-design.md).
+30 repos across 10 languages, 3 scale tiers each (§4.1 of recon-lab/README.md).
 Each file contains the repo selection rationale, structure overview, and
 task definitions (narrow/medium/wide) per §5.2.
 

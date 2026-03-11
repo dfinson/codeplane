@@ -10,7 +10,7 @@ Two groups of tables, collected separately:
 **Retrieval signals** (re-collected when harvesters change):
 - ``CandidateRank``   — per-candidate retrieval features per query
 
-See §5 of ranking-design.md.
+See §5 of recon-lab/README.md.
 """
 
 from __future__ import annotations

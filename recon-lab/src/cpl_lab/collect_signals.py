@@ -6,7 +6,7 @@ signals.
 
 Output: ``data/{repo_id}/signals/candidates_rank.jsonl``
 
-See §4.3 Phase 3 of ranking-design.md.
+See §4.3 Phase 4 of recon-lab/README.md.
 """
 
 from __future__ import annotations

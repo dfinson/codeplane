@@ -1,7 +1,7 @@
 """Cutoff predictor — LightGBM regressor (Model 2).
 
 Predicts N(q): how many top-ranked objects to return.
-See §2.2 of ranking-design.md.
+See §2.2 of recon-lab/README.md.
 """
 
 from __future__ import annotations

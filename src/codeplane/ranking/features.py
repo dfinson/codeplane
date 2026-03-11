@@ -4,7 +4,7 @@ Converts the candidate pool returned by ``recon_raw_signals()`` into
 feature matrices suitable for the LightGBM ranker, cutoff, and gate
 models.
 
-See §3 and §13 of ranking-design.md for feature definitions.
+See §2.1 of recon-lab/README.md for feature definitions.
 """
 
 from __future__ import annotations

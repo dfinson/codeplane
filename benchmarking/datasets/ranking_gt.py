@@ -4,7 +4,7 @@ Registered as ``@dataset("cpl-ranking-gt")`` for EVEE evaluation.
 
 Each record is a ``(run_id, query_id)`` pair with ground-truth
 touched objects and gate label.  Loaded from the training pipeline's
-output tables (§7 of ranking-design.md).
+output tables (§5 of recon-lab/README.md).
 """
 
 from __future__ import annotations
