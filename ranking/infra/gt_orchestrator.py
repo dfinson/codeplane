@@ -2,8 +2,23 @@
 """Ground truth pipeline — local Copilot SDK orchestrator.
 
 Replaces the GitHub coding agent (fork/issue/PR) approach with local
-SDK sessions that run against ranking/clones/ and write directly to
-ranking/data/.
+SDK sessions that run against cloned repos and write directly to the
+pipeline workspace.
+
+Workspace layout (controlled by CPL_RANKING_WORKSPACE env var,
+default: ~/.codeplane/ranking):
+
+    $CPL_RANKING_WORKSPACE/
+    ├── clones/{set}/{repo}/       # cloned repos
+    ├── data/{repo_id}/            # ground truth, signals
+    │   ├── ground_truth/
+    │   └── signals/
+    ├── data/merged/               # training parquets
+    ├── data/gt_state.json         # pipeline state
+    └── data/logs/                 # session transcripts
+
+Pipeline source (repos/, roles/, infra/) stays in the git repo under
+ranking/.
 
 Usage:
     python gt_orchestrator.py run                  # run all stages
@@ -21,9 +36,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,11 +49,15 @@ from pydantic import BaseModel, Field
 
 # ── Paths ──
 
-RANKING_DIR = Path(__file__).resolve().parent.parent
-REPOS_DIR = RANKING_DIR / "repos"
-ROLES_DIR = RANKING_DIR / "roles"
-CLONES_DIR = RANKING_DIR / "clones"
-DATA_DIR = RANKING_DIR / "data"
+RANKING_SRC = Path(__file__).resolve().parent.parent  # in-repo pipeline source
+WORKSPACE = Path(
+    os.environ.get("CPL_RANKING_WORKSPACE", Path.home() / ".codeplane" / "ranking")
+)
+
+REPOS_DIR = RANKING_SRC / "repos"   # task definitions (versioned, in-repo)
+ROLES_DIR = RANKING_SRC / "roles"   # agent role prompts (versioned, in-repo)
+CLONES_DIR = WORKSPACE / "clones"   # cloned repos (mutable, outside repo)
+DATA_DIR = WORKSPACE / "data"       # ground truth + signals (mutable, outside repo)
 STATE_FILE = DATA_DIR / "gt_state.json"
 LOGS_DIR = DATA_DIR / "logs"
 
@@ -49,11 +70,45 @@ RATE_LIMIT_BACKOFF = [30, 60, 120, 300]  # seconds between retries
 
 MODELS = {
     "audit": "claude-sonnet-4.6",
-    "exec_n": "claude-sonnet-4.6",
-    "exec_m": "claude-sonnet-4.6",
-    "exec_w": "claude-sonnet-4.6",
+    "exec_n": "claude-opus-4.6",
+    "exec_m": "claude-opus-4.6",
+    "exec_w": "claude-opus-4.6",
     "review": "claude-opus-4.6",
 }
+
+# helpers
+
+def exec_stage_prefix(stage: str) -> str | None:
+    return {
+        "exec_n": "N",
+        "exec_m": "M",
+        "exec_w": "W",
+    }.get(stage)
+
+
+def exec_stage_expected_jsons(stage: str) -> int:
+    return 11 if stage in EXEC_STAGES else 0
+
+
+def exec_stage_artifacts_satisfied(repo_id: str, stage: str) -> tuple[bool, str, int]:
+    if stage not in EXEC_STAGES:
+        return True, "not an exec stage", 0
+
+    gt_dir = DATA_DIR / repo_id / "ground_truth"
+    prefix = exec_stage_prefix(stage)
+    required = exec_stage_expected_jsons(stage)
+
+    if not gt_dir.exists():
+        return False, f"{gt_dir} does not exist", 0
+
+    json_count = len(list(gt_dir.glob(f"{prefix}*.json")))
+    if json_count < required:
+        return False, f"have {json_count}/{required} required {prefix} JSONs", json_count
+
+    if stage == "exec_w" and not (gt_dir / "non_ok_queries.json").exists():
+        return False, "non_ok_queries.json missing", json_count
+
+    return True, "ok", json_count
 
 # ── State management ──
 
@@ -64,9 +119,23 @@ def load_state() -> dict:
     return {"global_stage": "audit", "repos": {}}
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content to path atomically via temp file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        os.write(fd, content.encode())
+        os.fsync(fd)
+        os.close(fd)
+        os.rename(tmp, path)
+    except BaseException:
+        os.close(fd)
+        os.unlink(tmp)
+        raise
+
+
 def save_state(state: dict) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    _atomic_write(STATE_FILE, json.dumps(state, indent=2) + "\n")
 
 
 def current_global_stage(state: dict) -> str:
@@ -117,8 +186,11 @@ def next_stage_for_repo(rd: dict) -> str | None:
     return None
 
 
-def all_eligible_tasks(state: dict, stage_filter: str | None = None,
-                       repo_filter: str | None = None) -> list[tuple[str, str]]:
+def all_eligible_tasks(
+    state: dict,
+    stage_filter: str | None = None,
+    repo_filter: str | None = None,
+) -> list[tuple[str, str]]:
     """Return list of (repo_id, stage) pairs ready to run."""
     tasks = []
     for rid, rd in state["repos"].items():
@@ -151,8 +223,11 @@ def recover_orphaned_active(state: dict) -> int:
             if prefix and gt_dir.exists():
                 jsons = list(gt_dir.glob(f"{prefix}*.json"))
                 if len(jsons) >= 11:
-                    rd[stage] = {"status": "done", "jsons": len(jsons),
-                                 "note": "recovered from interrupted run"}
+                    rd[stage] = {
+                        "status": "done",
+                        "jsons": len(jsons),
+                        "note": "recovered from interrupted run",
+                    }
                     continue
             attempts = rd[stage].get("attempts", 0)
             _archive_log(rid, stage, attempts)
@@ -272,7 +347,12 @@ def _is_retryable(exc: Exception) -> bool:
 
     # Fallback: string heuristic for errors that don't use typed exceptions
     err = str(exc).lower()
-    return any(k in err for k in ("rate limit", "429", "too many", "throttl", "capacity", "overloaded", "try again later", "service unavailable", "503"))
+    return any(
+        k in err for k in (
+            "rate limit", "429", "too many", "throttl", "capacity",
+            "overloaded", "try again later", "service unavailable", "503",
+        )
+    )
 
 # These are defined as functions that will be wrapped with @define_tool
 # at session creation time (they need closure over the SessionRunner).
@@ -314,7 +394,14 @@ class SessionRunner:
 
     def log(self, msg: str, level: str = "INFO") -> None:
         ts = datetime.now().strftime("%H:%M:%S")
-        prefix = {"INFO": "│", "TOOL": "├─🔧", "WRITE": "├─📝", "ERROR": "├─❌", "DONE": "└─✅", "START": "┌─▶"}.get(level, "│")
+        prefix = {
+            "INFO": "│",
+            "TOOL": "├─🔧",
+            "WRITE": "├─📝",
+            "ERROR": "├─❌",
+            "DONE": "└─✅",
+            "START": "┌─▶",
+        }.get(level, "│")
         with open(self.log_path, "a") as f:
             f.write(f"[{ts}] {prefix} {msg}\n")
 
@@ -334,10 +421,11 @@ class SessionRunner:
             errors = validate_gt_schema(params.data)
             if errors:
                 runner.log(f"Schema validation failed for {params.task_id}: {errors}", "ERROR")
-                return f"VALIDATION FAILED — fix these errors and call again:\n" + "\n".join(f"  - {e}" for e in errors)
+                return f"VALIDATION FAILED — fix these errors and call again:\n" + "\n".join(
+                    f"  - {e}" for e in errors
+                )
             path = DATA_DIR / params.repo_id / "ground_truth" / f"{params.task_id}.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(params.data, indent=2) + "\n")
+            _atomic_write(path, json.dumps(params.data, indent=2) + "\n")
             runner.jsons_written += 1
             runner.log(f"{params.task_id}.json written ({runner.jsons_written}/11)", "WRITE")
             runner.status_line = f"wrote {params.task_id}.json ({runner.jsons_written}/11)"
@@ -350,21 +438,35 @@ class SessionRunner:
                 runner.log(f"Non-OK validation failed: {errors}", "ERROR")
                 return f"VALIDATION FAILED:\n" + "\n".join(f"  - {e}" for e in errors)
             path = DATA_DIR / params.repo_id / "ground_truth" / "non_ok_queries.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(params.data, indent=2) + "\n")
-            runner.log(f"non_ok_queries.json written ({len(params.data.get('non_ok_queries', []))} queries)", "WRITE")
+            _atomic_write(path, json.dumps(params.data, indent=2) + "\n")
+            runner.log(
+                f"non_ok_queries.json written ({len(params.data.get('non_ok_queries', []))} queries)",
+                "WRITE",
+            )
             return f"Written: {path}"
 
         @define_tool(description="Signal that you have completed all assigned tasks for this session.")
         async def report_complete(params: ReportCompleteParams) -> str:
+            if runner.stage in EXEC_STAGES:
+                ok, reason, json_count = exec_stage_artifacts_satisfied(runner.repo_id, runner.stage)
+                if not ok:
+                    runner.log(f"report_complete rejected: {reason}", "ERROR")
+                    runner.status_line = f"incomplete: {reason}"
+                    return (
+                        "CANNOT COMPLETE YET.\n"
+                        f"Missing required outputs for {runner.stage}: {reason}\n"
+                        "Continue writing the remaining JSON files, then call report_complete again."
+                    )
+            else:
+                json_count = runner.jsons_written
+
             runner.log(f"{params.summary}", "DONE")
             runner.status_line = "✅ done"
-            # Update state
             rd = runner.state["repos"].get(runner.repo_id, {})
-            rd[runner.stage] = {"status": "done", "jsons": runner.jsons_written}
+            rd[runner.stage] = {"status": "done", "jsons": json_count}
             save_state(runner.state)
             runner.done_event.set()
-            return "Session marked complete. You can stop."
+            return "Session marked complete."
 
         tools = [write_ground_truth, report_complete]
         if self.stage == "exec_w":
@@ -390,10 +492,20 @@ class SessionRunner:
 
         role_content = role_file.read_text()
 
-        # Adapt paths in role content
-        role_content = role_content.replace(
-            "../../data/{repo_id}/ground_truth/", f"{DATA_DIR}/{self.repo_id}/ground_truth/"
+        # Adapt relative paths in role content to absolute paths.
+        # Roles were written for agents running from clones/{set}/{repo}/,
+        # so ../../ → clones/ and ../../../ → ranking/.
+        role_content = (
+            role_content
+            .replace("../../../roles/", f"{ROLES_DIR}/")
+            .replace("../../../repos/", f"{REPOS_DIR}/")
+            .replace("../../../infra/", f"{RANKING_SRC / 'infra'}/")
+            .replace("../../../data/", f"{DATA_DIR}/")
+            .replace("../../data/", f"{DATA_DIR}/")
         )
+        # Resolve {repo_id} placeholders
+        role_content = role_content.replace("{repo_id}", self.repo_id)
+        role_content = role_content.replace("{REPO_NAME}", self.repo_id)
 
         base_prompt = f"Your tasks file is: {task_file}\nThe repo_id is: {self.repo_id}\n\n"
 
@@ -470,7 +582,10 @@ class SessionRunner:
             except Exception as e:
                 if _is_retryable(e) and attempt < RATE_LIMIT_RETRIES - 1:
                     wait = RATE_LIMIT_BACKOFF[attempt]
-                    self.log(f"Retryable error, waiting {wait}s (attempt {attempt + 1}/{RATE_LIMIT_RETRIES}): {e}", "ERROR")
+                    self.log(
+                        f"Retryable error, waiting {wait}s (attempt {attempt + 1}/{RATE_LIMIT_RETRIES}): {e}",
+                        "ERROR",
+                    )
                     self.status_line = f"⏳ retry in {wait}s"
                     await asyncio.sleep(wait)
                     continue
@@ -505,8 +620,39 @@ class SessionRunner:
                             break
                 elif etype == "session.idle":
                     if not self.done_event.is_set():
-                        self.log("Session ended naturally", "DONE")
-                        self.done_event.set()
+                        if self.stage in EXEC_STAGES:
+                            ok, reason, json_count = exec_stage_artifacts_satisfied(
+                                self.repo_id,
+                                self.stage,
+                            )
+                            rd = self.state["repos"].get(self.repo_id, {})
+
+                            if ok:
+                                self.log(
+                                    "Session went idle, but exec artifacts are complete; marking done",
+                                    "DONE",
+                                )
+                                self.status_line = "idle but complete"
+                                rd[self.stage] = {"status": "done", "jsons": json_count}
+                            else:
+                                attempts = rd.get(self.stage, {}).get("attempts", 0)
+                                self.log(
+                                    f"Session went idle before completion: {reason}; resetting to pending",
+                                    "ERROR",
+                                )
+                                self.status_line = f"idle incomplete: {reason}"
+                                rd[self.stage] = {
+                                    "status": "pending",
+                                    "attempts": attempts,
+                                    "note": f"idle before completion: {reason}",
+                                }
+
+                            save_state(self.state)
+                            self.done_event.set()
+
+                        else:
+                            self.log("Session ended naturally", "DONE")
+                            self.done_event.set()
 
             session.on(on_event)
 
@@ -515,7 +661,7 @@ class SessionRunner:
             self.status_line = "prompt sent..."
 
             await session.send({"prompt": prompt})
-            await asyncio.wait_for(self.done_event.wait(), timeout=7200)
+            await asyncio.wait_for(self.done_event.wait(), timeout=5400)
 
             await session.disconnect()
         finally:
@@ -562,18 +708,30 @@ def cmd_status(state: dict) -> None:
         bar = f"[green]{'━' * filled}[/green][dim]{'─' * (25 - filled)}[/dim] {done*100//total}%"
         marker = "[bold yellow]◀[/bold yellow]" if s == stage else ""
         s_display = {
-            "audit": "Audit", "exec_n": "Exec N", "exec_m": "Exec M",
-            "exec_w": "Exec W", "review": "Review",
+            "audit": "Audit",
+            "exec_n": "Exec N",
+            "exec_m": "Exec M",
+            "exec_w": "Exec W",
+            "review": "Review",
         }.get(s, s)
         stage_table.add_row(
-            s_display, bar, str(done),
+            s_display,
+            bar,
+            str(done),
             str(active) if active else "·",
             str(failed) if failed else "·",
             str(pending) if pending else "·",
             marker,
         )
 
-    console.print(Panel(stage_table, title="[bold]Ground Truth Pipeline[/bold]", subtitle=f"stage: [yellow]{stage}[/yellow]", border_style="blue"))
+    console.print(
+        Panel(
+            stage_table,
+            title="[bold]Ground Truth Pipeline[/bold]",
+            subtitle=f"stage: [yellow]{stage}[/yellow]",
+            border_style="blue",
+        )
+    )
 
     # Failed details
     failed_list = []
@@ -592,8 +750,12 @@ def cmd_status(state: dict) -> None:
 # ── Run command ──
 
 
-async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None,
-                  concurrency: int) -> None:
+async def cmd_run(
+    state: dict,
+    stage_filter: str | None,
+    repo_filter: str | None,
+    concurrency: int,
+) -> None:
     from rich.console import Console
     from rich.live import Live
     from rich.table import Table
@@ -614,7 +776,9 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
     # ── Recover orphaned 'active' from previous interrupted run ──
     n_recovered = recover_orphaned_active(state)
     if n_recovered:
-        console.print(f"[yellow]Recovered {n_recovered} orphaned 'active' session(s) from previous run[/yellow]")
+        console.print(
+            f"[yellow]Recovered {n_recovered} orphaned 'active' session(s) from previous run[/yellow]"
+        )
         state = load_state()
 
     async def run_one(repo_id: str, stage: str):
@@ -634,23 +798,40 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
                 # If session ended naturally (session.idle) without report_complete,
                 # mark as done anyway — auditor sessions don't use report_complete
                 if rd.get(stage, {}).get("status") == "active":
-                    rd[stage] = {"status": "done", "jsons": runner.jsons_written}
-                    save_state(state)
+                    if stage in EXEC_STAGES:
+                        ok, reason, json_count = exec_stage_artifacts_satisfied(repo_id, stage)
+                        if ok:
+                            rd[stage] = {"status": "done", "jsons": json_count}
+                        else:
+                            attempts = rd.get(stage, {}).get("attempts", 0)
+                            rd[stage] = {
+                                "status": "pending",
+                                "attempts": attempts,
+                                "note": f"session exited incomplete: {reason}",
+                            }
+                        save_state(state)
+                    else:
+                        rd[stage] = {"status": "done", "jsons": runner.jsons_written}
+                        save_state(state)
 
             except asyncio.TimeoutError:
-                runner.log("TIMEOUT after 2h", "ERROR")
-                rd[stage] = {"status": "failed", "error": "timeout", "attempts": attempts}
-                save_state(state)
+                runner.log(f"TIMEOUT after 90min (attempt {attempts}/{MAX_ATTEMPTS})", "ERROR")
                 _archive_log(repo_id, stage, attempts)
+                if attempts < MAX_ATTEMPTS:
+                    rd[stage] = {"status": "pending", "attempts": attempts}
+                    runner.log("Will auto-retry with skip instruction")
+                else:
+                    rd[stage] = {"status": "failed", "error": "timeout", "attempts": attempts}
+                save_state(state)
             except Exception as e:
                 runner.log(f"{e}", "ERROR")
+                _archive_log(repo_id, stage, attempts)
                 if attempts < MAX_ATTEMPTS:
                     rd[stage] = {"status": "pending", "attempts": attempts}
                     runner.log(f"Will retry (attempt {attempts}/{MAX_ATTEMPTS})")
                 else:
                     rd[stage] = {"status": "failed", "error": str(e)[:200], "attempts": attempts}
                 save_state(state)
-                _archive_log(repo_id, stage, attempts)
             finally:
                 runners.pop(repo_id, None)
 
@@ -679,21 +860,42 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
         # Stage bars
         stage_lines = []
         for s in STAGES:
-            done = sum(1 for rd in fresh["repos"].values() if rd.get(s, {}).get("status") in ("merged", "done"))
-            active = sum(1 for rd in fresh["repos"].values() if rd.get(s, {}).get("status") == "active")
-            failed = sum(1 for rd in fresh["repos"].values() if rd.get(s, {}).get("status") == "failed")
+            done = sum(
+                1 for rd in fresh["repos"].values()
+                if rd.get(s, {}).get("status") in ("merged", "done")
+            )
+            active = sum(
+                1 for rd in fresh["repos"].values()
+                if rd.get(s, {}).get("status") == "active"
+            )
+            failed = sum(
+                1 for rd in fresh["repos"].values()
+                if rd.get(s, {}).get("status") == "failed"
+            )
             pct = done / total if total else 0
             filled = int(pct * 20)
             bar = f"[green]{'━' * filled}[/green][dim]{'─' * (20 - filled)}[/dim]"
-            s_name = {"audit": "Audit", "exec_n": "Exec N", "exec_m": "Exec M",
-                      "exec_w": "Exec W", "review": "Review"}.get(s, s)
+            s_name = {
+                "audit": "Audit",
+                "exec_n": "Exec N",
+                "exec_m": "Exec M",
+                "exec_w": "Exec W",
+                "review": "Review",
+            }.get(s, s)
             active_str = f" [cyan]+{active}[/cyan]" if active else ""
             failed_str = f" [red]✗{failed}[/red]" if failed else ""
-            stage_lines.append(Text.from_markup(f"  {s_name:8} {bar} {done}/{total}{active_str}{failed_str}"))
+            stage_lines.append(
+                Text.from_markup(f"  {s_name:8} {bar} {done}/{total}{active_str}{failed_str}")
+            )
 
         # Active sessions table
         if runners:
-            session_table = Table(show_header=True, box=None, padding=(0, 1), show_edge=False)
+            session_table = Table(
+                show_header=True,
+                box=None,
+                padding=(0, 1),
+                show_edge=False,
+            )
             session_table.add_column("", width=1)
             session_table.add_column("Repo", style="bold", min_width=28)
             session_table.add_column("Stage", style="magenta", width=7)
@@ -747,7 +949,9 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
                     if rd.get(s, {}).get("status") == "failed":
                         failed_repos.add(rid)
             if failed_repos:
-                console.print(f"[yellow]{len(failed_repos)} repo(s) have failed stages. Run 'retry' to reset.[/yellow]")
+                console.print(
+                    f"[yellow]{len(failed_repos)} repo(s) have failed stages. Run 'retry' to reset.[/yellow]"
+                )
             else:
                 console.print("[yellow]Nothing to do.[/yellow]")
         return
@@ -780,7 +984,9 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
                 if rd.get(s, {}).get("status") == "failed":
                     failed_repos.add(rid)
         if failed_repos:
-            console.print(f"[yellow]{len(failed_repos)} repo(s) have failed stages. Run 'retry' to reset, then 'run' again.[/yellow]")
+            console.print(
+                f"[yellow]{len(failed_repos)} repo(s) have failed stages. Run 'retry' to reset, then 'run' again.[/yellow]"
+            )
 
 
 def _archive_log(repo_id: str, stage: str, attempt: int) -> None:
@@ -831,7 +1037,7 @@ def cmd_logs(repo_id: str, stage: str) -> None:
 
 def cmd_collect(state: dict) -> None:
     """Merge per-task JSONs into JSONL for all completed repos."""
-    merge_script = RANKING_DIR / "infra" / "merge_ground_truth.py"
+    merge_script = RANKING_SRC / "infra" / "merge_ground_truth.py"
     for rid, rd in state["repos"].items():
         if rd.get("review", {}).get("status") in ("done", "merged"):
             repo_dir = DATA_DIR / rid
@@ -839,7 +1045,10 @@ def cmd_collect(state: dict) -> None:
                 import subprocess
                 r = subprocess.run(
                     f"python3 {merge_script} {repo_dir}",
-                    shell=True, capture_output=True, text=True, check=False,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
                 if r.returncode == 0:
                     print(f"  {rid}: merged")

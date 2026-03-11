@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-CLONES_DIR="$(cd "$(dirname "$0")/../clones" && pwd)"
+CLONES_DIR="${CPL_RANKING_WORKSPACE:-$HOME/.codeplane/ranking}/clones"
 CPL="$(cd "$(dirname "$0")/../../" && pwd)/.venv/bin/cpl"
 LOG="$(dirname "$0")/index_all.log"
 FLAGGED="$(dirname "$0")/index_flagged.txt"

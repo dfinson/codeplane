@@ -137,17 +137,18 @@ specifies an ANSI-only provider, the parameter is still sent as
 to detect the provider and set `IsAnsi` appropriately based on the
 connection's provider factory.
 
-### N8: Fix SqlMapper.Identity.Equals contract violation with gridIndex and parametersType
+### N8: Document SqlMapper.Identity.Equals hash/equals contract invariant for gridIndex and parametersType
 
 `SqlMapper.Identity.GetHashCode` in `SqlMapper.Identity.cs` includes
-`gridIndex` and `parametersType` in the hash computation, but
-`SqlMapper.Identity.Equals` does not compare these fields. This
-violates the hash/equals contract: two `Identity` objects with different
-`gridIndex` or `parametersType` can have the same hash and pass
-`Equals`, causing incorrect cache hits where a deserializer compiled
-for one grid position or parameter set is returned for a different one.
-Fix `SqlMapper.Identity.Equals` to compare both `gridIndex` and
-`parametersType`.
+`gridIndex` and `parametersType` in the hash computation, and
+`SqlMapper.Identity.Equals` correctly compares these fields, but
+this critical invariant is not documented in the code. Add an explicit
+comment to the `Equals` method in `SqlMapper.Identity.cs` documenting
+that both `gridIndex` and `parametersType` must be compared to maintain
+the hash/equals contract, preventing future maintainers from
+accidentally removing either comparison and causing incorrect cache
+hits where a deserializer compiled for one grid position or parameter
+set would be returned for a different one.
 
 ### N9: Fix Execute returning -1 for stored procedures with no SET NOCOUNT
 

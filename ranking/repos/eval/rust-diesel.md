@@ -79,7 +79,7 @@ In `diesel_cli/src/infer_schema_internals/foreign_keys.rs`, the `remove_unsafe_f
 
 ### N7: Add PostgreSQL regex match expression operators
 
-PostgreSQL supports case-sensitive (`~`, `!~`) and case-insensitive (`~*`, `!~*`) regular expression match operators that have no equivalent in other backends. The PostgreSQL expression module at `diesel/src/pg/expression/operators.rs` defines many PG-specific infix operators but none for regex matching. Add `Regexp`, `NotRegexp`, `RegexpInsensitive`, and `NotRegexpInsensitive` infix operators in `pg/expression/operators.rs` and expose them as `regexp`, `not_regexp`, `regexp_insensitive`, and `not_regexp_insensitive` methods via `PgExpressionMethods` in `diesel/src/pg/expression/expression_methods.rs`.
+PostgreSQL supports case-sensitive (`~`, `!~`) and case-insensitive (`~*`, `!~*`) regular expression match operators that have no equivalent in other backends. The PostgreSQL expression module at `diesel/src/pg/expression/operators.rs` defines many PG-specific infix operators but none for regex matching. Add `Regexp`, `NotRegexp`, `RegexpInsensitive`, and `NotRegexpInsensitive` infix operators in `pg/expression/operators.rs` and expose them as `regexp`, `not_regexp`, `regexp_insensitive`, and `not_regexp_insensitive` methods via `PgTextExpressionMethods` in `diesel/src/pg/expression/expression_methods.rs`.
 
 ### N8: Fix `MigrationHarness::pending_migrations` sorting migrations with non-zero-padded numeric versions
 

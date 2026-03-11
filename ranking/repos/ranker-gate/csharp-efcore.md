@@ -191,18 +191,16 @@ distributed (via `IDistributedCache`). Add cache hit/miss metrics.
 ### M3: Add configurable retry semantics for `ExecuteUpdate` and `ExecuteDelete`
 
 `ExecuteUpdate` and `ExecuteDelete` in `EFCore.Relational/Query/`
-execute their SQL commands immediately without passing through the
-`IExecutionStrategy` retry logic defined in
-`EFCore/Storage/ExecutionStrategy.cs`. When a transient error occurs
-during a bulk operation, the caller gets an immediate exception
-instead of automatic retry. Wire `ExecuteUpdate` and
-`ExecuteDelete` command execution through the `IExecutionStrategy`.
-Support the same `MaxRetryCount` and `MaxRetryDelay` settings used
-by `SaveChanges`. Add diagnostics events in
-`EFCore.Relational/Diagnostics/` for retry attempts on bulk
-operations. Update all relational providers (`EFCore.SqlServer/`,
-`EFCore.Sqlite.Core/`) to route through the retry pipeline. Also
-add a "Resiliency and Retry" section to `README.md` documenting
+already route through the `IExecutionStrategy` for transient fault
+retry, but there are no dedicated diagnostic events for bulk
+operation retries. When a transient error triggers a retry, only
+the general `ExecutionStrategyRetrying` event fires without
+identifying the bulk operation type. Add dedicated
+`ExecuteDeleteRetrying` and `ExecuteUpdateRetrying` event IDs to
+`RelationalEventId`, create a `BulkOperationRetryEventData` payload
+class in `EFCore.Relational/Diagnostics/`, and add logger extension
+methods to `RelationalLoggerExtensions` that emit these events.
+Also add a "Resiliency and Retry" section to `README.md` documenting
 the retry configuration settings, and update
 `docs/getting-and-building-the-code.md` with instructions for
 testing retry behaviour locally using transient-fault injection.

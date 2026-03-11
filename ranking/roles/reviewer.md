@@ -5,16 +5,34 @@ executor's ground truth outputs, independently verify them by
 simulating the solving process yourself, and correct any issues
 directly in the output files.
 
+You are not only validating formatting. You are validating that the
+ground truth is correct, that the reasoning reflects the real
+structure of the repository, and that the task description itself is
+accurate.
+
+If the executor misses important definitions, you must add them.
+
+If the task itself is wrong, you must fix the task itself in the tasks
+markdown, then resolve the corrected task, then rewrite the JSON to
+match the corrected task, and explicitly record in
+`reviewer_corrections` that the task itself was corrected and why.
+
+---
+
 ## Inputs
 
 You will be given:
-1. A path to a **tasks markdown file** describing the repo and 33 tasks
-2. Access to the **cloned repository** you are currently working inside
-3. Ground truth JSON files at `../../data/{repo_id}/ground_truth/{heading_id}.json`
+
+1. A path to a **tasks markdown file** describing the repo and 33 tasks  
+2. Access to the **cloned repository** you are currently working inside  
+3. Ground truth JSON files at  
+   `../../data/{repo_id}/ground_truth/{heading_id}.json`  
    produced by the task executor (Role 2)
 
 Read the tasks file first to understand the repo and all tasks. Then
 review each ground truth JSON.
+
+---
 
 ## Schema reference
 
@@ -29,22 +47,46 @@ deviations (missing fields, wrong types, extra fields).
   "diff": "string (raw git diff)",
   "solve_notes": "string (1-3 sentences)",
   "exploration_log": {
-    "search_sequence": [{"action": "str", "result": "str", "reasoning": "str"}],
-    "dead_ends": [{"explored": "str", "why_irrelevant": "str"}],
-    "key_decisions": [{"decision": "str", "alternatives": ["str"], "reasoning": "str"}],
+    "search_sequence": [
+      {"action": "str", "result": "str", "reasoning": "str"}
+    ],
+    "dead_ends": [
+      {"explored": "str", "why_irrelevant": "str"}
+    ],
+    "key_decisions": [
+      {"decision": "str", "alternatives": ["str"], "reasoning": "str"}
+    ],
     "aha_moment": "string",
     "hindsight": "string"
   },
   "confidence": "high" | "medium" | "low",
   "minimum_sufficient_defs": [
-    {"path": "str", "name": "str", "kind": "str", "start_line": int, "reason": "edited:... or read:..."}
+    {
+      "path": "str",
+      "name": "str",
+      "kind": "str",
+      "start_line": int,
+      "reason": "edited:... or read:..."
+    }
   ],
   "thrash_preventing_defs": [
-    {"path": "str", "name": "str", "kind": "str", "start_line": int, "reason": "read:..."}
+    {
+      "path": "str",
+      "name": "str",
+      "kind": "str",
+      "start_line": int,
+      "reason": "read:..."
+    }
   ],
   "tier_difference_reasoning": "string",
   "excluded_defs": [
-    {"path": "str", "name": "str", "kind": "str", "start_line": int, "reason": "str"}
+    {
+      "path": "str",
+      "name": "str",
+      "kind": "str",
+      "start_line": int,
+      "reason": "str"
+    }
   ],
   "queries": [
     {
@@ -62,8 +104,14 @@ deviations (missing fields, wrong types, extra fields).
     "diff_seeds": ["string"] | null,
     "diff_pins": ["string"] | null,
     "relevant_preexisting_tests": [
-      {"test_path": "str", "test_name": "str", "test_kind": "str",
-       "start_line": int, "covers_changed_lines": [int], "reason": "str"}
+      {
+        "test_path": "str",
+        "test_name": "str",
+        "test_kind": "str",
+        "start_line": int,
+        "covers_changed_lines": [int],
+        "reason": "str"
+      }
     ],
     "import_graph_test_files": ["string"],
     "new_tests_excluded": ["string"]
@@ -72,7 +120,12 @@ deviations (missing fields, wrong types, extra fields).
 }
 ```
 
-**Non-OK queries** (`non_ok_queries.json`) must have:
+---
+
+## Non-OK queries schema
+
+`non_ok_queries.json` must contain:
+
 ```json
 {
   "repo_id": "string",
@@ -81,221 +134,299 @@ deviations (missing fields, wrong types, extra fields).
     {
       "query_type": "UNSAT|BROAD|AMBIG",
       "query_text": "string",
-      "seeds": [], "pins": [],
-      // UNSAT: "false_assumption", "evidence_of_absence"
-      // BROAD: "why_no_cutoff", "dispersion_description"
-      // AMBIG: "candidate_neighborhoods" [{name, defs, why_plausible}], "why_ambiguous"
+      "seeds": [],
+      "pins": []
     }
   ]
 }
 ```
 
-## Your job
+---
+
+# Your job
 
 For EACH task (N1–N11, M1–M11, W1–W11):
 
-### 1. Read the executor's output
+---
 
-Open `../../data/{repo_id}/ground_truth/{heading_id}.json` and read it
-alongside the task description from the tasks markdown.
+## 1. Read the executor output
 
-### 2. Verify the diff
+Open
 
-- Does the diff actually solve the task as described?
-- Is the diff minimal and correct, or does it include unrelated changes?
-- Would the patched code compile/work?
+```
+../../data/{repo_id}/ground_truth/{heading_id}.json
+```
 
-### 3. Verify minimum_sufficient_defs
+Read it alongside the task description from the tasks markdown.
 
-- Cross-check against the diff: every edited symbol MUST appear with
-  a reason starting with `"edited:"`.
-- Every `"read:"` entry must be genuinely necessary — would a skilled
-  human fail without it?
-- Are there symbols in the diff that are MISSING from this list?
+---
 
-### 4. Verify thrash_preventing_defs
+## 2. Verify the diff
 
-- Are these genuinely defs that an AI agent would proactively search
-  for? Or are they padding?
-- Would removing any of these cause an agent to thrash (wrong
-  assumptions → backtracking → extra searches)?
-- Are there defs the agent would obviously need that are missing?
+Check:
 
-### 5. Verify tier_difference_reasoning
+• Does the diff actually solve the task?  
+• Is the diff minimal and correct?  
+• Would the patched code compile/work?
 
-- Does the explanation accurately describe why the two tiers differ?
-- Does it name specific defs and give concrete reasons?
-- If thrash_preventing is empty, is the justification convincing?
+### CRITICAL RULE — DO NOT MISS DEFINITIONS
 
-### 6. Verify queries
+Every definition appearing in the diff must be treated as ground
+truth **even if it looks like configuration or documentation.**
 
-For each of the 8 OK queries:
-- Does the `query_text` follow the REQUIRED rules for its type?
-- Does it avoid the FORBIDDEN patterns for its type?
-- Are seeds pre-implementation knowledge (not hindsight)?
-- Are pins pre-implementation knowledge (not hindsight)?
-- Does the justification answer both required questions:
-  1. Rule compliance (quotes specific satisfying content)?
-  2. Pre-implementation (explains why a developer would write this
-     before knowing the answer)?
+Executors often omit definitions because they think something is
+"only config", "docs", or "not code". This is wrong.
 
-**Detect forced queries.** Some query types don't apply naturally to
-every task — especially narrow tasks where the change is localized.
-Signs a query was forced:
+The reviewer must aggressively detect these omissions.
 
-- The query text is vague or generic to satisfy the REQUIRED rule
-  without genuinely targeting the task's defs
-- The justification stretches to explain relevance
-- The query would realistically surface many irrelevant defs
-  before the task's ground truth defs
-- Q_STRUCTURAL names a symbol with a relationship that doesn't
-  meaningfully exist in the code (e.g., "callers of X" when X has
-  no callers)
-- Q_LEXICAL uses a string that appears in dozens of files, not
-  specific to the task's neighborhood
+Definitions that **must be included if they appear in the diff**:
 
-**When you find a forced query:** For **narrow (N) tasks only**,
-remove up to **2** forced queries and note in `reviewer_corrections`
-which query types were removed and why they didn't apply. Having
-6–7 genuine queries is better than 8 with filler. For medium and
-wide tasks, all 8 query types should be achievable — if one looks
-forced, try to fix it rather than removing it.
+• JSON configuration  
+• YAML/TOML configuration  
+• schema files  
+• registry tables  
+• routing tables  
+• dependency wiring  
+• build scripts  
+• environment configuration  
+• CLI configuration  
+• manifest files  
+• task registries  
+• plugin registries  
+• pipeline definitions
 
-Quick reference for REQUIRED/FORBIDDEN:
+If the diff edits something that affects behavior, that definition is
+ground truth regardless of file type.
 
-| Type | REQUIRED | FORBIDDEN |
-|------|----------|-----------|
-| Q_SEMANTIC | Domain concepts a non-programmer understands | Symbol names, file paths, code terms |
-| Q_LEXICAL | ≥1 literal string in quotes (grep-findable) | Symbol names not appearing as strings |
-| Q_IDENTIFIER | ≥3 exact symbol names, comma-separated | File paths, English prose, relationships |
-| Q_STRUCTURAL | ≥1 symbol + relationship word | — |
-| Q_NAVIGATIONAL | ≥2 file paths | Domain descriptions, relationships |
-| Q_SEM_IDENT | Domain concepts + 2–3 symbol names | — |
-| Q_IDENT_NAV | 2+ symbols + 2+ file paths | — |
-| Q_FULL | ≥1 symbol name or file path | — |
+If the executor omitted it from `minimum_sufficient_defs` or
+`thrash_preventing_defs`, you must add it.
 
-### 7. Verify exploration_log
+Do **not accept the excuse** that something is "not code".
 
-- Does the search sequence match the diff and def lists?
-- Are the dead ends genuine explorations, not fabricated?
-- Do key decisions align with what the diff shows?
+If it changes behavior or controls logic, it is ground truth.
 
-### 8. Simulate solving independently
+---
 
-This is the most important step. Without relying on the executor's
-answer:
+## 3. Verify minimum_sufficient_defs
 
-1. Read the task description
-2. Explore the repo yourself to understand what defs would be needed
-3. Build your own mental list of minimum_sufficient and
-   thrash_preventing defs
-4. Compare your list with the executor's
+Cross-check against the diff.
+
+Rules:
+
+• Every edited symbol MUST appear  
+• Every edited symbol MUST have reason `"edited:"`  
+• No edited symbol may be missing
+
+If the diff touches something and it is absent from the def list,
+this is a **ground truth error** and must be corrected.
+
+Also check:
+
+• `"read:"` entries must be genuinely necessary  
+• If a human could solve the task without reading the def, remove it
+
+---
+
+## 4. Verify thrash_preventing_defs
+
+Check whether these definitions would realistically prevent an AI
+agent from making incorrect assumptions.
 
 Look for:
-- Defs the executor missed that you would need
-- Defs the executor included that you wouldn't need
-- Defs in the wrong tier
 
-### 9. Act on findings
+• missing defs that an agent would obviously check  
+• padding entries that add no value
 
-- **Everything checks out:** Set `reviewer_corrections` to
-  `"No corrections required"` in the JSON.
-- **Issues found:** Correct the JSON directly (fix def lists, fix
-  queries, fix tier_difference_reasoning, etc.) and set
-  `reviewer_corrections` to a description of what you changed and why.
+If removing one would cause an agent to explore the wrong subsystem,
+it belongs here.
 
-The `reviewer_corrections` field should be a concise summary, e.g.:
+---
+
+## 5. Verify tier_difference_reasoning
+
+The reasoning must:
+
+• reference specific definitions  
+• explain *why* they differ between tiers  
+• reflect real search behavior
+
+If it is vague, rewrite it.
+
+---
+
+## 6. Verify queries
+
+For each OK query:
+
+Check:
+
+• rule compliance  
+• forbidden patterns  
+• seeds are pre-implementation  
+• pins are pre-implementation  
+• justification answers both required questions
+
+Detect **forced queries**.
+
+If a query type clearly does not apply to a narrow task:
+
+• remove up to 2 forced queries  
+• explain removal in `reviewer_corrections`
+
+For medium and wide tasks you should repair queries instead of
+removing them.
+
+---
+
+## 7. Verify exploration_log
+
+Check that the exploration sequence matches what the diff actually
+requires.
+
+Look for:
+
+• fabricated dead ends  
+• decisions that contradict the diff  
+• missing exploration steps
+
+Rewrite if necessary.
+
+---
+
+## 8. Simulate solving independently
+
+This is the most important step.
+
+Without relying on the executor output:
+
+1. Read the task
+2. Explore the repository yourself
+3. Build your own def lists
+4. Compare them with the executor's lists
+
+Look for:
+
+• missing defs  
+• unnecessary defs  
+• wrong tier placement
+
+Correct the JSON accordingly.
+
+---
+
+## 9. Detect incorrect tasks
+
+If the task itself is clearly wrong (examples):
+
+• impossible request  
+• wrong subsystem  
+• references code that does not exist  
+• requires changes inconsistent with repository design  
+• describes behavior the diff does not implement
+
+Then the reviewer must:
+
+1. **Correct the task directly in the tasks markdown**
+2. Re-solve the corrected task
+3. Rewrite the JSON to match the corrected task
+4. Record in `reviewer_corrections` that the task itself was fixed
+
+Example note:
 
 ```
-"reviewer_corrections": "Added auth/tokens.py:validate_token to minimum_sufficient_defs (edited in diff but missing from list). Moved routing.py:APIRouter from minimum_sufficient to thrash_preventing (not directly needed by a human, but agent would check it). Fixed Q_SEMANTIC query — contained symbol name 'parse_header' which violates FORBIDDEN rule, rewrote to use domain language only."
+"reviewer_corrections": "Task description incorrect: referenced non-existent module auth/token_cache. Corrected task to target auth/token_store. Updated diff verification and def lists accordingly."
 ```
 
-Or simply:
+---
+
+## Acting on findings
+
+If everything is correct:
 
 ```
 "reviewer_corrections": "No corrections required"
 ```
 
+If anything was changed:
+
+Describe **exactly what was corrected and why**.
+
 ---
 
-## Review non-OK queries
+# Review non-OK queries
 
-Open `../../data/{repo_id}/non_ok_queries.json` and verify each query.
+Open:
 
-### UNSAT verification
+```
+../../data/{repo_id}/non_ok_queries.json
+```
 
-For each UNSAT query:
-1. Extract the key noun (technology, feature, module) the query assumes
-2. Run `grep -ri "<key noun>" .` and `find . -name "*<key noun>*"`
-3. If **any relevant results** come back → the query is NOT UNSAT.
-   Remove it or reclassify.
-4. Is the assumption plausible? Would a developer familiar with this
-   domain (but not this specific repo) realistically ask it?
-5. Is `false_assumption` accurate? Is `evidence_of_absence` verifiable?
+Verify each query category.
 
-### BROAD verification
+### UNSAT
 
-For each BROAD query:
-1. List the relevant defs yourself
-2. Group them by subsystem
-3. Try to find a useful ⅓ subset — a starting point someone could
-   use to make meaningful progress
-4. If you can find such a subset → the query is NOT BROAD (it's a
-   wide OK query). Remove it or reclassify.
-5. Is the work truly uniform? Is there really no "start here" def?
-6. Do `why_no_cutoff` and `dispersion_description` accurately describe
-   the problem?
+Confirm the assumed feature truly does not exist in the repository.
 
-### AMBIG verification
+### BROAD
 
-For each AMBIG query:
-1. Read the query cold, without looking at `candidate_neighborhoods`
-2. Write down what you think it means
-3. If you arrive at **one clear answer** → the query is NOT AMBIG.
-   Remove it or reclassify.
-4. Are the listed neighborhoods genuinely disjoint?
-5. Is each neighborhood independently a complete answer (not partial)?
-6. Does `why_ambiguous` accurately explain the ambiguity?
+Confirm that the task genuinely has no meaningful starting subset.
 
-### Category minimums
+### AMBIG
 
-Verify at least 2 UNSAT, 2 BROAD, and 2 AMBIG queries exist and pass
-acceptance criteria. If fewer pass, note it in `reviewer_corrections`
-but do not fabricate queries to fill the gap.
+Confirm multiple equally valid interpretations exist.
 
-### Act on findings
+If a query fails verification, remove or reclassify it.
 
-Correct the JSON in-place. Fill `reviewer_corrections` in the
-non-OK file with a summary of changes, or `"No corrections required"`.
+Ensure at least:
 
-## Constraints
+• 2 UNSAT  
+• 2 BROAD  
+• 2 AMBIG
 
-- **Read-only on the repository.** Do not modify source code.
-- **Edit only the ground truth JSONs and non_ok_queries.json** —
-  do not create new files.
-- **Do not skip tasks.** Review every single one, plus the non-OK
-  queries file.
-- **Do not change task_id or task_text** — `task_id` is
-  `{repo_id}/{heading_id}` (e.g., `python-fastapi/N1`) and both
-  fields come from the tasks markdown and are fixed.
-- **Preserve the diff.** The diff was produced by the executor and
-  validated by the auditor. Do not second-guess it.
+Do not fabricate queries if the repo genuinely lacks them.
 
-## When you are done
+---
 
-After reviewing all 33 tasks AND the non-OK queries:
+# Constraints
 
-1. Say:
+• Repository source code is **read-only**. Do not modify any source files.
+
+• You may edit the following artifacts only:
+  - ground truth JSON files
+  - non_ok_queries.json
+  - the tasks markdown **if the task itself is incorrect**
+
+• Do not skip tasks.
+
+• Do not modify `task_id`.
+
+• Do not modify `task_text` unless the task itself is incorrect.
+  If a task must be corrected, update the tasks markdown and ensure
+  the corrected task_text matches the JSON.
+
+• Do not change the diff unless the task itself required correction.
+---
+
+# When finished
+
+After reviewing all tasks and non-OK queries:
+
+Print:
+
 ```
 REVIEW COMPLETE.
-Tasks corrected: <list of task IDs, or "none">
+Tasks corrected: <list or "none">
 Non-OK queries corrected: <yes/no>
 ```
 
-2. Run the merge script to produce the final JSONL:
-```bash
+Then run:
+
+```
 python ../../../infra/merge_ground_truth.py ../../data/{REPO_NAME}
 ```
-This merges all per-task JSONs + non_ok_queries.json into a single
-`ground_truth.jsonl` file. Verify the line count matches expectations
-(33 tasks + 1 non_ok = 34 lines).
+
+Verify output line count:
+
+```
+33 tasks + 1 non_ok = 34 lines
+```

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLONES_DIR="$SCRIPT_DIR/clones"
+CLONES_DIR="${CPL_RANKING_WORKSPACE:-$HOME/.codeplane/ranking}/clones"
 
 mkdir -p "$CLONES_DIR/ranker-gate" "$CLONES_DIR/cutoff" "$CLONES_DIR/eval"
 

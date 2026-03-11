@@ -168,22 +168,20 @@ found for a given extension. Relax the guard so that an empty
 `"application/octet-stream"` as the MIME type rather than recording
 a `bodyPartFilenameInvalid` error.
 
-### N10: Fix `DownloadRequest.resumeData` not returning resume data from network failures on Apple platforms
+### N10: Refactor `DownloadRequest.resumeData` platform conditional for readability
 
 In `Source/Core/DownloadRequest.swift`, the `resumeData` computed
-property has a platform split: on Linux (`canImport(FoundationNetworking)`),
-it returns `mutableDownloadState.read(\.resumeData) ?? error?.downloadResumeData`,
-so that resume data embedded in a `URLError`'s userInfo
-(`NSURLSessionDownloadTaskResumeData`) is surfaced when the download
-fails mid-transfer. On Apple platforms (the `#else` branch), it only
-returns `mutableDownloadState.read(\.resumeData)`, which is populated
-solely by an explicit `cancel(producingResumeData:)` call. When a
-download fails due to a network error (not an explicit cancellation),
-the resume data present in `(error as? URLError)?.userInfo[NSURLSessionDownloadTaskResumeData]`
-is silently discarded. Fix the Apple-platform `#else` branch to match
-the Linux path: return `mutableDownloadState.read(\.resumeData) ?? error?.downloadResumeData`
-so callers can always resume interrupted downloads from the
-`DownloadResponse.resumeData` field.
+property uses `#if !canImport(FoundationNetworking)` (a double-negative)
+to select the Apple-platform branch, which includes the
+`error?.downloadResumeData` fallback for extracting resume data from a
+`URLError`'s userInfo. The `#else` branch handles Linux where
+`downloadResumeData` is unavailable (gated by `canImport(Security)` in
+`AFError`). The double-negative condition makes it easy to misread
+which platform gets which behavior. Restructure the conditional to use
+the positive form `#if canImport(FoundationNetworking)` for the Linux
+branch first, with the Apple `#else` branch containing the
+`downloadResumeData` fallback second, so the platform intent is
+immediately clear without changing runtime behavior.
 
 ## Medium
 

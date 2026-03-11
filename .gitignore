@@ -210,6 +210,12 @@ __marimo__/
 
 # Benchmark raw chatreplay exports (large)
 benchmarking/**/results/*_raw.json
+
+# Ranking pipeline — mutable data lives outside repo at $CPL_RANKING_WORKSPACE
+# Legacy: ignore if someone hasn't migrated yet
+ranking/clones/
+ranking/data/
+ranking/.venv/
 ranking/infra/terraform.tfvars
 ranking/infra/.terraform/
 ranking/infra/terraform.tfstate*

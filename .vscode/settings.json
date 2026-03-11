@@ -1,26 +1,42 @@
 {
-    "github.copilot.chat.virtualTools.threshold": 128,
-    "chat.mcp.serverSampling": {
-        "codeplane/.vscode/mcp.json: codeplane": {
-            "allowedModels": [
-                "copilot/claude-opus-4.5"
-            ]
-        }
-    },
-    "files.watcherExclude": {
-        "**/ranking/clones/**": true,
-        "**/.codeplane/**": true,
-        "**/benchmarking/results/**": true,
-        "**/benchmarking/experiments/output/**": true
-    },
-    "files.exclude": {
-        "ranking/clones": true
-    },
-    "python-envs.pythonProjects": [
-        {
-            "path": ".",
-            "envManager": "ms-python.python:venv",
-            "packageManager": "ms-python.python:pip"
-        }
-    ]
+  "github.copilot.chat.virtualTools.threshold": 128,
+  "chat.mcp.serverSampling": {
+    "codeplane/.vscode/mcp.json: codeplane": {
+      "allowedModels": [
+        "copilot/claude-opus-4.5"
+      ]
+    }
+  },
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.venv/**": true,
+    "**/__pycache__/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/.codeplane/**": true
+  },
+  "search.exclude": {
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.codeplane": true
+  },
+  "files.exclude": {
+    "**/.venv": true,
+    "**/__pycache__": true,
+    "**/.mypy_cache": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.codeplane": true
+  },
+  "python-envs.pythonProjects": [
+    {
+      "path": ".",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
+  ]
 }

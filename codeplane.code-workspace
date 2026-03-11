@@ -1,8 +1,53 @@
 {
-	"folders": [
-		{
-			"path": "../codeplane"
-		}
-	],
-	"settings": {}
+  "folders": [
+    { "path": "src" },
+    { "path": "tests" },
+    { "path": "docs" },
+    { "path": "data" },
+    { "path": ".github" },
+    { "path": ".vscode" },
+    { "path": ".codeplane" }
+  ],
+  "settings": {
+    "github.copilot.chat.virtualTools.threshold": 128,
+    "chat.mcp.serverSampling": {
+      "codeplane/.vscode/mcp.json: codeplane": {
+        "allowedModels": [
+          "copilot/claude-opus-4.5"
+        ]
+      }
+    },
+    "files.watcherExclude": {
+      "**/.git/**": true,
+      "**/.venv/**": true,
+      "**/__pycache__/**": true,
+      "**/.mypy_cache/**": true,
+      "**/.pytest_cache/**": true,
+      "**/.ruff_cache/**": true,
+      "**/.codeplane/**": true
+    },
+    "search.exclude": {
+      "**/.venv": true,
+      "**/__pycache__": true,
+      "**/.mypy_cache": true,
+      "**/.pytest_cache": true,
+      "**/.ruff_cache": true,
+      "**/.codeplane": true
+    },
+    "files.exclude": {
+      "**/.venv": true,
+      "**/__pycache__": true,
+      "**/.mypy_cache": true,
+      "**/.pytest_cache": true,
+      "**/.ruff_cache": true,
+      "**/.codeplane": true
+    },
+    "python-envs.pythonProjects": [
+      {
+        "path": ".",
+        "envManager": "ms-python.python:venv",
+        "packageManager": "ms-python.python:pip"
+      }
+    ]
+  }
 }
