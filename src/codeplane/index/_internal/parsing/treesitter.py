@@ -716,7 +716,9 @@ class TreeSitterParser:
                                 node = sub
                                 break
                         else:
-                            # file-scoped namespace has no declaration_list
+                            # file-scoped namespace has no declaration_list;
+                            # signal outer while-loop to stop as well.
+                            found = False
                             break
                     break
             if not found:

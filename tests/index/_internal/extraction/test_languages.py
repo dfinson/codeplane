@@ -63,7 +63,12 @@ class TestPackTypeConfigs:
     def test_aliases_map_to_same_config(self) -> None:
         """Language aliases map to same type configs."""
         assert PACKS["javascript"].type_config is PACKS["typescript"].type_config
-        assert PACKS["c"].type_config is PACKS["cpp"].type_config
+
+    def test_c_has_own_type_config(self) -> None:
+        """C has its own type config (separate from C++ to avoid query poisoning)."""
+        assert PACKS["c"].type_config is not PACKS["cpp"].type_config
+        assert PACKS["c"].type_config is not None
+        assert PACKS["c"].type_config.language_family == "c"
 
 
 class TestGetPackTypeConfig:
