@@ -62,7 +62,7 @@ class TestMalformedYAML:
         """Config file that's a plain string instead of a dict."""
         f = tmp_path / "config.yaml"
         f.write_text("just a plain string\n")
-        # Should not crash — raw is a string, not dict, so .get() will fail
+        # raw is a string, not dict, so .get() will fail
         with pytest.raises(Exception):  # noqa: B017
             load_config(f)
 

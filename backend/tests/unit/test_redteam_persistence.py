@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -158,7 +159,7 @@ class TestFKViolations:
             payload={},
         )
         # flush() inside append() triggers the FK check
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(IntegrityError):
             await event_repo.append(event)
 
     @pytest.mark.asyncio
@@ -177,7 +178,7 @@ class TestFKViolations:
             created_at=now,
         )
         # flush() inside create() triggers the FK check
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(IntegrityError):
             await artifact_repo.create(artifact)
 
 
@@ -190,7 +191,7 @@ class TestDuplicatePKs:
         repo = JobRepository(session)
         await repo.create(_make_job("job-dup"))
         await session.flush()
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(IntegrityError):
             await repo.create(_make_job("job-dup"))
             await session.flush()
 
@@ -206,7 +207,7 @@ class TestDuplicatePKs:
             DomainEvent(event_id="evt-dup", job_id="job-1", timestamp=now, kind=DomainEventKind.job_created, payload={})
         )
         await session.flush()
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(IntegrityError):
             await event_repo.append(
                 DomainEvent(
                     event_id="evt-dup", job_id="job-1", timestamp=now, kind=DomainEventKind.job_created, payload={}
@@ -235,7 +236,7 @@ class TestDuplicatePKs:
         )
         await artifact_repo.create(base)
         await session.flush()
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(IntegrityError):
             dup = Artifact(
                 id="art-dup",
                 job_id="job-1",

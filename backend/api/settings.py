@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.config import (
@@ -129,5 +130,5 @@ async def cleanup_worktrees(
             count = await git.cleanup_worktrees(repo)
             total += count
         except GitError:
-            pass
+            structlog.get_logger().warning("cleanup_worktrees_failed", repo=repo)
     return {"removed": total}

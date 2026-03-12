@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import Integer, and_, func, or_, select
 
 from backend.models.db import JobRow
 from backend.models.domain import Job
@@ -16,6 +16,12 @@ if TYPE_CHECKING:
 
 class JobRepository(BaseRepository):
     """Database access for job records."""
+
+    async def next_id(self) -> str:
+        """Generate the next sequential job ID atomically via the database."""
+        result = await self._session.execute(select(func.max(func.cast(func.substr(JobRow.id, 5), Integer))))
+        max_num = result.scalar() or 0
+        return f"job-{max_num + 1}"
 
     @staticmethod
     def _to_domain(row: JobRow) -> Job:

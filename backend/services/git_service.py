@@ -33,13 +33,16 @@ class GitService:
 
     async def _run_git(self, *args: str, cwd: str | Path) -> str:
         """Run a git command and return stdout. Raises GitError on failure."""
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            *args,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                *args,
+                cwd=str(cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            raise GitError("git executable not found. Ensure Git is installed and available on PATH.") from exc
         stdout_bytes, stderr_bytes = await proc.communicate()
         stdout = stdout_bytes.decode().strip()
         stderr = stderr_bytes.decode().strip()
@@ -193,6 +196,13 @@ class GitService:
         if not wt.exists():
             return
 
+        # Safety: reject symlinks and paths outside the worktrees directory
+        worktrees_dir = (Path(repo_path) / self._worktrees_dirname).resolve()
+        resolved_wt = wt.resolve()
+        if not str(resolved_wt).startswith(str(worktrees_dir) + "/"):
+            log.warning("worktree_path_outside_dir", worktree=worktree_path, expected_parent=str(worktrees_dir))
+            return
+
         # Get branch name before removing
         try:
             branch = await self._run_git(
@@ -227,6 +237,9 @@ class GitService:
 
         removed = 0
         for entry in worktrees_dir.iterdir():
+            if entry.is_symlink():
+                log.warning("worktree_symlink_skipped", path=str(entry))
+                continue
             if entry.is_dir():
                 await self.remove_worktree(repo_path, str(entry))
                 removed += 1
@@ -242,14 +255,17 @@ class GitService:
         target = Path(target_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            url,
-            str(target),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "clone",
+                url,
+                str(target),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            raise GitError("git executable not found. Ensure Git is installed and available on PATH.") from exc
         _, stderr_bytes = await proc.communicate()
         stderr = stderr_bytes.decode().strip()
 
@@ -264,8 +280,10 @@ class GitService:
         """Derive a local directory path from a remote URL.
 
         Example: https://github.com/org/repo.git → ~/tower-repos/org/repo
+
+        Raises GitError if the derived path would escape repos_base_dir.
         """
-        base = Path(repos_base_dir).expanduser()
+        base = Path(repos_base_dir).expanduser().resolve()
         # Strip protocol and .git suffix
         cleaned = re.sub(r"^(https?://|git@|ssh://)", "", url)
         cleaned = re.sub(r"\.git$", "", cleaned)
@@ -274,7 +292,11 @@ class GitService:
         # Take the last two path segments (org/repo)
         parts = cleaned.split("/")
         rel = "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-        return str(base / rel)
+        result = (base / rel).resolve()
+        # Prevent path traversal — result must stay within base
+        if not str(result).startswith(str(base) + "/") and result != base:
+            raise GitError(f"Derived clone path escapes repos base directory: {url}")
+        return str(result)
 
     @staticmethod
     def is_remote_url(source: str) -> bool:

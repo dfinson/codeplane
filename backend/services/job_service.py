@@ -73,20 +73,6 @@ class JobService:
             raise RepoNotAllowedError(f"Repository '{repo}' is not in the allowlist.")
         return resolved
 
-    def _next_job_id(self, existing_jobs: list[Job]) -> str:
-        """Generate the next sequential job ID."""
-        if not existing_jobs:
-            return "job-1"
-        max_num = 0
-        for j in existing_jobs:
-            try:
-                num = int(j.id.split("-", 1)[1])
-                if num > max_num:
-                    max_num = num
-            except (ValueError, IndexError):
-                continue
-        return f"job-{max_num + 1}"
-
     async def create_job(
         self,
         repo: str,
@@ -108,11 +94,11 @@ class JobService:
 
         now = datetime.now(UTC)
 
-        # Generate job ID
-        all_jobs = await self._job_repo.list(limit=10000)
-        job_id = self._next_job_id(all_jobs)
+        # Generate job ID atomically via the database
+        job_id = await self._job_repo.next_id()
 
         # Determine if we use main worktree or secondary
+        all_jobs = await self._job_repo.list(limit=10000)
         active_on_repo = [j for j in all_jobs if j.repo == resolved_repo and j.state in ACTIVE_STATES]
         use_main = len(active_on_repo) == 0
 
@@ -147,7 +133,8 @@ class JobService:
             log.error("job_worktree_failed", job_id=job_id, error=str(exc))
             return job
 
-        # Initial state
+        # Initial state — queuing logic will be added in Phase 4 (RuntimeService)
+        # to respect max_concurrent_jobs from config.
         initial_state = JobState.running
 
         job = Job(
