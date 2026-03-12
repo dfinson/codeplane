@@ -250,9 +250,8 @@ class SSEManager:
                 new_state=new_state,
                 timestamp=event.timestamp,
             )
-            secondary_id = f"{sse_id}-state" if event.db_id is not None else None
             state_frame = _format_sse(
-                secondary_id,
+                None,
                 "job_state_changed",
                 state_payload.model_dump_json(by_alias=True),
             )

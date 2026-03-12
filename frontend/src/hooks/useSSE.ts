@@ -35,6 +35,8 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
 
     function connect() {
       if (disposed) return;
+      es?.close();
+      es = null;
       connectRef.current = connect;
 
       let url = "/api/events";

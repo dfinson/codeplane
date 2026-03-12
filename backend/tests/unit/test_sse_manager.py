@@ -528,3 +528,188 @@ class TestSSEManager:
         # Each mappable kind produces at least 1 frame. approval_* produce 2 each.
         # 10 kinds, 2 of which produce secondary frames = 12 total
         assert len(frames) == 12
+
+    @pytest.mark.asyncio
+    async def test_approval_resolved_secondary_frame_has_no_id(self) -> None:
+        """Secondary job_state_changed from approval_resolved must omit id: line."""
+        mgr = SSEManager()
+        conn = SSEConnection()
+        mgr.register(conn)
+
+        event = _make_event(
+            kind=DomainEventKind.approval_resolved,
+            payload={"resolution": "approved"},
+            db_id=99,
+        )
+        await mgr.handle_event(event)
+
+        frames = []
+        while not conn.queue.empty():
+            frames.append(conn.queue.get_nowait())
+
+        assert len(frames) == 2
+        # Primary frame has the db_id
+        assert "id: 99\n" in frames[0]
+        # Secondary frame must NOT have an id: line (same as approval_requested)
+        assert "id:" not in frames[1]
+
+    @pytest.mark.asyncio
+    async def test_replay_scoped_connection_uses_job_repo_get(self) -> None:
+        """Job-scoped replay with snapshot uses job_repo.get() not list()."""
+        mgr = SSEManager()
+        conn = SSEConnection(job_id="job-1")
+        mgr.register(conn)
+
+        now = datetime.now(UTC)
+        # Create overflow to trigger snapshot
+        events = [
+            DomainEvent(
+                event_id=f"evt-{i}",
+                job_id="job-1",
+                timestamp=now,
+                kind=DomainEventKind.log_line_emitted,
+                payload={"seq": i},
+            )
+            for i in range(MAX_REPLAY_EVENTS + 1)
+        ]
+
+        event_repo = AsyncMock()
+        event_repo.list_after.return_value = events
+
+        job_repo = AsyncMock()
+        job_repo.get.return_value = _make_job_domain("job-1")
+
+        await mgr.replay_events(conn, event_repo, job_repo, last_event_id=0)
+
+        # Must use get() for scoped, not list()
+        job_repo.get.assert_called_once_with("job-1")
+        job_repo.list.assert_not_called()
+
+        frames = []
+        while not conn.queue.empty():
+            frames.append(conn.queue.get_nowait())
+
+        # First frame is a snapshot
+        assert "event: snapshot" in frames[0]
+        # Snapshot should contain the scoped job
+        assert "job-1" in frames[0]
+
+    @pytest.mark.asyncio
+    async def test_replay_scoped_connection_missing_job(self) -> None:
+        """Job-scoped replay where job no longer exists sends empty snapshot."""
+        mgr = SSEManager()
+        conn = SSEConnection(job_id="deleted-job")
+        mgr.register(conn)
+
+        now = datetime.now(UTC)
+        events = [
+            DomainEvent(
+                event_id=f"evt-{i}",
+                job_id="deleted-job",
+                timestamp=now,
+                kind=DomainEventKind.log_line_emitted,
+                payload={"seq": i},
+            )
+            for i in range(MAX_REPLAY_EVENTS + 1)
+        ]
+
+        event_repo = AsyncMock()
+        event_repo.list_after.return_value = events
+
+        job_repo = AsyncMock()
+        job_repo.get.return_value = None  # job was deleted
+
+        await mgr.replay_events(conn, event_repo, job_repo, last_event_id=0)
+
+        frames = []
+        while not conn.queue.empty():
+            frames.append(conn.queue.get_nowait())
+
+        # Snapshot with empty jobs list
+        assert "event: snapshot" in frames[0]
+        assert '"jobs": []' in frames[0] or '"jobs":[]' in frames[0]
+
+
+class TestBuildSSEDataAllTypes:
+    """Test _build_sse_data for every SSE event type."""
+
+    def test_approval_requested_payload(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.approval_requested,
+            payload={
+                "approval_id": "apr-1",
+                "description": "Delete file?",
+                "proposed_action": "rm file.txt",
+            },
+        )
+        result = _build_sse_data(event, "approval_requested")
+        parsed = json.loads(result)
+        assert parsed["jobId"] == "job-1"
+        assert parsed["approvalId"] == "apr-1"
+        assert parsed["description"] == "Delete file?"
+        assert parsed["proposedAction"] == "rm file.txt"
+        assert "timestamp" in parsed
+
+    def test_approval_requested_missing_fields_use_defaults(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.approval_requested,
+            payload={},
+        )
+        result = _build_sse_data(event, "approval_requested")
+        parsed = json.loads(result)
+        assert parsed["approvalId"] == ""
+        assert parsed["description"] == ""
+        assert parsed["proposedAction"] is None
+
+    def test_approval_resolved_payload(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.approval_resolved,
+            payload={
+                "approval_id": "apr-1",
+                "resolution": "approved",
+            },
+        )
+        result = _build_sse_data(event, "approval_resolved")
+        parsed = json.loads(result)
+        assert parsed["approvalId"] == "apr-1"
+        assert parsed["resolution"] == "approved"
+        assert "timestamp" in parsed
+
+    def test_diff_update_payload(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.diff_updated,
+            payload={"changed_files": []},
+        )
+        result = _build_sse_data(event, "diff_update")
+        parsed = json.loads(result)
+        assert parsed["jobId"] == "job-1"
+        assert parsed["changedFiles"] == []
+
+    def test_session_heartbeat_payload(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.session_heartbeat,
+            payload={"session_id": "sess-1"},
+        )
+        result = _build_sse_data(event, "session_heartbeat")
+        parsed = json.loads(result)
+        assert parsed["jobId"] == "job-1"
+        assert parsed["sessionId"] == "sess-1"
+        assert "timestamp" in parsed
+
+    def test_transcript_update_payload(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.transcript_updated,
+            payload={"seq": 5, "role": "agent", "content": "I found the bug"},
+        )
+        result = _build_sse_data(event, "transcript_update")
+        parsed = json.loads(result)
+        assert parsed["jobId"] == "job-1"
+        assert parsed["seq"] == 5
+        assert parsed["role"] == "agent"
+        assert parsed["content"] == "I found the bug"
+
+    def test_fallback_for_unknown_type(self) -> None:
+        event = _make_event(payload={"custom": "data"})
+        result = _build_sse_data(event, "unknown_type")
+        parsed = json.loads(result)
+        assert parsed["custom"] == "data"
