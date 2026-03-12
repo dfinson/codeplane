@@ -59,16 +59,16 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Adapter interface, Copilot SDK integration, runtime service.
 
-- [ ] `AgentAdapterInterface` — abstract base class
-- [ ] `FakeAgentAdapter` — test double emitting scripted events
-- [ ] `CopilotAdapter` — wraps Python Copilot SDK
-- [ ] Callback-to-iterator bridge (SDK callbacks → `AsyncIterator[SessionEvent]`)
-- [ ] `SessionConfig` resolution from job + repo config
-- [ ] `RuntimeService` — asyncio task management, capacity enforcement, queueing
-- [ ] `ExecutionStrategy` interface + `SingleAgentExecutor`
-- [ ] Strategy registry and selection
-- [ ] Session heartbeat generation (30s interval, 90s warning, 5-min timeout)
-- [ ] MCP server discovery (`.vscode/mcp.json` + global config merge)
+- [x] `AgentAdapterInterface` — abstract base class
+- [x] `FakeAgentAdapter` — test double emitting scripted events
+- [x] `CopilotAdapter` — wraps Python Copilot SDK
+- [x] Callback-to-iterator bridge (SDK callbacks → `AsyncIterator[SessionEvent]`)
+- [x] `SessionConfig` resolution from job + repo config
+- [x] `RuntimeService` — asyncio task management, capacity enforcement, queueing
+- [x] `ExecutionStrategy` interface + `SingleAgentExecutor`
+- [x] Strategy registry and selection
+- [x] Session heartbeat generation (30s interval, 90s warning, 5-min timeout)
+- [x] MCP server discovery (`.vscode/mcp.json` + global config merge)
 
 ---
 
