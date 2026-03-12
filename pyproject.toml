@@ -1,0 +1,85 @@
+[project]
+name = "tower"
+version = "0.1.0"
+description = "A control tower for running and supervising coding agents"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    # Database
+    "sqlalchemy>=2.0,<3",
+    "aiosqlite>=0.20,<1",
+    "alembic>=1.14,<2",
+    # Agent SDK
+    "github-copilot-sdk>=0.1",
+    # Voice transcription
+    "faster-whisper>=1.1,<2",
+    # Structured logging
+    "structlog>=24.0,<26",
+    # Terminal UI
+    "rich>=13.0,<14",
+    # Config
+    "pyyaml>=6.0,<7",
+    # Pydantic (used by FastAPI)
+    "pydantic>=2.0,<3",
+    "pydantic-settings>=2.0,<3",
+    # CLI
+    "click>=8.0,<9",
+]
+
+[project.scripts]
+tower = "backend.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*", "copilot.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-asyncio>=0.24,<1",
+    "pytest-cov>=6.0,<7",
+    "httpx>=0.28,<1",
+    "mypy>=1.13,<2",
+    "ruff>=0.8,<1",
+    "pre-commit>=4.0,<5",
+]

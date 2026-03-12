@@ -1,0 +1,2545 @@
+# Tower — Product Specification
+
+---
+
+## Table of Contents
+
+1. [Product Overview](#1-product-overview)
+2. [Technology Architecture](#2-technology-architecture)
+3. [Frontend](#3-frontend)
+4. [Backend](#4-backend)
+5. [Live Update Model (SSE)](#5-live-update-model-sse)
+6. [Execution Runtime](#6-execution-runtime)
+7. [Deployment Model](#7-deployment-model)
+8. [Repository and Workspace Model](#8-repository-and-workspace-model)
+9. [Voice Input and Transcription](#9-voice-input-and-transcription)
+10. [Configuration Model](#10-configuration-model)
+11. [Canonical Internal Event Model](#11-canonical-internal-event-model)
+12. [Job States](#12-job-states)
+13. [Execution Phases](#13-execution-phases)
+14. [User Interface](#14-user-interface)
+15. [Data Model](#15-data-model)
+16. [Persistence](#16-persistence)
+17. [REST API](#17-rest-api)
+18. [Approval System](#18-approval-system)
+19. [Diff Model](#19-diff-model)
+20. [Observability](#20-observability)
+21. [Security Model](#21-security-model)
+22. [Engineering Constraints and Pitfalls](#22-engineering-constraints-and-pitfalls)
+23. [Sequence Diagrams](#23-sequence-diagrams)
+24. [Execution Strategy Model](#24-execution-strategy-model)
+25. [Ross Review: Open Questions](#25-ross-review-open-questions)
+
+---
+
+## 1. Product Overview
+
+Tower is a control tower for running and supervising coding agents.
+
+It allows an operator to launch automated coding tasks against real repositories and observe everything the agent does in real time.
+
+The system provides visibility into execution progress, code changes, logs, artifacts, and agent reasoning so work can be reviewed and controlled as it happens.
+
+Operators can intervene at any time by sending instructions, approving risky actions, canceling runs, or rerunning failed tasks.
+
+The interface can be accessed locally or remotely through a Dev Tunnel, allowing jobs to be monitored and controlled from another device such as a phone.
+
+Tower turns autonomous coding agents into something observable, controllable, and safe to operate.
+
+### Core Capabilities
+
+| Capability | Description |
+|---|---|
+| Job orchestration | Launch coding tasks against local repositories |
+| Live monitoring | Watch agent reasoning, logs, and code changes as they happen |
+| Approval gating | Intercept and approve or reject risky actions before they execute |
+| Operator intervention | Send messages, cancel, or rerun jobs at any time |
+| Workspace isolation | Jobs use the main worktree; secondary worktrees for concurrency |
+| Remote access | Dev Tunnel exposes the UI over HTTPS for phone/remote control |
+| Voice input | Speak prompts and operator instructions into the browser |
+| Artifact inspection | Browse files, diffs, and produced outputs from every job |
+
+---
+
+## 2. Technology Architecture
+
+Tower is a two-tier application.
+
+```
+┌──────────────────────────────────────────────────┐
+│                  Operator Browser                │
+│          React + TypeScript Frontend             │
+│   REST (commands/queries) + SSE (live events)   │
+└────────────────────┬─────────────────────────────┘
+                     │ HTTP / SSE
+┌────────────────────▼─────────────────────────────┐
+│             FastAPI Backend (Python)             │
+│  REST API · SSE stream · Job orchestration       │
+│  Git workspace mgmt · Agent adapter              │
+│  Approval routing · Persistence coordinator     │
+└──────┬──────────────┬──────────────┬─────────────┘
+       │              │              │
+  ┌────▼────┐   ┌─────▼─────┐  ┌───▼────┐
+  │ SQLite  │   │ Git repos │  │Copilot │
+  │   DB    │   │/worktrees │  │  SDK   │
+  └─────────┘   └───────────┘  └────────┘
+```
+
+| Tier | Technology |
+|---|---|
+| Frontend | React 18, TypeScript, Vite |
+| Backend | Python 3.11+, FastAPI, Uvicorn |
+| Persistence | SQLite (via SQLAlchemy) |
+| Agent runtime | Python Copilot SDK (v1), wrapped behind generic adapter interface |
+| Workspace isolation | Git worktrees |
+| Voice transcription | faster-whisper |
+| Remote access | Dev Tunnel (HTTPS) |
+| State management | Zustand |
+| UI primitives | Radix UI (headless) |
+| Diff / code viewer | Monaco Editor (`@monaco-editor/react`) |
+| Virtualization | `@tanstack/react-virtual` |
+| Drag and drop | `@dnd-kit/core` + `@dnd-kit/sortable` |
+| Markdown | `react-markdown` + `remark-gfm` |
+| Syntax highlighting | Shiki (`@shikijs/rehype`) |
+| File tree | `react-arborist` |
+| Toasts | Sonner |
+| Icons | Lucide React |
+| API type generation | openapi-typescript (from FastAPI OpenAPI spec) |
+| Package management | uv (Python), npm (Frontend) |
+
+### 2.1 Frontend Serving Model
+
+In production mode, the FastAPI backend serves the built frontend as static files from a `/static` mount point. The Vite dev server (`localhost:5173`) is used only during frontend development.
+
+This means:
+
+- Only one port is exposed in production (`8080`)
+- The Dev Tunnel exposes a single port
+- CORS is not needed in production (same origin)
+- During development, CORS allows `http://localhost:5173`
+
+---
+
+## 3. Frontend
+
+### 3.1 Responsibilities
+
+- Operator console UI
+- Job dashboards (Kanban / list)
+- Job detail views
+- Live execution monitoring
+- Diff visualization
+- Artifact inspection
+- Workspace browsing
+- Approval and operator controls
+- Voice input capture
+
+### 3.2 Communication Model
+
+| Channel | Direction | Purpose |
+|---|---|---|
+| REST API | Client → Server | Commands and queries |
+| SSE (`/api/events`) | Server → Client | Live runtime updates |
+
+The frontend never polls for state. All live updates arrive via SSE. REST calls are used exclusively for actions (create job, send message, approve, cancel, etc.) and one-time data fetches.
+
+### 3.3 Application State
+
+Application state has a single source of truth managed by a Zustand store.
+
+SSE events are processed centrally through a single event dispatcher that updates the store. Components subscribe to the store via selectors and never maintain their own copies of job state.
+
+State slices:
+
+| Slice | Contents |
+|---|---|
+| `jobs` | All job summaries (id, repo, state, created_at, updated_at) |
+| `activeJob` | Full detail of currently viewed job |
+| `approvals` | Pending approval requests |
+| `settings` | Application settings |
+| `ui` | Transient UI state (selected panel, filters, etc.) |
+
+### 3.4 Component Hierarchy
+
+```
+App
+├── Router
+│   ├── DashboardScreen
+│   │   ├── KanbanBoard (desktop)
+│   │   │   ├── KanbanColumn [Active]
+│   │   │   ├── KanbanColumn [Sign-off]
+│   │   │   ├── KanbanColumn [Failed]
+│   │   │   └── KanbanColumn [History]
+│   │   └── JobList (mobile)
+│   ├── JobDetailScreen
+│   │   ├── JobMetadataHeader
+│   │   ├── ApprovalBanner
+│   │   ├── TranscriptPanel
+│   │   ├── LogsPanel
+│   │   ├── DiffViewer
+│   │   ├── WorkspaceBrowser
+│   │   ├── ArtifactViewer
+│   │   └── ExecutionTimeline
+│   ├── JobCreationScreen
+│   │   ├── RepoSelector
+│   │   ├── PromptInput
+│   │   ├── VoiceInputButton
+│   │   └── AdvancedOptions
+│   └── SettingsScreen
+│       ├── GlobalConfigEditor
+│       └── RepoConfigList
+└── SSEProvider (global)
+```
+
+### 3.5 SSE Client
+
+The SSE client lives in a singleton provider mounted at the app root.
+
+Behavior:
+
+- Connects to `/api/events` on mount
+- Tracks the last received `event_id`
+- On disconnect, reconnects automatically with `Last-Event-ID` header
+- Dispatches each received event to the central store
+- Exposes connection status to UI components
+
+#### Reconnection Strategy
+
+| Parameter | Value |
+|---|---|
+| Initial delay | 1 second |
+| Backoff multiplier | 2x |
+| Maximum delay | 30 seconds |
+| Jitter | ±500 ms (random) |
+| Maximum attempts | 20 |
+| Fallback | Show persistent "Disconnected" banner with manual reconnect button |
+
+Connection status is exposed as a Zustand slice with values: `connected`, `reconnecting`, `disconnected`. The UI renders a status indicator in the app header.
+
+### 3.6 TypeScript Domain Models (Generated)
+
+All frontend types are **generated** from the FastAPI OpenAPI schema. The Pydantic models in Section 4.6 are the single source of truth.
+
+#### Code Generation
+
+TypeScript types are generated using `openapi-typescript`:
+
+```bash
+npx openapi-typescript http://localhost:8080/openapi.json -o src/api/schema.d.ts
+```
+
+This runs as part of the frontend build pipeline:
+
+```json
+// package.json scripts
+{
+  "generate:api": "openapi-typescript http://localhost:8080/openapi.json -o src/api/schema.d.ts",
+  "dev": "npm run generate:api && vite",
+  "build": "npm run generate:api && tsc && vite build"
+}
+```
+
+During CI or when the backend isn't running, the committed `schema.d.ts` is used as-is. Developers regenerate it after any Pydantic model change.
+
+#### Convenience Type Aliases
+
+The generated types use path-based access. A thin `src/api/types.ts` file re-exports them as friendly aliases:
+
+```typescript
+import type { components } from "./schema";
+
+export type Job = components["schemas"]["JobResponse"];
+export type JobState = Job["state"];
+export type LogLine = components["schemas"]["LogLinePayload"];
+export type TranscriptEntry = components["schemas"]["TranscriptPayload"];
+export type ApprovalRequest = components["schemas"]["ApprovalResponse"];
+export type DiffFile = components["schemas"]["DiffFileModel"];
+export type DiffHunk = components["schemas"]["DiffHunkModel"];
+export type DiffLine = components["schemas"]["DiffLineModel"];
+export type Artifact = components["schemas"]["ArtifactResponse"];
+export type ExecutionPhase = components["schemas"]["ExecutionPhase"];
+export type WorkspaceEntry = components["schemas"]["WorkspaceEntry"];
+```
+
+All component code imports from `src/api/types.ts`, never from `schema.d.ts` directly.
+
+### 3.7 Performance Guidelines
+
+- Large log and transcript lists must use virtualized rendering (`@tanstack/react-virtual`)
+- Diff viewer uses Monaco `DiffEditor`; large files are loaded on demand, not all at once
+- Kanban board must not re-render all columns when a single job updates; use memoized selectors per column
+
+---
+
+## 4. Backend
+
+### 4.1 Responsibilities
+
+- REST API endpoints
+- SSE event streaming
+- Job orchestration
+- Agent session lifecycle management
+- Git workspace management
+- Artifact collection
+- Approval routing
+- Runtime monitoring
+- Persistence coordination
+- Voice transcription
+
+### 4.2 Module Structure
+
+```
+backend/
+├── main.py                    # FastAPI app factory
+├── config.py                  # Configuration loading
+├── api/
+│   ├── jobs.py                # Job CRUD and control endpoints
+│   ├── events.py              # SSE streaming endpoint
+│   ├── artifacts.py           # Artifact retrieval endpoints
+│   ├── workspace.py           # File browsing endpoints
+│   ├── approvals.py           # Approval resolution endpoints
+│   ├── voice.py               # Voice transcription endpoint
+│   ├── health.py              # Health check endpoint
+│   └── settings.py            # Settings management endpoints
+├── services/
+│   ├── job_service.py         # Job lifecycle orchestration
+│   ├── runtime_service.py     # Long-running job execution manager
+│   ├── execution_strategy.py  # ExecutionStrategy interface + SingleAgentExecutor
+│   ├── git_service.py         # Git worktree and branch operations
+│   ├── agent_adapter.py       # Agent adapter (interface + Copilot impl)
+│   ├── event_bus.py           # Internal event bus
+│   ├── sse_manager.py         # SSE connection management
+│   ├── approval_service.py    # Approval request persistence and routing
+│   ├── artifact_service.py    # Artifact storage and retrieval
+│   ├── diff_service.py        # Diff generation and parsing
+│   └── voice_service.py       # faster-whisper transcription
+├── models/
+│   ├── db.py                  # SQLAlchemy models
+│   ├── domain.py              # Domain dataclasses/Pydantic models
+│   ├── events.py              # Canonical event types
+│   └── api_schemas.py         # Pydantic request/response schemas
+├── persistence/
+│   ├── repository.py          # Base repository pattern
+│   ├── job_repo.py            # Job persistence
+│   ├── event_repo.py          # Event persistence
+│   └── artifact_repo.py       # Artifact metadata persistence
+└── tests/
+    ├── unit/
+    └── integration/
+```
+
+### 4.3 API Routes Must Not Contain Orchestration Logic
+
+API route handlers are thin. They:
+
+1. Validate and parse input
+2. Delegate to a service
+3. Return the result
+
+No orchestration logic, no direct database access, and no git operations belong in route handlers.
+
+### 4.4 Agent Adapter
+
+The agent runtime is wrapped behind an interface so the system is not tightly coupled to any specific SDK.
+
+```python
+from abc import ABC, abstractmethod
+from typing import AsyncIterator
+from dataclasses import dataclass
+
+@dataclass
+class SessionConfig:
+    workspace_path: str
+    prompt: str
+    mcp_servers: dict[str, MCPServerConfig]  # discovered from repo config files
+    protected_paths: list[str]               # from per-repo config; adapter translates to SDK-native rules
+
+@dataclass
+class MCPServerConfig:
+    command: str
+    args: list[str]
+    env: dict[str, str] | None = None
+
+class SessionEventKind(str, Enum):
+    log = "log"
+    transcript = "transcript"
+    file_changed = "file_changed"
+    approval_request = "approval_request"
+    done = "done"
+    error = "error"
+
+@dataclass
+class SessionEvent:
+    kind: SessionEventKind
+    payload: dict
+
+class AgentAdapterInterface(ABC):
+
+    @abstractmethod
+    async def create_session(self, config: SessionConfig) -> str:
+        """Create a session, return session_id."""
+
+    @abstractmethod
+    async def stream_events(self, session_id: str) -> AsyncIterator[SessionEvent]:
+        """Stream events from a running session."""
+
+    @abstractmethod
+    async def send_message(self, session_id: str, message: str) -> None:
+        """Send a follow-up message into a running session."""
+
+    @abstractmethod
+    async def abort_session(self, session_id: str) -> None:
+        """Abort the current message processing. Session remains valid."""
+```
+
+The production implementation (`CopilotAdapter`) wraps the Python Copilot SDK (`pip install github-copilot-sdk`, import as `from copilot import CopilotClient`). A `FakeAgentAdapter` is used in tests.
+
+#### SDK Method Mapping
+
+| Adapter method | SDK method | Notes |
+|---|---|---|
+| `create_session()` | `client.create_session(config)` | Returns `CopilotSession` |
+| `stream_events()` | `session.on(handler)` | Callback-based; adapter bridges to async iterator (see below) |
+| `send_message()` | `session.send(MessageOptions)` | Uses `mode="immediate"` for mid-session injection |
+| `abort_session()` | `session.abort()` | Aborts current message; session stays alive |
+
+#### Callback-to-Iterator Bridge
+
+The Copilot SDK uses a callback-based API: `SessionHooks` (`on_pre_tool_use`, `on_post_tool_use`, `on_session_start`, etc.) and `on_permission_request` are registered at session creation. The adapter bridges these into the `AsyncIterator[SessionEvent]` pattern by:
+
+1. Creating an `asyncio.Queue` per session
+2. Registering an SDK callback via `session.on(handler)` that pushes `SessionEvent` items onto the queue
+3. `stream_events()` yields from the queue until the session completes or the subprocess exits
+4. On subprocess crash, the SDK raises `ProcessExitedError` on pending futures; the adapter catches this and emits an error `SessionEvent`
+
+This keeps the rest of the system (strategies, runtime service, event bus) decoupled from SDK callback mechanics.
+
+### 4.5 Session Config Resolution
+
+The `RuntimeService` constructs a `SessionConfig` directly from the `Job` record and resolved config (global + per-repo). There is no intermediate aggregation object. The inputs are:
+
+- `workspace_path` — from `Job.worktree_path` (set by `GitService` during workspace prep)
+- `prompt` — from `Job.prompt`
+- `mcp_servers` — discovered from the repo's MCP config files (see §10.2.1)
+- `protected_paths` — from per-repo config, translated to SDK-native permission rules by the adapter
+
+### 4.6 Pydantic API Schemas
+
+All API request and response bodies are defined as Pydantic models in `models/api_schemas.py`. These models are the **single source of truth** for the API contract. FastAPI auto-generates an OpenAPI schema from them, and TypeScript types are generated from that schema (see Section 3.6).
+
+All response models use camelCase serialization to match frontend conventions:
+
+```python
+from pydantic import BaseModel, Field, ConfigDict
+from pydantic.alias_generators import to_camel
+from typing import Literal
+from datetime import datetime
+from enum import Enum
+
+
+class CamelModel(BaseModel):
+    """Base model that serializes field names to camelCase."""
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+# --- Jobs ---
+
+class StrategyKind(str, Enum):
+    single_agent = "single_agent"
+
+class CreateJobRequest(BaseModel):    # Request models use snake_case (Python convention)
+    repo: str
+    prompt: str
+    base_ref: str | None = None
+    branch: str | None = None            # default: agent decides based on prompt
+    strategy: StrategyKind | None = None  # default: single_agent
+
+class CreateJobResponse(CamelModel):
+    id: str
+    state: str
+    branch: str
+    worktree_path: str
+    created_at: datetime
+
+class JobResponse(CamelModel):
+    id: str
+    repo: str
+    prompt: str
+    state: str
+    strategy: StrategyKind
+    base_ref: str
+    worktree_path: str | None
+    branch: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+class JobListResponse(CamelModel):
+    items: list[JobResponse]
+    cursor: str | None
+    has_more: bool
+
+
+# --- Messages ---
+
+class SendMessageRequest(BaseModel):
+    content: str
+
+class SendMessageResponse(CamelModel):
+    seq: int
+    timestamp: datetime
+
+
+# --- Approvals ---
+
+class ApprovalResolution(str, Enum):
+    approved = "approved"
+    rejected = "rejected"
+
+class ResolveApprovalRequest(BaseModel):
+    resolution: ApprovalResolution
+
+class ApprovalResponse(CamelModel):
+    id: str
+    job_id: str
+    description: str
+    proposed_action: str | None
+    requested_at: datetime
+    resolved_at: datetime | None
+    resolution: ApprovalResolution | None
+
+
+# --- Artifacts ---
+
+class ArtifactType(str, Enum):
+    diff_snapshot = "diff_snapshot"
+    agent_summary = "agent_summary"
+    custom = "custom"
+
+class ArtifactResponse(CamelModel):
+    id: str
+    job_id: str
+    name: str
+    type: ArtifactType
+    mime_type: str
+    size_bytes: int
+    phase: ExecutionPhase
+    created_at: datetime
+
+class ArtifactListResponse(CamelModel):
+    items: list[ArtifactResponse]
+
+
+# --- Workspace ---
+
+class WorkspaceEntryType(str, Enum):
+    file = "file"
+    directory = "directory"
+
+class WorkspaceEntry(CamelModel):
+    path: str
+    type: WorkspaceEntryType
+    size_bytes: int | None = None    # None for directories
+
+class WorkspaceListResponse(CamelModel):
+    items: list[WorkspaceEntry]
+    cursor: str | None
+    has_more: bool
+
+
+# --- Settings ---
+
+class GlobalConfigResponse(BaseModel):
+    config_yaml: str                  # Raw YAML content
+
+class UpdateGlobalConfigRequest(BaseModel):
+    config_yaml: str                  # Raw YAML content (validated on apply)
+
+
+# --- Voice ---
+
+class TranscribeResponse(BaseModel):
+    text: str
+
+
+# --- Health ---
+
+class HealthStatus(str, Enum):
+    healthy = "healthy"
+
+class HealthResponse(CamelModel):
+    status: HealthStatus
+    version: str
+    uptime_seconds: float
+    active_jobs: int
+    queued_jobs: int
+
+
+# --- SSE Payload Models ---
+# These models define the shape of SSE event payloads.
+# They appear in the OpenAPI schema so TypeScript types
+# are generated for them alongside the REST models.
+
+class ExecutionPhase(str, Enum):
+    environment_setup = "environment_setup"
+    agent_reasoning = "agent_reasoning"
+    finalization = "finalization"
+    post_completion = "post_completion"
+
+class LogLevel(str, Enum):
+    debug = "debug"
+    info = "info"
+    warn = "warn"
+    error = "error"
+
+class LogLinePayload(CamelModel):
+    job_id: str
+    seq: int
+    timestamp: datetime
+    level: LogLevel
+    message: str
+    context: dict | None = None
+
+class TranscriptRole(str, Enum):
+    agent = "agent"
+    operator = "operator"
+
+class TranscriptPayload(CamelModel):
+    job_id: str
+    seq: int
+    timestamp: datetime
+    role: TranscriptRole
+    content: str
+
+class DiffLineType(str, Enum):
+    context = "context"
+    addition = "addition"
+    deletion = "deletion"
+
+class DiffLineModel(CamelModel):
+    type: DiffLineType
+    content: str
+
+class DiffHunkModel(CamelModel):
+    old_start: int
+    old_lines: int
+    new_start: int
+    new_lines: int
+    lines: list[DiffLineModel]
+
+class DiffFileStatus(str, Enum):
+    added = "added"
+    modified = "modified"
+    deleted = "deleted"
+    renamed = "renamed"
+
+class DiffFileModel(CamelModel):
+    path: str
+    status: DiffFileStatus
+    additions: int
+    deletions: int
+    hunks: list[DiffHunkModel]
+
+class JobStateChangedPayload(CamelModel):
+    job_id: str
+    previous_state: str | None
+    new_state: str
+    timestamp: datetime
+
+class DiffUpdatePayload(CamelModel):
+    job_id: str
+    changed_files: list[DiffFileModel]
+
+class SessionHeartbeatPayload(CamelModel):
+    job_id: str
+    session_id: str
+    timestamp: datetime
+
+class SnapshotPayload(CamelModel):
+    jobs: list[JobResponse]
+    pending_approvals: list[ApprovalResponse]
+```
+
+### 4.7 Internal Event Bus
+
+The `EventBus` is the backbone of the backend. All subsystems communicate through it.
+
+- Services publish domain events to the bus
+- Persistence layer subscribes and persists events
+- SSE manager subscribes and pushes events to connected clients
+- Job state machine subscribes and applies transitions
+
+The event bus is an in-process async pub/sub. It is not a message broker. All subscribers run in the same process.
+
+---
+
+## 5. Live Update Model (SSE)
+
+### 5.1 Endpoint
+
+```
+GET /api/events
+```
+
+Optional query parameter to scope to a single job:
+
+```
+GET /api/events?job_id={job_id}
+```
+
+### 5.2 SSE Event Format
+
+Each event follows the standard SSE wire format:
+
+```
+id: {event_id}
+event: {event_type}
+data: {json_payload}
+
+```
+
+### 5.3 Event Types
+
+| Event Type | Payload Summary |
+|---|---|
+| `job_state_changed` | `{ job_id, previous_state, new_state, timestamp }` |
+| `log_line` | `{ job_id, seq, timestamp, level, message, context }` |
+| `transcript_update` | `{ job_id, seq, timestamp, role, content }` |
+| `diff_update` | `{ job_id, changed_files: DiffFile[] }` |
+| `approval_requested` | `{ job_id, approval_id, description, proposed_action }` |
+| `approval_resolved` | `{ job_id, approval_id, resolution, timestamp }` |
+| `session_heartbeat` | `{ job_id, session_id, timestamp }` |
+| `snapshot` | `{ jobs: JobResponse[], pending_approvals: ApprovalResponse[] }` |
+
+### 5.3.1 Domain Event to SSE Event Mapping
+
+The `SSEManager` translates internal domain events into SSE events as follows:
+
+| Domain Event | SSE Event | Notes |
+|---|---|---|
+| `JobCreated` | `job_state_changed` | `previous_state: null, new_state: running or queued` |
+| `WorkspacePrepared` | _(none)_ | Internal only; workspace info is in the job response |
+| `AgentSessionStarted` | _(none)_ | Internal only |
+| `LogLineEmitted` | `log_line` | 1:1 mapping |
+| `TranscriptUpdated` | `transcript_update` | 1:1 mapping |
+| `DiffUpdated` | `diff_update` | 1:1 mapping |
+| `ApprovalRequested` | `approval_requested` + `job_state_changed` | Two SSE events emitted |
+| `ApprovalResolved` | `approval_resolved` + `job_state_changed` | Two SSE events emitted |
+| `JobSucceeded` | `job_state_changed` | `new_state: succeeded` |
+| `JobFailed` | `job_state_changed` | `new_state: failed` |
+| `JobCanceled` | `job_state_changed` | `new_state: canceled` |
+| `SessionHeartbeat` | `session_heartbeat` | 1:1 mapping |
+
+### 5.4 Reconnection and Replay
+
+- Every SSE event carries a monotonically increasing `id`
+- The client sends `Last-Event-ID` on reconnect
+- The backend replays all events with `id > Last-Event-ID` from the event log in SQLite
+- Replay is bounded: events older than the job's terminal state are not replayed
+
+#### Replay Bounds
+
+To prevent unbounded replay for long-running jobs, the backend enforces:
+
+| Constraint | Value |
+|---|---|
+| Maximum replay events | 500 per job |
+| Maximum replay age | 5 minutes of wall-clock time |
+
+If the client has been disconnected longer than the replay window, the backend sends a `snapshot` event first containing the current state of all active jobs, followed by recent events within the window. The client applies the snapshot to its store, then processes the delta events.
+
+```
+event: snapshot
+data: { "jobs": [...], "pending_approvals": [...] }
+
+```
+
+The `jobs` array contains full `JobResponse` objects (same shape as `GET /api/jobs/{id}`). The `pending_approvals` array contains full `ApprovalResponse` objects. This gives the client enough data to fully reconstruct its store without additional REST calls.
+
+### 5.5 SSE Manager
+
+The `SSEManager` service:
+
+- Maintains the set of open SSE connections
+- Subscribes to the internal event bus
+- Serializes events to SSE wire format
+- Broadcasts or routes events to appropriate connections
+- Handles client disconnection cleanup
+
+### 5.6 SSE Scaling Constraint
+
+Broadcasting all job events to all connected clients does not scale beyond approximately 20 concurrent jobs per operator session. This is acceptable for the single-developer deployment model.
+
+When more than 20 jobs are active concurrently, the SSE manager switches to a **selective streaming** mode:
+
+| Condition | Behavior |
+|---|---|
+| Job card is open (Job Detail screen) | Full event streaming for that job continues normally |
+| Dashboard view with >20 active jobs | Job cards receive only `job_state_changed` events (no logs, transcripts, or diffs) |
+| Dashboard with >20 active jobs | A "Refresh page for latest updates" banner is shown above the Kanban board |
+
+This means:
+
+- An operator viewing a specific job always gets the full live experience regardless of total job count
+- The dashboard degrades gracefully by showing state transitions only, not the full event firehose
+- The operator can click into any job to restore full streaming for that job
+- Below the 20-job threshold, behavior is unchanged — all events stream to all views
+
+---
+
+## 6. Execution Runtime
+
+### 6.1 Job Lifecycle
+
+When a job is created:
+
+1. `JobService` validates the request
+2. `GitService` creates the worktree and branch
+3. `JobService` persists a `JobCreated` event and a `WorkspacePrepared` event
+4. `RuntimeService` is asked to run the job
+5. `RuntimeService` resolves the execution strategy (see Section 24) and creates an asyncio task
+6. The task calls `strategy.execute(config, adapter)` and consumes yielded events
+7. Each event is translated into a domain event and published to the event bus
+8. When the strategy completes, the job transitions to `succeeded`, `failed`, or `canceled`
+
+### 6.2 Runtime Service
+
+The `RuntimeService` manages all active job tasks.
+
+- Tracks running asyncio tasks by `job_id`
+- Resolves the execution strategy for each job (see Section 24)
+- Enforces `max_concurrent_jobs` from global config
+- Enqueues jobs if at capacity (state: `queued`)
+- Starts queued jobs when capacity opens
+- Provides a `cancel(job_id)` method that cancels the asyncio task and delegates to `strategy.abort()`
+
+### 6.3 Operator Message Injection
+
+When an operator sends a message to a running job:
+
+1. `POST /api/jobs/{job_id}/messages` received
+2. Route delegates to `JobService.send_operator_message()`
+3. Service calls `adapter.send_message(session_id, message)`
+4. A `TranscriptUpdated` event is published with `role="operator"`
+
+### 6.4 Approval Pause
+
+When the agent SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`):
+
+1. Adapter translates to `ApprovalRequested` domain event
+2. Event bus delivers to `ApprovalService`
+3. `ApprovalService` persists the request; adapter holds the SDK callback pending
+4. Job transitions to `waiting_for_approval`
+5. `ApprovalRequested` SSE event sent to frontend
+6. Operator approves or rejects via `POST /api/approvals/{approval_id}/resolve`
+7. `ApprovalService` records resolution; adapter returns the decision to the SDK callback
+
+### 6.5 Graceful Shutdown
+
+When the backend process receives `SIGTERM` or `SIGINT` (e.g., operator presses Ctrl+C):
+
+1. Stop accepting new job creation requests (return `503 Service Unavailable`)
+2. For each running job:
+   a. Call `adapter.abort_session(session_id)`
+   b. Publish a `JobCanceled` event with `reason: "server_shutdown"`
+   c. Transition the job to `canceled`
+3. Close all SSE connections
+4. Allow up to 10 seconds for in-flight requests to complete
+5. Close the SQLite connection
+6. Exit
+
+Queued jobs remain in `queued` state and are picked up on next startup.
+
+### 6.6 Restart Recovery
+
+On startup, before accepting requests, the backend runs recovery:
+
+1. Query for all jobs in `running` or `waiting_for_approval` state
+2. Transition each to `failed` with a `JobFailed` event containing `reason: "process_restarted"`
+3. Log each recovered job as a warning
+
+The system does not attempt to reconnect to orphaned agent sessions. Asyncio tasks from a previous process cannot be reconstructed. The operator can rerun any recovered job using the rerun button.
+
+Queued jobs are re-evaluated against capacity and started if slots are available.
+
+---
+
+## 7. Deployment Model
+
+Tower runs entirely on a single developer machine.
+
+```
+Developer Machine
+├── Tower Backend (FastAPI on localhost:8080, serves frontend static files)
+├── SQLite database (~/.tower/data.db)
+├── Artifact storage (~/.tower/artifacts/)
+├── Global config (~/.tower/config.yaml)
+├── Application logs (~/.tower/logs/)
+├── Local git repositories (/repos/...)
+└── Dev Tunnel (HTTPS tunnel to public URL)
+```
+
+In production mode, the backend serves the built React frontend as static files. Only one port (`8080`) is exposed. The Vite dev server on port `5173` is used only during frontend development.
+
+### 7.1 Dev Tunnel
+
+Dev Tunnel exposes the local application over HTTPS, enabling remote access from phones and other devices.
+
+- The tunnel is created with `--allow-anonymous=false` so that only the tunnel owner's Microsoft/GitHub identity can connect
+- Dev Tunnel handles authentication and HTTPS termination — the backend itself has no auth layer
+- The tunnel URL should be treated as semi-private but is not a secret; identity verification prevents unauthorized access even if the URL is known
+- The backend enforces CORS to prevent cross-origin abuse from other browser tabs
+
+### 7.2 Startup
+
+The system is started with a single command:
+
+```bash
+tower up
+```
+
+This command:
+
+1. Loads and validates global config
+2. Initializes the SQLite database (runs migrations)
+3. Runs restart recovery (see Section 6.6)
+4. Loads the faster-whisper model (if voice is enabled)
+5. Starts the FastAPI server
+6. Optionally starts the Dev Tunnel
+
+### 7.3 CLI
+
+The `tower` CLI is a Python entry point installed via `uv`:
+
+```bash
+uv pip install -e .
+```
+
+The entry point is defined in `pyproject.toml`:
+
+```toml
+[project.scripts]
+tower = "backend.main:cli"
+```
+
+#### CLI Commands
+
+| Command | Description |
+|---|---|
+| `tower up` | Start the server |
+| `tower up --port 9090` | Start on a custom port |
+| `tower up --tunnel` | Start with Dev Tunnel enabled |
+| `tower up --dev` | Start in development mode (CORS allows localhost:5173) |
+| `tower init` | Create `~/.tower/config.yaml` with defaults |
+| `tower version` | Print version |
+
+---
+
+## 8. Repository and Workspace Model
+
+### 8.1 Worktree Creation
+
+When a job starts, `GitService` decides whether to use the main worktree or create a secondary one:
+
+1. Backend resolves the repository root from the config
+2. Check if any other job targeting the same repo is currently in an active state (`queued`, `running`, `paused`)
+3. **No active jobs on this repo** — use the main worktree:
+   - `worktree_path` is set to the repository root itself
+   - A new branch is created from `base_branch` and checked out in the main worktree
+4. **Another active job already occupies this repo** — create a secondary worktree:
+   - A worktree directory is created at:
+     ```
+     {repo_root}/{worktrees_dirname}/{job_id}/
+     ```
+     Default `worktrees_dirname`: `.tower-worktrees`
+   - A new branch is created from `base_branch` and checked out in the secondary worktree
+5. A branch is created from `base_branch`:
+   - If `branch` was provided in the job creation request, that name is used as-is
+   - Otherwise, the agent decides the branch name as a preflight step based on the prompt (e.g. `fix/null-pointer-in-user-service`, `feat/add-pagination-to-orders-api`)
+
+#### Worktree Creation Failure
+
+If `git worktree add` fails (e.g., disk full, permissions error, corrupt repo state), `GitService.create_worktree()` catches the exception and transitions the job to `failed` with a descriptive error message including the git stderr output. The operator can resolve the underlying issue (free disk space, fix permissions, etc.) and rerun the job.
+
+Example — single job uses the main worktree:
+
+```
+/repos/service-a/                          ← job-104 works here
+```
+
+Example — second concurrent job gets a secondary worktree:
+
+```
+/repos/service-a/                          ← job-104 (main worktree)
+/repos/service-a/.tower-worktrees/job-105/  ← job-105 (secondary)
+```
+
+### 8.2 Branch Naming
+
+Branch names are either explicitly provided by the operator at job creation or chosen by the agent as a preflight step. The agent picks a conventional name based on the prompt.
+
+Examples:
+
+```
+fix/null-pointer-in-user-service
+feat/add-pagination-to-orders-api
+chore/upgrade-react-to-19
+```
+
+### 8.3 Workspace Cleanup
+
+On job completion (success, failure, or cancel):
+
+- **Main worktree jobs**: the branch is left in place but the main worktree is considered available for the next job. No directory is deleted
+- **Secondary worktree jobs**: the worktree directory is retained for artifact inspection and diff browsing
+- Secondary worktrees are not automatically deleted; operators must explicitly clean them up via a settings action
+- A background cleanup command may be scheduled via settings: `POST /api/settings/cleanup-worktrees`
+
+### 8.4 Protected Paths
+
+If a per-repository config defines `protected_paths`, the adapter translates these into SDK-native permission rules at session creation time. Any write to a protected path triggers the SDK's built-in permission request flow, which the adapter routes to the operator via the approval system (Section 18).
+
+### 8.5 Concurrent Jobs on the Same Repository
+
+Multiple jobs may target the same repository concurrently.
+
+The first active job on a repo uses the main worktree directly. Any additional concurrent jobs on the same repo are each assigned their own secondary worktree, providing full isolation. When the main-worktree job completes, the next queued job for the same repo may use the main worktree if no other job currently occupies it.
+
+Isolation between concurrent jobs is guaranteed by Git worktrees: each secondary job works in its own worktree and cannot interfere with another job's files. The main branch of the repository is never written to.
+
+### 8.6 Repository Safety Enforcement
+
+To prevent the agent from accidentally modifying unrelated files:
+
+1. The `GitService` configures the worktree (main or secondary) before the agent session starts
+2. The adapter sets `workspace_path` in the SDK's session config, which scopes agent operations to the worktree. The SDK's own subprocess inherits this scoping
+3. Any shell command that modifies files outside the worktree path triggers an approval request via the SDK's permission system
+4. Pushing to remote and creating PRs are allowed — these are useful agent capabilities. Push protection is not enforced at the git config level
+
+### 8.7 Pull Request Creation After Successful Job
+
+When a job completes successfully, Tower instructs the agent to create a pull request as a **post-completion step** if the GitHub CLI (`gh`) or GitHub MCP tools are available.
+
+The flow:
+
+1. Job reaches `succeeded` state
+2. During the `post_completion` phase, the agent is instructed to push the branch and open a PR using whichever GitHub tooling is available:
+   - **GitHub MCP server** (if configured in `.vscode/mcp.json` or `tools.mcp` global config) — the agent uses the MCP `create_pull_request` tool
+   - **`gh` CLI** (if available on `$PATH`) — the agent runs `gh pr create` with the branch name, prompt-derived title, and a summary body
+3. If neither `gh` CLI nor GitHub MCP tools are available, the step is skipped silently and the branch remains on disk for the operator to push manually
+4. The PR URL (if created) is included in the `JobSucceeded` event payload and displayed on the Job Detail screen
+
+This is a best-effort operation — if PR creation fails (e.g., no remote configured, auth issues), the job is still considered successful. The failure is logged as a warning.
+
+Completed branches are **not** auto-deleted after merge. The branch remains on disk until the operator explicitly cleans it up or the retention policy removes the worktree.
+
+---
+
+## 9. Voice Input and Transcription
+
+### 9.1 Overview
+
+Tower supports voice input for dictating prompts and operator messages. Audio is captured in the browser, uploaded to the local backend, and transcribed locally using `faster-whisper`. No audio data is transmitted to external services.
+
+### 9.2 Privacy Guarantee
+
+All voice transcription runs locally on the developer machine:
+
+- Audio is uploaded only to `localhost` (or via the authenticated Dev Tunnel)
+- The `faster-whisper` library performs inference locally using downloaded model weights
+- `faster-whisper` does not phone home or transmit data to external servers
+- The UI displays a "Local transcription" indicator next to the microphone button
+- Audio blobs are discarded after transcription; they are not persisted
+
+### 9.3 Workflow
+
+1. Operator presses and holds the microphone button in the browser
+2. Browser requests microphone permission (`getUserMedia`)
+3. `MediaRecorder` records audio chunks while button is held
+4. On release, recording stops
+5. Chunks are combined into a single audio blob (WebM/Opus or WAV)
+6. Blob uploaded via `POST /api/voice/transcribe` as `multipart/form-data`
+7. Backend transcribes and returns `{ text: "..." }`
+8. Transcribed text is inserted into the active prompt or message input field
+
+### 9.4 Frontend Implementation
+
+```typescript
+async function recordAndTranscribe(): Promise<string> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const recorder = new MediaRecorder(stream);
+  const chunks: Blob[] = [];
+
+  recorder.ondataavailable = (e) => chunks.push(e.data);
+
+  await new Promise<void>((resolve) => {
+    recorder.onstop = () => resolve();
+    // caller triggers recorder.stop() on button release
+  });
+
+  const blob = new Blob(chunks, { type: "audio/webm" });
+  const form = new FormData();
+  form.append("audio", blob, "recording.webm");
+
+  const res = await fetch("/api/voice/transcribe", { method: "POST", body: form });
+  const { text } = await res.json();
+  return text;
+}
+```
+
+### 9.5 Voice Input Contexts
+
+Voice input is available in two contexts:
+
+| Context | Description |
+|---|---|
+| Job creation prompt | Dictate the initial task prompt |
+| Operator message | Dictate a mid-run instruction to send to the agent |
+
+### 9.6 Transcription Engine
+
+Local transcription uses `faster-whisper`.
+
+| Model | RAM | Latency (approx.) | Use case |
+|---|---|---|---|
+| `tiny.en` | ~150 MB | 100–300 ms | Low-latency, English only |
+| `base.en` | 300–400 MB | 300–800 ms | Default, better accuracy |
+
+Default model: `base.en`
+
+### 9.7 Configuration
+
+```yaml
+voice:
+  enabled: true
+  model: base.en     # or tiny.en
+  max_audio_size_mb: 10
+```
+
+### 9.8 Backend Endpoint
+
+```
+POST /api/voice/transcribe
+Content-Type: multipart/form-data
+
+Field: audio (binary, max 10 MB)
+```
+
+Response:
+
+```json
+{
+  "text": "Fix the null pointer exception in the user service."
+}
+```
+
+The endpoint rejects uploads exceeding `max_audio_size_mb` with `413 Payload Too Large`.
+
+The frontend enforces the same limit client-side: it checks the recording size before uploading and shows a warning toast if the limit is exceeded, without sending the request.
+
+### 9.9 Transcription Service
+
+```python
+from faster_whisper import WhisperModel
+
+class VoiceService:
+    def __init__(self, model_name: str = "base.en"):
+        self._model = WhisperModel(model_name, device="cpu", compute_type="int8")
+
+    def transcribe(self, audio_bytes: bytes) -> str:
+        segments, _ = self._model.transcribe(audio_bytes)
+        return " ".join(seg.text.strip() for seg in segments)
+```
+
+The model is loaded once at startup and reused across requests.
+
+---
+
+## 10. Configuration Model
+
+### 10.1 Overview
+
+Configuration exists at three layers:
+
+| Layer | Location | Scope |
+|---|---|---|
+| Global | `~/.tower/config.yaml` | Machine-level runtime behavior |
+| Per-repository | `{repo_root}/.tower.yml` | Repository-specific overrides |
+| Per-job | Job creation payload | Single-job overrides |
+
+### 10.2 Global Configuration
+
+File: `~/.tower/config.yaml`
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8080
+
+auth:
+  enabled: true
+  tunnel_identity: true            # Require Microsoft/GitHub identity via Dev Tunnel
+
+runtime:
+  max_concurrent_jobs: 2
+  worktrees_dirname: .tower-worktrees
+
+voice:
+  enabled: true
+  model: base.en
+  max_audio_size_mb: 10
+
+retention:
+  artifact_retention_days: 30        # Auto-delete artifacts older than this
+  max_artifact_size_mb: 100          # Maximum size per artifact file
+  cleanup_on_startup: false          # Run retention cleanup on startup
+
+logging:
+  level: info                        # debug, info, warn, error
+  file: ~/.tower/logs/server.log
+  max_file_size_mb: 50
+  backup_count: 3                    # Number of rotated log files to keep
+
+rate_limits:
+  max_sse_connections: 5             # Maximum concurrent SSE connections
+
+repos:
+  - /repos/service-a
+  - /repos/service-b
+  - /repos/microservices/*
+  - ~/projects/**
+
+tools:
+  mcp:
+    github:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+    postgres:
+      command: uvx
+      args: ["mcp-postgres"]
+      env:
+        DATABASE_URL: "${DATABASE_URL}"
+```
+
+Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
+
+#### 10.2.1 MCP Server Discovery
+
+Tower discovers MCP servers from two sources, merged as a union:
+
+1. `.vscode/mcp.json` in the repo — `"servers"` key (VS Code / Copilot convention)
+2. `tools.mcp` block in Tower's global config (`~/.tower/config.yaml`)
+
+If the same server name appears in both, the repo-level `.vscode/mcp.json` takes precedence.
+
+Entries are normalized into `MCPServerConfig` and passed to the SDK.
+
+Example `.vscode/mcp.json` (already in the repo):
+
+```json
+{
+  "servers": {
+    "github": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-postgres"],
+      "env": { "DATABASE_URL": "${DATABASE_URL}" }
+    }
+  }
+}
+```
+
+The per-repo `.tower.yml` can optionally disable specific discovered servers:
+
+```yaml
+tools:
+  mcp:
+    disabled:
+      - postgres
+```
+
+This keeps Tower out of the business of defining MCP servers and lets developers use the same config they already have.
+
+### 10.3 Per-Repository Configuration
+
+File: `{repo_root}/.tower.yml`
+
+```yaml
+base_branch: main
+
+protected_paths:
+  - infra/
+  - .github/workflows/
+
+tools:
+  mcp:
+    disabled:
+      - postgres
+```
+
+| Field | Description |
+|---|---|
+| `base_branch` | Branch to create worktree from |
+| `protected_paths` | Paths that require approval before modification |
+| `tools.mcp.disabled` | MCP servers discovered in the repo to exclude from sessions |
+
+### 10.4 Per-Job Overrides
+
+Provided in the job creation request body:
+
+```json
+{
+  "repo": "/repos/service-a",
+  "prompt": "Fix the null pointer exception in UserService.java",
+  "base_ref": "main"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `repo` | Yes | Path to repository (must be in allowlist) |
+| `prompt` | Yes | Task description for the agent |
+| `base_ref` | No | Override base branch/commit |
+
+---
+
+## 11. Canonical Internal Event Model
+
+All runtime activity is represented as structured domain events. Every event has a shared envelope:
+
+```python
+class DomainEventKind(str, Enum):
+    job_created = "JobCreated"
+    workspace_prepared = "WorkspacePrepared"
+    agent_session_started = "AgentSessionStarted"
+    log_line_emitted = "LogLineEmitted"
+    transcript_updated = "TranscriptUpdated"
+    diff_updated = "DiffUpdated"
+    approval_requested = "ApprovalRequested"
+    approval_resolved = "ApprovalResolved"
+    job_succeeded = "JobSucceeded"
+    job_failed = "JobFailed"
+    job_canceled = "JobCanceled"
+    session_heartbeat = "SessionHeartbeat"
+
+@dataclass
+class DomainEvent:
+    event_id: str       # UUID
+    job_id: str
+    timestamp: datetime
+    kind: DomainEventKind
+    payload: dict
+```
+
+### 11.1 Event Types
+
+| Event Kind | Trigger | Key Payload Fields |
+|---|---|---|
+| `JobCreated` | Job creation request accepted | `repo`, `prompt`, `base_ref` |
+| `WorkspacePrepared` | Worktree and branch created | `worktree_path`, `branch` |
+| `AgentSessionStarted` | Agent session created | `session_id` |
+| `LogLineEmitted` | Agent or system log output | `seq`, `level`, `message`, `context` |
+| `TranscriptUpdated` | Agent reasoning or operator message | `seq`, `role`, `content` |
+| `DiffUpdated` | File changes detected in worktree | `changed_files` (list of DiffFile) |
+| `ApprovalRequested` | SDK permission request intercepted | `approval_id`, `description`, `proposed_action` |
+| `ApprovalResolved` | Operator approves or rejects | `approval_id`, `resolution` |
+| `JobSucceeded` | Session completed successfully | `summary` |
+| `JobFailed` | Session terminated with error | `error`, `traceback` |
+| `JobCanceled` | Operator canceled the job | `reason` |
+| `SessionHeartbeat` | Periodic heartbeat from running session | `session_id` |
+
+### 11.2 Event Consumers
+
+| Consumer | Events consumed | Action |
+|---|---|---|
+| `JobStateMachine` | All state-relevant events | Applies state transitions |
+| `PersistenceSubscriber` | All events | Persists to SQLite event log |
+| `SSEManager` | All events | Pushes to connected SSE clients |
+| `ApprovalService` | `ApprovalRequested` | Persists request, awaits operator resolution |
+| `DiffService` | `WorkspacePrepared`, `JobSucceeded` | Generates and stores diff snapshots |
+| `ArtifactService` | `JobSucceeded` | Collects and stores artifacts |
+| `TimelineBuilder` | All events | Updates job timeline view |
+
+---
+
+## 12. Job States
+
+### 12.0 Job ID Generation
+
+Job IDs use a sequential integer with a `job-` prefix, backed by SQLite autoincrement. The `jobs` table uses `TEXT` primary key but the value is always `job-{N}` where `N` is the next integer from an internal sequence.
+
+Examples: `job-1`, `job-104`, `job-2057`
+
+Sequential integers are preferred over UUIDs because:
+- Branch names remain human-readable (`fix/null-pointer-in-user-service`)
+- Job IDs are easy to reference in conversation
+- There is only one instance of Tower; global uniqueness is not required
+
+### 12.1 States
+
+| State | Description |
+|---|---|
+| `queued` | Job accepted but not yet started (at capacity) |
+| `running` | Agent session is active |
+| `waiting_for_approval` | Session paused, awaiting operator decision |
+| `succeeded` | Session completed successfully |
+| `failed` | Session terminated with an error |
+| `canceled` | Operator canceled the job |
+
+### 12.2 State Transition Table
+
+| From | Event | To |
+|---|---|---|
+| _(none)_ | `JobCreated` + capacity available | `running` |
+| _(none)_ | `JobCreated` + at capacity | `queued` |
+| `queued` | Capacity opens | `running` |
+| `queued` | `JobCanceled` | `canceled` |
+| `running` | `ApprovalRequested` | `waiting_for_approval` |
+| `running` | `JobSucceeded` | `succeeded` |
+| `running` | `JobFailed` | `failed` |
+| `running` | `JobCanceled` | `canceled` |
+| `waiting_for_approval` | `ApprovalResolved` (approved) | `running` |
+| `waiting_for_approval` | `ApprovalResolved` (rejected) | `failed` |
+| `waiting_for_approval` | `JobCanceled` | `canceled` |
+
+Terminal states (`succeeded`, `failed`, `canceled`) have no further transitions.
+
+### 12.3 Rerun
+
+Rerunning a job creates a new job record. The original job is not mutated. The new job copies the original's `repo`, `prompt`, `base_ref`, and `strategy`.
+
+---
+
+## 13. Execution Phases
+
+| Phase | Description | Example events |
+|---|---|---|
+| `environment_setup` | Workspace creation, branch, dependency install | `WorkspacePrepared`, `LogLineEmitted` |
+| `agent_reasoning` | Agent reads code, thinks, plans, and writes changes | `TranscriptUpdated`, `DiffUpdated`, `ApprovalRequested` |
+| `finalization` | Final diff snapshot, artifact collection | `DiffUpdated`, `JobSucceeded` |
+| `post_completion` | Operator reviews, approves, or reruns | _(no agent events)_ |
+
+Artifacts and timeline entries carry the phase in which they were produced. The frontend uses phase labels to group the execution timeline.
+
+---
+
+## 14. User Interface
+
+### 14.1 Dashboard
+
+**Desktop layout: Kanban board** (viewport width ≥ 1024px)
+
+Columns:
+
+| Column | States shown |
+|---|---|
+| Active | `queued`, `running` |
+| Sign-off | `waiting_for_approval` |
+| Failed | `failed` |
+| History | `succeeded`, `canceled` |
+
+Each card displays: job ID, repository name, prompt excerpt, elapsed time, and status badge.
+
+The History column shows the most recent 50 jobs by default. A "Load more" button fetches the next page via `GET /api/jobs?state=succeeded,canceled&limit=50&cursor={last_id}`. The column uses virtualized rendering for smooth scrolling.
+
+**Mobile layout: Filtered job list** (viewport width < 1024px)
+
+A single scrollable list of jobs. Filter tabs at the top correspond to the Kanban columns. Tapping a job opens the Job Detail screen.
+
+#### Responsive Breakpoints
+
+| Breakpoint | Layout |
+|---|---|
+| ≥ 1024px | Kanban board (4 columns) |
+| 768px – 1023px | Kanban board (2 columns, stacked) |
+| < 768px | Mobile job list with filter tabs |
+
+The Job Detail screen uses a single-column stacked layout on viewports below 768px. Panels (Transcript, Logs, Diff, etc.) become collapsible accordion sections.
+
+### 14.2 Job Detail Screen
+
+Sections:
+
+| Section | Contents |
+|---|---|
+| **Job Metadata Header** | Job ID, repo, branch, state badge, started/completed timestamps |
+| **Approval Banner** | Shown only in `waiting_for_approval` state. Displays description, proposed action, and Approve/Reject buttons |
+| **Transcript Panel** | Scrolling list of agent reasoning messages and operator injections. Auto-scrolls to bottom on new entries |
+| **Logs Panel** | Raw log output with level filtering (debug/info/warn/error). Virtualized list |
+| **Diff Viewer** | Per-file diffs with syntax highlighting, additions/deletions counts, and hunk navigation |
+| **Workspace Browser** | File tree of the worktree. Click a file to view its contents |
+| **Artifact Viewer** | List of collected artifacts with type badges and download links |
+| **Execution Timeline** | Chronological list of key events grouped by phase |
+
+#### Concurrent Approval Notifications
+
+When multiple jobs are simultaneously in `waiting_for_approval` state:
+
+- The Sign-off column on the dashboard clearly shows each pending approval with its job ID
+- On mobile, a persistent badge on the "Sign-off" filter tab shows the count of pending approvals
+- If the operator is viewing a different job's detail screen, a toast notification appears for new approval requests with a "View" link
+
+### 14.3 Job Creation Screen
+
+Fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| Repository | Dropdown | Only repositories in allowlist |
+| Prompt | Textarea + voice button | Task description |
+| Base reference | Text | Default: repo's `base_branch` |
+
+### 14.4 Settings Screen
+
+Sections:
+
+- Global config viewer/editor (YAML text editor with validation)
+- Repository config list (per-repo `.tower.yml` viewer)
+- Worktree cleanup action
+- Voice model selector
+
+---
+
+## 15. Data Model
+
+### 15.1 SQLite Schema
+
+#### jobs
+
+```sql
+CREATE TABLE jobs (
+    id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL,
+    strategy TEXT NOT NULL DEFAULT 'single_agent',
+    base_ref TEXT NOT NULL,
+    branch TEXT,
+    worktree_path TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+```
+
+#### events
+
+```sql
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    job_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    payload TEXT NOT NULL,        -- JSON
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+CREATE INDEX idx_events_job_id ON events(job_id);
+CREATE INDEX idx_events_id ON events(id);
+```
+
+#### approvals
+
+```sql
+CREATE TABLE approvals (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    description TEXT NOT NULL,
+    proposed_action TEXT,
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+```
+
+#### artifacts
+
+```sql
+CREATE TABLE artifacts (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,              -- 'diff_snapshot', 'agent_summary', 'custom'
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    disk_path TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+```
+
+#### Artifact Types
+
+| Type | Description | Collection trigger |
+|---|---|---|
+| `diff_snapshot` | Final unified diff of all changes | `JobSucceeded` or `JobFailed` |
+| `agent_summary` | Agent's self-reported summary of work done | `JobSucceeded` |
+| `custom` | Files placed by the agent in `.tower/artifacts/` inside the worktree | `JobSucceeded` |
+
+Custom artifacts are collected by scanning `{worktree_path}/.tower/artifacts/` at job completion. Each file found is registered as an artifact with `type: custom`.
+
+#### diff_snapshots
+
+```sql
+CREATE TABLE diff_snapshots (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    diff_json TEXT NOT NULL,      -- serialized list of DiffFile
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+CREATE INDEX idx_diff_snapshots_job_id ON diff_snapshots(job_id);
+```
+
+---
+
+## 16. Persistence
+
+### 16.1 Storage Layout
+
+```
+~/.tower/
+├── config.yaml
+├── data.db            # SQLite database
+└── artifacts/
+    └── {job_id}/
+        └── {artifact_id}-{name}
+```
+
+### 16.2 Migrations
+
+Schema migrations are managed with Alembic. The backend runs `alembic upgrade head` at startup before accepting requests.
+
+### 16.3 Persistence Layer Design
+
+All database access is mediated through repository classes. No SQLAlchemy sessions are used directly in services or route handlers.
+
+```python
+class JobRepository:
+    def create(self, job: Job) -> Job: ...
+    def get(self, job_id: str) -> Job | None: ...
+    def list(self, state: str | None = None) -> list[Job]: ...
+    def update_state(self, job_id: str, new_state: str, updated_at: datetime) -> None: ...
+
+class EventRepository:
+    def append(self, event: DomainEvent) -> None: ...
+    def list_after(self, after_id: int, job_id: str | None = None) -> list[DomainEvent]: ...
+
+class ArtifactRepository:
+    def create(self, artifact: Artifact) -> Artifact: ...
+    def list_for_job(self, job_id: str) -> list[Artifact]: ...
+    def get(self, artifact_id: str) -> Artifact | None: ...
+```
+
+### 16.4 Retention Policy
+
+Artifacts and associated data accumulate over time. The retention policy prevents unbounded growth:
+
+- **Artifact retention**: Artifacts older than `retention.artifact_retention_days` (default: 30 days) are deleted from disk and database
+- **Maximum artifact size**: Individual artifacts exceeding `retention.max_artifact_size_mb` (default: 100 MB) are rejected at collection time
+- **Cleanup schedule**: Retention cleanup runs once daily as a background task. It can also be triggered manually via `POST /api/settings/cleanup-worktrees`
+- **Cleanup on startup**: If `retention.cleanup_on_startup` is `true`, cleanup runs during startup after recovery
+
+Retention cleanup removes:
+1. Artifact files from `~/.tower/artifacts/{job_id}/`
+2. Artifact metadata from the `artifacts` table
+3. Diff snapshots from the `diff_snapshots` table
+4. Secondary worktree directories for jobs in terminal states older than the retention period
+
+Job records and events are never deleted. They serve as an audit log.
+```
+
+---
+
+## 17. REST API
+
+All endpoints are prefixed with `/api`.
+
+Authentication is handled at the transport layer by Dev Tunnel identity verification (see Section 21.1). The backend binds to `127.0.0.1` by default, so direct access is limited to the local machine. No application-level authentication headers are required.
+
+### 17.1 Health Check
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/health` | Service health and status |
+
+The health endpoint does **not** require authentication. It returns:
+
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "uptime_seconds": 3621.5,
+  "active_jobs": 1,
+  "queued_jobs": 0
+}
+```
+
+### 17.2 Jobs
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/jobs` | Create a new job |
+| `GET` | `/api/jobs` | List jobs (filterable, paginated) |
+| `GET` | `/api/jobs/{job_id}` | Get full job detail |
+| `POST` | `/api/jobs/{job_id}/cancel` | Cancel a running or queued job |
+| `POST` | `/api/jobs/{job_id}/rerun` | Create a new job from this job's config |
+| `POST` | `/api/jobs/{job_id}/messages` | Send an operator message to a running job |
+
+#### Pagination
+
+List endpoints support cursor-based pagination:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | integer | 50 | Maximum items to return (max: 200) |
+| `cursor` | string | _(none)_ | Opaque cursor from previous response |
+| `state` | string | _(none)_ | Comma-separated state filter |
+
+Response envelope for list endpoints:
+
+```json
+{
+  "items": [...],
+  "cursor": "eyJpZCI6ICJqb2ItNTAifQ",
+  "has_more": true
+}
+```
+
+#### Create Job — Request
+
+```json
+POST /api/jobs
+{
+  "repo": "/repos/service-a",
+  "prompt": "Fix the null pointer in UserService",
+  "base_ref": "main"
+}
+```
+
+#### Create Job — Response
+
+```json
+201 Created
+{
+  "id": "job-104",
+  "state": "running",
+  "branch": "fix/null-pointer-in-userservice",
+  "worktreePath": "/repos/service-a",
+  "createdAt": "2025-01-01T12:00:00Z"
+}
+```
+
+#### Send Operator Message — Request
+
+```json
+POST /api/jobs/{job_id}/messages
+{
+  "content": "Also add unit tests for the fix."
+}
+```
+
+#### Send Operator Message — Response
+
+```json
+200 OK
+{
+  "seq": 5,
+  "timestamp": "2025-01-01T12:10:00Z"
+}
+```
+
+The endpoint returns `409 Conflict` if the job is not in `running` state.
+
+### 17.3 Events (SSE)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/events` | SSE stream for all jobs |
+| `GET` | `/api/events?job_id={id}` | SSE stream scoped to one job |
+
+### 17.4 Approvals
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/jobs/{job_id}/approvals` | List approvals for a job |
+| `POST` | `/api/approvals/{approval_id}/resolve` | Approve or reject |
+
+#### Resolve Approval — Request
+
+```json
+POST /api/approvals/{approval_id}/resolve
+{
+  "resolution": "approved"    // or "rejected"
+}
+```
+
+### 17.5 Artifacts
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/jobs/{job_id}/artifacts` | List artifacts for a job |
+| `GET` | `/api/artifacts/{artifact_id}` | Download artifact file |
+
+### 17.6 Workspace
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/jobs/{job_id}/workspace` | List files in job's worktree (paginated, max 200 entries) |
+| `GET` | `/api/jobs/{job_id}/workspace/file` | Get file contents (`?path=relative/path`) |
+
+### 17.7 Voice
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/voice/transcribe` | Upload audio, receive transcript |
+
+### 17.8 Settings
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/settings/global` | Get current global config |
+| `PUT` | `/api/settings/global` | Update global config |
+| `GET` | `/api/settings/repos` | List repo configs |
+| `POST` | `/api/settings/cleanup-worktrees` | Clean up completed job worktrees |
+
+### 17.9 Connection Limits
+
+SSE connections are limited to `max_sse_connections` concurrent connections (default: 5).
+
+Voice transcription uploads are limited to `max_audio_size_mb` (default: 10 MB).
+
+No per-request rate limiting is applied. Tower runs on a single developer machine accessed by one browser and optionally one phone — throttling REST requests adds complexity without value.
+
+### 17.10 Error Responses
+
+All errors return a consistent envelope:
+
+```json
+{
+  "error": {
+    "code": "JOB_NOT_FOUND",
+    "message": "Job job-999 does not exist."
+  }
+}
+```
+
+| HTTP Status | Condition |
+|---|---|
+| 400 | Validation error in request |
+| 403 | Repository not in allowlist, or protected path violation |
+| 404 | Resource not found |
+| 409 | State conflict (e.g., cancel an already-completed job) |
+| 413 | Payload too large (voice upload exceeds `max_audio_size_mb`) |
+| 500 | Internal server error |
+
+#### Error Codes
+
+| Code | Used by | Description |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | Request body failed Pydantic validation |
+| `REPO_NOT_ALLOWED` | 403 | Repository path not in allowlist |
+| `PROTECTED_PATH` | 403 | Operation targets a protected path |
+| `JOB_NOT_FOUND` | 404 | Job ID does not exist |
+| `APPROVAL_NOT_FOUND` | 404 | Approval ID does not exist |
+| `ARTIFACT_NOT_FOUND` | 404 | Artifact ID does not exist |
+| `FILE_NOT_FOUND` | 404 | Workspace file path does not exist |
+| `STATE_CONFLICT` | 409 | Action invalid for current job state |
+| `PAYLOAD_TOO_LARGE` | 413 | Upload exceeds size limit |
+| `INTERNAL_ERROR` | 500 | Unexpected server error |
+
+---
+
+## 18. Approval System
+
+### 18.1 Purpose
+
+Approval gates intercept risky operations before they execute. This ensures the operator maintains control over destructive or irreversible actions.
+
+### 18.2 Delegation to the Agent Runtime
+
+Tower does not maintain its own trigger evaluation logic. The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides which actions require approval based on its own built-in rules and permission model.
+
+Tower's role is to:
+
+1. **Route** the SDK's permission requests to the operator via the UI
+2. **Relay** the operator's decision back to the SDK
+3. **Persist** approval requests and resolutions for auditability
+4. **Feed repo-level config** (like `protected_paths`) into the SDK at session creation time
+
+#### How `protected_paths` Maps to SDK Config
+
+The per-repo `protected_paths` list (Section 10.3) is translated into SDK-native permission rules when the adapter creates a session:
+
+- **Copilot SDK:** Injected via `on_pre_tool_use` hook — actions targeting protected paths return `permissionDecision: "ask"`
+- **Future runtimes:** Each adapter is responsible for translating `protected_paths` into the equivalent native rule format
+
+### 18.3 Approval Request Object
+
+```json
+{
+  "id": "appr-88",
+  "job_id": "job-104",
+  "description": "Agent wants to delete all files in /tmp/build",
+  "proposed_action": "rm -rf /tmp/build",
+  "requested_at": "2025-01-01T12:05:00Z"
+}
+```
+
+The adapter normalizes whichever fields the SDK provides into this common shape. Fields the SDK doesn't supply are omitted.
+
+### 18.4 Approval Flow
+
+1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
+2. Adapter translates to `ApprovalRequested` domain event
+3. `ApprovalService` persists the request
+4. Job transitions to `waiting_for_approval`
+5. `ApprovalRequested` SSE event sent to frontend
+6. Frontend renders approval banner on Job Detail screen
+7. Operator clicks Approve or Reject
+8. `POST /api/approvals/{id}/resolve` called
+9. `ApprovalService` persists the resolution
+10. Adapter returns the decision to the SDK (e.g., `PermissionRequestResult` with `approved` or `denied-interactively-by-user`)
+11. `ApprovalResolved` domain event published
+12. Job transitions back to `running`
+
+The SDK blocks on its permission callback while waiting for the operator's response. Tower holds the pending future and resolves it when the REST endpoint is called.
+
+### 18.5 Approval Timeout
+
+Approval requests do not expire automatically. The job remains in `waiting_for_approval` state indefinitely until the operator responds. This is intentional for a single-operator tool.
+
+The frontend provides visibility:
+
+- Pending approvals older than 30 minutes show an "Aging" warning badge
+- The dashboard sorts approvals by age (oldest first)
+- A persistent toast notification remains visible if the operator is on a different screen
+
+---
+
+## 19. Diff Model
+
+### 19.1 Diff Generation
+
+Diffs are generated relative to the base branch using git:
+
+```bash
+git diff {base_ref}...HEAD
+```
+
+This command is run inside the job's worktree. The output is standard unified diff format.
+
+### 19.2 Hunk Parsing
+
+The `DiffService` parses raw unified diff output into structured `DiffFileModel` and `DiffHunkModel` Pydantic objects (see Section 4.6).
+
+Parser responsibilities:
+
+- Extract changed file paths (old and new)
+- Detect file status (added, modified, deleted, renamed)
+- Parse hunk headers (`@@ -a,b +c,d @@`)
+- Classify each line as context, addition, or deletion
+- Count additions and deletions per file
+
+### 19.3 Diff Updates
+
+`DiffUpdated` events are emitted:
+
+- When the agent writes a file (debounced)
+- When a validation phase completes
+- When the job reaches a terminal state
+
+#### Debounce Behavior
+
+Diff recalculation uses **per-job throttling** (not trailing-edge debounce):
+
+- After a file-change event from the agent adapter, the `DiffService` schedules a diff recalculation
+- If a diff was calculated for this job within the last 5 seconds, the request is skipped
+- At most one diff recalculation runs per job per 5-second window
+- The final diff at job completion always runs regardless of throttle state
+
+Diff recalculation is triggered by the adapter's `file_changed` events (emitted when the agent uses file-write or file-edit tools), not by filesystem watching. This avoids race conditions with partial file writes.
+
+### 19.4 Diff Snapshots
+
+At job completion, a final diff snapshot is stored in the `diff_snapshots` table. This snapshot represents the full set of changes produced by the job.
+
+Diff snapshots are not exposed via a dedicated REST endpoint. The frontend receives live diffs via SSE `diff_update` events during execution, and the final diff is available as a `diff_snapshot` artifact via `GET /api/jobs/{job_id}/artifacts`. Historical intermediate snapshots are stored for future features (e.g., diff timeline playback) but are not served in v1.
+
+### 19.5 Frontend Diff Rendering
+
+The `DiffViewer` component:
+
+- Lists all changed files with status icons and line count badges
+- Expands a file to show its hunks
+- Renders each line with syntax highlighting and color coding (green for additions, red for deletions, gray for context)
+- Supports collapsing unchanged context blocks
+- Shows a summary bar: total files changed, total additions, total deletions
+
+---
+
+## 20. Observability
+
+### 20.1 Job Health
+
+The Job Detail screen exposes:
+
+- Current state with color-coded badge
+- Session heartbeat timestamp (updated by `session_heartbeat` SSE events every 30 seconds)
+- If no heartbeat received in 90 seconds, a "Session unresponsive" warning is shown
+
+### 20.2 Runtime Logs
+
+Logs are streamed in real time via SSE `log_line` events.
+
+Backend logging uses human-readable format via Python's `structlog` library with console renderer:
+
+```python
+log.info("job_started", job_id=job_id, repo=repo)
+# Output: 2025-01-01 12:00:00 [info] job_started  job_id=job-104 repo=/repos/service-a
+```
+
+Every log line carries:
+
+- `timestamp`
+- `level`
+- `message`
+- `job_id` (when applicable)
+- Additional structured context fields
+
+#### Log Rotation
+
+Backend logs are written to `~/.tower/logs/server.log` using Python's `RotatingFileHandler`:
+
+| Parameter | Default |
+|---|---|
+| Max file size | 50 MB (`logging.max_file_size_mb`) |
+| Backup count | 3 (`logging.backup_count`) |
+| Format | Human-readable (`structlog` console renderer) |
+
+This produces files: `server.log`, `server.log.1`, `server.log.2`, `server.log.3`.
+
+#### Terminal Output
+
+Stdout does not show raw log lines. Instead, `tower up` renders a live status display using `rich` showing:
+
+- Server URL and tunnel URL (if active)
+- Active jobs table: job ID, repo, state, elapsed time
+- Aggregate metrics: jobs running, queued, succeeded, failed
+- Last few significant events (job created, completed, failed, approval requested)
+
+This provides an at-a-glance operational view without overwhelming the terminal. Full logs remain in `~/.tower/logs/server.log`.
+
+### 20.3 Failure Diagnostics
+
+When a job enters `failed` state, the Job Detail screen shows:
+
+- The error message from the `JobFailed` event payload
+- The traceback (if available)
+- The last log lines before failure
+- The last transcript entries
+
+### 20.4 Session Heartbeat
+
+The adapter generates a `session_heartbeat` domain event every 30 seconds for each running session. The SDK itself may not provide periodic heartbeats, so the adapter maintains its own timer per active session. The frontend uses these to display session health status.
+
+#### Heartbeat Watchdog
+
+If no heartbeat is received for a running session within 90 seconds:
+
+1. The frontend shows a "Session unresponsive" warning badge
+2. The backend logs a warning: `log.warning("session_unresponsive", job_id=job_id, last_heartbeat=...)`
+3. After 5 minutes without a heartbeat, the backend auto-cancels the job with `reason: "heartbeat_timeout"` and transitions it to `failed`
+4. The operator can rerun the job if desired
+
+---
+
+## 21. Security Model
+
+### 21.1 Authentication
+
+Tower has **no application-level authentication**. Access control relies on two mechanisms:
+
+1. **Localhost binding**: The backend binds to `127.0.0.1` by default, making it accessible only from the local machine
+2. **Dev Tunnel identity verification**: When remote access is needed, Microsoft Dev Tunnel authenticates users via their Microsoft or GitHub identity. Only the tunnel owner can connect. The tunnel is always created with `--allow-anonymous=false`
+
+This means:
+
+- No bearer tokens, session cookies, or API keys to manage or rotate
+- No authentication middleware in the backend
+- The SSE endpoint (`/api/events`) requires no special auth handling
+- If the server is intentionally bound to `0.0.0.0` (e.g., for LAN access), a startup warning is emitted noting that no authentication is enforced
+
+#### Why not application-level auth?
+
+Tower is a single-operator tool on a developer machine. Adding a token/session system would create operational overhead (managing secrets, handling rotation, config errors) without meaningfully improving security over the combination of localhost binding + Dev Tunnel identity. If the local machine is compromised, application-level auth provides no additional protection.
+
+### 21.2 Repository Allowlist
+
+The `repos` list in global config is the authoritative allowlist.
+
+- All job creation requests are validated against this list
+- Any path traversal attempts (e.g., `../../etc/passwd`) are rejected
+- The backend resolves all paths to their canonical absolute form before comparison
+
+### 21.3 Filesystem Protections
+
+- The backend never serves files outside of whitelisted repository paths or the artifact storage directory
+- All file-read endpoints validate the requested path against the job's worktree root
+- Directory traversal attacks are prevented by canonicalizing paths and asserting prefix membership
+
+### 21.4 Approval Gating
+
+Risky operations require explicit operator approval before execution. This prevents autonomous destructive actions, especially when the agent misunderstands intent.
+
+### 21.5 CORS
+
+The backend enforces CORS:
+
+- In production mode (single port): CORS is not needed (same origin)
+- In development mode (`--dev`): `http://localhost:5173` is allowed
+- When Dev Tunnel is active: the tunnel origin is dynamically added to the allowed origins list
+
+### 21.6 Connection Limits
+
+SSE connections are capped at `max_sse_connections` (default: 5) to prevent resource exhaustion from too many open connections. No per-request rate limiting is applied.
+
+### 21.7 Dev Tunnel Security
+
+When the Dev Tunnel is active:
+
+- Identity-linked access is always enabled (`--allow-anonymous=false`)
+- Only the tunnel owner's Microsoft/GitHub identity can access the application
+- HTTPS is enforced by the Dev Tunnel infrastructure
+- The tunnel URL does not need to be kept secret (identity verification prevents unauthorized access)
+- The operator must be signed in to their Microsoft or GitHub account in the browser to access the UI remotely
+
+---
+
+## 22. Engineering Constraints and Pitfalls
+
+### 22.1 Backend Rules
+
+| Rule | Rationale |
+|---|---|
+| API routes must not contain orchestration logic | Routes should delegate to services; mixing concerns makes testing and refactoring difficult |
+| Agent SDK must be wrapped behind an adapter | Prevents tight coupling to SDK types; enables testing with fakes |
+| Git operations must be isolated behind `GitService` | Prevents git logic from spreading across the codebase; enables mocking |
+| Long-running jobs must be managed by `RuntimeService` | Central task management enables cancellation, capacity enforcement, and recovery |
+| Job state transitions must be explicit | Prevents invalid state changes and makes the state machine auditable |
+| Important state must be persisted | Enables restart recovery and event replay |
+| Logging must include structured context | Enables filtering and correlation |
+
+### 22.2 Frontend Rules
+
+| Rule | Rationale |
+|---|---|
+| Application state must have a single source of truth | Prevents inconsistency between components |
+| SSE events must be processed centrally | Prevents duplicate state updates and race conditions |
+| Components must not duplicate job state | Components should read from the store, not maintain local copies |
+| Large lists must avoid excessive re-renders | Virtualization required for log and transcript panels |
+| Domain models must be strongly typed | TypeScript interfaces prevent entire classes of runtime errors |
+
+### 22.3 Testing Requirements
+
+| Test type | Coverage target |
+|---|---|
+| Unit tests | Job state machine transitions |
+| Unit tests | Approval service logic |
+| Unit tests | Diff parser (hunk parsing, line classification) |
+| Unit tests | Config loading and validation |
+| Integration tests | Git service: worktree creation, branch creation, cleanup |
+| Integration tests | Concurrent jobs on same repository |
+| Integration tests | Approval flow end-to-end |
+| Integration tests | Job restart recovery (simulate process restart) |
+| Integration tests | SSE reconnection and event replay |
+
+### 22.4 Style Requirements
+
+**Backend:**
+
+- Python 3.11+
+- `mypy` with strict mode for type checking
+- `ruff` for linting and formatting
+- `pytest` for testing
+
+**Frontend:**
+
+- TypeScript strict mode
+- ESLint with React and TypeScript rules
+- Prettier for formatting
+- Vitest for unit tests
+- Playwright for end-to-end tests
+
+---
+
+## 23. Sequence Diagrams
+
+All diagrams use participants:
+
+- **Operator** — human at the UI
+- **React UI** — frontend application
+- **FastAPI** — backend application
+- **JobRuntime** — RuntimeService + asyncio task
+- **AgentSDK** — adapter-wrapped agent runtime
+- **GitWorkspace** — GitService + worktree
+- **Persistence** — SQLite via repositories
+- **SSEStream** — SSEManager + client connection
+
+---
+
+### 23.1 Job Creation and Workspace Initialization
+
+```
+Operator -> React UI: Fill job form, click Create
+React UI -> FastAPI: POST /api/jobs
+FastAPI -> FastAPI: Validate repo in allowlist
+FastAPI -> GitWorkspace: create_worktree(repo, base_ref, job_id)
+GitWorkspace --> FastAPI: worktree_path, branch
+FastAPI -> Persistence: persist JobCreated event
+FastAPI -> Persistence: persist WorkspacePrepared event
+FastAPI -> JobRuntime: enqueue(job)
+JobRuntime -> FastAPI: job accepted (state=running or queued)
+FastAPI --> React UI: 201 { job_id, state, branch, worktree_path }
+React UI -> SSEStream: subscribe /api/events?job_id={id}
+JobRuntime -> AgentSDK: create_session(workspace_path, prompt)
+AgentSDK --> JobRuntime: session_id
+JobRuntime -> Persistence: persist AgentSessionStarted
+JobRuntime -> SSEStream: job_state_changed (queued->running)
+SSEStream --> React UI: job_state_changed event
+React UI -> React UI: Update job state badge
+```
+
+---
+
+### 23.2 Agent Execution Lifecycle
+
+```
+JobRuntime -> AgentSDK: stream_events(session_id)
+loop [SDK emits events]
+    AgentSDK --> JobRuntime: SessionEvent(kind="transcript", ...)
+    JobRuntime -> Persistence: persist TranscriptUpdated
+    JobRuntime -> SSEStream: transcript_update
+    SSEStream --> React UI: transcript_update
+    React UI -> React UI: Append to TranscriptPanel
+
+    AgentSDK --> JobRuntime: SessionEvent(kind="log", ...)
+    JobRuntime -> Persistence: persist LogLineEmitted
+    JobRuntime -> SSEStream: log_line
+    SSEStream --> React UI: log_line
+    React UI -> React UI: Append to LogsPanel
+
+    AgentSDK --> JobRuntime: SessionEvent(kind="file_changed", ...)
+    JobRuntime -> GitWorkspace: generate_diff(worktree, base_ref)
+    GitWorkspace --> JobRuntime: DiffFile[]
+    JobRuntime -> Persistence: persist DiffUpdated
+    JobRuntime -> SSEStream: diff_update
+    SSEStream --> React UI: diff_update
+    React UI -> React UI: Refresh DiffViewer
+end
+
+AgentSDK --> JobRuntime: SessionEvent(kind="done")
+JobRuntime -> GitWorkspace: final_diff(worktree, base_ref)
+JobRuntime -> Persistence: persist DiffUpdated (final)
+JobRuntime -> Persistence: persist JobSucceeded
+JobRuntime -> SSEStream: job_state_changed (running->succeeded)
+SSEStream --> React UI: job_state_changed
+React UI -> React UI: Show succeeded badge, enable rerun
+```
+
+---
+
+### 23.3 Approval Pause and Resolution
+
+```
+AgentSDK --> JobRuntime: on_permission_request callback invoked
+JobRuntime -> FastAPI: ApprovalRequested domain event
+FastAPI -> Persistence: persist ApprovalRequested
+FastAPI -> Persistence: update job state = waiting_for_approval
+FastAPI -> SSEStream: approval_requested event
+FastAPI -> SSEStream: job_state_changed (running->waiting_for_approval)
+SSEStream --> React UI: approval_requested
+SSEStream --> React UI: job_state_changed
+React UI -> React UI: Show ApprovalBanner with proposed action
+
+Operator -> React UI: Click "Approve"
+React UI -> FastAPI: POST /api/approvals/{id}/resolve { resolution: "approved" }
+FastAPI -> Persistence: persist ApprovalResolved
+FastAPI -> Persistence: update job state = running
+FastAPI -> AgentSDK: Return PermissionRequestResult(approved) to pending callback
+FastAPI -> SSEStream: job_state_changed (waiting_for_approval->running)
+SSEStream --> React UI: job_state_changed
+React UI -> React UI: Hide ApprovalBanner, show running state
+AgentSDK -> AgentSDK: Resume execution
+```
+
+---
+
+### 23.4 Job Cancellation
+
+```
+Operator -> React UI: Click "Cancel Job"
+React UI -> FastAPI: POST /api/jobs/{job_id}/cancel
+FastAPI -> JobRuntime: cancel(job_id)
+JobRuntime -> AgentSDK: abort_session(session_id)
+AgentSDK --> JobRuntime: session aborted
+JobRuntime -> Persistence: persist JobCanceled
+JobRuntime -> Persistence: update job state = canceled
+JobRuntime -> SSEStream: job_state_changed (running->canceled)
+SSEStream --> React UI: job_state_changed
+React UI -> React UI: Show canceled badge
+FastAPI --> React UI: 200 OK
+```
+
+If job is `waiting_for_approval` at cancel time:
+
+```
+FastAPI -> Persistence: persist ApprovalResolved (resolution=rejected, reason=canceled)
+FastAPI -> JobRuntime: cancel(job_id)
+JobRuntime -> AgentSDK: abort_session(session_id)
+[continues as above]
+```
+
+---
+
+### 23.5 Job Rerun
+
+```
+Operator -> React UI: Click "Rerun"
+React UI -> FastAPI: POST /api/jobs/{job_id}/rerun
+FastAPI -> Persistence: get original job config
+FastAPI -> FastAPI: Create new job (same repo, prompt, base_ref)
+FastAPI -> GitWorkspace: create_worktree(repo, base_ref, new_job_id)
+FastAPI -> Persistence: persist JobCreated (new job)
+FastAPI -> Persistence: persist WorkspacePrepared (new job)
+FastAPI -> JobRuntime: enqueue(new_job)
+FastAPI --> React UI: 201 { new_job_id, state, branch }
+React UI -> React UI: Navigate to new job detail
+[continues as Job Creation flow]
+```
+
+---
+
+### 23.6 SSE Reconnection and Event Replay
+
+```
+React UI -> SSEStream: GET /api/events?job_id={id}
+SSEStream --> React UI: [stream opens]
+React UI -> React UI: Track last_event_id from each "id:" field
+
+note: Network interruption
+React UI -> React UI: SSE connection closed
+React UI -> React UI: Wait 1s (exponential backoff)
+React UI -> SSEStream: GET /api/events?job_id={id}
+                       Header: Last-Event-ID: {last_event_id}
+SSEStream -> Persistence: EventRepository.list_after(last_event_id, job_id)
+Persistence --> SSEStream: [missed events]
+SSEStream --> React UI: [replay missed events in order]
+SSEStream --> React UI: [continue live stream]
+React UI -> React UI: Apply replayed events to store (idempotent)
+React UI -> React UI: UI updated to current state
+```
+
+---
+
+### 23.7 Voice Input Transcription Flow
+
+```
+Operator -> React UI: Press and hold microphone button
+React UI -> Browser: getUserMedia({ audio: true })
+Browser --> React UI: MediaStream
+React UI -> Browser: new MediaRecorder(stream)
+React UI -> Browser: recorder.start()
+
+loop [while button held]
+    Browser --> React UI: ondataavailable(chunk)
+    React UI -> React UI: chunks.push(chunk)
+end
+
+Operator -> React UI: Release microphone button
+React UI -> Browser: recorder.stop()
+React UI -> React UI: blob = new Blob(chunks, { type: "audio/webm" })
+React UI -> FastAPI: POST /api/voice/transcribe (multipart: audio=blob)
+FastAPI -> VoiceService: transcribe(audio_bytes)
+VoiceService -> faster-whisper: model.transcribe(audio_bytes)
+faster-whisper --> VoiceService: segments
+VoiceService --> FastAPI: "Fix the null pointer in UserService"
+FastAPI --> React UI: 200 { text: "Fix the null pointer in UserService" }
+React UI -> React UI: Insert text into prompt/message input
+```
+
+---
+
+## 24. Execution Strategy Model
+
+Jobs do not directly invoke an agent. Instead, each job delegates to an **execution strategy** that defines how the task is carried out. This abstraction allows the system to support different execution approaches without changing the job lifecycle, state machine, or event model.
+
+### 24.1 Interface
+
+```python
+from abc import ABC, abstractmethod
+from typing import AsyncIterator
+
+class ExecutionStrategy(ABC):
+    """Defines how a job's task is executed within its worktree."""
+
+    @abstractmethod
+    async def execute(
+        self,
+        config: SessionConfig,
+        adapter: AgentAdapterInterface,
+    ) -> AsyncIterator[SessionEvent]:
+        """Run the strategy and yield session events as they occur."""
+
+    @abstractmethod
+    async def send_message(self, message: str) -> None:
+        """Inject an operator message into the running execution."""
+
+    @abstractmethod
+    async def abort(self) -> None:
+        """Abort the running execution."""
+```
+
+### 24.2 Default Strategy: SingleAgentExecutor
+
+The default (and only v1) strategy is `SingleAgentExecutor`. It maps 1:1 to a single agent session:
+
+```python
+class SingleAgentExecutor(ExecutionStrategy):
+    """Executes a job using a single agent session."""
+
+    async def execute(
+        self,
+        config: SessionConfig,
+        adapter: AgentAdapterInterface,
+    ) -> AsyncIterator[SessionEvent]:
+        self._session_id = await adapter.create_session(config)
+        async for event in adapter.stream_events(self._session_id):
+            yield event
+
+    async def send_message(self, message: str) -> None:
+        await self._adapter.send_message(self._session_id, message)
+
+    async def abort(self) -> None:
+        await self._adapter.abort_session(self._session_id)
+```
+
+### 24.3 Strategy Selection
+
+The execution strategy is resolved during job creation:
+
+1. Per-job override: `strategy` field in the job creation request (optional)
+2. Per-repo config: `agent.strategy` in `.tower.yml` (optional)
+3. Default: `single_agent`
+
+The `RuntimeService` resolves the strategy name to a concrete class via a registry:
+
+```python
+STRATEGY_REGISTRY: dict[StrategyKind, type[ExecutionStrategy]] = {
+    StrategyKind.single_agent: SingleAgentExecutor,
+}
+```
+
+New strategies can be registered by adding entries to this dict. No other code needs to change.
+
+### 24.4 How the RuntimeService Uses Strategies
+
+The `RuntimeService` does not know or care what happens inside a strategy. It:
+
+1. Resolves the strategy class from the registry
+2. Instantiates it
+3. Calls `strategy.execute(config, adapter)` and consumes the yielded events
+4. Translates each `SessionEvent` into a domain event and publishes it to the event bus
+5. Delegates `send_message()` and `abort()` calls to the strategy instance
+
+This means the job state machine, event bus, SSE streaming, persistence, and all UI components remain completely unaware of which strategy is running.
+
+### 24.5 Future Strategy Examples
+
+The following strategies are **not implemented in v1** but the abstraction is designed to support them:
+
+| Strategy | Description |
+|---|---|
+| `planner_executor` | A planner agent decomposes the task, then an executor agent implements each step |
+| `executor_reviewer` | An executor agent produces changes, then a reviewer agent validates them |
+| `parallel_executors` | Multiple executor agents work on independent subtasks concurrently |
+| `human_in_the_loop` | The agent pauses after each step for operator review before continuing |
+
+Each of these would implement the same `ExecutionStrategy` interface and yield the same `SessionEvent` stream, making them drop-in replacements.
+
+### 24.6 Impact on Data Model
+
+The `jobs` table gains a `strategy` column:
+
+```sql
+ALTER TABLE jobs ADD COLUMN strategy TEXT NOT NULL DEFAULT 'single_agent';
+```
+
+The `CreateJobRequest` Pydantic model gains an optional field:
+
+```python
+class CreateJobRequest(BaseModel):
+    repo: str
+    prompt: str
+    base_ref: str | None = None
+    strategy: StrategyKind | None = None  # default: single_agent
+```
+
+The TypeScript `Job` interface gains a matching field:
+
+```typescript
+interface Job {
+  // ... existing fields ...
+  strategy: StrategyKind;  // "single_agent" in v1
+}
+```
+
+---
+
+## 25. Ross Review: Open Questions
+
+This section documents genuinely open questions that require further investigation or decision-making. Items that had clear suggested approaches have been promoted into the main specification as design decisions.
+
+---
+
+### 25.1 Agent SDK Integration
+
+**Context from research:** The Python Copilot SDK (`github/copilot-sdk`) wraps the Copilot CLI via JSON-RPC over a subprocess. Sessions are created with a `SessionConfig` that accepts `available_tools`, `excluded_tools`, `mcp_servers`, `agent_mode`, and callback hooks. The SDK provides:
+
+- **Event interception** via `SessionHooks` (`on_pre_tool_use`, `on_post_tool_use`, `on_session_start`, `on_session_end`, `on_error_occurred`)
+- **Permission handling** via `on_permission_request` (blocking callback, returns `PermissionRequestResult`)
+- **Tool filtering** via `available_tools` / `excluded_tools` lists
+- **MCP server config** with per-server tool filtering
+- **Agent modes**: `autopilot`, `interactive`, `plan`, `shell`
+
+**Resolved:** The approval-pause mechanism uses the SDK's blocking `on_permission_request` callback. Tower holds the pending callback and resolves it when the operator responds.
+
+**Resolved:** Session cancellation uses `session.abort()` which aborts the current message processing. The session remains valid after abort. Operator message injection uses `session.send(MessageOptions)` with `mode="immediate"` to send a follow-up message while the session is active.
+
+**Resolved:** Subprocess crash detection relies on EOF/broken pipe on the JSON-RPC stdout stream. The SDK's background read loop detects the closed stream, polls the process exit code, captures stderr, and raises `ProcessExitedError` on all pending futures. The adapter catches this exception and emits a `JobFailed` event with the error details. No heartbeat mechanism exists — crash detection is immediate via the broken pipe.
+
+---
+
+### 25.2 Runtime Failure Scenarios
+
+**Resolved:** `GitService.create_worktree()` catches exceptions from `git worktree add` (disk full, permissions, corrupt state) and transitions the job to `failed` with a descriptive error including git stderr output. The operator resolves the underlying issue and reruns. See Section 8.1.
+
+---
+
+### 25.3 SSE Scalability Constraint
+
+**Resolved:** Documented as a known constraint. Beyond ~20 concurrent jobs, the SSE manager switches to selective streaming: only `job_state_changed` events are broadcast to the dashboard, while the currently open Job Detail screen continues to receive full event streaming. A "Refresh page for latest updates" banner is shown on the dashboard. See Section 5.6.
+
+---
+
+### 25.4 Branch Cleanup and PR Integration
+
+**Resolved:** Tower offers to create a pull request after a successful job using the GitHub MCP server or `gh` CLI, whichever is available. If neither is available, the step is skipped and the branch remains on disk for manual push. Completed branches are **not** auto-deleted after merge. See Section 8.7.
