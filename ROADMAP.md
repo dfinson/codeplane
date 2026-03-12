@@ -76,18 +76,18 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Dashboard, job detail, job creation screens.
 
-- [ ] OpenAPI type generation pipeline (`openapi-typescript`)
-- [ ] Type aliases (`src/api/types.ts`)
-- [ ] API client module (REST calls)
-- [ ] Dashboard — Kanban board (Active, Sign-off, Failed, History columns)
-- [ ] Dashboard — mobile job list with filter tabs
-- [ ] Responsive breakpoints (1024px, 768px)
-- [ ] Job Detail screen — metadata header, state badge, timestamps
-- [ ] Job Detail — transcript panel (virtualized, auto-scroll)
-- [ ] Job Detail — logs panel (virtualized, level filtering)
-- [ ] Job Detail — execution timeline (grouped by phase)
-- [ ] Job Creation screen — repo selector, prompt input, advanced options
-- [ ] Repository Detail view — resolved MCP/tool config table (local/global/disabled), repo config, active + recent jobs
+- [x] OpenAPI type generation pipeline (`openapi-typescript`)
+- [x] Type aliases (`src/api/types.ts`)
+- [x] API client module (REST calls)
+- [x] Dashboard — Kanban board (Active, Sign-off, Failed, History columns)
+- [x] Dashboard — mobile job list with filter tabs
+- [x] Responsive breakpoints (1024px, 768px)
+- [x] Job Detail screen — metadata header, state badge, timestamps
+- [x] Job Detail — transcript panel (virtualized, auto-scroll)
+- [x] Job Detail — logs panel (virtualized, level filtering)
+- [x] Job Detail — execution timeline (grouped by phase)
+- [x] Job Creation screen — repo selector, prompt input, advanced options
+- [x] Repository Detail view — resolved MCP/tool config table (local/global/disabled), repo config, active + recent jobs
 
 ---
 
