@@ -13,11 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api import approvals, artifacts, events, health, jobs, settings, voice, workspace
 from backend.config import init_config, load_config
 from backend.persistence.database import create_engine, create_session_factory, run_migrations
+from backend.persistence.event_repo import EventRepository
+from backend.persistence.job_repo import JobRepository
+from backend.services.event_bus import EventBus
+from backend.services.sse_manager import SSEManager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from backend.models.events import DomainEvent
 
 
 @asynccontextmanager
@@ -25,6 +31,40 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage engine lifecycle — create on startup, dispose on shutdown."""
     engine = create_engine()
     session_factory = create_session_factory(engine)
+
+    # --- Event infrastructure ---
+    event_bus = EventBus()
+    sse_manager = SSEManager()
+
+    # Subscribe SSE manager to the event bus
+    event_bus.subscribe(sse_manager.handle_event)
+
+    # Event persistence subscriber
+    async def _persist_event(event: DomainEvent) -> None:
+        async with session_factory() as session:
+            repo = EventRepository(session)
+            await repo.append(event)
+            await session.commit()
+
+    event_bus.subscribe(_persist_event)
+
+    # Store on app.state for access from route handlers
+    app.state.event_bus = event_bus
+    app.state.sse_manager = sse_manager
+
+    # Factories that create repos with fresh sessions (for replay)
+    async def _event_repo_factory() -> EventRepository:
+        session = session_factory()
+        s = await session.__aenter__()
+        return EventRepository(s)
+
+    async def _job_repo_factory() -> JobRepository:
+        session = session_factory()
+        s = await session.__aenter__()
+        return JobRepository(s)
+
+    app.state.event_repo_factory = _event_repo_factory
+    app.state.job_repo_factory = _job_repo_factory
 
     async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
@@ -37,6 +77,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.dependency_overrides[jobs._get_session] = _session_dep
     yield
+    await sse_manager.close_all()
     app.dependency_overrides.clear()
     await engine.dispose()
 
