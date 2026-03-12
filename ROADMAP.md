@@ -8,16 +8,16 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Backend skeleton, database, domain models, dev tooling.
 
-- [ ] FastAPI app factory (`backend/main.py`) with health endpoint
-- [ ] CLI entry point (`tower up`, `tower init`, `tower version`) via Click
-- [ ] Global config loading and validation (`~/.tower/config.yaml`)
-- [ ] SQLAlchemy models and SQLite schema (`jobs`, `events`, `approvals`, `artifacts`, `diff_snapshots`)
-- [ ] Alembic migration setup and initial migration
-- [ ] Pydantic API schemas (`models/api_schemas.py`) — all request/response models
-- [ ] Domain dataclasses and event types (`models/domain.py`, `models/events.py`)
-- [ ] Repository pattern persistence layer (`persistence/`)
-- [ ] CI pipeline (lint, type-check, test)
-- [ ] Frontend Vite + React + TypeScript skeleton with health check fetch
+- [x] FastAPI app factory (`backend/main.py`) with health endpoint
+- [x] CLI entry point (`tower up`, `tower init`, `tower version`) via Click
+- [x] Global config loading and validation (`~/.tower/config.yaml`)
+- [x] SQLAlchemy models and SQLite schema (`jobs`, `events`, `approvals`, `artifacts`, `diff_snapshots`)
+- [x] Alembic migration setup and initial migration
+- [x] Pydantic API schemas (`models/api_schemas.py`) — all request/response models
+- [x] Domain dataclasses and event types (`models/domain.py`, `models/events.py`)
+- [x] Repository pattern persistence layer (`persistence/`)
+- [x] CI pipeline (lint, type-check, test)
+- [x] Frontend Vite + React + TypeScript skeleton with health check fetch
 
 ---
 
@@ -25,17 +25,17 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Worktree management, repository registration, job creation, state machine.
 
-- [ ] `GitService` — worktree creation (main vs secondary), branch creation, cleanup
-- [ ] Worktree creation error handling (catch failures, transition job to failed)
-- [ ] Repository registration — add local repos by path, clone remote repos by URL via `git` subprocess
-- [ ] Repository registration API (`POST /api/settings/repos`, `DELETE /api/settings/repos/{repo_path}`)
-- [ ] Job CRUD API (`POST /api/jobs`, `GET /api/jobs`, `GET /api/jobs/{id}`)
-- [ ] Job state machine (all transitions from §12.2)
-- [ ] Repository allowlist validation
-- [ ] Job cancel endpoint (`POST /api/jobs/{id}/cancel`)
-- [ ] Job rerun endpoint (`POST /api/jobs/{id}/rerun`)
-- [ ] Cursor-based pagination for job list
-- [ ] Integration tests for git operations and concurrent worktrees
+- [x] `GitService` — worktree creation (main vs secondary), branch creation, cleanup
+- [x] Worktree creation error handling (catch failures, transition job to failed)
+- [x] Repository registration — add local repos by path, clone remote repos by URL via `git` subprocess
+- [x] Repository registration API (`POST /api/settings/repos`, `DELETE /api/settings/repos/{repo_path}`)
+- [x] Job CRUD API (`POST /api/jobs`, `GET /api/jobs`, `GET /api/jobs/{id}`)
+- [x] Job state machine (all transitions from §12.2)
+- [x] Repository allowlist validation
+- [x] Job cancel endpoint (`POST /api/jobs/{id}/cancel`)
+- [x] Job rerun endpoint (`POST /api/jobs/{id}/rerun`)
+- [x] Cursor-based pagination for job list
+- [x] Integration tests for git operations and concurrent worktrees
 
 ---
 
@@ -161,6 +161,24 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [ ] Virtualized rendering for logs and transcript panels (`@tanstack/react-virtual`)
 - [ ] Memoized Kanban column selectors (prevent full-board re-renders)
 - [ ] Large diff lazy loading in Monaco
+
+---
+
+## Phase 11: MCP Orchestration Server
+
+> Expose Tower's full functionality as an MCP server so external agents can use it as an orchestration layer.
+
+- [ ] MCP server transport — Streamable HTTP on `/mcp`, mounted in FastAPI app
+- [ ] MCP tool handlers for Job management (`tower_job_create`, `tower_job_list`, `tower_job_get`, `tower_job_cancel`, `tower_job_rerun`, `tower_job_message`)
+- [ ] MCP tool handlers for Approvals (`tower_approval_list`, `tower_approval_resolve`)
+- [ ] MCP tool handlers for Workspace & Artifacts (`tower_workspace_list`, `tower_workspace_read`, `tower_artifact_list`, `tower_artifact_get`)
+- [ ] MCP tool handlers for Configuration (`tower_settings_get`, `tower_settings_update`, `tower_repo_list`, `tower_repo_get`, `tower_repo_register`, `tower_repo_remove`)
+- [ ] MCP tool handlers for Observability (`tower_health`, `tower_cleanup_worktrees`)
+- [ ] Server-to-client notifications via event bus subscription (`tower/job_state_changed`, `tower/approval_requested`, `tower/job_completed`, `tower/agent_message`)
+- [ ] Schema derivation from existing Pydantic models
+- [ ] MCP server configuration (`mcp_server.enabled`, `mcp_server.path`)
+- [ ] Dev Tunnel authentication for remote MCP connections
+- [ ] Integration tests for MCP tool calls end-to-end
 - [ ] Comprehensive unit tests (state machine, diff parser, config, approval logic)
 - [ ] Integration tests (git service, concurrent jobs, approval flow, SSE replay, restart recovery)
 - [ ] End-to-end tests (Playwright)

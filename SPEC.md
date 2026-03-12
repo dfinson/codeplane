@@ -29,6 +29,7 @@
 23. [Sequence Diagrams](#23-sequence-diagrams)
 24. [Execution Strategy Model](#24-execution-strategy-model)
 25. [Ross Review: Open Questions](#25-ross-review-open-questions)
+26. [MCP Orchestration Server](#26-mcp-orchestration-server)
 
 ---
 
@@ -2697,3 +2698,133 @@ This section documents genuinely open questions that require further investigati
 ### 25.4 Branch Cleanup and PR Integration
 
 **Resolved:** Tower offers to create a pull request after a successful job using the GitHub MCP server or `gh` CLI, whichever is available. If neither is available, the step is skipped and the branch remains on disk for manual push. Completed branches are **not** auto-deleted after merge. See Section 8.7.
+
+---
+
+## 26. MCP Orchestration Server
+
+Tower exposes an **MCP (Model Context Protocol) server** that mirrors the full UI functionality, enabling external agents to use Tower as an orchestration layer. An outer agent connects to Tower's MCP server and drives job lifecycle, approval workflows, workspace inspection, and configuration — all through MCP tool calls.
+
+---
+
+### 26.1 Purpose
+
+The MCP orchestration server turns Tower from a human-operated dashboard into a programmable control plane. An orchestrating agent can:
+
+- Create and monitor coding jobs across multiple repositories
+- Handle approval requests on behalf of a human or policy engine
+- Inspect diffs, workspace files, and artifacts produced by inner agents
+- Inject operator messages to steer running agents
+- Manage repository registration and global settings
+
+This enables hierarchical agent architectures where a planning agent delegates implementation tasks to Tower-managed coding agents and reacts to their progress in real time.
+
+---
+
+### 26.2 Transport
+
+The MCP server uses **Streamable HTTP** transport, served from the same FastAPI process on a dedicated path:
+
+- **Endpoint**: `POST /mcp` (message endpoint), `GET /mcp` (SSE stream for server-initiated notifications)
+- **Authentication**: None for local connections; remote access is secured via Dev Tunnel authentication (see §7)
+- **Discovery**: Standard MCP capabilities negotiation on `initialize`
+
+Running in-process avoids a separate deployment unit and shares the service layer, database connections, and event bus with the REST API.
+
+---
+
+### 26.3 Tool Surface
+
+Every REST API capability is exposed as an MCP tool. Tool names follow `tower_<resource>_<action>` convention.
+
+#### Job Management
+
+| Tool | Description | Maps to |
+|---|---|---|
+| `tower_job_create` | Create a new job (repo, prompt, strategy, options) | `POST /api/jobs` |
+| `tower_job_list` | List jobs with optional status filter and pagination | `GET /api/jobs` |
+| `tower_job_get` | Get full detail for a single job | `GET /api/jobs/{job_id}` |
+| `tower_job_cancel` | Cancel a running or queued job | `POST /api/jobs/{job_id}/cancel` |
+| `tower_job_rerun` | Rerun a job with the same configuration | `POST /api/jobs/{job_id}/rerun` |
+| `tower_job_message` | Send an operator message to a running job | `POST /api/jobs/{job_id}/messages` |
+
+#### Approvals
+
+| Tool | Description | Maps to |
+|---|---|---|
+| `tower_approval_list` | List pending/resolved approvals for a job | `GET /api/jobs/{job_id}/approvals` |
+| `tower_approval_resolve` | Approve or reject a pending approval | `POST /api/approvals/{approval_id}/resolve` |
+
+#### Workspace & Artifacts
+
+| Tool | Description | Maps to |
+|---|---|---|
+| `tower_workspace_list` | List files in a job's worktree | `GET /api/jobs/{job_id}/workspace` |
+| `tower_workspace_read` | Read a file from a job's worktree | `GET /api/jobs/{job_id}/workspace/file` |
+| `tower_artifact_list` | List artifacts produced by a job | `GET /api/jobs/{job_id}/artifacts` |
+| `tower_artifact_get` | Download an artifact | `GET /api/artifacts/{artifact_id}` |
+
+#### Configuration
+
+| Tool | Description | Maps to |
+|---|---|---|
+| `tower_settings_get` | Get global configuration | `GET /api/settings/global` |
+| `tower_settings_update` | Update global configuration | `PUT /api/settings/global` |
+| `tower_repo_list` | List registered repositories | `GET /api/settings/repos` |
+| `tower_repo_get` | Get repo config with resolved MCP servers | `GET /api/settings/repos/{repo_path}` |
+| `tower_repo_register` | Register a repository (path or URL) | `POST /api/settings/repos` |
+| `tower_repo_remove` | Remove a repository from the allowlist | `DELETE /api/settings/repos/{repo_path}` |
+
+#### Observability
+
+| Tool | Description | Maps to |
+|---|---|---|
+| `tower_health` | Service health check | `GET /api/health` |
+| `tower_cleanup_worktrees` | Clean up worktrees for completed jobs | `POST /api/settings/cleanup-worktrees` |
+
+---
+
+### 26.4 Notifications (Server → Client)
+
+The MCP server pushes **notifications** to connected clients for key domain events:
+
+| Notification | Trigger |
+|---|---|
+| `tower/job_state_changed` | Job transitions to a new state |
+| `tower/approval_requested` | A running job requests operator approval |
+| `tower/job_completed` | Job reaches `succeeded` or `failed` terminal state |
+| `tower/agent_message` | Agent produces a transcript message |
+
+Notifications are sourced from the internal event bus — the same events that drive the SSE stream and the frontend. The orchestrating agent can subscribe to these to react without polling.
+
+---
+
+### 26.5 Implementation Approach
+
+1. **Thin MCP handler layer**: Each MCP tool handler validates input, calls the corresponding service method, and returns the result. Same principle as the REST route handlers.
+2. **Shared service layer**: MCP handlers call the same `JobService`, `ApprovalService`, `GitService`, etc. used by the REST API. No duplication of business logic.
+3. **Schema reuse**: Tool input/output schemas are derived from the existing Pydantic models in `api_schemas.py`.
+4. **Event bus integration**: Notifications are powered by subscribing to the internal event bus, same as `SSEManager`.
+
+---
+
+### 26.6 Configuration
+
+```yaml
+# ~/.tower/config.yaml
+mcp_server:
+  enabled: true          # default: true
+  path: /mcp             # mount path, default: /mcp
+```
+
+The MCP server is enabled by default. Disabling it removes the `/mcp` route entirely.
+
+---
+
+### 26.7 Security Considerations
+
+- Local connections (localhost) require no authentication — same trust model as the REST API.
+- Remote access is secured exclusively via Dev Tunnel authentication (see §7, §9 Operational Hardening).
+- Tool calls are subject to the same validation as REST requests (repository allowlist, state machine rules).
+- Rate limiting and capacity enforcement from `RuntimeService` apply equally to MCP-initiated jobs.
+- The MCP server does **not** expose raw database access, shell execution, or filesystem paths outside registered repositories.

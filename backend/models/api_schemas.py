@@ -106,6 +106,10 @@ class UpdateGlobalConfigRequest(BaseModel):
     config_yaml: str
 
 
+class RegisterRepoRequest(BaseModel):
+    source: str
+
+
 # --- Response Models ---
 
 
@@ -193,6 +197,16 @@ class HealthResponse(CamelModel):
     uptime_seconds: float
     active_jobs: int
     queued_jobs: int
+
+
+class RegisterRepoResponse(CamelModel):
+    path: str
+    source: str
+    cloned: bool
+
+
+class RepoListResponse(CamelModel):
+    items: list[str]
 
 
 # --- SSE Payload Models ---

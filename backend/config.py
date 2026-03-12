@@ -130,6 +130,76 @@ def load_config(path: Path | None = None) -> TowerConfig:
     )
 
 
+def save_config(config: TowerConfig, path: Path | None = None) -> None:
+    """Persist the current TowerConfig back to the YAML config file."""
+    if path is None:
+        path = DEFAULT_CONFIG_PATH
+
+    raw: dict[str, Any] = {
+        "server": {"host": config.server.host, "port": config.server.port},
+        "runtime": {
+            "max_concurrent_jobs": config.runtime.max_concurrent_jobs,
+            "worktrees_dirname": config.runtime.worktrees_dirname,
+        },
+        "voice": {
+            "enabled": config.voice.enabled,
+            "model": config.voice.model,
+            "max_audio_size_mb": config.voice.max_audio_size_mb,
+        },
+        "retention": {
+            "artifact_retention_days": config.retention.artifact_retention_days,
+            "max_artifact_size_mb": config.retention.max_artifact_size_mb,
+            "cleanup_on_startup": config.retention.cleanup_on_startup,
+        },
+        "logging": {
+            "level": config.logging.level,
+            "file": config.logging.file,
+            "max_file_size_mb": config.logging.max_file_size_mb,
+            "backup_count": config.logging.backup_count,
+        },
+        "rate_limits": {
+            "max_sse_connections": config.rate_limits.max_sse_connections,
+        },
+        "repos_base_dir": config.repos_base_dir,
+        "repos": config.repos,
+    }
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, sort_keys=False)
+
+
+def register_repo(config: TowerConfig, repo_path: str, config_path: Path | None = None) -> str:
+    """Add a repo path to the allowlist if not already present.
+
+    Returns the resolved path that was added.
+    """
+    resolved = str(Path(repo_path).expanduser().resolve())
+    if resolved not in config.repos:
+        config.repos.append(resolved)
+        save_config(config, config_path)
+    return resolved
+
+
+def unregister_repo(config: TowerConfig, repo_path: str, config_path: Path | None = None) -> str:
+    """Remove a repo path from the allowlist.
+
+    Returns the resolved path that was removed.
+    Raises ValueError if the repo is not in the allowlist.
+    """
+    resolved = str(Path(repo_path).expanduser().resolve())
+    if resolved in config.repos:
+        config.repos.remove(resolved)
+        save_config(config, config_path)
+        return resolved
+    # Also try matching the original string
+    if repo_path in config.repos:
+        config.repos.remove(repo_path)
+        save_config(config, config_path)
+        return repo_path
+    raise ValueError(f"Repository '{repo_path}' is not in the allowlist.")
+
+
 def init_config(path: Path | None = None) -> Path:
     """Create the default config file. Returns the path written."""
     if path is None:

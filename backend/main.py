@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
+
 import click
 import uvicorn
 from fastapi import FastAPI
@@ -9,12 +12,38 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, voice, workspace
 from backend.config import init_config, load_config
-from backend.persistence.database import run_migrations
+from backend.persistence.database import create_engine, create_session_factory, run_migrations
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Manage engine lifecycle — create on startup, dispose on shutdown."""
+    engine = create_engine()
+    session_factory = create_session_factory(engine)
+
+    async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[jobs._get_session] = _session_dep
+    yield
+    app.dependency_overrides.clear()
+    await engine.dispose()
 
 
 def create_app(*, dev: bool = False) -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(title="Tower", version="0.1.0")
+    app = FastAPI(title="Tower", version="0.1.0", lifespan=_lifespan)
 
     if dev:
         app.add_middleware(

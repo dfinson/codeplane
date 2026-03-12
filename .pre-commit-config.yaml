@@ -22,7 +22,6 @@ repos:
           - aiosqlite
           - pytest
           - pytest-asyncio
-        args: [--ignore-missing-imports]
         pass_filenames: false
         entry: mypy backend/
 
