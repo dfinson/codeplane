@@ -26,8 +26,10 @@ export function JobDetailScreen() {
       setLoading(false);
       return;
     }
+    let cancelled = false;
     fetchJob(jobId)
       .then((fetched) => {
+        if (cancelled) return;
         useTowerStore.setState((state) => ({
           jobs: { ...state.jobs, [fetched.id]: fetched },
         }));
@@ -35,7 +37,8 @@ export function JobDetailScreen() {
       .catch(() => {
         // Job not found — stay on page with error state
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [jobId, job]);
 
   const handleCancel = useCallback(async () => {

@@ -129,8 +129,9 @@ export const useTowerStore = create<TowerState>((set) => ({
             context: (payload.context as Record<string, unknown> | null) ?? null,
           };
           const existing = state.logs[jobId] ?? [];
+          const updated = [...existing, entry];
           return {
-            logs: { ...state.logs, [jobId]: [...existing, entry] },
+            logs: { ...state.logs, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
           };
         }
 
@@ -144,8 +145,9 @@ export const useTowerStore = create<TowerState>((set) => ({
             content: payload.content as string,
           };
           const existing = state.transcript[jobId] ?? [];
+          const updated = [...existing, entry];
           return {
-            transcript: { ...state.transcript, [jobId]: [...existing, entry] },
+            transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
           };
         }
 

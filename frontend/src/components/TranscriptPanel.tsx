@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect } from "react";
 import { useTowerStore, selectJobTranscript } from "../store";
 
 export function TranscriptPanel({ jobId }: { jobId: string }) {
@@ -10,22 +10,20 @@ export function TranscriptPanel({ jobId }: { jobId: string }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript.length]);
 
-  const entries = useMemo(() => transcript, [transcript]);
-
   return (
     <div className="panel">
       <div className="panel__header">
         <span>Transcript</span>
-        <span style={{ fontSize: 11 }}>{entries.length} messages</span>
+        <span style={{ fontSize: 11 }}>{transcript.length} messages</span>
       </div>
       <div className="panel__body">
-        {entries.length === 0 ? (
+        {transcript.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__text">No transcript entries yet</div>
           </div>
         ) : (
-          entries.map((entry, i) => (
-            <div key={`${entry.jobId}-${entry.seq}-${i}`} className="transcript-entry">
+          transcript.map((entry) => (
+            <div key={`${entry.jobId}-${entry.seq}`} className="transcript-entry">
               <div
                 className={`transcript-entry__role transcript-entry__role--${entry.role}`}
               >

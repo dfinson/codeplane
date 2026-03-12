@@ -54,8 +54,8 @@ export function LogsPanel({ jobId }: { jobId: string }) {
             <div className="empty-state__text">No log entries</div>
           </div>
         ) : (
-          filteredLogs.map((line, i) => (
-            <div key={`${line.jobId}-${line.seq}-${i}`} className="log-line">
+          filteredLogs.map((line) => (
+            <div key={`${line.jobId}-${line.seq}`} className="log-line">
               <span className="log-line__time">
                 {new Date(line.timestamp).toLocaleTimeString()}
               </span>

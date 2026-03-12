@@ -10,8 +10,10 @@ export function DashboardScreen() {
 
   // Seed store with existing jobs on mount
   useEffect(() => {
+    let cancelled = false;
     fetchJobs({ limit: 100 })
       .then((result) => {
+        if (cancelled) return;
         useTowerStore.setState((state) => {
           const updated = { ...state.jobs };
           for (const job of result.items) {
@@ -23,6 +25,7 @@ export function DashboardScreen() {
       .catch(() => {
         // API unavailable — rely on SSE snapshot
       });
+    return () => { cancelled = true; };
   }, []);
 
   return (

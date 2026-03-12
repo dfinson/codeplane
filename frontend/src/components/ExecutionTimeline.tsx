@@ -52,7 +52,7 @@ export function ExecutionTimeline({ jobId }: { jobId: string }) {
         ) : (
           <div className="timeline">
             {events.map((ev, i) => (
-              <div key={i} className="timeline-event">
+              <div key={`${ev.timestamp}-${i}`} className="timeline-event">
                 <div className={`timeline-event__dot timeline-event__dot--${ev.variant}`} />
                 <span className="timeline-event__time">
                   {new Date(ev.timestamp).toLocaleTimeString()}

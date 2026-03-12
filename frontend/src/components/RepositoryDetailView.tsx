@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useTowerStore, selectJobs } from "../store";
 import type { JobSummary } from "../store";
@@ -8,8 +8,9 @@ export function RepositoryDetailView() {
   const { repoPath } = useParams<{ repoPath: string }>();
   const navigate = useNavigate();
   const jobs = useTowerStore(selectJobs);
-  const [decodedPath] = useState(() =>
-    repoPath ? decodeURIComponent(repoPath) : "",
+  const decodedPath = useMemo(
+    () => (repoPath ? decodeURIComponent(repoPath) : ""),
+    [repoPath],
   );
 
   const repoJobs: JobSummary[] = Object.values(jobs)
