@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from backend.models.db import JobRow
 from backend.models.domain import Job
@@ -69,12 +69,19 @@ class JobRepository(BaseRepository):
         cursor: str | None = None,
     ) -> list[Job]:
         """List jobs, optionally filtered by state, with cursor-based pagination."""
-        stmt = select(JobRow).order_by(JobRow.created_at.desc())
+        stmt = select(JobRow).order_by(JobRow.created_at.desc(), JobRow.id.desc())
         if state is not None:
             states = [s.strip() for s in state.split(",")]
             stmt = stmt.where(JobRow.state.in_(states))
         if cursor is not None:
-            stmt = stmt.where(JobRow.id < cursor)
+            # Keyset pagination: look up the cursor row's created_at for proper ordering
+            cursor_time = select(JobRow.created_at).where(JobRow.id == cursor).scalar_subquery()
+            stmt = stmt.where(
+                or_(
+                    JobRow.created_at < cursor_time,
+                    and_(JobRow.created_at == cursor_time, JobRow.id < cursor),
+                )
+            )
         stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]

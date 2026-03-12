@@ -112,8 +112,8 @@ class UpdateGlobalConfigRequest(BaseModel):
 class CreateJobResponse(CamelModel):
     id: str
     state: str
-    branch: str
-    worktree_path: str
+    branch: str | None = None
+    worktree_path: str | None = None
     created_at: datetime
 
 

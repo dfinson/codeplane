@@ -40,6 +40,8 @@ logging:
 rate_limits:
   max_sse_connections: 5
 
+repos_base_dir: ~/tower-repos
+
 repos: []
 """
 
@@ -92,6 +94,7 @@ class TowerConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     repos: list[str] = field(default_factory=list)
+    repos_base_dir: str = "~/tower-repos"
 
 
 def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
@@ -122,7 +125,8 @@ def load_config(path: Path | None = None) -> TowerConfig:
         retention=_parse_section(raw, RetentionConfig, "retention"),
         logging=_parse_section(raw, LoggingConfig, "logging"),
         rate_limits=_parse_section(raw, RateLimitConfig, "rate_limits"),
-        repos=raw.get("repos", []),
+        repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
+        repos_base_dir=raw.get("repos_base_dir", "~/tower-repos"),
     )
 
 

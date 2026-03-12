@@ -87,6 +87,7 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [ ] Job Detail — logs panel (virtualized, level filtering)
 - [ ] Job Detail — execution timeline (grouped by phase)
 - [ ] Job Creation screen — repo selector, prompt input, advanced options
+- [ ] Repository Detail view — resolved MCP/tool config table (local/global/disabled), repo config, active + recent jobs
 
 ---
 
@@ -142,7 +143,7 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [ ] Graceful shutdown (SIGTERM/SIGINT handler, cancel running jobs, close SSE)
 - [ ] Restart recovery (transition orphaned running/waiting jobs to failed)
 - [ ] Retention policy — artifact cleanup, worktree cleanup, daily background task
-- [ ] Settings API (`GET/PUT /api/settings/global`, `GET /api/settings/repos`)
+- [ ] Settings API (`GET/PUT /api/settings/global`, `GET /api/settings/repos`, `GET /api/settings/repos/{repo_path}`)
 - [ ] Settings screen (global config editor, repo config list, cleanup action)
 - [ ] Dev Tunnel integration (`tower up --tunnel`)
 - [ ] Dynamic CORS for tunnel origin

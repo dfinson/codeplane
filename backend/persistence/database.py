@@ -63,6 +63,7 @@ def run_migrations(db_path: Path | None = None) -> None:
     from alembic import command
 
     alembic_cfg = Config()
-    alembic_cfg.set_main_option("script_location", str(Path(__file__).parent.parent / "alembic"))
+    repo_root = Path(__file__).resolve().parents[2]
+    alembic_cfg.set_main_option("script_location", str(repo_root / "alembic"))
     alembic_cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path or DEFAULT_DB_PATH}")
     command.upgrade(alembic_cfg, "head")

@@ -189,6 +189,11 @@ App
 │       ├── RepoManager
 │       │   ├── AddRepoForm
 │       │   └── RepoList
+│       ├── RepoDetailView
+│       │   ├── RepoHeader
+│       │   ├── MCPConfigTable
+│       │   ├── RepoConfigPanel
+│       │   └── RepoJobList
 │       ├── GlobalConfigEditor
 │       └── RepoConfigList
 └── SSEProvider (global)
@@ -1552,6 +1557,34 @@ Sections:
 - Worktree cleanup action
 - Voice model selector
 
+### 14.5 Repository Detail View
+
+Accessible by clicking a repository in the Settings Screen repo list or from the repo selector anywhere in the UI. Displays the full resolved configuration for a single repository.
+
+Sections:
+
+| Section | Contents |
+|---|---|
+| **Header** | Repository name (derived from path), absolute path on disk, remote origin URL (if any) |
+| **Tool / MCP Configuration** | Table of all MCP servers available to this repo. Each row shows: server name, command, source badge (`local` — from `.vscode/mcp.json`, `global` — from global config, `disabled` — blocked by `.tower.yml`). Inherited global servers are shown with a dimmed style if not overridden |
+| **Repo Config** | Rendered view of the repo's `.tower.yml` — `base_branch`, `protected_paths`, `tools.mcp.disabled`. Shows defaults for fields not explicitly set |
+| **Active Jobs** | List of currently active jobs targeting this repo (links to Job Detail) |
+| **Recent Jobs** | Last 10 completed/failed/canceled jobs for this repo |
+
+#### MCP / Tool Resolution Display
+
+For each MCP server, the view shows the resolution chain so the operator understands where the config comes from:
+
+```
+┌─────────────┬──────────────────┬──────────┐
+│ Server      │ Command          │ Source   │
+├─────────────┼──────────────────┼──────────┤
+│ github      │ npx -y @model... │ local    │  ← .vscode/mcp.json (overrides global)
+│ postgres    │ uvx mcp-postgres │ disabled │  ← global, disabled by .tower.yml
+│ filesystem  │ npx -y @model... │ global   │  ← inherited from global config
+└─────────────┴──────────────────┴──────────┘
+```
+
 ---
 
 ## 15. Data Model
@@ -1858,6 +1891,7 @@ POST /api/approvals/{approval_id}/resolve
 | `GET` | `/api/settings/global` | Get current global config |
 | `PUT` | `/api/settings/global` | Update global config |
 | `GET` | `/api/settings/repos` | List repo configs |
+| `GET` | `/api/settings/repos/{repo_path}` | Get detailed repo config with resolved MCP servers |
 | `POST` | `/api/settings/repos` | Register a repository (local path or remote URL) |
 | `DELETE` | `/api/settings/repos/{repo_path}` | Remove a repository from the allowlist |
 | `POST` | `/api/settings/cleanup-worktrees` | Clean up completed job worktrees |
@@ -1888,6 +1922,48 @@ Response (`201 Created`):
 ```
 
 Errors: `400` if path doesn't exist or isn't a git repo, `409` if already registered, `502` if clone fails (auth/network).
+
+#### `GET /api/settings/repos/{repo_path}` — Repository Detail
+
+Returns the fully resolved configuration for a single repository, including the MCP server resolution chain.
+
+Response (`200 OK`):
+
+```json
+{
+  "path": "/repos/service-a",
+  "origin_url": "https://github.com/org/service-a.git",
+  "base_branch": "main",
+  "protected_paths": ["infra/", ".github/workflows/"],
+  "mcp_servers": [
+    {
+      "name": "github",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "source": "local",
+      "overrides_global": true
+    },
+    {
+      "name": "postgres",
+      "command": "uvx",
+      "args": ["mcp-postgres"],
+      "source": "disabled",
+      "disabled_by": ".tower.yml"
+    },
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "source": "global",
+      "overrides_global": false
+    }
+  ],
+  "active_job_count": 1,
+  "recent_jobs": [{"id": "job-42", "state": "succeeded", "prompt": "..."}]
+}
+```
+
+`source` is one of: `local` (from `.vscode/mcp.json`), `global` (inherited from global config), `disabled` (present but blocked by `.tower.yml`).
 
 ### 17.9 Connection Limits
 

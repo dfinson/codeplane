@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
+from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ from backend.models.db import Base
 from backend.models.domain import Artifact, Job
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.persistence.artifact_repo import ArtifactRepository
+from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
 
@@ -23,6 +25,7 @@ from backend.persistence.job_repo import JobRepository
 async def session() -> AsyncGenerator[AsyncSession, None]:
     """Create an in-memory SQLite database and yield an async session."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -110,6 +113,30 @@ async def test_job_list_filter_multi_state(session: AsyncSession) -> None:
 
     jobs = await repo.list(state="succeeded,failed")
     assert len(jobs) == 2
+
+
+@pytest.mark.asyncio
+async def test_job_list_cursor_pagination(session: AsyncSession) -> None:
+    repo = JobRepository(session)
+    for i in range(5):
+        await repo.create(_make_job(f"job-{i}", "running"))
+    await session.commit()
+
+    # First page
+    page1 = await repo.list(limit=2)
+    assert len(page1) == 2
+
+    # Second page using last item's ID as cursor
+    page2 = await repo.list(limit=2, cursor=page1[-1].id)
+    assert len(page2) == 2
+
+    # Third page — only 1 remaining
+    page3 = await repo.list(limit=2, cursor=page2[-1].id)
+    assert len(page3) == 1
+
+    # No duplicates across pages
+    all_ids = [j.id for j in page1 + page2 + page3]
+    assert len(all_ids) == len(set(all_ids))
 
 
 @pytest.mark.asyncio
