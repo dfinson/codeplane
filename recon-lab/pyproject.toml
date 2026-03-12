@@ -7,7 +7,7 @@ name = "cpl-lab"
 version = "0.1.0"
 description = "Recon Lab — training pipeline for CodePlane's recon models (ranker, cutoff, gate)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     "click>=8.1",
@@ -17,9 +17,10 @@ dependencies = [
     "pyarrow>=15.0",
     "numpy>=1.26",
     "httpx>=0.27",
-    "github-copilot-sdk>=0.1.32",
     "rich>=14.0",
     "tomli>=2.0; python_version < '3.12'",
+    "codeplane",
+    "evee-ms-core",
 ]
 
 [project.scripts]
@@ -33,6 +34,10 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cpl_lab"]
+
+[tool.uv.sources]
+codeplane = { path = "..", editable = true }
+evee-ms-core = { path = "../assets/evee_wheels/evee_ms_core-0.4.0-py3-none-any.whl" }
 
 [tool.ruff]
 target-version = "py311"

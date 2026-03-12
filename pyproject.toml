@@ -221,7 +221,7 @@ exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used - we use asserts in tests
 
 [tool.uv.sources]
-evee-ms-core = { path = "benchmarking/vendor/evee_ms_core-0.4.0-py3-none-any.whl" }
+evee-ms-core = { path = "assets/evee_wheels/evee_ms_core-0.4.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

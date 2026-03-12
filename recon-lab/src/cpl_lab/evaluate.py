@@ -1,60 +1,38 @@
-"""Evaluate models via EVEE — CLI adapter for benchmarking integration."""
+"""Evaluate models via EVEE — in-process pipeline evaluation."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import click
 
-from cpl_lab.config import LAB_ROOT
-
 
 def run_eval(
     config: dict[str, Any],
-    experiment: str = "recon_ranking.yaml",
+    experiment: str | None = None,
     model_dir: Path | None = None,
     verbose: bool = False,
 ) -> None:
-    """Run EVEE evaluation against trained models.
+    """Run EVEE evaluation using the in-process eval project.
 
-    Delegates to the benchmarking/ project's run.py, which handles
-    experiment loading, model execution, and metric computation.
+    Uses cpl_lab.eval components (model, dataset, metrics) registered
+    via EVEE decorators.  Defaults to the built-in experiment YAML.
     """
-    # Locate benchmarking project (sibling to recon-lab in the repo)
-    repo_root = LAB_ROOT.parent
-    bench_dir = repo_root / "benchmarking"
+    from cpl_lab.eval.run import run
 
-    if not bench_dir.is_dir():
-        raise click.ClickException(
-            f"Benchmarking directory not found at {bench_dir}"
-        )
+    # Resolve experiment file — accept a bare filename or full path
+    if experiment is not None:
+        exp_path = Path(experiment)
+        if not exp_path.is_file():
+            # Try as a name under the eval/experiments dir
+            pkg_dir = Path(__file__).resolve().parent / "eval" / "experiments"
+            exp_path = pkg_dir / experiment
+        if not exp_path.is_file():
+            raise click.ClickException(f"Experiment not found: {experiment}")
+        config_path = str(exp_path)
+    else:
+        config_path = None  # run() defaults to eval_pipeline.yaml
 
-    run_script = bench_dir / "run.py"
-    if not run_script.is_file():
-        raise click.ClickException(f"run.py not found at {run_script}")
-
-    # Resolve experiment file
-    exp_path = bench_dir / "experiments" / experiment
-    if not exp_path.is_file():
-        raise click.ClickException(f"Experiment not found: {exp_path}")
-
-    model_dir = model_dir or config["models_dir"]
-
-    cmd = [
-        sys.executable, str(run_script),
-        "--experiment", str(exp_path),
-        "--model-dir", str(model_dir),
-    ]
-    if verbose:
-        cmd.append("--verbose")
-
-    click.echo(f"Running EVEE evaluation: {experiment}")
-    click.echo(f"  models: {model_dir}")
-    click.echo(f"  experiment: {exp_path}")
-
-    result = subprocess.run(cmd, cwd=bench_dir)
-    if result.returncode != 0:
-        raise click.ClickException(f"Evaluation failed with exit code {result.returncode}")
+    click.echo(f"Running EVEE evaluation: {config_path or 'eval_pipeline.yaml'}")
+    run(config_path)

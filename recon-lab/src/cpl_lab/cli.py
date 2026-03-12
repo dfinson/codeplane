@@ -25,8 +25,8 @@ MERGE_TARGETS = ("gt", "signals", "all")
 
 
 @click.group()
-@click.option("--workspace", default=None, envvar="CPL_LAB_WORKSPACE",
-              help="Override workspace directory.")
+@click.option("--workspace", default=None,
+              help="Override workspace directory (default: lab.toml).")
 @click.option("-v", "--verbose", is_flag=True, help="Increase log verbosity.")
 @click.option("--dry-run", is_flag=True, help="Show what would be done.")
 @click.pass_context
@@ -125,10 +125,10 @@ def generate(ctx: click.Context, repo_set: str | None, repo: str | None,
 @click.option("--set", "repo_set", type=click.Choice(SETS), default="all",
               help="Which repo set to collect signals for.")
 @click.option("--repo", default=None, help="Single repo ID.")
-@click.option("--mcp-url", default="http://127.0.0.1:7654/mcp", help="MCP endpoint URL.")
+@click.option("--workers", default=0, help="Parallel workers (0=auto).")
 @click.pass_context
-def collect(ctx: click.Context, repo_set: str, repo: str | None, mcp_url: str) -> None:
-    """Collect retrieval signals via MCP for all queries."""
+def collect(ctx: click.Context, repo_set: str, repo: str | None, workers: int) -> None:
+    """Collect retrieval signals (direct, no MCP server needed)."""
     from cpl_lab.collect import run_collect
 
     cfg = ctx.obj["config"]
@@ -137,7 +137,7 @@ def collect(ctx: click.Context, repo_set: str, repo: str | None, mcp_url: str) -
         clones_dir=cfg["clones_dir"],
         repo_set=repo_set,
         repo=repo,
-        mcp_url=mcp_url,
+        workers=workers,
         verbose=ctx.obj["verbose"],
     )
 
@@ -192,20 +192,16 @@ def train(ctx: click.Context, model: str, output_dir: str | None, skip_merge: bo
 
 
 @main.command("eval")
-@click.option("--experiment", default=None, help="Experiment YAML file name.")
-@click.option("--model-dir", type=click.Path(exists=True), default=None,
-              help="Directory containing trained models.")
+@click.option("--experiment", default=None, help="Experiment YAML file or name.")
 @click.pass_context
-def eval_cmd(ctx: click.Context, experiment: str | None, model_dir: str | None) -> None:
-    """Run EVEE evaluation against trained models."""
+def eval_cmd(ctx: click.Context, experiment: str | None) -> None:
+    """Run EVEE evaluation of the ranking pipeline."""
     from cpl_lab.evaluate import run_eval
 
     cfg = ctx.obj["config"]
-    from pathlib import Path as P
     run_eval(
         config=cfg,
-        experiment=experiment or cfg["eval"]["default_experiment"],
-        model_dir=P(model_dir) if model_dir else cfg["models_dir"],
+        experiment=experiment,
         verbose=ctx.obj["verbose"],
     )
 
