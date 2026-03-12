@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
-from backend.models.domain import SessionConfig, SessionEvent
-from backend.services.agent_adapter import AgentAdapterInterface
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from backend.models.domain import SessionConfig, SessionEvent
+    from backend.services.agent_adapter import AgentAdapterInterface
 
 
 class ExecutionStrategy(ABC):

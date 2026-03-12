@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, voice, workspace
+from backend.config import init_config, load_config
+from backend.persistence.database import run_migrations
 
 
 def create_app(*, dev: bool = False) -> FastAPI:
@@ -47,6 +49,13 @@ def cli() -> None:
 @click.option("--tunnel", is_flag=True, help="Start Dev Tunnel for remote access")
 def up(host: str, port: int, dev: bool, tunnel: bool) -> None:
     """Start the Tower server."""
+    config = load_config()
+    host = host or config.server.host
+    port = port or config.server.port
+
+    # Run Alembic migrations before starting the server
+    run_migrations()
+
     app = create_app(dev=dev)
     uvicorn.run(app, host=host, port=port)
 
@@ -54,7 +63,14 @@ def up(host: str, port: int, dev: bool, tunnel: bool) -> None:
 @cli.command()
 def init() -> None:
     """Create default configuration at ~/.tower/config.yaml."""
-    click.echo("tower init — not yet implemented")
+    import backend.config as _cfg
+
+    if _cfg.DEFAULT_CONFIG_PATH.exists():
+        click.echo(f"Configuration already exists at {_cfg.DEFAULT_CONFIG_PATH}")
+        click.echo("Delete it first if you want to regenerate defaults.")
+        return
+    path = init_config()
+    click.echo(f"Created default configuration at {path}")
 
 
 @cli.command()

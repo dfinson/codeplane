@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -32,10 +32,12 @@ class EventRow(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     event_id = Column(String, nullable=False, unique=True)
-    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False, index=True)
     kind = Column(String, nullable=False)
     timestamp = Column(DateTime, nullable=False)
     payload = Column(Text, nullable=False)  # JSON
+
+    __table_args__ = (Index("idx_events_job_id", "job_id"),)
 
 
 class ApprovalRow(Base):
@@ -68,6 +70,8 @@ class DiffSnapshotRow(Base):
     __tablename__ = "diff_snapshots"
 
     id = Column(String, primary_key=True)
-    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False, index=True)
     snapshot_at = Column(DateTime, nullable=False)
     diff_json = Column(Text, nullable=False)  # JSON
+
+    __table_args__ = (Index("idx_diff_snapshots_job_id", "job_id"),)

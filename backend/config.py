@@ -4,8 +4,44 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
+
+TOWER_DIR = Path.home() / ".tower"
+DEFAULT_CONFIG_PATH = TOWER_DIR / "config.yaml"
+DEFAULT_DB_PATH = TOWER_DIR / "data.db"
+
+DEFAULT_CONFIG_YAML = """\
+server:
+  host: 127.0.0.1
+  port: 8080
+
+runtime:
+  max_concurrent_jobs: 2
+  worktrees_dirname: .tower-worktrees
+
+voice:
+  enabled: true
+  model: base.en
+  max_audio_size_mb: 10
+
+retention:
+  artifact_retention_days: 30
+  max_artifact_size_mb: 100
+  cleanup_on_startup: false
+
+logging:
+  level: info
+  file: ~/.tower/logs/server.log
+  max_file_size_mb: 50
+  backup_count: 3
+
+rate_limits:
+  max_sse_connections: 5
+
+repos: []
+"""
 
 
 @dataclass
@@ -58,10 +94,20 @@ class TowerConfig:
     repos: list[str] = field(default_factory=list)
 
 
+def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
+    """Parse a config section dict into a dataclass instance."""
+    section = raw.get(key, {})
+    if not isinstance(section, dict):
+        return cls()
+    # Only pass keys that the dataclass accepts
+    valid_keys = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    return cls(**{k: v for k, v in section.items() if k in valid_keys})
+
+
 def load_config(path: Path | None = None) -> TowerConfig:
     """Load Tower configuration from a YAML file."""
     if path is None:
-        path = Path.home() / ".tower" / "config.yaml"
+        path = DEFAULT_CONFIG_PATH
 
     if not path.exists():
         return TowerConfig()
@@ -69,9 +115,21 @@ def load_config(path: Path | None = None) -> TowerConfig:
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
 
-    # TODO: full config parsing and validation
-    config = TowerConfig()
-    if "repos" in raw:
-        config.repos = raw["repos"]
+    return TowerConfig(
+        server=_parse_section(raw, ServerConfig, "server"),
+        runtime=_parse_section(raw, RuntimeConfig, "runtime"),
+        voice=_parse_section(raw, VoiceConfig, "voice"),
+        retention=_parse_section(raw, RetentionConfig, "retention"),
+        logging=_parse_section(raw, LoggingConfig, "logging"),
+        rate_limits=_parse_section(raw, RateLimitConfig, "rate_limits"),
+        repos=raw.get("repos", []),
+    )
 
-    return config
+
+def init_config(path: Path | None = None) -> Path:
+    """Create the default config file. Returns the path written."""
+    if path is None:
+        path = DEFAULT_CONFIG_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(DEFAULT_CONFIG_YAML)
+    return path

@@ -17,6 +17,11 @@ repos:
           - structlog>=24.0
           - click>=8.0
           - pyyaml>=6.0
+          - types-PyYAML
+          - alembic
+          - aiosqlite
+          - pytest
+          - pytest-asyncio
         args: [--ignore-missing-imports]
         pass_filenames: false
         entry: mypy backend/

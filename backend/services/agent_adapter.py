@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 from backend.models.domain import SessionConfig, SessionEvent
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 class AgentAdapterInterface(ABC):
