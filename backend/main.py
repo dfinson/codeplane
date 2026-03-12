@@ -14,7 +14,6 @@ from backend.api import approvals, artifacts, events, health, jobs, settings, vo
 from backend.config import init_config, load_config
 from backend.persistence.database import create_engine, create_session_factory, run_migrations
 from backend.persistence.event_repo import EventRepository
-from backend.persistence.job_repo import JobRepository
 from backend.services.event_bus import EventBus
 from backend.services.sse_manager import SSEManager
 
@@ -52,19 +51,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.event_bus = event_bus
     app.state.sse_manager = sse_manager
 
-    # Factories that create repos with fresh sessions (for replay)
-    async def _event_repo_factory() -> EventRepository:
-        session = session_factory()
-        s = await session.__aenter__()
-        return EventRepository(s)
-
-    async def _job_repo_factory() -> JobRepository:
-        session = session_factory()
-        s = await session.__aenter__()
-        return JobRepository(s)
-
-    app.state.event_repo_factory = _event_repo_factory
-    app.state.job_repo_factory = _job_repo_factory
+    # Session factory available for route handlers that need ad-hoc sessions
+    app.state.session_factory = session_factory
 
     async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:

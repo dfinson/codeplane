@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 from starlette.responses import StreamingResponse
 
+from backend.persistence.event_repo import EventRepository
+from backend.persistence.job_repo import JobRepository
 from backend.services.sse_manager import SSEConnection
 
 router = APIRouter(tags=["events"])
@@ -28,8 +30,7 @@ async def stream_events(
     ``Last-Event-ID`` (header or query) enables reconnection replay.
     """
     sse_manager = request.app.state.sse_manager
-    event_repo = request.app.state.event_repo_factory
-    job_repo = request.app.state.job_repo_factory
+    session_factory = request.app.state.session_factory
 
     # Also check the standard SSE header
     header_last_id = request.headers.get("Last-Event-ID") or last_event_id
@@ -43,9 +44,15 @@ async def stream_events(
             if header_last_id is not None:
                 try:
                     numeric_id = int(header_last_id)
-                    session = await event_repo()
-                    job_session = await job_repo()
-                    await sse_manager.replay_events(conn, session, job_session, numeric_id)
+                    async with session_factory() as session:
+                        event_repo = EventRepository(session)
+                        job_repo = JobRepository(session)
+                        await sse_manager.replay_events(
+                            conn,
+                            event_repo,
+                            job_repo,
+                            numeric_id,
+                        )
                 except (ValueError, TypeError):
                     pass  # invalid Last-Event-ID, skip replay
 
