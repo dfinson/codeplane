@@ -146,9 +146,10 @@ class TestStubRoutes:
         assert resp.status_code in (404, 500)
 
     @pytest.mark.asyncio
-    async def test_get_events_sse_returns_404(self, client: AsyncClient) -> None:
+    async def test_get_events_sse_returns_503_without_lifespan(self, client: AsyncClient) -> None:
+        """Without lifespan wiring, SSE infra is missing → 503."""
         resp = await client.get("/api/events")
-        assert resp.status_code in (404, 405)
+        assert resp.status_code == 503
 
     @pytest.mark.asyncio
     async def test_get_approvals_returns_404(self, client: AsyncClient) -> None:

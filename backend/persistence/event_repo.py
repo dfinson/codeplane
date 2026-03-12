@@ -22,10 +22,11 @@ class EventRepository(BaseRepository):
             timestamp=row.timestamp,  # type: ignore[arg-type]
             kind=DomainEventKind(row.kind),  # type: ignore[arg-type]
             payload=json.loads(row.payload),  # type: ignore[arg-type]
+            db_id=row.id,  # type: ignore[arg-type]
         )
 
-    async def append(self, event: DomainEvent) -> None:
-        """Persist a domain event."""
+    async def append(self, event: DomainEvent) -> int:
+        """Persist a domain event. Returns the autoincrement DB id."""
         row = EventRow(
             event_id=event.event_id,
             job_id=event.job_id,
@@ -35,6 +36,8 @@ class EventRepository(BaseRepository):
         )
         self._session.add(row)
         await self._session.flush()
+        event.db_id = row.id  # type: ignore[assignment]
+        return row.id  # type: ignore[return-value]
 
     async def list_after(
         self,

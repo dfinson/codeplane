@@ -32,3 +32,4 @@ class DomainEvent:
     timestamp: datetime
     kind: DomainEventKind
     payload: dict  # type: ignore[type-arg]
+    db_id: int | None = None  # autoincrement ID from EventRow; set after persistence

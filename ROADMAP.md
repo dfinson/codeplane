@@ -43,15 +43,15 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Internal pub/sub, SSE streaming, reconnection.
 
-- [ ] Internal event bus (async in-process pub/sub)
-- [ ] SSE endpoint (`GET /api/events`, `GET /api/events?job_id=`)
-- [ ] SSE manager — connection tracking, broadcast, cleanup
-- [ ] Event persistence subscriber (write all events to SQLite)
-- [ ] Reconnection and event replay (`Last-Event-ID`, snapshot fallback)
-- [ ] Replay bounds (max 500 events, 5-minute window)
-- [ ] SSE scaling constraint — selective streaming beyond 20 jobs (§5.6)
-- [ ] Frontend SSE client with exponential backoff reconnection
-- [ ] Zustand store with central event dispatcher
+- [x] Internal event bus (async in-process pub/sub)
+- [x] SSE endpoint (`GET /api/events`, `GET /api/events?job_id=`)
+- [x] SSE manager — connection tracking, broadcast, cleanup
+- [x] Event persistence subscriber (write all events to SQLite)
+- [x] Reconnection and event replay (`Last-Event-ID`, snapshot fallback)
+- [x] Replay bounds (max 500 events, 5-minute window)
+- [x] SSE scaling constraint — selective streaming beyond 20 jobs (§5.6)
+- [x] Frontend SSE client with exponential backoff reconnection
+- [x] Zustand store with central event dispatcher
 
 ---
 

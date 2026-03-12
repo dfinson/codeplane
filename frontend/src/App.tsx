@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
+import { useSSE } from "./hooks/useSSE";
+import { useTowerStore, selectConnectionStatus } from "./store";
 
 export function App() {
   const [health, setHealth] = useState<{ status: string; version: string } | null>(null);
+  const connectionStatus = useTowerStore(selectConnectionStatus);
+
+  // Mount global SSE connection
+  useSSE();
 
   useEffect(() => {
     fetch("/api/health")
@@ -21,6 +27,7 @@ export function App() {
       ) : (
         <p>Backend: connecting…</p>
       )}
+      <p>SSE: {connectionStatus}</p>
     </div>
   );
 }

@@ -257,6 +257,21 @@ class JobStateChangedPayload(CamelModel):
     timestamp: datetime
 
 
+class ApprovalRequestedPayload(CamelModel):
+    job_id: str
+    approval_id: str
+    description: str
+    proposed_action: str | None = None
+    timestamp: datetime
+
+
+class ApprovalResolvedPayload(CamelModel):
+    job_id: str
+    approval_id: str
+    resolution: str
+    timestamp: datetime
+
+
 class DiffUpdatePayload(CamelModel):
     job_id: str
     changed_files: list[DiffFileModel]
