@@ -82,7 +82,7 @@ describe("TowerStore", () => {
         timestamp: "2025-01-01T01:00:00Z",
       });
 
-      expect(selectJobs(useTowerStore.getState())["job-1"].state).toBe(
+      expect(selectJobs(useTowerStore.getState())["job-1"]!.state).toBe(
         "succeeded"
       );
     });
@@ -109,7 +109,7 @@ describe("TowerStore", () => {
 
       const logs = selectJobLogs("job-1")(useTowerStore.getState());
       expect(logs).toHaveLength(1);
-      expect(logs[0].message).toBe("Hello world");
+      expect(logs[0]!.message).toBe("Hello world");
     });
 
     it("appends log lines to existing logs", () => {
@@ -146,7 +146,7 @@ describe("TowerStore", () => {
         useTowerStore.getState()
       );
       expect(transcript).toHaveLength(1);
-      expect(transcript[0].content).toBe("I fixed the bug");
+      expect(transcript[0]!.content).toBe("I fixed the bug");
     });
 
     it("handles approval_requested", () => {
@@ -160,7 +160,7 @@ describe("TowerStore", () => {
 
       const approvals = selectApprovals(useTowerStore.getState());
       expect(approvals["apr-1"]).toBeDefined();
-      expect(approvals["apr-1"].description).toBe("Delete file?");
+      expect(approvals["apr-1"]!.description).toBe("Delete file?");
     });
 
     it("handles approval_resolved", () => {
@@ -185,7 +185,7 @@ describe("TowerStore", () => {
         timestamp: "2025-01-01T01:00:00Z",
       });
 
-      const approval = selectApprovals(useTowerStore.getState())["apr-1"];
+      const approval = selectApprovals(useTowerStore.getState())["apr-1"]!;
       expect(approval.resolution).toBe("approved");
       expect(approval.resolvedAt).toBe("2025-01-01T01:00:00Z");
     });
