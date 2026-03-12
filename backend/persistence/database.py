@@ -58,8 +58,9 @@ def run_migrations(db_path: Path | None = None) -> None:
     """Run Alembic migrations programmatically at startup."""
     TOWER_DIR.mkdir(parents=True, exist_ok=True)
 
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     alembic_cfg = Config()
     alembic_cfg.set_main_option("script_location", str(Path(__file__).parent.parent / "alembic"))
