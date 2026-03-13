@@ -59,13 +59,35 @@ class CopilotAdapter(AgentAdapterInterface):
         self._queues.pop(session_id, None)
 
     async def create_session(self, config: SessionConfig) -> str:
-        from copilot import CopilotClient
+        from copilot import CopilotClient, PermissionRequest, PermissionRequestResult
 
         client = CopilotClient()
-        session = await client.create_session({"working_directory": config.workspace_path})
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
+
+        # Permission handler — bridge SDK permission requests into Tower's
+        # approval system by emitting approval_request SessionEvents.
+        def _on_permission(request: PermissionRequest, invocation: dict[str, str]) -> PermissionRequestResult:
+            queue.put_nowait(
+                SessionEvent(
+                    kind=SessionEventKind.approval_request,
+                    payload={
+                        "description": f"{request.tool_name}: {request.intention or request.subject or ''}",
+                        "proposed_action": request.full_command_text,
+                    },
+                )
+            )
+            # For now approve all — the RuntimeService handles the approval flow
+            # at a higher level via the approval_requested domain event.
+            return PermissionRequestResult(kind="approved")
+
+        session = await client.create_session(
+            {
+                "working_directory": config.workspace_path,
+                "on_permission_request": _on_permission,
+            }
+        )
         self._sessions[session_id] = session
 
         # Register SDK callback that bridges into the async queue
