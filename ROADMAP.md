@@ -182,7 +182,7 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [x] `tower setup` interactive onboarding CLI (deps check, auth, devtunnel, config)
 - [x] `tower doctor` non-interactive dependency check
 - [x] WSL-aware headless auth flows for gh CLI and devtunnel
-- [ ] Integration tests for MCP tool calls end-to-end
-- [ ] Comprehensive unit tests (state machine, diff parser, config, approval logic)
-- [ ] Integration tests (git service, concurrent jobs, approval flow, SSE replay, restart recovery)
+- [x] Integration tests for MCP tool calls end-to-end
+- [x] Comprehensive unit tests (state machine, diff parser, config, approval logic)
+- [x] Integration tests (git service, concurrent jobs, approval flow, SSE replay, restart recovery)
 - [ ] End-to-end tests (Playwright)
