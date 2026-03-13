@@ -107,6 +107,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_factory = session_factory
 
     # --- MCP server ---
+    mcp_cleanup = None
     if config.mcp_server.enabled:
         from backend.mcp.server import create_mcp_server
 
@@ -116,7 +117,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             approval_service=approval_service,
         )
         app.state.mcp_server = mcp_server
-        app.mount(config.mcp_server.path, mcp_server.streamable_http_app())
+        mcp_app = mcp_server.streamable_http_app()
+        app.mount(config.mcp_server.path, mcp_app)
+        # Manually start the session manager's task group (sub-app lifespan
+        # doesn't fire when mounted during the parent's lifespan).
+        mcp_ctx = mcp_server.session_manager.run()
+        await mcp_ctx.__aenter__()
+        mcp_cleanup = mcp_ctx
         log.info("mcp_server_mounted", path=config.mcp_server.path)
 
     async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
@@ -130,6 +137,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.dependency_overrides[jobs._get_session] = _session_dep
     yield
+    if mcp_cleanup is not None:
+        await mcp_cleanup.__aexit__(None, None, None)
     retention_task.cancel()
     await runtime_service.shutdown()
     await sse_manager.close_all()

@@ -127,6 +127,7 @@ def create_mcp_server(
         "Tower",
         instructions="Tower — control tower for running and supervising coding agents.",
         stateless_http=True,
+        streamable_http_path="/",
     )
 
     _register_job_tools(mcp)
