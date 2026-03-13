@@ -337,21 +337,33 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
                 "host",
                 "--port-numbers",
                 str(port),
+                "--allow-anonymous",
+                "--protocol",
+                "http",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
-        # Read output lines looking for the tunnel URL
+        # Read output lines looking for the tunnel URL.
+        # devtunnel prints two URLs: "https://ID.euw.devtunnels.ms:PORT" and
+        # "https://ID-PORT.euw.devtunnels.ms". We want the second form
+        # (port embedded in subdomain) since it works on standard HTTPS port 443.
         import re
 
         tunnel_url: str | None = None
         if proc.stdout:
             for line in proc.stdout:
-                match = re.search(r"(https://\S+\.devtunnels\.ms)", line)
+                # Prefer the port-in-subdomain URL (e.g. https://abc-8080.euw.devtunnels.ms)
+                match = re.search(rf"(https://\S+-{port}\.(?:euw|use|usw|ase|jpe)\.devtunnels\.ms)", line)
                 if match:
                     tunnel_url = match.group(1).rstrip("/,")
                     break
+                # Fallback: any devtunnels URL
+                fallback = re.search(r"(https://\S+\.devtunnels\.ms\S*)", line)
+                if fallback:
+                    tunnel_url = fallback.group(1).rstrip("/,: ")
+                    # Keep reading in case the port-subdomain URL comes next
         if tunnel_url:
             log.info("tunnel_started", url=tunnel_url)
         else:
