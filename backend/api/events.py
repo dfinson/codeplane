@@ -62,14 +62,19 @@ async def stream_events(
                 except (ValueError, TypeError):
                     pass  # invalid Last-Event-ID, skip replay
 
+            # Send immediate keepalive so tunnel proxies don't timeout
+            # before the first real event arrives
+            yield ": keepalive\n\n"
+
             while not conn.closed:
                 if await request.is_disconnected():
                     break
                 try:
-                    data = await asyncio.wait_for(conn.queue.get(), timeout=15.0)
+                    data = await asyncio.wait_for(conn.queue.get(), timeout=5.0)
                     yield data
                 except TimeoutError:
-                    # Send SSE keep-alive comment
+                    # Send SSE keep-alive comment frequently to prevent
+                    # tunnel proxies from killing the connection
                     yield ": keepalive\n\n"
         finally:
             sse_manager.unregister(conn)
