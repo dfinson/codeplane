@@ -37,11 +37,9 @@ def _merge_candidates(
             else:
                 existing = merged[uid]
                 existing.from_term_match = existing.from_term_match or cand.from_term_match
-                existing.from_lexical = existing.from_lexical or cand.from_lexical
                 existing.from_explicit = existing.from_explicit or cand.from_explicit
                 existing.from_graph = existing.from_graph or cand.from_graph
                 existing.matched_terms |= cand.matched_terms
-                existing.lexical_hit_count += cand.lexical_hit_count
                 existing.evidence.extend(cand.evidence)
                 if existing.def_fact is None and cand.def_fact is not None:
                     existing.def_fact = cand.def_fact
@@ -67,11 +65,9 @@ async def _enrich_candidates(
     # Resolve missing DefFacts in one batch query
     missing_uids = [uid for uid, c in candidates.items() if c.def_fact is None]
     if missing_uids:
-        with coordinator.db.session() as session:
-            fq = FactQueries(session)
-            found = fq.batch_get_defs(missing_uids)
-            for uid, d in found.items():
-                candidates[uid].def_fact = d
+        found = coordinator.batch_get_defs(missing_uids)
+        for uid, d in found.items():
+            candidates[uid].def_fact = d
 
     # Remove candidates that still lack a DefFact
     dead = [uid for uid, c in candidates.items() if c.def_fact is None]

@@ -53,6 +53,7 @@ class RankingMetric:
         predicted_n: int,
         gt_edited: list[str],
         gt_read_necessary: list[str],
+        query_type: str = "UNKNOWN",
     ) -> dict[str, Any]:
         """Compute ranking metrics for a single query."""
         edited_set = set(gt_edited)
@@ -96,6 +97,7 @@ class RankingMetric:
             "predicted_n": predicted_n,
             "gt_edited_count": len(edited_set),
             "gt_read_count": len(read_set),
+            "query_type": query_type,
         }
 
     def aggregate(self, scores: list[dict[str, Any]]) -> dict[str, Number]:
@@ -103,8 +105,7 @@ class RankingMetric:
         if not scores:
             return {}
 
-        result: dict[str, Number] = {}
-        for key in (
+        metric_keys = (
             "ndcg_5",
             "ndcg_10",
             "ndcg_20",
@@ -114,10 +115,27 @@ class RankingMetric:
             "cutoff_precision",
             "cutoff_recall",
             "cutoff_f1",
-        ):
+        )
+
+        result: dict[str, Number] = {}
+        for key in metric_keys:
             values = [s[key] for s in scores]
             result[f"avg_{key}"] = round(statistics.mean(values), 4)
 
         result["avg_predicted_n"] = round(statistics.mean(s["predicted_n"] for s in scores), 1)
         result["total_queries"] = len(scores)
+
+        # Per-query-type breakdown
+        by_type: dict[str, list[dict[str, Any]]] = {}
+        for s in scores:
+            qt = s.get("query_type", "UNKNOWN")
+            by_type.setdefault(qt, []).append(s)
+
+        for qt, type_scores in sorted(by_type.items()):
+            prefix = f"qt_{qt.lower()}"
+            for key in metric_keys:
+                vals = [s[key] for s in type_scores]
+                result[f"{prefix}/avg_{key}"] = round(statistics.mean(vals), 4)
+            result[f"{prefix}/count"] = len(type_scores)
+
         return result

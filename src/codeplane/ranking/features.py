@@ -45,9 +45,6 @@ def extract_ranker_features(
         f["term_match_count"] = cand.get("term_match_count") or 0
         f["term_total_matches"] = cand.get("term_total_matches") or 0
 
-        # Lexical signal
-        f["lex_hit_count"] = cand.get("lex_hit_count") or 0
-
         # Graph signal (categorical → encoded)
         edge_type = cand.get("graph_edge_type")
         f["graph_is_callee"] = edge_type == "callee"

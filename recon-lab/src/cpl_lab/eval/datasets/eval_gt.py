@@ -59,6 +59,7 @@ class EvalGroundTruthDataset:
                         "task_id": tid,
                         "query_id": f"{tid}/Q{qi}",
                         "query_text": q["query_text"],
+                        "query_type": q.get("query_type", "UNKNOWN"),
                         "seeds": q.get("seeds", []),
                         "pins": q.get("pins", []),
                         "gt_edited": gt_edited,

@@ -3,8 +3,8 @@
 
 [workspace]
 # Base directory for mutable data (clones, ground truth, signals, models).
-# Override: CPL_LAB_WORKSPACE env var or --workspace flag.
-path = "~/.codeplane/recon-lab"
+# Override: --workspace CLI flag.
+path = "~/.cpl-lab"
 
 [clone]
 jobs = 4

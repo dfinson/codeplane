@@ -28,7 +28,7 @@ experiment:
   models:
     - name: cpl-ranking
       args:
-        - clone_dir: ["~/.cpl-lab/repos"]
+        - clone_dir: ["~/.cpl-lab/clones"]
 
   dataset:
     name: cpl-eval-gt
@@ -44,7 +44,9 @@ experiment:
         predicted_n: model.predicted_n
         gt_edited: dataset.gt_edited
         gt_read_necessary: dataset.gt_read_necessary
+        query_type: dataset.query_type
     - name: cpl-gate
       mapping:
         predicted_gate: model.predicted_gate
         gt_gate: dataset.label_gate
+        query_type: dataset.query_type

@@ -7,7 +7,13 @@
 
 set -euo pipefail
 
-CLONES_DIR="${CPL_LAB_WORKSPACE:-$HOME/.codeplane/recon-lab}/clones"
+LAB_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CLONES_DIR=$(python3 -c "
+import tomllib, pathlib
+lab = pathlib.Path('${LAB_DIR}/lab.toml')
+cfg = tomllib.loads(lab.read_text()) if lab.exists() else {}
+print(pathlib.Path(cfg.get('workspace',{}).get('path','~/.cpl-lab')).expanduser() / 'clones')
+")
 CPL="$(cd "$(dirname "$0")/../../" && pwd)/.venv/bin/cpl"
 LOG="$(dirname "$0")/index_all.log"
 FLAGGED="$(dirname "$0")/index_flagged.txt"

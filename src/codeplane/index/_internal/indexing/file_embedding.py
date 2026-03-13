@@ -817,12 +817,13 @@ class FileEmbeddingIndex:
 
     # --- Query API ---
 
-    def query(self, text: str, top_k: int = 100) -> list[tuple[str, float]]:
+    def query(self, text: str) -> list[tuple[str, float]]:
         """Embed query text and compute cosine similarity against all files.
 
         Uses max-pool when a file has multiple chunks (2-chunk split):
         the returned similarity is the maximum across all chunks for
         that file.  Returns list of (path, similarity) sorted descending.
+        All files with positive similarity are returned.
         """
         if self._matrix is None or len(self._paths) == 0:
             return []
@@ -845,7 +846,7 @@ class FileEmbeddingIndex:
         sorted_pairs = sorted(path_best.items(), key=lambda x: -x[1])
 
         results: list[tuple[str, float]] = []
-        for path, sim in sorted_pairs[:top_k]:
+        for path, sim in sorted_pairs:
             if sim <= 0:
                 break
             results.append((path, sim))

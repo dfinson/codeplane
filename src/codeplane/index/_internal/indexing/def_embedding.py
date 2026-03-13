@@ -406,10 +406,11 @@ class DefEmbeddingIndex:
 
     # --- Query API ---
 
-    def query(self, text: str, top_k: int = 200) -> list[tuple[str, float]]:
+    def query(self, text: str) -> list[tuple[str, float]]:
         """Embed query text and compute cosine similarity against all defs.
 
         Returns list of (def_uid, similarity) sorted descending.
+        All defs with positive similarity are returned.
         """
         if self._matrix is None or len(self._uids) == 0:
             return []
@@ -421,7 +422,7 @@ class DefEmbeddingIndex:
         sims = self._matrix @ q_vec  # (N,)
 
         # Sort descending
-        top_indices = np.argsort(sims)[::-1][:top_k]
+        top_indices = np.argsort(sims)[::-1]
 
         results: list[tuple[str, float]] = []
         for idx in top_indices:

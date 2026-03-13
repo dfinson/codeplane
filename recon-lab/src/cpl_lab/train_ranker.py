@@ -14,6 +14,7 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from cpl_lab.schema import OK_QUERY_TYPES
 
@@ -33,19 +34,22 @@ RANKER_FEATURES = [
     "query_len", "has_identifier", "has_path", "term_count",
 ]
 
-
-def _load_candidates(
-    merged_dir: Path,
-    repo_sets: set[str] | None = None,
-    ok_only: bool = True,
-) -> pd.DataFrame:
-    """Load the single denormalized parquet, filter by set and query type."""
-    df = pd.read_parquet(merged_dir / "candidates_rank.parquet")
-    if repo_sets is not None:
-        df = df[df["repo_set"].isin(repo_sets)]
-    if ok_only:
-        df = df[df["query_type"].isin(OK_QUERY_TYPES)]
-    return df.copy()
+# Columns needed from the merged parquet to produce RANKER_FEATURES + labels.
+# Categorical sources are encoded into binary cols by _prepare_features.
+_RANKER_LOAD_COLS = [
+    "run_id", "query_id", "query_type", "repo_set", "label_relevant",
+    # Numeric features (direct)
+    "emb_score", "emb_rank",
+    "term_match_count", "term_total_matches",
+    "graph_seed_rank", "retriever_hits",
+    "object_size_lines", "path_depth", "nesting_depth",
+    "hub_score", "is_test",
+    "has_docstring", "has_decorators", "has_return_type", "has_parent_scope",
+    "query_len", "has_identifier", "has_path",
+    # Categorical sources → binary encoding
+    "graph_edge_type", "symbol_source", "import_direction",
+    "signature_text",
+]
 
 
 def _prepare_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -86,6 +90,73 @@ def _prepare_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _subsample_negatives(
+    df: pd.DataFrame,
+    max_neg: int = 500,
+    rng: np.random.RandomState | None = None,
+) -> pd.DataFrame:
+    """Keep all positives, sample at most *max_neg* negatives per query group."""
+    if rng is None:
+        rng = np.random.RandomState(42)
+    group_col = df["run_id"].astype(str) + "__" + df["query_id"].astype(str)
+    parts: list[pd.DataFrame] = []
+    for _, grp in df.groupby(group_col, sort=False):
+        pos = grp[grp["label_relevant"] > 0]
+        neg = grp[grp["label_relevant"] == 0]
+        if len(neg) > max_neg:
+            neg = neg.sample(n=max_neg, random_state=rng)
+        parts.append(pd.concat([pos, neg]))
+    if not parts:
+        return df.iloc[:0]
+    return pd.concat(parts, ignore_index=True)
+
+
+def _stream_and_subsample(
+    merged_dir: Path,
+    repo_sets: set[str],
+    max_neg: int = 500,
+) -> pd.DataFrame:
+    """Stream row groups, filter + subsample, return accumulated result.
+
+    Reads one Parquet row group at a time, keeping only columns in
+    ``_RANKER_LOAD_COLS``.  Filters to *repo_sets* and OK query types,
+    subsamples negatives per query group, and accumulates the small
+    subsampled chunks.  Peak RAM ≈ one row group + accumulated result.
+    """
+    pq_path = merged_dir / "candidates_rank.parquet"
+    pf = pq.ParquetFile(pq_path)
+
+    rng = np.random.RandomState(42)
+    parts: list[pd.DataFrame] = []
+
+    for rg_idx in range(pf.metadata.num_row_groups):
+        table = pf.read_row_group(rg_idx, columns=_RANKER_LOAD_COLS)
+        chunk = table.to_pandas()
+        del table
+
+        # Filter to target repo set
+        chunk = chunk[chunk["repo_set"].isin(repo_sets)]
+        if chunk.empty:
+            del chunk
+            continue
+
+        # Filter to OK query types
+        chunk = chunk[chunk["query_type"].isin(OK_QUERY_TYPES)]
+        if chunk.empty:
+            del chunk
+            continue
+
+        # Prepare features + subsample within this chunk
+        chunk = _prepare_features(chunk)
+        chunk = _subsample_negatives(chunk, max_neg=max_neg, rng=rng)
+        parts.append(chunk)
+        del chunk
+
+    if not parts:
+        return pd.DataFrame()
+    return pd.concat(parts, ignore_index=True)
+
+
 def train_ranker(
     merged_dir: Path,
     output_path: Path,
@@ -101,11 +172,9 @@ def train_ranker(
     Returns:
         Training summary dict.
     """
-    df = _load_candidates(merged_dir, repo_sets={"ranker-gate"})
+    df = _stream_and_subsample(merged_dir, repo_sets={"ranker-gate"})
     if df.empty:
         raise ValueError("No candidate data found (ranker-gate set)")
-
-    df = _prepare_features(df)
 
     # Build group ids for LambdaMART
     group_col = df["run_id"] + "__" + df["query_id"]

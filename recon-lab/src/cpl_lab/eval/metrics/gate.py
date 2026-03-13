@@ -25,12 +25,14 @@ class GateMetric:
         self,
         predicted_gate: str,
         gt_gate: str,
+        query_type: str = "UNKNOWN",
     ) -> dict[str, Any]:
         """Compute gate metric for a single query."""
         return {
             "correct": 1.0 if predicted_gate == gt_gate else 0.0,
             "predicted": predicted_gate,
             "actual": gt_gate,
+            "query_type": query_type,
         }
 
     def aggregate(self, scores: list[dict[str, Any]]) -> dict[str, Number]:
@@ -62,5 +64,18 @@ class GateMetric:
         for actual in _GATE_LABELS:
             for predicted in _GATE_LABELS:
                 result[f"confusion_{actual}_{predicted}"] = confusion.get((actual, predicted), 0)
+
+        # Per-query-type accuracy breakdown
+        by_type: dict[str, list[dict[str, Any]]] = {}
+        for s in scores:
+            qt = s.get("query_type", "UNKNOWN")
+            by_type.setdefault(qt, []).append(s)
+
+        for qt, type_scores in sorted(by_type.items()):
+            prefix = f"qt_{qt.lower()}"
+            qt_correct = sum(s["correct"] for s in type_scores)
+            qt_total = len(type_scores)
+            result[f"{prefix}/accuracy"] = round(qt_correct / qt_total, 4) if qt_total else 0.0
+            result[f"{prefix}/count"] = qt_total
 
         return result

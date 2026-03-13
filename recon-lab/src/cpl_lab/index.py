@@ -11,11 +11,9 @@ import click
 
 
 def _find_cpl() -> str:
-    """Find the cpl binary."""
-    cpl = shutil.which("cpl")
-    if cpl:
-        return cpl
-    raise click.ClickException("'cpl' not found on PATH — install codeplane first")
+    """Find the cpl binary, preferring the codeplane venv."""
+    from cpl_lab.collect import _find_cpl_bin
+    return _find_cpl_bin()
 
 
 def _iter_clones(clones_dir: Path, repo_set: str) -> list[Path]:

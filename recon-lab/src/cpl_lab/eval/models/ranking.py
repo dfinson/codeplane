@@ -10,6 +10,7 @@ time (repos are processed sequentially via ``max_workers: 1``).
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import sys
 from pathlib import Path
@@ -30,21 +31,37 @@ class RankingModel:
         clone_dir: Root directory containing cloned eval repos.
     """
 
-    def __init__(self, clone_dir: str = "~/.cpl-lab/repos", **kwargs: object) -> None:
+    def __init__(self, clone_dir: str = "~/.cpl-lab/clones", **kwargs: object) -> None:
         self._clone_root = Path(clone_dir).expanduser()
         self._cached_repo: str | None = None
         self._ctx = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._gate = None
+        self._ranker = None
+        self._cutoff = None
 
     def _ensure_context(self, repo_id: str) -> None:
         """Load (or re-use cached) AppContext for *repo_id*."""
         if self._cached_repo == repo_id and self._ctx is not None:
             return
 
+        # Release previous context to free memory (tantivy, sqlite, embeddings)
+        if self._ctx is not None:
+            self._ctx.coordinator.close()
+            self._ctx = None
+            self._cached_repo = None
+            gc.collect()
+
         # Lazy imports — keeps module importable without codeplane installed
         from codeplane.mcp.context import AppContext
 
-        clone_dir = self._clone_root / repo_id
+        from cpl_lab.clone import REPO_MANIFEST
+
+        info = REPO_MANIFEST.get(repo_id)
+        if info is None:
+            msg = f"Unknown repo_id: {repo_id}"
+            raise ValueError(msg)
+        clone_dir = self._clone_root / info["set"] / info["clone_name"]
         cp = clone_dir / ".codeplane"
         if not cp.exists():
             msg = f"No codeplane index at {cp}"
@@ -66,6 +83,15 @@ class RankingModel:
         self._loop.run_until_complete(self._ctx.coordinator.load_existing())
         self._cached_repo = repo_id
 
+        # Cache gate/ranker/cutoff once per repo (avoids per-query warnings)
+        from codeplane.ranking.cutoff import load_cutoff
+        from codeplane.ranking.gate import load_gate
+        from codeplane.ranking.ranker import load_ranker
+
+        self._gate = load_gate()
+        self._ranker = load_ranker()
+        self._cutoff = load_cutoff()
+
     def infer(self, input: dict) -> dict:  # noqa: A002
         """Run the full pipeline for a single query record.
 
@@ -85,15 +111,12 @@ class RankingModel:
         assert self._loop is not None  # noqa: S101
 
         from codeplane.mcp.tools.recon.raw_signals import raw_signals_pipeline
-        from codeplane.ranking.cutoff import load_cutoff
         from codeplane.ranking.features import (
             extract_cutoff_features,
             extract_gate_features,
             extract_ranker_features,
         )
-        from codeplane.ranking.gate import load_gate
         from codeplane.ranking.models import GateLabel
-        from codeplane.ranking.ranker import load_ranker
 
         # 1. Raw signals
         raw = self._loop.run_until_complete(
@@ -104,9 +127,8 @@ class RankingModel:
         repo_features = raw.get("repo_features", {})
 
         # 2. Gate
-        gate = load_gate()
         gate_features = extract_gate_features(candidates, query_features, repo_features)
-        gate_label = gate.classify(gate_features)
+        gate_label = self._gate.classify(gate_features)
 
         if gate_label != GateLabel.OK:
             return {
@@ -117,13 +139,12 @@ class RankingModel:
             }
 
         # 3. Rank
-        ranker = load_ranker()
         ranker_features = extract_ranker_features(candidates, query_features)
-        scores = ranker.score(ranker_features)
+        scores = self._ranker.score(ranker_features)
         scored = sorted(zip(candidates, scores), key=lambda x: -x[1])
 
         # 4. Cutoff
-        cutoff = load_cutoff()
+        cutoff = self._cutoff
         ranked_for_cutoff = [{**c, "ranker_score": s} for c, s in scored]
         cutoff_features = extract_cutoff_features(
             ranked_for_cutoff, query_features, repo_features,

@@ -1,15 +1,13 @@
 """Configuration resolution for cpl-lab.
 
 Priority (highest wins):
-  1. CLI flags (--workspace, --concurrency, etc.)
-  2. Environment variables (CPL_LAB_WORKSPACE, etc.)
-  3. lab.toml in the recon-lab project root
-  4. Built-in defaults
+  1. CLI flags (--workspace, etc.)
+  2. lab.toml in the recon-lab project root
+  3. Built-in defaults
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -42,21 +40,17 @@ def _load_toml(path: Path) -> dict:
 def resolve_workspace(cli_override: str | None = None) -> Path:
     """Resolve the workspace directory.
 
-    Priority: CLI flag > CPL_LAB_WORKSPACE env > lab.toml > default.
+    Priority: CLI flag > lab.toml > default (~/.cpl-lab).
     """
     if cli_override:
         return Path(cli_override).expanduser().resolve()
-
-    env = os.environ.get("CPL_LAB_WORKSPACE")
-    if env:
-        return Path(env).expanduser().resolve()
 
     cfg = _load_toml(_DEFAULT_CONFIG)
     toml_path = cfg.get("workspace", {}).get("path")
     if toml_path:
         return Path(toml_path).expanduser().resolve()
 
-    return Path.home() / ".codeplane" / "recon-lab"
+    return Path.home() / ".cpl-lab"
 
 
 def get_config(cli_override: str | None = None) -> dict:

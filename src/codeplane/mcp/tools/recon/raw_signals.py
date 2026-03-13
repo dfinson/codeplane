@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
-async def _raw_signals_pipeline(
+async def raw_signals_pipeline(
     app_ctx: AppContext,
     query: str,
     seeds: list[str] | None = None,
@@ -55,7 +55,7 @@ async def _raw_signals_pipeline(
 
     # Run all harvesters in parallel-safe order
     # A: Embedding (per-def + per-file, both indices) — no cap
-    emb_candidates = await _harvest_def_embedding(app_ctx, parsed, top_k=100000)
+    emb_candidates = await _harvest_def_embedding(app_ctx, parsed)
 
     # B: Term match
     term_candidates = await _harvest_term_match(app_ctx, parsed)
@@ -139,7 +139,6 @@ async def _raw_signals_pipeline(
         retriever_hits = sum([
             uid in emb_scores,
             cand.from_term_match,
-            cand.from_lexical,
             cand.from_graph,
             cand.from_explicit,
             cand.import_direction is not None,
@@ -185,8 +184,7 @@ async def _raw_signals_pipeline(
             # Term match signal (raw counts)
             "term_match_count": cand.term_match_count if cand.from_term_match else None,
             "term_total_matches": cand.term_total_matches if cand.from_term_match else None,
-            # Lexical signal (raw count)
-            "lex_hit_count": cand.lexical_hit_count if cand.from_lexical else None,
+
             # Graph signal (categorical)
             "graph_edge_type": cand.graph_edge_type,
             "graph_seed_rank": cand.graph_seed_rank,
@@ -240,7 +238,7 @@ async def _raw_signals_pipeline(
             "candidate_count": len(candidates_out),
             "emb_hits": len(emb_scores),
             "term_hits": sum(1 for c in merged.values() if c.from_term_match),
-            "lex_hits": sum(1 for c in merged.values() if c.from_lexical),
+
             "graph_hits": sum(1 for c in merged.values() if c.from_graph),
             "symbol_hits": sum(1 for c in merged.values() if c.from_explicit),
         },
@@ -286,7 +284,7 @@ def register_raw_signals_tool(mcp: FastMCP, app_ctx: AppContext) -> None:
         Does NOT filter, sort, or truncate the candidate pool.
         Returns the raw union of all retriever outputs.
         """
-        result = await _raw_signals_pipeline(
+        result = await raw_signals_pipeline(
             app_ctx, query,
             seeds=seeds or None,
             pins=pins or None,

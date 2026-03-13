@@ -153,7 +153,7 @@ def _build_hints(metrics: dict, gate_label: str) -> list[str]:
     return hints
 
 
-async def _recon_pipeline(
+async def recon_pipeline(
     app_ctx: AppContext,
     task: str,
     seeds: list[str] | None = None,
@@ -164,7 +164,7 @@ async def _recon_pipeline(
     Returns a dict with gate_label, ranked candidates with code snippets,
     query metrics, hints, and diagnostics.
     """
-    from codeplane.mcp.tools.recon.raw_signals import _raw_signals_pipeline
+    from codeplane.mcp.tools.recon.raw_signals import raw_signals_pipeline
     from codeplane.ranking.cutoff import load_cutoff
     from codeplane.ranking.features import (
         extract_cutoff_features,
@@ -179,7 +179,7 @@ async def _recon_pipeline(
     repo_root = app_ctx.coordinator.repo_root
 
     # 1. Get raw signals
-    raw = await _raw_signals_pipeline(app_ctx, task, seeds=seeds, pins=pins)
+    raw = await raw_signals_pipeline(app_ctx, task, seeds=seeds, pins=pins)
     candidates = raw.get("candidates", [])
     query_features = raw.get("query_features", {})
     repo_features = raw.get("repo_features", {})
@@ -326,7 +326,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False)
         """
         recon_id = uuid.uuid4().hex[:12]
 
-        result = await _recon_pipeline(
+        result = await recon_pipeline(
             app_ctx, task,
             seeds=seeds or None,
             pins=pins or None,

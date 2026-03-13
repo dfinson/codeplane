@@ -348,6 +348,10 @@ class IndexCoordinatorEngine:
 
         self._initialized = False
 
+        # Optional in-memory cache of all DefFacts (keyed by def_uid).
+        # Lazy-loaded on first batch_get_defs() call; cleared on close().
+        self._def_cache: dict[str, DefFact] | None = None
+
     def mark_stale(self) -> None:
         """Mark index as stale (query methods will block until fresh).
 
@@ -696,6 +700,7 @@ class IndexCoordinatorEngine:
         try:
             return await self._reindex_incremental_impl(changed_paths)
         finally:
+            self._def_cache = None
             self._fresh_event.set()
 
     async def _reindex_incremental_impl(self, changed_paths: list[Path]) -> IndexStats:
@@ -1218,6 +1223,7 @@ class IndexCoordinatorEngine:
         try:
             return await self._reindex_full_impl()
         finally:
+            self._def_cache = None
             self._fresh_event.set()
 
     async def _reindex_full_impl(self) -> IndexStats:
@@ -2131,6 +2137,7 @@ class IndexCoordinatorEngine:
     def close(self) -> None:
         """Close all resources."""
         self._lexical = None
+        self._def_cache = None
         self._initialized = False
         # Dispose DB engine to release file handles
         if hasattr(self, "db") and self.db is not None:
@@ -2812,25 +2819,49 @@ class IndexCoordinatorEngine:
                 imports=extraction.imports,
             )
 
-    def query_file_embeddings(self, text: str, top_k: int = 50) -> list[tuple[str, float]]:
+    def query_file_embeddings(self, text: str) -> list[tuple[str, float]]:
         """File-level semantic search for non-code files.
 
         Returns (relative_path, cosine_similarity) pairs ranked by similarity.
         Only searches the non-code file embedding index (config, docs, build files).
+        All files with positive similarity are returned.
         """
         if self._file_embedding is None or self._file_embedding.count == 0:
             return []
-        return self._file_embedding.query(text, top_k=top_k)
+        return self._file_embedding.query(text)
 
-    def query_def_embeddings(self, text: str, top_k: int = 200) -> list[tuple[str, float]]:
+    def query_def_embeddings(self, text: str) -> list[tuple[str, float]]:
         """Per-DefFact semantic search for code objects.
 
         Returns (def_uid, cosine_similarity) pairs ranked by similarity.
         Searches the per-def embedding index (functions, classes, methods, etc.).
+        All defs with positive similarity are returned.
         """
         if self._def_embedding is None or self._def_embedding.count == 0:
             return []
-        return self._def_embedding.query(text, top_k=top_k)
+        return self._def_embedding.query(text)
+
+    def batch_get_defs(self, def_uids: list[str]) -> dict[str, DefFact]:
+        """Get DefFacts by UID, using an in-memory cache.
+
+        On first call, loads ALL DefFacts from the database into memory
+        (~25 MB for the largest repos). Subsequent calls return from
+        cache with zero DB overhead.
+        """
+        if not def_uids:
+            return {}
+        if self._def_cache is None:
+            with self.db.session() as session:
+                all_defs = list(session.exec(select(DefFact)).all())
+                # Expunge so objects are usable outside the session
+                for d in all_defs:
+                    session.expunge(d)
+                self._def_cache = {d.def_uid: d for d in all_defs}
+                log.debug(
+                    "def_cache.loaded",
+                    count=len(self._def_cache),
+                )
+        return {uid: self._def_cache[uid] for uid in def_uids if uid in self._def_cache}
 
     def _share_embedding_model(self) -> None:
         """Share the ONNX model between file and def embedding indices.

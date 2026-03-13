@@ -5,6 +5,7 @@ features. All query types from non-eval repos participate
 (OK, UNSAT, BROAD, AMBIG).  Optimizes cross-entropy.
 
 Reads one table: ``data/merged/candidates_rank.parquet``.
+Uses streaming row-group iteration to avoid loading the full table.
 """
 
 from __future__ import annotations
@@ -16,6 +17,17 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
+
+
+# Columns needed from the merged parquet for gate feature extraction.
+_GATE_LOAD_COLS = [
+    "query_id", "query_type", "repo_set", "label_gate",
+    "emb_score", "parent_dir", "path", "retriever_hits",
+    "object_count", "file_count",
+    "query_len", "identifier_density", "has_path",
+    "has_numbers", "has_quoted_strings",
+]
 
 
 GATE_FEATURES = [
@@ -107,6 +119,49 @@ def _compute_gate_features(
     return f
 
 
+def _stream_gate_features(merged_dir: Path) -> list[dict]:
+    """Build per-query gate feature rows by streaming row groups.
+
+    Reads one Parquet row group at a time (one per repo), keeping only
+    the columns needed for gate features.  Peak RAM ≈ largest single
+    repo rather than the full dataset.
+    """
+    pq_path = merged_dir / "candidates_rank.parquet"
+    pf = pq.ParquetFile(pq_path)
+
+    allowed_sets = {"ranker-gate", "cutoff"}
+
+    # Accumulators: query_id → per-query candidate dicts + metadata
+    # Process one row group → aggregate → discard.
+    all_rows: list[dict] = []
+
+    for rg_idx in range(pf.metadata.num_row_groups):
+        table = pf.read_row_group(rg_idx, columns=_GATE_LOAD_COLS)
+        chunk = table.to_pandas()
+        del table
+
+        # Filter to non-eval repo sets
+        chunk = chunk[chunk["repo_set"].isin(allowed_sets)]
+        if chunk.empty:
+            del chunk
+            continue
+
+        # Group by query_id within this row group
+        for qid, grp in chunk.groupby("query_id", sort=False):
+            first = grp.iloc[0]
+            cands = grp.to_dict("records")
+            repo_features = {
+                "object_count": first.get("object_count", 0),
+                "file_count": first.get("file_count", 0),
+            }
+            feat = _compute_gate_features(cands, first, repo_features)
+            feat["label_gate"] = first.get("label_gate", "OK")
+            all_rows.append(feat)
+        del chunk
+
+    return all_rows
+
+
 def train_gate(
     merged_dir: Path,
     output_path: Path,
@@ -122,32 +177,7 @@ def train_gate(
     Returns:
         Training summary dict.
     """
-    # Everything comes from the single denormalized table
-    from cpl_lab.train_ranker import _load_candidates
-    all_df = _load_candidates(merged_dir, repo_sets={"ranker-gate", "cutoff"}, ok_only=False)
-    if all_df.empty:
-        raise ValueError("No candidate data found (non-eval repos)")
-
-    # Group candidates by (query_id); deduce per-query metadata from first row
-    candidates_by_query: dict[str, list[dict]] = {}
-    query_info: dict[str, dict] = {}
-    for _, row in all_df.iterrows():
-        qid = row["query_id"]
-        candidates_by_query.setdefault(qid, []).append(row.to_dict())
-        if qid not in query_info:
-            query_info[qid] = row.to_dict()
-
-    rows: list[dict] = []
-    for qid, cands in candidates_by_query.items():
-        q = query_info[qid]
-        repo_features = {
-            "object_count": q.get("object_count", 0),
-            "file_count": q.get("file_count", 0),
-        }
-        feat = _compute_gate_features(cands, q, repo_features)
-        feat["label_gate"] = q.get("label_gate", "OK")
-        rows.append(feat)
-
+    rows = _stream_gate_features(merged_dir)
     if not rows:
         raise ValueError("No gate training data found")
 

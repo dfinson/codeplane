@@ -1,121 +1,38 @@
-"""Collect retrieval signals — CLI adapter for collect_signals.py."""
+"""Collect retrieval signals — Rich UI with per-worker progress."""
 
 from __future__ import annotations
 
-import subprocess
+import os
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import click
-import httpx
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.table import Table
+from rich.text import Text
 
 
-def _iter_repos(data_dir: Path, clones_dir: Path, repo_set: str, repo: str | None) -> list[str]:
-    """List repo IDs that have ground truth ready for signal collection."""
-    if repo:
-        return [repo]
+console = Console()
 
-    repo_ids = []
-    if repo_set == "all":
-        set_dirs = sorted(d for d in clones_dir.iterdir() if d.is_dir())
-    else:
-        set_dirs = [clones_dir / repo_set]
 
-    for set_dir in set_dirs:
-        if not set_dir.is_dir():
-            continue
-        for repo_dir in sorted(set_dir.iterdir()):
-            if not repo_dir.is_dir():
-                continue
-            rid = repo_dir.name
-            # Only collect if ground truth queries exist
-            queries = data_dir / rid / "ground_truth" / "queries.jsonl"
-            if queries.exists():
-                repo_ids.append(rid)
-    return repo_ids
+def _iter_repos(data_dir: Path, repo_set: str) -> list[str]:
+    """List repo IDs for signal collection (training sets only)."""
+    from cpl_lab.clone import REPO_MANIFEST
+    train_sets = {"ranker-gate", "cutoff"}
+    allowed = {repo_set} if repo_set != "all" else train_sets
+    train_ids = {rid for rid, info in REPO_MANIFEST.items() if info.get("set") in allowed}
+    return sorted(
+        d.name for d in data_dir.iterdir()
+        if d.is_dir() and d.name in train_ids and (d / "ground_truth.jsonl").exists()
+    )
 
 
 def _find_clone_dir(clones_dir: Path, repo_id: str) -> Path | None:
-    """Find the clone directory for a repo ID across all set dirs."""
-    for set_dir in sorted(clones_dir.iterdir()):
-        if not set_dir.is_dir():
-            continue
-        candidate = set_dir / repo_id
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
-def _parse_port(mcp_url: str) -> int:
-    """Extract the port number from the MCP URL."""
-    parsed = urlparse(mcp_url)
-    return parsed.port or 7654
-
-
-def _start_cpl_server(clone_dir: Path, port: int = 7654) -> subprocess.Popen:
-    """Start ``cpl up --dev-mode`` as a background process."""
-    return subprocess.Popen(
-        ["cpl", "up", "--dev-mode", "--port", str(port), str(clone_dir)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-
-def _wait_for_server(
-    mcp_url: str, proc: subprocess.Popen, timeout: int = 60,
-) -> bool:
-    """Poll until the MCP endpoint accepts connections or *timeout* expires."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            stderr = (proc.stderr.read() or b"").decode(errors="replace").strip()
-            click.echo(f"  cpl server exited early (code {proc.returncode})")
-            if stderr:
-                click.echo(f"  stderr: {stderr[:500]}")
-            return False
-        time.sleep(15)
-        try:
-            r = httpx.post(
-                mcp_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": "health",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {},
-                        "clientInfo": {"name": "cpl-health-check", "version": "1.0"},
-                    },
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                timeout=5,
-            )
-            if r.status_code == 200:
-                return True
-        except httpx.HTTPError:
-            elapsed = timeout - (deadline - time.monotonic())
-            click.echo(f"  Waiting for server... ({elapsed:.0f}s / {timeout}s)")
-    return False
-
-
-def _stop_cpl_server(clone_dir: Path, proc: subprocess.Popen) -> None:
-    """Stop the cpl daemon and clean up the background process."""
-    subprocess.run(
-        ["cpl", "down", str(clone_dir)],
-        capture_output=True,
-        check=False,
-    )
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+    from cpl_lab.clone import clone_dir_for
+    return clone_dir_for(repo_id, clones_dir)
 
 
 def run_collect(
@@ -123,58 +40,138 @@ def run_collect(
     clones_dir: Path,
     repo_set: str = "all",
     repo: str | None = None,
-    mcp_url: str = "http://127.0.0.1:7654/mcp",
+    workers: int = 0,
     verbose: bool = False,
 ) -> None:
-    """Collect retrieval signals for repos with ground truth.
+    """Collect retrieval signals — direct in-process, multi-worker."""
+    from cpl_lab.collect_signals import collect_all
 
-    For each repo, starts a ``cpl up --dev-mode`` server, collects
-    signals via MCP, then tears the server down before moving on.
-    """
-    from cpl_lab.collect_signals import collect_signals
-
-    repo_ids = _iter_repos(data_dir, clones_dir, repo_set, repo)
+    repo_ids = [repo] if repo else _iter_repos(data_dir, repo_set)
     if not repo_ids:
-        click.echo("No repos with ground truth found for signal collection.")
+        console.print("[yellow]No repos with ground truth found.[/yellow]")
         return
 
-    port = _parse_port(mcp_url)
-
-    click.echo(f"Collecting signals for {len(repo_ids)} repos...")
-    ok = failed = 0
-
+    jobs: list[tuple[str, Path, Path]] = []
+    skipped = 0
     for rid in repo_ids:
-        click.echo(f"\n=== {rid} ===")
-
-        clone_dir = _find_clone_dir(clones_dir, rid)
-        if clone_dir is None:
-            click.echo(f"  ERROR: clone directory not found for {rid}", err=True)
-            failed += 1
+        # Skip repos that already have completed signals
+        sig_dir = data_dir / rid / "signals"
+        if (sig_dir / "summary.json").exists() and (sig_dir / "candidates_rank.parquet").exists():
+            skipped += 1
             continue
+        cd = _find_clone_dir(clones_dir, rid)
+        if cd and (cd / ".codeplane" / "index.db").exists():
+            jobs.append((rid, data_dir / rid, cd))
 
-        # Start the cpl server for this repo
-        click.echo(f"  Starting cpl server (port {port})...")
-        proc = _start_cpl_server(clone_dir, port=port)
-        try:
-            if not _wait_for_server(mcp_url, proc):
-                click.echo("  ERROR: cpl server failed to start within 60s", err=True)
-                failed += 1
-                continue
+    if skipped:
+        console.print(f"[dim]Skipping {skipped} repos with completed signals.[/dim]")
 
-            click.echo("  Server ready, collecting signals...")
-            summary = collect_signals(
-                repo_id=rid,
-                data_dir=data_dir / rid,
-                mcp_url=mcp_url,
-            )
-            click.echo(f"  {summary['queries_processed']} queries, "
-                       f"{summary['total_candidates']} candidates")
-            ok += 1
-        except Exception as e:
-            click.echo(f"  ERROR: {e}", err=True)
+    if not jobs:
+        console.print("[yellow]No indexed repos ready for collection.[/yellow]")
+        return
+
+    if workers <= 0:
+        workers = min(os.cpu_count() or 6, 6)
+
+    total = len(jobs)
+
+    # ── Rich progress ────────────────────────────────────────────
+    # Overall bar
+    overall = Progress(
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(bar_width=30, complete_style="green"),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console, expand=False,
+    )
+    overall_bar = overall.add_task("Overall", total=total)
+
+    # Per-worker bars (shows active repos)
+    worker_progress = Progress(
+        TextColumn("  {task.description}", style="dim"),
+        BarColumn(bar_width=25, style="cyan", complete_style="green"),
+        TaskProgressColumn(),
+        console=console, expand=False,
+    )
+    # Track active worker tasks: repo_id -> task_id
+    worker_tasks: dict[str, object] = {}
+
+    # Completed table
+    tbl = Table(box=None, pad_edge=False, show_header=True, header_style="dim")
+    tbl.add_column("Repo", style="cyan", min_width=28)
+    tbl.add_column("Queries", justify="right", min_width=7)
+    tbl.add_column("Candidates", justify="right", min_width=10)
+    tbl.add_column("Time", justify="right", min_width=7)
+    tbl.add_column("", width=4)
+
+    ok = failed = tot_q = tot_c = 0
+    t_start = time.monotonic()
+
+    def _render() -> Panel:
+        header = Text.from_markup(
+            f"  [bold]{total}[/bold] repos  ·  [bold]{workers}[/bold] workers"
+            f"  ·  {ok}[green] ok[/green]  {failed}[red] fail[/red]"
+            f"  ·  {tot_q:,} queries → {tot_c:,} candidates"
+        )
+        parts = [header, Text(""), overall]
+        # Only show worker bars if there are active tasks
+        if worker_progress.tasks:
+            parts.append(worker_progress)
+        if tbl.rows:
+            parts.extend([Text(""), tbl])
+        return Panel(Group(*parts),
+                     title="Signal Collection", title_align="left",
+                     border_style="dim", width=72, padding=(0, 1))
+
+    _last_refresh = 0.0
+
+    def on_progress(repo_id: str, done: int, total_q: int) -> None:
+        nonlocal _last_refresh
+        if repo_id not in worker_tasks:
+            tid = worker_progress.add_task(repo_id, total=total_q)
+            worker_tasks[repo_id] = tid
+        worker_progress.update(worker_tasks[repo_id], completed=done, total=total_q)
+        # Throttle UI refreshes to avoid flicker
+        now = time.monotonic()
+        if now - _last_refresh > 0.5:
+            _last_refresh = now
+            live.update(_render())
+
+    def on_done(s: dict) -> None:
+        nonlocal ok, failed, tot_q, tot_c
+        rid = s["repo_id"]
+        q, c = s["queries_processed"], s["total_candidates"]
+        sec = s.get("elapsed_sec", 0)
+
+        # Remove worker bar
+        if rid in worker_tasks:
+            worker_progress.remove_task(worker_tasks[rid])
+            del worker_tasks[rid]
+
+        if s.get("status") == "ok":
+            ok += 1; tot_q += q; tot_c += c
+            mark = "[green]✓[/green]"
+        else:
             failed += 1
-        finally:
-            click.echo("  Stopping cpl server...")
-            _stop_cpl_server(clone_dir, proc)
+            mark = "[red]✗[/red]"
 
-    click.echo(f"\nDone: {ok} collected, {failed} failed")
+        tbl.add_row(rid, f"{q}", f"{c:,}", f"{sec}s", mark)
+        overall.update(overall_bar, advance=1)
+        live.update(_render())
+
+    with Live(_render(), console=console, refresh_per_second=4) as live:
+        collect_all(repo_jobs=jobs, workers=workers,
+                    on_progress=on_progress, on_complete=on_done)
+
+    # Final summary
+    elapsed = round(time.monotonic() - t_start, 1)
+    console.print()
+    console.print(Panel(
+        Text.from_markup(
+            f"[green]✓[/green] {ok} collected  [red]{failed}[/red] failed"
+            f"  ({elapsed}s)\n"
+            f"  {tot_q:,} queries → {tot_c:,} candidates"
+        ),
+        title="Done", title_align="left",
+        border_style="green" if failed == 0 else "yellow", width=60,
+    ))

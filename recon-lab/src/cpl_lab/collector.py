@@ -116,6 +116,8 @@ def collect_ground_truth(
             ("thrash_preventing_defs", "thrash_preventing"),
         ]:
             for rd in task.get(tier_key, []):
+                # Optionally resolve against index for end_line, but don't
+                # skip if unresolved — the GT itself is the source of truth.
                 resolved = _resolve_def(
                     cur, rd["path"], rd["name"], rd["kind"],
                     start_line=rd["start_line"],
@@ -128,15 +130,14 @@ def collect_ground_truth(
                         "name": rd["name"],
                         "kind": rd["kind"],
                     })
-                    continue
                 touched.append({
                     "run_id": run_id,
-                    "def_uid": resolved["def_uid"],
+                    "candidate_key": f"{rd['path']}:{rd['kind']}:{rd['name']}:{rd['start_line']}",
                     "path": rd["path"],
                     "kind": rd["kind"],
                     "name": rd["name"],
-                    "start_line": resolved["start_line"],
-                    "end_line": resolved["end_line"],
+                    "start_line": rd["start_line"],
+                    "end_line": resolved["end_line"] if resolved else rd["start_line"],
                     "tier": tier_label,
                 })
 

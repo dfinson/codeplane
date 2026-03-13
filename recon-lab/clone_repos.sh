@@ -11,7 +11,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLONES_DIR="${CPL_LAB_WORKSPACE:-$HOME/.codeplane/recon-lab}/clones"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLONES_DIR=$(python3 -c "
+import tomllib, pathlib
+lab = pathlib.Path('${SCRIPT_DIR}/lab.toml')
+cfg = tomllib.loads(lab.read_text()) if lab.exists() else {}
+print(pathlib.Path(cfg.get('workspace',{}).get('path','~/.cpl-lab')).expanduser() / 'clones')
+")
 
 mkdir -p "$CLONES_DIR/ranker-gate" "$CLONES_DIR/cutoff" "$CLONES_DIR/eval"
 

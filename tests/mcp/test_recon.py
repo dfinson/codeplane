@@ -373,7 +373,7 @@ class TestHarvestCandidateNew:
         assert c.evidence[0].category == "embedding"
 
     def test_evidence_axes_unchanged(self) -> None:
-        c = HarvestCandidate(def_uid="test::func", from_term_match=True, from_lexical=True)
+        c = HarvestCandidate(def_uid="test::func", from_term_match=True, from_explicit=True)
         assert c.evidence_axes == 2
 
 

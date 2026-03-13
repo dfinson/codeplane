@@ -34,44 +34,37 @@ log = structlog.get_logger(__name__)
 async def _harvest_def_embedding(
     app_ctx: AppContext,
     parsed: ParsedTask,
-    *,
-    top_k: int = 200,
 ) -> dict[str, HarvestCandidate]:
     """Per-def embedding harvest for raw signal collection.
 
     Returns HarvestCandidate objects keyed by def_uid with embedding
-    similarity as evidence. Used by recon_raw_signals, not the
-    production recon pipeline.
+    similarity as evidence. All defs with positive similarity are returned.
     """
     coordinator = app_ctx.coordinator
     query_text = parsed.query_text or parsed.raw
     candidates: dict[str, HarvestCandidate] = {}
 
     # Per-def embedding results (code defs) — batch lookup
-    def_results = coordinator.query_def_embeddings(query_text, top_k=top_k)
+    def_results = coordinator.query_def_embeddings(query_text)
     if def_results:
-        from codeplane.index._internal.indexing.graph import FactQueries
-
-        with coordinator.db.session() as session:
-            fq = FactQueries(session)
-            uids = [uid for uid, _ in def_results]
-            defs_map = fq.batch_get_defs(uids)
-            sim_map = {uid: sim for uid, sim in def_results}
-            for uid, d in defs_map.items():
-                candidates[uid] = HarvestCandidate(
-                    def_uid=uid,
-                    def_fact=d,
-                    evidence=[
-                        EvidenceRecord(
-                            category="embedding",
-                            detail=f"def embedding sim={sim_map[uid]:.3f}",
-                            score=sim_map[uid],
-                        )
-                    ],
-                )
+        uids = [uid for uid, _ in def_results]
+        defs_map = coordinator.batch_get_defs(uids)
+        sim_map = {uid: sim for uid, sim in def_results}
+        for uid, d in defs_map.items():
+            candidates[uid] = HarvestCandidate(
+                def_uid=uid,
+                def_fact=d,
+                evidence=[
+                    EvidenceRecord(
+                        category="embedding",
+                        detail=f"def embedding sim={sim_map[uid]:.3f}",
+                        score=sim_map[uid],
+                    )
+                ],
+            )
 
     # File-level embedding results (non-code files) → expand to defs in those files
-    file_results = coordinator.query_file_embeddings(query_text, top_k=top_k)
+    file_results = coordinator.query_file_embeddings(query_text)
     if file_results:
         from codeplane.index._internal.indexing.graph import FactQueries
 
@@ -344,17 +337,15 @@ async def _harvest_graph(
 
     # Resolve DefFacts for seeds — batch lookup for missing ones
     seeds_with_facts: list[tuple[str, HarvestCandidate]] = []
-    with coordinator.db.session() as session:
-        fq = FactQueries(session)
-        missing_uids = [uid for uid in seed_uids if merged[uid].def_fact is None]
-        if missing_uids:
-            defs_map = fq.batch_get_defs(missing_uids)
-            for uid, d in defs_map.items():
-                merged[uid].def_fact = d
-        for uid in seed_uids:
-            cand = merged[uid]
-            if cand.def_fact is not None:
-                seeds_with_facts.append((uid, cand))
+    missing_uids = [uid for uid in seed_uids if merged[uid].def_fact is None]
+    if missing_uids:
+        defs_map = coordinator.batch_get_defs(missing_uids)
+        for uid, d in defs_map.items():
+            merged[uid].def_fact = d
+    for uid in seed_uids:
+        cand = merged[uid]
+        if cand.def_fact is not None:
+            seeds_with_facts.append((uid, cand))
 
     if not seeds_with_facts:
         return candidates
@@ -512,7 +503,7 @@ async def _harvest_imports(
         # Resolve seed file paths — batch lookup for missing defs, then batch file resolution
         missing_uids = [uid for uid in seed_uids if merged[uid].def_fact is None]
         if missing_uids:
-            defs_map = fq.batch_get_defs(missing_uids)
+            defs_map = coordinator.batch_get_defs(missing_uids)
             for uid, d in defs_map.items():
                 merged[uid].def_fact = d
 

@@ -463,13 +463,11 @@ class HarvestCandidate:
 
     # Which harvesters found this candidate
     from_term_match: bool = False
-    from_lexical: bool = False
     from_explicit: bool = False
     from_graph: bool = False
 
     # Harvester-specific scores
     matched_terms: set[str] = field(default_factory=set)
-    lexical_hit_count: int = 0
 
     # Raw signal fields for ranking model training
     term_match_count: int = 0  # Raw count of query terms matching this def's name
@@ -501,7 +499,6 @@ class HarvestCandidate:
         return sum(
             [
                 self.from_term_match,
-                self.from_lexical,
                 self.from_explicit,
                 self.from_graph,
             ]
@@ -521,7 +518,6 @@ class HarvestCandidate:
         return (
             len(self.matched_terms) >= 2
             or (len(self.matched_terms) == 1 and self.hub_score >= 3)
-            or self.from_lexical
             or self.from_explicit
             or self.from_graph
         )

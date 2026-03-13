@@ -4,6 +4,8 @@ Trains a LightGBM regressor to predict N(q) — how many top-ranked
 objects to return.  The ranker (trained on ranker-gate repos) scores
 cutoff-set candidates.  N* is computed from those scores.  Zero leakage.
 
+Uses streaming row-group iteration to avoid loading the full table.
+
 Reads one table: ``data/merged/candidates_rank.parquet``.
 """
 
@@ -14,10 +16,14 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from cpl_lab.train_ranker import (
     RANKER_FEATURES,
+    _RANKER_LOAD_COLS,
+    _prepare_features,
 )
+from cpl_lab.schema import OK_QUERY_TYPES
 
 
 def _compute_n_star(
@@ -106,10 +112,11 @@ def train_cutoff(
     The ranker (trained on ranker+gate repos) scores cutoff repo
     candidates. N* is computed from those scores. Zero leakage.
 
+    Streams one Parquet row group at a time to avoid loading the full
+    dataset into memory.
+
     Args:
         merged_dir: Path to ``data/merged/`` with Parquet files.
-            Must contain ``candidates_rank.parquet`` from cutoff repos
-            and ``queries.parquet`` with cutoff queries.
         output_path: Where to save ``cutoff.lgbm``.
         ranker_model_path: Path to trained ``ranker.lgbm``.
             If None, looks for it next to output_path.
@@ -127,47 +134,58 @@ def train_cutoff(
             f"Train the ranker first."
         )
 
-    from cpl_lab.train_ranker import _prepare_features
-
     ranker = lgb.Booster(model_file=str(ranker_model_path))
-
-    # Load cutoff candidates (cutoff set only — disjoint from ranker training)
-    from cpl_lab.train_ranker import _load_candidates
-    candidates_df = _load_candidates(merged_dir, repo_sets={"cutoff"})
-    if candidates_df.empty:
-        raise ValueError("No candidate data found (cutoff set)")
-
-    candidates_df = _prepare_features(candidates_df)
-
-    # Score all candidates with the trained ranker
     feature_names = ranker.feature_name()
-    X_all = candidates_df[feature_names].fillna(0).values
-    candidates_df["ranker_score"] = ranker.predict(X_all)
 
-    # Compute N* per query
+    # Stream cutoff-set candidates row-group by row-group
+    pq_path = merged_dir / "candidates_rank.parquet"
+    pf = pq.ParquetFile(pq_path)
+
     cutoff_rows: list[dict] = []
 
-    for (run_id, query_id), qdf in candidates_df.groupby(["run_id", "query_id"]):
-        scores = qdf["ranker_score"].values
-        labels = qdf["label_relevant"].astype(int).values
+    for rg_idx in range(pf.metadata.num_row_groups):
+        table = pf.read_row_group(rg_idx, columns=_RANKER_LOAD_COLS)
+        chunk = table.to_pandas()
+        del table
 
-        # Sort by predicted score
-        order = np.argsort(-scores)
-        sorted_scores = scores[order]
-        sorted_labels = labels[order]
-        sorted_hits = qdf["retriever_hits"].values[order]
+        # Filter to cutoff set only, OK queries only
+        chunk = chunk[chunk["repo_set"] == "cutoff"]
+        if "query_type" in chunk.columns:
+            chunk = chunk[chunk["query_type"].isin(OK_QUERY_TYPES)]
+        if chunk.empty:
+            del chunk
+            continue
 
-        n_star = _compute_n_star(sorted_scores, sorted_labels)
+        chunk = _prepare_features(chunk)
 
-        feat = _extract_cutoff_features(
-            sorted_scores, sorted_hits,
-            query_len=int(qdf["query_len"].iloc[0]),
-            has_identifier=bool(qdf["has_identifier"].iloc[0]),
-            has_path=bool(qdf["has_path"].iloc[0]),
-            n_candidates=len(qdf),
-        )
-        feat["n_star"] = n_star
-        cutoff_rows.append(feat)
+        # Score all candidates with the trained ranker
+        X_all = chunk[feature_names].fillna(0).values
+        chunk["ranker_score"] = ranker.predict(X_all)
+
+        # Compute N* per query within this row group
+        for (run_id, query_id), qdf in chunk.groupby(["run_id", "query_id"]):
+            scores = qdf["ranker_score"].values
+            labels = qdf["label_relevant"].astype(int).values
+
+            # Sort by predicted score
+            order = np.argsort(-scores)
+            sorted_scores = scores[order]
+            sorted_labels = labels[order]
+            sorted_hits = qdf["retriever_hits"].values[order]
+
+            n_star = _compute_n_star(sorted_scores, sorted_labels)
+
+            feat = _extract_cutoff_features(
+                sorted_scores, sorted_hits,
+                query_len=int(qdf["query_len"].iloc[0]),
+                has_identifier=bool(qdf["has_identifier"].iloc[0]),
+                has_path=bool(qdf["has_path"].iloc[0]),
+                n_candidates=len(qdf),
+            )
+            feat["n_star"] = n_star
+            cutoff_rows.append(feat)
+
+        del chunk
 
     if not cutoff_rows:
         raise ValueError("No cutoff training rows generated")
