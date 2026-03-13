@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createJob, fetchRepos } from "../api/client";
+import { VoiceButton } from "./VoiceButton";
 
 export function JobCreationScreen() {
   const navigate = useNavigate();
@@ -102,6 +103,10 @@ export function JobCreationScreen() {
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Describe the task for the coding agent…"
             required
+          />
+          <VoiceButton
+            onTranscript={(text) => setPrompt((prev) => (prev ? `${prev} ${text}` : text))}
+            disabled={submitting}
           />
         </div>
 

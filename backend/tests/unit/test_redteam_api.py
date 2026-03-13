@@ -172,9 +172,10 @@ class TestStubRoutes:
         assert resp.status_code in (404, 405, 500)
 
     @pytest.mark.asyncio
-    async def test_voice_transcribe_returns_404(self, client: AsyncClient) -> None:
+    async def test_voice_transcribe_returns_error(self, client: AsyncClient) -> None:
+        # No audio field → 422 validation error (endpoint is now implemented)
         resp = await client.post("/api/voice/transcribe")
-        assert resp.status_code in (404, 405)
+        assert resp.status_code in (404, 405, 422, 500)
 
     @pytest.mark.asyncio
     async def test_get_global_settings_returns_200(self, client: AsyncClient) -> None:

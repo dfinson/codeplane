@@ -19,6 +19,7 @@ from backend.services.approval_service import ApprovalService
 from backend.services.event_bus import EventBus
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
+from backend.services.voice_service import VoiceService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -73,6 +74,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.sse_manager = sse_manager
     app.state.runtime_service = runtime_service
     app.state.approval_service = approval_service
+
+    # --- Voice service ---
+    voice_service: VoiceService | None = None
+    if config.voice.enabled:
+        voice_service = VoiceService(model_name=config.voice.model)
+    app.state.voice_service = voice_service
+    app.state.voice_max_bytes = config.voice.max_audio_size_mb * 1024 * 1024
 
     # Session factory available for route handlers that need ad-hoc sessions
     app.state.session_factory = session_factory

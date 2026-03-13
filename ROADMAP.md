@@ -126,13 +126,13 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Local transcription with faster-whisper.
 
-- [ ] `VoiceService` — load model, transcribe audio bytes
-- [ ] Voice endpoint (`POST /api/voice/transcribe`)
-- [ ] Frontend audio capture (MediaRecorder, WebM/Opus)
-- [ ] Voice input button component (press-and-hold)
-- [ ] Client-side size limit enforcement
-- [ ] "Local transcription" indicator in UI
-- [ ] Voice config (`voice.enabled`, `voice.model`, `voice.max_audio_size_mb`)
+- [x] `VoiceService` — load model, transcribe audio bytes
+- [x] Voice endpoint (`POST /api/voice/transcribe`)
+- [x] Frontend audio capture (MediaRecorder, WebM/Opus)
+- [x] Voice input button component (press-and-hold)
+- [x] Client-side size limit enforcement
+- [x] "Local transcription" indicator in UI
+- [x] Voice config (`voice.enabled`, `voice.model`, `voice.max_audio_size_mb`)
 
 ---
 
