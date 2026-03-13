@@ -1,5 +1,6 @@
 import { useState, useCallback, type ReactNode, type FormEvent } from "react";
 import { sendOperatorMessage } from "../api/client";
+import { VoiceButton } from "./VoiceButton";
 
 export function OperatorMessageInput({ jobId }: { jobId: string }): ReactNode {
   const [content, setContent] = useState("");
@@ -40,6 +41,10 @@ export function OperatorMessageInput({ jobId }: { jobId: string }): ReactNode {
       >
         Send
       </button>
+      <VoiceButton
+        onTranscript={(text) => setContent((prev) => (prev ? `${prev} ${text}` : text))}
+        disabled={sending}
+      />
     </form>
   );
 }

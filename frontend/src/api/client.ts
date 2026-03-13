@@ -190,4 +190,21 @@ export function sendOperatorMessage(
   });
 }
 
+// --- Voice ---
+
+export async function transcribeAudio(audio: Blob): Promise<string> {
+  const form = new FormData();
+  form.append("audio", audio, "recording.webm");
+  const res = await fetch(`${BASE}/voice/transcribe`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, (body as { detail?: string }).detail ?? res.statusText);
+  }
+  const data = (await res.json()) as { text: string };
+  return data.text;
+}
+
 export { ApiError };
