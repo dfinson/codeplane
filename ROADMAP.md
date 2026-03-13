@@ -112,13 +112,13 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 > Approval routing, operator messages, protected paths.
 
-- [ ] `ApprovalService` — persist requests, await resolution, route decisions to adapter
-- [ ] Approval REST endpoints (`GET /api/jobs/{id}/approvals`, `POST /api/approvals/{id}/resolve`)
-- [ ] Approval banner component (description, proposed action, approve/reject buttons)
-- [ ] Concurrent approval notifications (toasts, badge on Sign-off tab)
-- [ ] Operator message injection (`POST /api/jobs/{id}/messages` → `adapter.send_message`)
-- [ ] Protected paths configuration → SDK permission rules
-- [ ] Aging warning badge for approvals older than 30 minutes
+- [x] `ApprovalService` — persist requests, await resolution, route decisions to adapter
+- [x] Approval REST endpoints (`GET /api/jobs/{id}/approvals`, `POST /api/approvals/{id}/resolve`)
+- [x] Approval banner component (description, proposed action, approve/reject buttons)
+- [x] Concurrent approval notifications (toasts, badge on Sign-off tab)
+- [x] Operator message injection (`POST /api/jobs/{id}/messages` → `adapter.send_message`)
+- [x] Protected paths configuration → SDK permission rules
+- [x] Aging warning badge for approvals older than 30 minutes
 
 ---
 
