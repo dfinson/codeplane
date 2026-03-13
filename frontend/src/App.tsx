@@ -5,6 +5,7 @@ import { DashboardScreen } from "./components/DashboardScreen";
 import { JobDetailScreen } from "./components/JobDetailScreen";
 import { JobCreationScreen } from "./components/JobCreationScreen";
 import { RepositoryDetailView } from "./components/RepositoryDetailView";
+import { SettingsScreen } from "./components/SettingsScreen";
 
 export function App() {
   const connectionStatus = useTowerStore(selectConnectionStatus);
@@ -26,6 +27,7 @@ export function App() {
             Dashboard
           </NavLink>
           <NavLink to="/jobs/new">New Job</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <div className="app-header__status">
           <span
@@ -43,6 +45,7 @@ export function App() {
             path="/repos/:repoPath"
             element={<RepositoryDetailView />}
           />
+          <Route path="/settings" element={<SettingsScreen />} />
         </Routes>
       </main>
     </div>

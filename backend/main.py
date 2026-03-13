@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
+import structlog
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,7 @@ from backend.persistence.event_repo import EventRepository
 from backend.services.agent_adapter import CopilotAdapter
 from backend.services.approval_service import ApprovalService
 from backend.services.event_bus import EventBus
+from backend.services.retention_service import RetentionService
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
 from backend.services.voice_service import VoiceService
@@ -27,6 +30,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from backend.models.events import DomainEvent
+
+log = structlog.get_logger()
 
 
 @asynccontextmanager
@@ -82,6 +87,22 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.voice_service = voice_service
     app.state.voice_max_bytes = config.voice.max_audio_size_mb * 1024 * 1024
 
+    # --- Retention service ---
+    retention_service = RetentionService(
+        session_factory=session_factory,
+        config=config,
+    )
+    app.state.retention_service = retention_service
+
+    if config.retention.cleanup_on_startup:
+        await retention_service.run_cleanup()
+
+    # Start daily retention background task
+    retention_task = asyncio.create_task(
+        retention_service.daily_loop(),
+        name="retention-daily",
+    )
+
     # Session factory available for route handlers that need ad-hoc sessions
     app.state.session_factory = session_factory
 
@@ -96,20 +117,27 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.dependency_overrides[jobs._get_session] = _session_dep
     yield
+    retention_task.cancel()
     await runtime_service.shutdown()
     await sse_manager.close_all()
     app.dependency_overrides.clear()
     await engine.dispose()
 
 
-def create_app(*, dev: bool = False) -> FastAPI:
+def create_app(*, dev: bool = False, tunnel_origin: str | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="Tower", version="0.1.0", lifespan=_lifespan)
 
+    origins: list[str] = []
     if dev:
+        origins.append("http://localhost:5173")
+    if tunnel_origin:
+        origins.append(tunnel_origin)
+
+    if origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173"],
+            allow_origins=origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -146,8 +174,93 @@ def up(host: str | None, port: int | None, dev: bool, tunnel: bool) -> None:
     # Run Alembic migrations before starting the server
     run_migrations()
 
-    app = create_app(dev=dev)
-    uvicorn.run(app, host=host, port=port)
+    # Startup warning for 0.0.0.0 binding
+    if host == "0.0.0.0":  # noqa: S104
+        log.warning(
+            "binding_all_interfaces",
+            host=host,
+            message="Binding to 0.0.0.0 — no authentication is enforced. Use --tunnel for authenticated remote access.",
+        )
+        click.secho(
+            "WARNING: Binding to 0.0.0.0 — no authentication is enforced.",
+            fg="yellow",
+            err=True,
+        )
+
+    tunnel_origin: str | None = None
+    tunnel_proc = None
+
+    if tunnel:
+        tunnel_origin, tunnel_proc = _start_tunnel(port)
+
+    app = create_app(dev=dev, tunnel_origin=tunnel_origin)
+
+    try:
+        _print_startup_banner(host, port, dev, tunnel_origin)
+        uvicorn.run(app, host=host, port=port)
+    finally:
+        if tunnel_proc is not None:
+            tunnel_proc.terminate()
+
+
+def _start_tunnel(port: int) -> tuple[str | None, Any]:
+    """Start a devtunnel and return (origin_url, process)."""
+    import subprocess
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "devtunnel",
+                "host",
+                "--port-numbers",
+                str(port),
+                "--allow-anonymous",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        # Read output lines looking for the tunnel URL
+        import re
+
+        tunnel_url: str | None = None
+        if proc.stdout:
+            for line in proc.stdout:
+                match = re.search(r"(https://\S+\.devtunnels\.ms\S*)", line)
+                if match:
+                    tunnel_url = match.group(1).rstrip("/")
+                    break
+        if tunnel_url:
+            log.info("tunnel_started", url=tunnel_url)
+        else:
+            log.warning("tunnel_url_not_detected")
+        return tunnel_url, proc
+    except FileNotFoundError:
+        click.secho(
+            "ERROR: 'devtunnel' CLI not found. Install from https://aka.ms/devtunnels/cli",
+            fg="red",
+            err=True,
+        )
+        return None, None
+
+
+def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | None) -> None:
+    """Print a startup banner with server info."""
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+
+        console = Console()
+        lines = [f"[bold]Server:[/bold] http://{host}:{port}"]
+        if dev:
+            lines.append("[bold]Mode:[/bold]   Development (CORS enabled)")
+        if tunnel_url:
+            lines.append(f"[bold]Tunnel:[/bold] {tunnel_url}")
+        console.print(Panel("\n".join(lines), title="[bold cyan]Tower[/bold cyan]", border_style="cyan"))
+    except ImportError:
+        click.echo(f"Tower server: http://{host}:{port}")
+        if tunnel_url:
+            click.echo(f"Tunnel: {tunnel_url}")
 
 
 @cli.command()

@@ -100,6 +100,15 @@ export function fetchRepos(): Promise<RepoListResponse> {
   return request("/settings/repos");
 }
 
+export function fetchRepoDetail(repoPath: string): Promise<{
+  path: string;
+  originUrl: string | null;
+  baseBranch: string | null;
+  activeJobCount: number;
+}> {
+  return request(`/settings/repos/${encodeURIComponent(repoPath)}`);
+}
+
 export function registerRepo(source: string): Promise<{ path: string; source: string; cloned: boolean }> {
   return request("/settings/repos", {
     method: "POST",

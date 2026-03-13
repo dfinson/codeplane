@@ -209,6 +209,13 @@ class RepoListResponse(CamelModel):
     items: list[str]
 
 
+class RepoDetailResponse(CamelModel):
+    path: str
+    origin_url: str | None = None
+    base_branch: str | None = None
+    active_job_count: int = 0
+
+
 # --- SSE Payload Models ---
 
 

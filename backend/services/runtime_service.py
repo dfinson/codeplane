@@ -154,6 +154,7 @@ class RuntimeService:
         self._last_activity: dict[str, float] = {}
         self._session_ids: dict[str, str] = {}
         self._dequeue_lock = asyncio.Lock()
+        self._shutting_down = False
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
         from backend.persistence.job_repo import JobRepository
@@ -177,6 +178,9 @@ class RuntimeService:
 
     async def start_or_enqueue(self, job: Job) -> None:
         """Start the job if capacity allows, otherwise keep it queued."""
+        if self._shutting_down:
+            log.warning("job_rejected_shutting_down", job_id=job.id)
+            return
         async with self._dequeue_lock:
             if self.running_count >= self.max_concurrent:
                 # Job is already queued from create_job; only transition if needed
@@ -536,12 +540,42 @@ class RuntimeService:
 
     async def shutdown(self) -> None:
         """Gracefully shut down all running jobs."""
+        self._shutting_down = True
         for job_id in list(self._tasks):
-            await self.cancel(job_id)
+            # Cancel with server_shutdown reason
+            task = self._tasks.get(job_id)
+            if task is not None:
+                task.cancel()
+                try:
+                    async with self._session_factory() as session:
+                        svc = self._make_job_service(session)
+                        current = await svc.get_job(job_id)
+                        if current and current.state not in (
+                            JobState.canceled,
+                            JobState.succeeded,
+                            JobState.failed,
+                        ):
+                            await svc.transition_state(job_id, JobState.canceled)
+                            await session.commit()
+                            await self._event_bus.publish(
+                                DomainEvent(
+                                    event_id=_make_event_id(),
+                                    job_id=job_id,
+                                    timestamp=datetime.now(UTC),
+                                    kind=DomainEventKind.job_canceled,
+                                    payload={"reason": "server_shutdown"},
+                                )
+                            )
+                except Exception:
+                    log.warning("shutdown_cancel_failed", job_id=job_id, exc_info=True)
         # Wait briefly for tasks to complete
         tasks = list(self._tasks.values())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    @property
+    def is_shutting_down(self) -> bool:
+        return self._shutting_down
 
 
 def _make_event_id() -> str:

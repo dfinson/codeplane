@@ -98,6 +98,14 @@ class GitService:
                         cwd=repo_path,
                     )
 
+    async def get_origin_url(self, repo_path: str) -> str | None:
+        """Get the remote origin URL, or None if not set."""
+        try:
+            url = await self._run_git("config", "--get", "remote.origin.url", cwd=repo_path)
+            return url or None
+        except GitError:
+            return None
+
     async def has_active_worktree(self, repo_path: str) -> bool:
         """Check if any secondary worktree exists under the worktrees dir."""
         worktrees_dir = Path(repo_path) / self._worktrees_dirname

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Annotated
 
@@ -18,6 +19,7 @@ from backend.models.api_schemas import (
     GlobalConfigResponse,
     RegisterRepoRequest,
     RegisterRepoResponse,
+    RepoDetailResponse,
     RepoListResponse,
     UpdateGlobalConfigRequest,
 )
@@ -68,6 +70,31 @@ async def list_repos(
 ) -> RepoListResponse:
     """List registered repository paths."""
     return RepoListResponse(items=config.repos)
+
+
+@router.get("/settings/repos/{repo_path:path}", response_model=RepoDetailResponse)
+async def get_repo_detail(
+    repo_path: str,
+    config: Annotated[TowerConfig, Depends(_get_config)],
+    git: Annotated[GitService, Depends(_get_git_service)],
+) -> RepoDetailResponse:
+    """Get detailed config for a single registered repository."""
+    resolved = str(Path(repo_path).expanduser().resolve())
+    if resolved not in config.repos:
+        raise HTTPException(status_code=404, detail=f"Repository '{repo_path}' is not registered.")
+
+    origin_url: str | None = None
+    base_branch: str | None = None
+    with contextlib.suppress(GitError):
+        origin_url = await git.get_origin_url(resolved)
+    with contextlib.suppress(GitError):
+        base_branch = await git.get_default_branch(resolved)
+
+    return RepoDetailResponse(
+        path=resolved,
+        origin_url=origin_url,
+        base_branch=base_branch,
+    )
 
 
 @router.post("/settings/repos", response_model=RegisterRepoResponse, status_code=201)
