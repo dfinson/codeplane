@@ -31,6 +31,8 @@ dependencies = [
     "click>=8.0,<9",
     # MCP server
     "mcp>=1.9,<2",
+    # QR code
+    "qrcode>=7.0,<9",
 ]
 
 [project.scripts]
@@ -68,7 +70,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "copilot.*", "mcp.*"]
+module = ["faster_whisper.*", "copilot.*", "mcp.*", "qrcode.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

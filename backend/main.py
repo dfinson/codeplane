@@ -368,6 +368,8 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
 
 def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | None, password: str | None = None) -> None:
     """Print a startup banner with server info."""
+    url = tunnel_url or f"http://{host}:{port}"
+
     try:
         from rich.console import Console
         from rich.panel import Panel
@@ -387,6 +389,19 @@ def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | Non
             click.echo(f"Tunnel: {tunnel_url}")
         if password:
             click.echo(f"Password: {password}")
+
+    # Print QR code for the access URL
+    try:
+        import qrcode
+
+        qr = qrcode.QRCode(box_size=1, border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        click.echo()
+        qr.print_ascii(invert=True)
+        click.echo(f"\n  Scan to open: {url}\n")
+    except ImportError:
+        pass
 
 
 @cli.command()
