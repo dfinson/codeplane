@@ -188,12 +188,17 @@ async def handle_login(request: Request) -> Response:
 
     token = _create_session_token()
     response = JSONResponse({"ok": True})
-    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    # Detect HTTPS: check scheme, x-forwarded-proto, or devtunnel headers
+    is_https = (
+        request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto") == "https"
+        or ".devtunnels.ms" in request.headers.get("host", "")
+    )
     response.set_cookie(
         key="tower_session",
         value=token,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         secure=is_https,
         max_age=86400,  # 24 hours
         path="/",
