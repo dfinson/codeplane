@@ -88,12 +88,13 @@ async def create_job(
     # Commit so the job row is visible to RuntimeService (separate session)
     await session.commit()
 
-    # Hand off to RuntimeService for execution / queueing
-    runtime: RuntimeService = request.app.state.runtime_service
-    await runtime.start_or_enqueue(job)
+    # Hand off to RuntimeService for execution / queueing (skip if already failed)
+    if job.state != "failed":
+        runtime: RuntimeService = request.app.state.runtime_service
+        await runtime.start_or_enqueue(job)
 
-    # Re-fetch to get updated state (may have been enqueued)
-    job = await svc.get_job(job.id)
+        # Re-fetch to get updated state (may have been enqueued)
+        job = await svc.get_job(job.id)
 
     return CreateJobResponse(
         id=job.id,
