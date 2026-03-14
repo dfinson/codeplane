@@ -356,14 +356,20 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
                     username = parts[idx]
                 break
 
-        tunnel_name = f"{username}-tower"
+        tunnel_name = f"{username}-devtower"
 
         # Check if tunnel already exists
         list_result = _run(["devtunnel", "list", "--json"])
-        existing_tunnels = []
+        existing_tunnels: list[str] = []
+        tunnel_region = "euw"  # default
         try:
             data = json.loads(list_result.stdout)
-            existing_tunnels = [t.get("tunnelId", "").split(".")[0] for t in data.get("tunnels", [])]
+            for t in data.get("tunnels", []):
+                tid = t.get("tunnelId", "")
+                existing_tunnels.append(tid.split(".")[0])
+                # Extract region from existing tunnel (e.g. "dfinson-devtower.euw")
+                if tid.startswith(tunnel_name) and "." in tid:
+                    tunnel_region = tid.split(".")[1]
         except (json.JSONDecodeError, KeyError):
             pass
 
@@ -381,7 +387,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
             )
             if create_result.returncode != 0:
                 # Name might be taken by another user — add random padding
-                tunnel_name = f"{username}-tower-{secrets.token_hex(2)}"
+                tunnel_name = f"{username}-devtower-{secrets.token_hex(2)}"
                 _run(
                     [
                         "devtunnel",
@@ -418,32 +424,17 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
             text=True,
         )
 
-        # Read output to find the URL
-        import re
+        # Construct the stable URL from the tunnel name — don't parse
+        # the host output which uses a random connection ID.
+        tunnel_url = f"https://{tunnel_name}-{port}.{tunnel_region}.devtunnels.ms"
 
-        tunnel_url: str | None = None
+        # Wait for the tunnel to actually be ready (check stdout for "Connect via")
         if proc.stdout:
             for line in proc.stdout:
-                # Look for the port-in-subdomain URL
-                match = re.search(
-                    rf"(https://\S+-{port}\.\S+\.devtunnels\.ms)",
-                    line,
-                )
-                if match:
-                    tunnel_url = match.group(1).rstrip("/,")
+                if "Connect via" in line or "Hosting port" in line:
                     break
-                # Fallback
-                fallback = re.search(r"(https://\S+\.devtunnels\.ms\S*)", line)
-                if fallback:
-                    tunnel_url = fallback.group(1).rstrip("/,: ")
 
-        if tunnel_url:
-            log.info("tunnel_started", url=tunnel_url, name=tunnel_name)
-        else:
-            # Construct URL from convention
-            tunnel_url = f"https://{tunnel_name}-{port}.devtunnels.ms"
-            log.info("tunnel_url_constructed", url=tunnel_url)
-
+        log.info("tunnel_started", url=tunnel_url, name=tunnel_name)
         return tunnel_url, proc
     except FileNotFoundError:
         click.secho(
