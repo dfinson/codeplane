@@ -58,19 +58,19 @@ function NavItem({
   end?: boolean;
 }) {
   return (
-    <NavLink to={to} end={end}>
-      {({ isActive }) => (
-        <UnstyledButton
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-            isActive
-              ? "bg-[var(--mantine-color-dark-5)] text-white"
-              : "text-[var(--mantine-color-dimmed)] hover:text-white hover:bg-[var(--mantine-color-dark-6)]"
-          }`}
-        >
-          <Icon size={16} />
-          <span className="hidden sm:inline">{label}</span>
-        </UnstyledButton>
-      )}
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        `flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors no-underline ${
+          isActive
+            ? "bg-[var(--mantine-color-dark-5)] text-white"
+            : "text-[var(--mantine-color-dimmed)] hover:text-white hover:bg-[var(--mantine-color-dark-6)]"
+        }`
+      }
+    >
+      <Icon size={16} />
+      <span className="hidden sm:inline">{label}</span>
     </NavLink>
   );
 }

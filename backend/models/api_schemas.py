@@ -2,17 +2,32 @@
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003 — Pydantic resolves annotations at runtime
+from datetime import UTC, datetime  # noqa: TC003 — Pydantic resolves annotations at runtime
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 
 class CamelModel(BaseModel):
-    """Base model that serializes field names to camelCase."""
+    """Base model that serializes field names to camelCase.
+
+    All datetime fields are guaranteed to include UTC timezone info,
+    even when loaded from SQLite (which strips timezone).
+    """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ensure_utc_datetimes(cls, data: Any) -> Any:
+        """Attach UTC to any naive datetime values before validation."""
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, datetime) and value.tzinfo is None:
+                    data[key] = value.replace(tzinfo=UTC)
+        return data
 
 
 # --- Enums ---

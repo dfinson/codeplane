@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Paper, Title, Select, Textarea, TextInput, Button, Group, Stack, Text, Divider,
@@ -22,6 +22,11 @@ export function JobCreationScreen() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
+
+  const voiceSection = useMemo(
+    () => <VoiceRecorder onTranscript={(t) => setPrompt((p) => (p ? p + " " : "") + t)} />,
+    []
+  );
 
   useEffect(() => {
     fetchRepos()
@@ -115,13 +120,8 @@ export function JobCreationScreen() {
             autosize
             maxRows={12}
             size="sm"
-            rightSection={
-              <VoiceRecorder
-                onTranscript={(t) => setPrompt((p) => (p ? p + " " : "") + t)}
-              />
-            }
+            rightSection={voiceSection}
             rightSectionWidth={140}
-            styles={{ section: { alignItems: "flex-start", paddingTop: 8 } }}
           />
 
           <Divider />
