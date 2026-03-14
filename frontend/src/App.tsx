@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from "react";
 import { Routes, Route, NavLink, Link } from "react-router-dom";
-import { AppShell, Group, Badge, UnstyledButton, Text } from "@mantine/core";
+import { Group, Badge, UnstyledButton, Text } from "@mantine/core";
 import { type LucideIcon, LayoutDashboard, Plus, Settings } from "lucide-react";
 import { useSSE } from "./hooks/useSSE";
 import { useTowerStore, selectConnectionStatus } from "./store";
@@ -99,14 +99,12 @@ function ConnectionStatus() {
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
 
-const SHELL_HEADER = { height: 48 };
-
 export function App() {
   useSSE();
 
   return (
-    <AppShell header={SHELL_HEADER} padding="md">
-      <AppShell.Header className="flex items-center justify-between px-4 border-b border-[var(--mantine-color-dark-4)]">
+    <div className="flex flex-col h-screen">
+      <header className="flex items-center justify-between px-4 h-12 shrink-0 border-b border-[var(--mantine-color-dark-4)] bg-[var(--mantine-color-dark-7)]">
         <Link to="/" className="no-underline">
           <Text fw={700} size="md" c="white" className="tracking-tight cursor-pointer hover:opacity-80">
             Tower
@@ -120,9 +118,9 @@ export function App() {
         </Group>
 
         <ConnectionStatus />
-      </AppShell.Header>
+      </header>
 
-      <AppShell.Main>
+      <main className="flex-1 overflow-y-auto p-4">
         <ErrorBoundary>
           <Routes>
             <Route path="/" element={<DashboardScreen />} />
@@ -131,7 +129,7 @@ export function App() {
             <Route path="/settings" element={<SettingsScreen />} />
           </Routes>
         </ErrorBoundary>
-      </AppShell.Main>
-    </AppShell>
+      </main>
+    </div>
   );
 }
