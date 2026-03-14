@@ -12,6 +12,7 @@ import structlog
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, voice, workspace
@@ -184,6 +185,17 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
 
         @app.middleware("http")
         async def _auth_gate(request: Any, call_next: Any) -> Any:
+            # SSE must bypass middleware wrapping — BaseHTTPMiddleware
+            # buffers streaming responses and kills the connection.
+            if request.url.path == "/api/events":
+                # Check auth inline without wrapping
+                from backend.services.auth import _is_localhost, _is_valid_token
+
+                if not _is_localhost(request):
+                    token = request.cookies.get("tower_session")
+                    if not _is_valid_token(token):
+                        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+                return await call_next(request)
             return await auth_middleware(request, call_next)
 
     app.include_router(health.router, prefix="/api")
@@ -196,26 +208,24 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
     app.include_router(settings.router, prefix="/api")
 
     # Serve frontend static files (SPA fallback for client-side routing)
+    # Uses exception handler instead of middleware to avoid wrapping
+    # streaming responses (middleware breaks SSE).
     if _FRONTEND_DIR.is_dir():
         from starlette.responses import FileResponse
 
         _index_html = str(_FRONTEND_DIR / "index.html")
 
-        @app.middleware("http")
-        async def _spa_fallback(request: Any, call_next: Any) -> Any:
+        @app.exception_handler(404)
+        async def _spa_fallback(request: Any, exc: Any) -> Any:
             path = request.url.path
-            # Only intercept clean browser-navigation paths (no API/MCP, no traversal)
             if (
                 request.method in ("GET", "HEAD")
                 and not path.startswith(("/api", "/mcp"))
                 and "\x00" not in path
                 and ".." not in path
             ):
-                response = await call_next(request)
-                if response.status_code == 404:
-                    return FileResponse(_index_html)
-                return response
-            return await call_next(request)
+                return FileResponse(_index_html)
+            return JSONResponse({"detail": "Not found"}, status_code=404)
 
         app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIR / "assets")), name="static-assets")
 
