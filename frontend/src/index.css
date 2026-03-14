@@ -1,23 +1,10 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  --color-surface: #1a1b1e;
-  --color-surface-hover: #25262b;
-  --color-border: #373a40;
-  --color-text: #c1c2c5;
-  --color-text-muted: #909296;
-  --color-text-dim: #5c5f66;
-  --color-accent: #5180c6;
-  --color-success: #40c057;
-  --color-warning: #fab005;
-  --color-error: #fa5252;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-}
-
-html, body, #root {
-  height: 100%;
-}
-
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--mantine-color-dark-4); border-radius: 3px; }
+a { text-decoration: none; color: inherit; }

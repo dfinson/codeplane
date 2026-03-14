@@ -83,7 +83,7 @@ interface TowerState {
   applySnapshot: (jobs: JobSummary[], approvals: ApprovalRequest[]) => void;
 }
 
-export const useTowerStore = create<TowerState>((set) => ({
+export const useTowerStore = create<TowerState>((set, get) => ({
   jobs: {},
   approvals: {},
   logs: {},
@@ -99,10 +99,13 @@ export const useTowerStore = create<TowerState>((set) => ({
       approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
     }),
 
-  dispatchSSEEvent: (eventType, data) =>
-    set((state) => {
-      const payload = data as Record<string, unknown>;
-
+  dispatchSSEEvent: (eventType, data) => {
+    // Process the event and only call set() if we have an actual state change.
+    // Zustand's set() always creates a new state reference even when returning
+    // the same state object, which causes unnecessary re-renders.
+    const state = get();
+    const payload = data as Record<string, unknown>;
+    const update = (() => {
       switch (eventType) {
         case "job_state_changed": {
           const jobId = payload.jobId as string;
@@ -120,7 +123,7 @@ export const useTowerStore = create<TowerState>((set) => ({
               },
             };
           }
-          return state;
+          return null;
         }
 
         case "log_line": {
@@ -186,7 +189,7 @@ export const useTowerStore = create<TowerState>((set) => ({
               },
             };
           }
-          return state;
+          return null;
         }
 
         case "snapshot": {
@@ -203,7 +206,7 @@ export const useTowerStore = create<TowerState>((set) => ({
           if (state.connectionStatus !== "connected") {
             return { connectionStatus: "connected" as ConnectionStatus };
           }
-          return state;
+          return null;
         }
 
         case "job_succeeded": {
@@ -218,7 +221,7 @@ export const useTowerStore = create<TowerState>((set) => ({
               },
             };
           }
-          return state;
+          return null;
         }
 
         case "diff_update": {
@@ -230,9 +233,14 @@ export const useTowerStore = create<TowerState>((set) => ({
         }
 
         default:
-          return state;
+          return null;
       }
-    }),
+    })();
+    // Only call set() if the handler returned an actual update
+    if (update !== null) {
+      set(update);
+    }
+  },
 }));
 
 // ---------------------------------------------------------------------------
