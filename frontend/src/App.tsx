@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from "react";
-import { Routes, Route, NavLink } from "react-router-dom";
+import { Routes, Route, NavLink, Link } from "react-router-dom";
 import { AppShell, Group, Badge, UnstyledButton, Text } from "@mantine/core";
 import { type LucideIcon, LayoutDashboard, Plus, Settings } from "lucide-react";
 import { useSSE } from "./hooks/useSSE";
@@ -107,13 +107,13 @@ export function App() {
   return (
     <AppShell header={SHELL_HEADER} padding="md">
       <AppShell.Header className="flex items-center justify-between px-4 border-b border-[var(--mantine-color-dark-4)]">
-        <Group gap="xs">
-          <Text fw={700} size="md" className="tracking-tight">
+        <Link to="/" className="no-underline">
+          <Text fw={700} size="md" c="white" className="tracking-tight cursor-pointer hover:opacity-80">
             Tower
           </Text>
-        </Group>
+        </Link>
 
-        <Group gap={4}>
+        <Group gap="sm">
           <NavItem to="/" icon={LayoutDashboard} label="Dashboard" end />
           <NavItem to="/jobs/new" icon={Plus} label="New Job" />
           <NavItem to="/settings" icon={Settings} label="Settings" />

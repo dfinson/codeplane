@@ -5,6 +5,10 @@ from __future__ import annotations
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
+# All DateTime columns use timezone=True so timestamps are stored
+# and retrieved as timezone-aware UTC values, never naive.
+TZDateTime = DateTime(timezone=True)
+
 
 class Base(DeclarativeBase):
     pass
@@ -23,9 +27,9 @@ class JobRow(Base):
     worktree_path = Column(String, nullable=True)
     session_id = Column(String, nullable=True)
     pr_url = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(TZDateTime, nullable=False)
+    updated_at = Column(TZDateTime, nullable=False)
+    completed_at = Column(TZDateTime, nullable=True)
 
 
 class EventRow(Base):
@@ -35,7 +39,7 @@ class EventRow(Base):
     event_id = Column(String, nullable=False, unique=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
     kind = Column(String, nullable=False)
-    timestamp = Column(DateTime, nullable=False)
+    timestamp = Column(TZDateTime, nullable=False)
     payload = Column(Text, nullable=False)  # JSON
 
     __table_args__ = (Index("idx_events_job_id", "job_id"),)
@@ -48,8 +52,8 @@ class ApprovalRow(Base):
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False, index=True)
     description = Column(Text, nullable=False)
     proposed_action = Column(Text, nullable=True)
-    requested_at = Column(DateTime, nullable=False)
-    resolved_at = Column(DateTime, nullable=True)
+    requested_at = Column(TZDateTime, nullable=False)
+    resolved_at = Column(TZDateTime, nullable=True)
     resolution = Column(String, nullable=True)
 
 
@@ -64,7 +68,7 @@ class ArtifactRow(Base):
     size_bytes = Column(Integer, nullable=False)
     disk_path = Column(String, nullable=False)
     phase = Column(String, nullable=False)
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(TZDateTime, nullable=False)
 
 
 class DiffSnapshotRow(Base):
@@ -72,7 +76,7 @@ class DiffSnapshotRow(Base):
 
     id = Column(String, primary_key=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
-    snapshot_at = Column(DateTime, nullable=False)
+    snapshot_at = Column(TZDateTime, nullable=False)
     diff_json = Column(Text, nullable=False)  # JSON
 
     __table_args__ = (Index("idx_diff_snapshots_job_id", "job_id"),)

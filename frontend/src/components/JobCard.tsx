@@ -7,6 +7,7 @@ import { StateBadge } from "./StateBadge";
 
 function elapsed(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime();
+  if (ms < 0) return "just now";
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
