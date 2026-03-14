@@ -1,6 +1,5 @@
 import { memo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Group, Text, Stack } from "@mantine/core";
 import { GitBranch } from "lucide-react";
 import type { JobSummary } from "../store";
 import { StateBadge } from "./StateBadge";
@@ -21,35 +20,26 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const repoName = job.repo.split("/").pop() ?? job.repo;
 
   return (
-    <Card
-      className="cursor-pointer transition-all hover:border-[var(--mantine-color-blue-7)] hover:shadow-md"
-      padding="sm"
+    <button
+      className="w-full text-left rounded-lg border border-[var(--mantine-color-dark-4)] bg-[var(--mantine-color-dark-7)] p-3 cursor-pointer transition-colors hover:border-blue-600 hover:shadow-md"
       onClick={() => navigate(`/jobs/${job.id}`)}
     >
-      <Stack gap={6}>
-        <Group justify="space-between" wrap="nowrap">
-          <Text size="sm" fw={600} c="blue" truncate>
-            {job.id}
-          </Text>
-          <StateBadge state={job.state} />
-        </Group>
+      <div className="flex justify-between items-center mb-1.5">
+        <span className="text-sm font-semibold text-blue-400 truncate">{job.id}</span>
+        <StateBadge state={job.state} />
+      </div>
 
-        <Group gap={4} wrap="nowrap">
-          <GitBranch size={12} className="text-[var(--mantine-color-dimmed)] shrink-0" />
-          <Text size="xs" c="dimmed" truncate title={job.repo}>
-            {repoName}
-          </Text>
-        </Group>
+      <div className="flex items-center gap-1 mb-1">
+        <GitBranch size={12} className="text-gray-500 shrink-0" />
+        <span className="text-xs text-gray-400 truncate" title={job.repo}>{repoName}</span>
+      </div>
 
-        <Text size="xs" lineClamp={2} className="leading-snug">
-          {job.prompt}
-        </Text>
+      <p className="text-xs leading-snug line-clamp-2 text-gray-300 mb-2">{job.prompt}</p>
 
-        <Group justify="space-between" mt={2}>
-          <Text size="xs" c="dimmed">{elapsed(job.createdAt)}</Text>
-          <Text size="xs" c="dimmed">{job.strategy}</Text>
-        </Group>
-      </Stack>
-    </Card>
+      <div className="flex justify-between text-[11px] text-gray-500">
+        <span>{elapsed(job.createdAt)}</span>
+        <span>{job.strategy}</span>
+      </div>
+    </button>
   );
 });
