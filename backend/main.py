@@ -145,8 +145,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Runtime service ---
     config = load_config()
-    adapter = CopilotAdapter()
     approval_service = ApprovalService(session_factory=session_factory)
+    adapter = CopilotAdapter(
+        approval_service=approval_service,
+        event_bus=event_bus,
+    )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
     merge_service = MergeService(

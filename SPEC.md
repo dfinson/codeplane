@@ -361,7 +361,8 @@ class SessionConfig:
     workspace_path: str
     prompt: str
     mcp_servers: dict[str, MCPServerConfig]  # discovered from repo config files
-    protected_paths: list[str]               # from per-repo config; adapter translates to SDK-native rules
+    protected_paths: list[str]               # from per-repo config; used by permission policy
+    permission_mode: PermissionMode = "auto" # permissive | auto | supervised
 
 @dataclass
 class MCPServerConfig:
@@ -2019,25 +2020,73 @@ All errors return a consistent envelope:
 
 Approval gates intercept risky operations before they execute. This ensures the operator maintains control over destructive or irreversible actions.
 
-### 18.2 Delegation to the Agent Runtime
+### 18.2 Permission Modes
 
-Tower does not maintain its own trigger evaluation logic. The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides which actions require approval based on its own built-in rules and permission model.
+Tower supports three permission modes that control how the SDK's permission requests are handled. Inspired by VS Code Agent Chat and Claude Code, these modes allow operators to balance safety with productivity.
+
+| Mode | Behavior |
+|------|----------|
+| `permissive` | Auto-approve **all** operations. No approval popups. Suitable for trusted agents on low-risk repos. |
+| `auto` (default) | Smart auto-approval: approve reads and writes **within the workspace**, ask for shell commands, URL fetches, writes **outside** the workspace, writes to `protected_paths`, MCP tool calls with side effects, and custom tools. |
+| `supervised` | Ask the operator for **every** permission request. Maximum control. |
+
+#### Auto Mode Rules
+
+| Request Kind | Within Workspace | Outside Workspace | Protected Path |
+|-------------|------------------|--------------------|----------------|
+| `read` | ✅ approve | ❓ ask | ✅ approve |
+| `write` | ✅ approve | ❓ ask | ❓ ask |
+| `shell` | ❓ ask | ❓ ask | ❓ ask |
+| `url` | ❓ ask | ❓ ask | ❓ ask |
+| `mcp` (read-only) | ✅ approve | ✅ approve | ✅ approve |
+| `mcp` (mutating) | ❓ ask | ❓ ask | ❓ ask |
+| `custom-tool` | ❓ ask | ❓ ask | ❓ ask |
+| `memory` | ✅ approve | ✅ approve | ✅ approve |
+
+#### Configuration
+
+Permission mode is resolved with this priority chain (first match wins):
+
+1. **Per-job** — `permission_mode` field in `POST /api/jobs` request body
+2. **Per-repo** — `permission_mode` key in `.tower.yml`
+3. **Global** — `runtime.permission_mode` in Tower's `config.yaml`
+
+Default: `auto`
+
+Example `.tower.yml`:
+```yaml
+permission_mode: auto
+
+protected_paths:
+  - infra/
+  - .github/workflows/
+```
+
+Example global config:
+```yaml
+runtime:
+  max_concurrent_jobs: 2
+  permission_mode: auto
+```
+
+### 18.3 Delegation to the Agent Runtime
+
+The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. Tower's permission policy then evaluates the request against the active mode to decide whether to auto-approve or route to the operator.
 
 Tower's role is to:
 
-1. **Route** the SDK's permission requests to the operator via the UI
-2. **Relay** the operator's decision back to the SDK
-3. **Persist** approval requests and resolutions for auditability
-4. **Feed repo-level config** (like `protected_paths`) into the SDK at session creation time
+1. **Evaluate** the SDK's permission request against the active permission mode
+2. **Auto-approve** requests that the policy allows (the SDK is never blocked)
+3. **Route** remaining requests to the operator via the UI (the SDK blocks until resolved)
+4. **Relay** the operator's decision back to the SDK
+5. **Persist** approval requests and resolutions for auditability
+6. **Feed repo-level config** (like `protected_paths`) into the policy at session creation time
 
-#### How `protected_paths` Maps to SDK Config
+#### How `protected_paths` Maps to Policy
 
-The per-repo `protected_paths` list (Section 10.3) is translated into SDK-native permission rules when the adapter creates a session:
+The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the Tower level. In `auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
 
-- **Copilot SDK:** Injected via `on_pre_tool_use` hook — actions targeting protected paths return `permissionDecision: "ask"`
-- **Future runtimes:** Each adapter is responsible for translating `protected_paths` into the equivalent native rule format
-
-### 18.3 Approval Request Object
+### 18.4 Approval Request Object
 
 ```json
 {
@@ -2051,24 +2100,30 @@ The per-repo `protected_paths` list (Section 10.3) is translated into SDK-native
 
 The adapter normalizes whichever fields the SDK provides into this common shape. Fields the SDK doesn't supply are omitted.
 
-### 18.4 Approval Flow
+### 18.5 Approval Flow
 
 1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
-2. Adapter translates to `ApprovalRequested` domain event
-3. `ApprovalService` persists the request
-4. Job transitions to `waiting_for_approval`
-5. `ApprovalRequested` SSE event sent to frontend
-6. Frontend renders approval banner on Job Detail screen
-7. Operator clicks Approve or Reject
-8. `POST /api/approvals/{id}/resolve` called
-9. `ApprovalService` persists the resolution
-10. Adapter returns the decision to the SDK (e.g., `PermissionRequestResult` with `approved` or `denied-interactively-by-user`)
-11. `ApprovalResolved` domain event published
-12. Job transitions back to `running`
+2. Adapter evaluates the permission policy:
+   - **`permissive` mode:** returns `approved` immediately — SDK proceeds, no event emitted
+   - **`auto` mode:** evaluates request kind + paths against workspace + protected_paths rules
+   - **`supervised` mode:** always routes to operator
+3. If auto-approved: SDK proceeds immediately, no operator interaction
+4. If operator approval required:
+   a. `ApprovalService` persists the request
+   b. `approval_request` event emitted
+   c. Job transitions to `waiting_for_approval`
+   d. `ApprovalRequested` SSE event sent to frontend
+   e. Frontend renders approval banner on Job Detail screen
+   f. Operator clicks Approve or Reject
+   g. `POST /api/approvals/{id}/resolve` called
+   h. `ApprovalService` persists the resolution and unblocks the adapter's Future
+   i. Adapter returns the decision to the SDK
+   j. `ApprovalResolved` domain event published
+   k. Job transitions back to `running`
 
-The SDK blocks on its permission callback while waiting for the operator's response. Tower holds the pending future and resolves it when the REST endpoint is called.
+The SDK's `on_permission_request` callback is **async** — it blocks the SDK at the callback level while waiting for the operator's response. This ensures the action does not proceed until approved.
 
-### 18.5 Approval Timeout
+### 18.6 Approval Timeout
 
 Approval requests do not expire automatically. The job remains in `waiting_for_approval` state indefinitely until the operator responds. This is intentional for a single-operator tool.
 

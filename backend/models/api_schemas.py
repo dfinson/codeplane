@@ -38,6 +38,7 @@ class StrategyKind(StrEnum):
 
 
 class PermissionMode(StrEnum):
+    permissive = "permissive"
     auto = "auto"
     supervised = "supervised"
     readonly = "readonly"
@@ -166,6 +167,7 @@ class JobResponse(CamelModel):
     base_ref: str
     worktree_path: str | None
     branch: str | None
+    permission_mode: PermissionMode | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None

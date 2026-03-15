@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from backend.models.domain import SessionConfig, SessionEvent, SessionEventKind
+from backend.models.domain import (
+    PermissionMode,
+    SessionConfig,
+    SessionEvent,
+    SessionEventKind,
+)
+from backend.services.permission_policy import PolicyDecision, evaluate
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -19,6 +25,9 @@ if TYPE_CHECKING:
     from copilot import PermissionRequestResult
     from copilot.generated.session_events import SessionEvent as SdkSessionEvent
     from copilot.session import CopilotSession
+
+    from backend.services.approval_service import ApprovalService
+    from backend.services.event_bus import EventBus
 
 log = structlog.get_logger()
 
@@ -56,13 +65,19 @@ class CopilotAdapter(AgentAdapterInterface):
     items onto an asyncio.Queue; stream_events() yields from the queue.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        approval_service: ApprovalService | None = None,
+        event_bus: EventBus | None = None,
+    ) -> None:
         self._queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._sessions: dict[str, CopilotSession] = {}
         self._session_to_job: dict[str, str] = {}  # session_id → job_id for telemetry
         self._tool_start_times: dict[str, float] = {}  # tool_call_id → start monotonic
         # Buffers tool.execution_start data so we can emit a combined entry on complete
         self._tool_call_buffer: dict[str, dict[str, str]] = {}  # tool_call_id → {tool_name, tool_args, turn_id}
+        self._approval_service = approval_service
+        self._event_bus = event_bus
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
@@ -86,44 +101,99 @@ class CopilotAdapter(AgentAdapterInterface):
 
             kind_val = request.kind.value if request.kind else "unknown"
             mode = config.permission_mode
+            sid = invocation.get("session_id", "")
+
+            # --- permissive: approve everything ---
+            if mode == PermissionMode.permissive:
+                log.debug("permission_auto_approved", mode="permissive", kind=kind_val)
+                return _Result(kind="approved")
 
             # --- readonly: deny any mutation ---
-            if mode == "readonly":
+            if mode == PermissionMode.readonly:
                 if kind_val in ("write", "shell", "url"):
                     log.info("permission_denied_readonly", kind=kind_val)
                     return _Result(kind="denied-interactively-by-user")
                 return _Result(kind="approved")
 
-            # --- supervised: block write/url on operator decision, allow everything else ---
-            if mode == "supervised":
-                if kind_val not in ("write", "url"):
+            # --- auto: evaluate policy ---
+            if mode == PermissionMode.auto:
+                candidate_paths: list[str] = []
+                if request.file_name:
+                    candidate_paths.append(request.file_name)
+                if request.path:
+                    candidate_paths.append(request.path)
+                if request.possible_paths:
+                    candidate_paths.extend(request.possible_paths)
+
+                decision = evaluate(
+                    kind=kind_val,
+                    workspace_path=config.workspace_path,
+                    protected_paths=config.protected_paths,
+                    possible_paths=candidate_paths or None,
+                    file_name=request.file_name,
+                    path=request.path,
+                    read_only=request.read_only,
+                )
+
+                if decision == PolicyDecision.approve:
+                    log.debug("permission_auto_approved", mode="auto", kind=kind_val)
                     return _Result(kind="approved")
-                # Build human-readable description
-                if kind_val == "write":
-                    description = f"Write file: {request.file_name or request.intention or ''}"
-                elif kind_val == "shell":
-                    description = f"Run shell: {request.full_command_text or request.intention or ''}"
-                elif kind_val == "url":
-                    description = f"Fetch URL: {request.url or request.intention or ''}"
-                elif kind_val in ("mcp", "custom-tool"):
-                    label = request.tool_title or request.tool_name or kind_val
-                    description = f"{label}: {request.intention or ''}"
-                else:
-                    description = request.intention or request.full_command_text or kind_val
-                handler = config.blocking_permission_handler
-                if handler is not None:
-                    import inspect as _inspect
 
-                    resolution = handler(description, request.full_command_text)  # type: ignore[operator]
-                    if _inspect.isawaitable(resolution):
-                        resolution = await resolution
-                    if resolution == "approved":
-                        return _Result(kind="approved")
-                    return _Result(kind="denied-interactively-by-user")
-                return _Result(kind="approved")  # no handler wired — fall through
+            # --- supervised OR auto-policy-ask: route to operator ---
+            # Build human-readable description
+            if kind_val == "write":
+                description = f"Write file: {request.file_name or request.intention or ''}"
+            elif kind_val == "shell":
+                description = f"Run shell: {request.full_command_text or request.intention or ''}"
+            elif kind_val == "url":
+                description = f"Fetch URL: {request.url or request.intention or ''}"
+            elif kind_val in ("mcp", "custom-tool"):
+                label = request.tool_title or request.tool_name or kind_val
+                description = f"{label}: {request.intention or ''}"
+            else:
+                description = request.intention or request.full_command_text or kind_val
 
-            # --- auto (default): approve everything silently ---
-            return _Result(kind="approved")
+            approval_service = self._approval_service
+            job_id = self._session_to_job.get(sid)
+
+            if approval_service is None or job_id is None:
+                log.warning("permission_ask_no_infra", kind=kind_val)
+                return _Result(kind="approved")
+
+            # Persist the approval request and create a Future
+            approval = await approval_service.create_request(
+                job_id=job_id,
+                description=description,
+                proposed_action=request.full_command_text,
+            )
+
+            # Emit approval_request event so RuntimeService transitions state
+            q = self._queues.get(sid)
+            if q is not None:
+                q.put_nowait(
+                    SessionEvent(
+                        kind=SessionEventKind.approval_request,
+                        payload={
+                            "description": description,
+                            "proposed_action": request.full_command_text,
+                            "approval_id": approval.id,
+                        },
+                    )
+                )
+
+            log.info(
+                "permission_awaiting_operator",
+                approval_id=approval.id,
+                kind=kind_val,
+                description=description,
+            )
+
+            # Block the SDK until the operator responds
+            resolution = await approval_service.wait_for_resolution(approval.id)
+
+            if resolution == "approved":
+                return _Result(kind="approved")
+            return _Result(kind="denied-interactively-by-user")
 
         # Build session options dict — used for both create and resume
         session_opts: dict[str, object] = {

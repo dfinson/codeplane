@@ -76,6 +76,17 @@ def validate_state_transition(from_state: str | None, to_state: str) -> None:
 
 
 class PermissionMode(StrEnum):
+    """Controls how the agent adapter handles SDK permission requests.
+
+    permissive  — auto-approve everything, no operator prompts.
+    auto        — auto-approve reads/writes within workspace; ask for
+                  shell commands, URL fetches, writes outside workspace,
+                  and writes to protected paths.
+    supervised  — ask the operator for every permission request.
+    readonly    — deny any mutation (write/shell/url), approve reads.
+    """
+
+    permissive = "permissive"
     auto = "auto"
     supervised = "supervised"
     readonly = "readonly"
@@ -104,7 +115,7 @@ class SessionConfig:
     model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
-    permission_mode: str = "auto"
+    permission_mode: PermissionMode = PermissionMode.auto
     # Injected by RuntimeService for supervised mode; callable[[description, proposed_action], Awaitable[str]]
     blocking_permission_handler: object = None
     # Set when resuming a job to reconnect to an existing Copilot SDK session

@@ -109,7 +109,10 @@ async def create_job(
     # Hand off to RuntimeService for execution / queueing (skip if already failed)
     if job.state != "failed":
         runtime: RuntimeService = request.app.state.runtime_service
-        await runtime.start_or_enqueue(job)
+        await runtime.start_or_enqueue(
+            job,
+            permission_mode=body.permission_mode.value if body.permission_mode else None,
+        )
 
         # Re-fetch to get updated state (may have been enqueued)
         job = await svc.get_job(job.id)

@@ -66,6 +66,7 @@ class ServerConfig:
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".tower-worktrees"
+    permission_mode: str = "auto"  # permissive | auto | supervised
 
 
 @dataclass
@@ -178,6 +179,7 @@ def save_config(config: TowerConfig, path: Path | None = None) -> None:
     existing["runtime"] = {
         "max_concurrent_jobs": config.runtime.max_concurrent_jobs,
         "worktrees_dirname": config.runtime.worktrees_dirname,
+        "permission_mode": config.runtime.permission_mode,
     }
     existing["voice"] = {
         "enabled": config.voice.enabled,
