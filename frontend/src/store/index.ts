@@ -24,6 +24,7 @@ export interface JobSummary {
   id: string;
   repo: string;
   prompt: string;
+  title?: string | null;
   state: string;
   strategy: string;
   baseRef: string;

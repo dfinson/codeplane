@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from backend.config import TowerConfig
     from backend.persistence.job_repo import JobRepository
     from backend.services.git_service import GitService
+    from backend.services.naming_service import NamingService
 
 log = structlog.get_logger()
 
@@ -46,10 +47,12 @@ class JobService:
         job_repo: JobRepository,
         git_service: GitService,
         config: TowerConfig,
+        naming_service: NamingService | None = None,
     ) -> None:
         self._job_repo = job_repo
         self._git = git_service
         self._config = config
+        self._naming = naming_service
 
     def _resolve_repos(self) -> set[str]:
         """Expand glob patterns and return the full set of allowed repo paths."""
@@ -97,6 +100,17 @@ class JobService:
         # Generate job ID atomically via the database
         job_id = await self._job_repo.next_id()
 
+        # Pre-work: generate intelligent title and branch name from the prompt
+        title: str | None = None
+        if self._naming is not None and branch is None:
+            try:
+                title, generated_branch = await self._naming.generate(prompt)
+                if generated_branch:
+                    branch = generated_branch
+                log.info("naming_preflight_complete", job_id=job_id, title=title, branch=branch)
+            except Exception:
+                log.warning("naming_preflight_failed", job_id=job_id, exc_info=True)
+
         # Determine if we use main worktree or secondary
         all_jobs = await self._job_repo.list(limit=10000)
         active_on_repo = [j for j in all_jobs if j.repo == resolved_repo and j.state in ACTIVE_STATES]
@@ -128,6 +142,7 @@ class JobService:
                 created_at=now,
                 updated_at=now,
                 completed_at=now,
+                title=title,
             )
             await self._job_repo.create(job)
             log.error("job_worktree_failed", job_id=job_id, error=str(exc))
@@ -149,9 +164,10 @@ class JobService:
             session_id=None,
             created_at=now,
             updated_at=now,
+            title=title,
         )
         await self._job_repo.create(job)
-        log.info("job_created", job_id=job_id, repo=resolved_repo, state=initial_state)
+        log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
         return job
 
     async def get_job(self, job_id: str) -> Job:

@@ -39,10 +39,18 @@ async def _get_session(
 def _get_job_service(
     session: Annotated[AsyncSession, Depends(_get_session)],
     config: Annotated[TowerConfig, Depends(_get_config)],
+    request: Request,
 ) -> JobService:
     job_repo = JobRepository(session)
     git_service = GitService(config)
-    return JobService(job_repo=job_repo, git_service=git_service, config=config)
+    # Wire up NamingService when the adapter is available (runtime started)
+    naming_service = None
+    adapter = getattr(request.app.state, "agent_adapter", None)
+    if adapter is not None:
+        from backend.services.naming_service import NamingService
+
+        naming_service = NamingService(adapter)
+    return JobService(job_repo=job_repo, git_service=git_service, config=config, naming_service=naming_service)
 
 
 def _job_to_response(job: object) -> JobResponse:
@@ -54,6 +62,7 @@ def _job_to_response(job: object) -> JobResponse:
         id=j.id,
         repo=j.repo,
         prompt=j.prompt,
+        title=j.title,
         state=j.state,
         strategy=j.strategy,
         base_ref=j.base_ref,
@@ -99,6 +108,7 @@ async def create_job(
     return CreateJobResponse(
         id=job.id,
         state=job.state,
+        title=job.title,
         branch=job.branch,
         worktree_path=job.worktree_path,
         created_at=job.created_at,
@@ -174,6 +184,7 @@ async def rerun_job(
     return CreateJobResponse(
         id=job.id,
         state=job.state,
+        title=job.title,
         branch=job.branch,
         worktree_path=job.worktree_path,
         created_at=job.created_at,

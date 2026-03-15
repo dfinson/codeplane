@@ -41,6 +41,11 @@ class AgentAdapterInterface(ABC):
     async def abort_session(self, session_id: str) -> None:
         """Abort the current message processing. Session remains valid."""
 
+    @abstractmethod
+    async def complete(self, prompt: str) -> str:
+        """Non-agentic single-turn completion. Returns the full response text."""
+        return ""
+
 
 class CopilotAdapter(AgentAdapterInterface):
     """Wraps the Python Copilot SDK behind the adapter interface.
@@ -234,3 +239,59 @@ class CopilotAdapter(AgentAdapterInterface):
             log.warning("copilot_abort_failed", session_id=session_id, exc_info=True)
         finally:
             self._cleanup_session(session_id)
+
+    async def complete(self, prompt: str) -> str:
+        """Create a minimal session for single-turn completion, collect the response."""
+        from copilot import CopilotClient
+
+        client = CopilotClient()
+        tmp_session_id = str(uuid.uuid4())
+        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
+        self._queues[tmp_session_id] = queue
+
+        async def _noop_permission(request: object, invocation: object) -> object:
+            from copilot import PermissionRequestResult
+
+            return PermissionRequestResult(kind="approved")
+
+        try:
+            session = await client.create_session(
+                {
+                    "working_directory": "/tmp",
+                    "on_permission_request": _noop_permission,
+                }
+            )
+            self._sessions[tmp_session_id] = session
+
+            collected: list[str] = []
+            done_event = asyncio.Event()
+
+            def _on_event(sdk_event: SdkSessionEvent) -> None:
+                kind_str = sdk_event.type.value if sdk_event.type else ""
+                payload = sdk_event.data.to_dict() if sdk_event.data else {}
+                if kind_str == "assistant.message":
+                    content = payload.get("content") or ""
+                    if content:
+                        collected.append(content)
+                    done_event.set()
+                elif kind_str in ("session.task_complete", "session.idle", "session.error", "session.shutdown"):
+                    done_event.set()
+
+            session.on(_on_event)
+            await session.send({"prompt": prompt, "mode": "immediate", "attachments": []})
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=30)
+            except TimeoutError:
+                log.warning("complete_timeout")
+            return "\n".join(collected)
+        except Exception:
+            log.error("complete_failed", exc_info=True)
+            return ""
+        finally:
+            try:
+                s = self._sessions.get(tmp_session_id)
+                if s:
+                    await s.abort()
+            except Exception:
+                pass
+            self._cleanup_session(tmp_session_id)

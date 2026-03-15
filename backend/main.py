@@ -97,6 +97,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.sse_manager = sse_manager
     app.state.runtime_service = runtime_service
     app.state.approval_service = approval_service
+    app.state.agent_adapter = adapter
 
     # --- Voice service ---
     voice_service: VoiceService | None = None

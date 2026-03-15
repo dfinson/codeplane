@@ -101,7 +101,8 @@ export function JobDetailScreen() {
       <div className="rounded-lg border border-border bg-card p-4 mb-4">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold text-foreground">{job.id}</span>
+            <span className="text-lg font-bold text-foreground">{job.title ?? job.id}</span>
+            <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
             <StateBadge state={job.state} />
           </div>
           <div className="flex items-center gap-2">

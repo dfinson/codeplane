@@ -131,6 +131,7 @@ class RegisterRepoRequest(BaseModel):
 class CreateJobResponse(CamelModel):
     id: str
     state: str
+    title: str | None = None
     branch: str | None = None
     worktree_path: str | None = None
     created_at: datetime
@@ -140,6 +141,7 @@ class JobResponse(CamelModel):
     id: str
     repo: str
     prompt: str
+    title: str | None = None
     state: str
     strategy: StrategyKind
     base_ref: str

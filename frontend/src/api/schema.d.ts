@@ -464,6 +464,8 @@ export interface components {
             id: string;
             /** State */
             state: string;
+            /** Title */
+            title?: string | null;
             /** Branch */
             branch?: string | null;
             /** Worktreepath */
@@ -523,6 +525,8 @@ export interface components {
             repo: string;
             /** Prompt */
             prompt: string;
+            /** Title */
+            title?: string | null;
             /** State */
             state: string;
             strategy: components["schemas"]["StrategyKind"];
