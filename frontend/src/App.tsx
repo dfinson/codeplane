@@ -1,7 +1,7 @@
-import { Component, type ReactNode } from "react";
+import { Component, type ReactNode, useState } from "react";
 import { Routes, Route, NavLink, Link } from "react-router-dom";
-import { Group, Badge, UnstyledButton, Text } from "@mantine/core";
-import { type LucideIcon, LayoutDashboard, Plus, Settings } from "lucide-react";
+import { Group, Badge, UnstyledButton, Text, Drawer, Stack } from "@mantine/core";
+import { type LucideIcon, LayoutDashboard, Plus, Settings, Menu } from "lucide-react";
 import { useSSE } from "./hooks/useSSE";
 import { useTowerStore, selectConnectionStatus } from "./store";
 import { DashboardScreen } from "./components/DashboardScreen";
@@ -101,6 +101,7 @@ function ConnectionStatus() {
 
 export function App() {
   useSSE();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <div className="flex flex-col h-screen">
@@ -111,14 +112,62 @@ export function App() {
           </Text>
         </Link>
 
-        <Group gap="sm">
+        {/* Desktop nav */}
+        <Group gap="sm" className="hidden sm:flex">
           <NavItem to="/" icon={LayoutDashboard} label="Dashboard" end />
           <NavItem to="/jobs/new" icon={Plus} label="New Job" />
           <NavItem to="/settings" icon={Settings} label="Settings" />
         </Group>
 
-        <ConnectionStatus />
+        <Group gap="sm">
+          <ConnectionStatus />
+          {/* Mobile hamburger */}
+          <UnstyledButton
+            className="sm:hidden p-1.5 rounded-md hover:bg-[var(--mantine-color-dark-6)]"
+            onClick={() => setMenuOpen(true)}
+          >
+            <Menu size={20} className="text-[var(--mantine-color-dimmed)]" />
+          </UnstyledButton>
+        </Group>
       </header>
+
+      {/* Mobile drawer menu */}
+      <Drawer
+        opened={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        position="right"
+        size="xs"
+        title={<Text fw={700}>Tower</Text>}
+        withCloseButton
+      >
+        <Stack gap="xs">
+          {[
+            { to: "/", icon: LayoutDashboard, label: "Dashboard", end: true },
+            { to: "/jobs/new", icon: Plus, label: "New Job" },
+            { to: "/settings", icon: Settings, label: "Settings" },
+          ].map(({ to, icon: Icon, label, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              onClick={() => setMenuOpen(false)}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium no-underline ${
+                  isActive
+                    ? "bg-[var(--mantine-color-dark-5)] text-white"
+                    : "text-[var(--mantine-color-dimmed)] hover:text-white hover:bg-[var(--mantine-color-dark-6)]"
+                }`
+              }
+            >
+              <Icon size={18} />
+              {label}
+            </NavLink>
+          ))}
+          <div className="border-t border-[var(--mantine-color-dark-4)] mt-2 pt-2 px-3">
+            <ConnectionStatus />
+          </div>
+        </Stack>
+      </Drawer>
 
       <main className="flex-1 overflow-y-auto p-4">
         <ErrorBoundary>

@@ -1,13 +1,13 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Paper, Title, Select, Textarea, TextInput, Button, Group, Stack, Text, Divider,
+  Paper, Title, Select, TextInput, Button, Group, Stack, Text, Divider,
   Collapse, UnstyledButton,
 } from "@mantine/core";
 import { ChevronDown, ChevronRight, Rocket, Plus } from "lucide-react";
 import { notifications } from "@mantine/notifications";
 import { createJob, fetchRepos, fetchModels } from "../api/client";
-import { VoiceRecorder } from "./VoiceButton";
+import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
 
 export function JobCreationScreen() {
@@ -22,11 +22,6 @@ export function JobCreationScreen() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
-
-  const voiceSection = useMemo(
-    () => <VoiceRecorder onTranscript={(t) => setPrompt((p) => (p ? p + " " : "") + t)} />,
-    []
-  );
 
   useEffect(() => {
     fetchRepos()
@@ -111,18 +106,7 @@ export function JobCreationScreen() {
             }}
           />
 
-          <Textarea
-            label="Prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.currentTarget.value)}
-            placeholder="Describe the task for the agent…"
-            minRows={4}
-            autosize
-            maxRows={12}
-            size="sm"
-            rightSection={voiceSection}
-            rightSectionWidth={140}
-          />
+          <PromptWithVoice value={prompt} onChange={setPrompt} />
 
           <Divider />
 

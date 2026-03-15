@@ -10,7 +10,7 @@ import { Send, Bot, User } from "lucide-react";
 import { useTowerStore, selectJobTranscript } from "../store";
 import { sendOperatorMessage } from "../api/client";
 import { notifications } from "@mantine/notifications";
-import { VoiceRecorder } from "./VoiceButton";
+import { MicButton } from "./VoiceButton";
 
 export function TranscriptPanel({ jobId, interactive }: { jobId: string; interactive?: boolean }) {
   const entries = useTowerStore(selectJobTranscript(jobId));
@@ -105,11 +105,11 @@ export function TranscriptPanel({ jobId, interactive }: { jobId: string; interac
               className="flex-1"
               size="sm"
               rightSection={
-                <VoiceRecorder
-                  onTranscript={(t) => setMsg((prev) => (prev ? prev + " " : "") + t)}
+                <MicButton
+                  onTranscript={(t: string) => setMsg((prev) => (prev ? prev + " " : "") + t)}
                 />
               }
-              rightSectionWidth={80}
+              rightSectionWidth={40}
             />
             <ActionIcon
               variant="filled"
