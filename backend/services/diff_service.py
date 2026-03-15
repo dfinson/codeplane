@@ -110,6 +110,8 @@ class DiffService:
         """Calculate diff, publish event, update throttle timestamp."""
         files = await self.calculate_diff(worktree_path, base_ref)
         self._last_diff_at[job_id] = time.monotonic()
+        # Use snake_case keys for internal domain event payload;
+        # SSE manager re-serializes to camelCase for the wire.
         payload = DiffUpdatePayload(job_id=job_id, changed_files=files)
         await self._event_bus.publish(
             DomainEvent(
@@ -117,7 +119,7 @@ class DiffService:
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.diff_updated,
-                payload=json.loads(payload.model_dump_json(by_alias=True)),
+                payload=json.loads(payload.model_dump_json()),
             )
         )
         return files

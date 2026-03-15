@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from backend.config import TowerConfig
     from backend.services.agent_adapter import AgentAdapterInterface
     from backend.services.approval_service import ApprovalService
+    from backend.services.diff_service import DiffService
     from backend.services.event_bus import EventBus
     from backend.services.execution_strategy import ExecutionStrategy
     from backend.services.job_service import JobService
@@ -142,12 +143,14 @@ class RuntimeService:
         adapter: AgentAdapterInterface,
         config: TowerConfig,
         approval_service: ApprovalService | None = None,
+        diff_service: DiffService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
         self._adapter = adapter
         self._config = config
         self._approval_service = approval_service
+        self._diff_service = diff_service
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._strategies: dict[str, ExecutionStrategy] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
@@ -255,11 +258,34 @@ class RuntimeService:
 
         tel.start_job(job_id)
 
+        # Resolve worktree_path and base_ref for diff calculations
+        worktree_path: str | None = None
+        base_ref: str | None = None
+        try:
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                job = await svc.get_job(job_id)
+            if job is not None:
+                worktree_path = job.worktree_path or job.repo
+                base_ref = job.base_ref
+        except Exception:
+            log.warning("diff_job_lookup_failed", job_id=job_id, exc_info=True)
+
         session_id: str | None = None
         error_reason: str | None = None
         try:
             async for session_event in strategy.execute(config, self._adapter):
                 self._last_activity[job_id] = time.monotonic()
+
+                # Intercept file_changed events and route through DiffService
+                if (
+                    session_event.kind == SessionEventKind.file_changed
+                    and self._diff_service is not None
+                    and worktree_path
+                    and base_ref
+                ):
+                    await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
+                    continue
 
                 domain_event = self._translate_event(job_id, session_event)
                 if domain_event is not None:
@@ -329,6 +355,13 @@ class RuntimeService:
                 await self._fail_job(job_id, error_reason)
                 return
 
+            # Final diff snapshot before PR creation
+            if self._diff_service is not None and worktree_path and base_ref:
+                try:
+                    await self._diff_service.finalize(job_id, worktree_path, base_ref)
+                except Exception:
+                    log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
+
             # Best-effort PR creation before transitioning to succeeded
             pr_url = await self._try_create_pr(job_id)
 
@@ -391,6 +424,8 @@ class RuntimeService:
             self._session_ids.pop(job_id, None)
             if self._approval_service is not None:
                 self._approval_service.cleanup_job(job_id)
+            if self._diff_service is not None:
+                self._diff_service.cleanup(job_id)
             # Check if any queued jobs can now start
             await self._dequeue_next()
 
@@ -575,7 +610,6 @@ class RuntimeService:
         mapping: dict[SessionEventKind, DomainEventKind] = {
             SessionEventKind.log: DomainEventKind.log_line_emitted,
             SessionEventKind.transcript: DomainEventKind.transcript_updated,
-            SessionEventKind.file_changed: DomainEventKind.diff_updated,
             SessionEventKind.approval_request: DomainEventKind.approval_requested,
             SessionEventKind.error: DomainEventKind.job_failed,
         }

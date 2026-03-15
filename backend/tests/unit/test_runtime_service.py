@@ -280,14 +280,14 @@ class TestEventTranslation:
         assert result is not None
         assert result.kind == DomainEventKind.transcript_updated
 
-    def test_file_changed_to_diff_updated(self, runtime: RuntimeService) -> None:
+    def test_file_changed_not_translated(self, runtime: RuntimeService) -> None:
+        """file_changed events are handled by DiffService, not _translate_event."""
         event = SessionEvent(
             kind=SessionEventKind.file_changed,
             payload={"path": "foo.py", "action": "modified"},
         )
         result = runtime._translate_event("job-1", event)
-        assert result is not None
-        assert result.kind == DomainEventKind.diff_updated
+        assert result is None
 
     def test_approval_request_translated(self, runtime: RuntimeService) -> None:
         event = SessionEvent(
@@ -339,11 +339,11 @@ class TestJobLifecycle:
         await runtime.start_or_enqueue(job)
         await asyncio.sleep(0.5)
 
-        # Should have log, transcript, diff, transcript events + job_succeeded
+        # Should have log, transcript events + job_succeeded
+        # (diff_updated events now come from DiffService which requires a real git worktree)
         kinds = [e.kind for e in published]
         assert DomainEventKind.log_line_emitted in kinds
         assert DomainEventKind.transcript_updated in kinds
-        assert DomainEventKind.diff_updated in kinds
         assert DomainEventKind.job_succeeded in kinds
 
     async def test_cancel_running_job(
