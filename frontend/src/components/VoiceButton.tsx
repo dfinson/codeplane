@@ -20,6 +20,8 @@ export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
   const recordRef = useRef<ReturnType<typeof RecordPlugin.create> | null>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   const initedRef = useRef(false);
+  const valueRef = useRef(value);
+  useEffect(() => { valueRef.current = value; }, [value]);
 
   const ensureInit = useCallback(() => {
     if (initedRef.current || !containerRef.current) return;
@@ -52,7 +54,8 @@ export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
       try {
         const text = await transcribeAudio(blob);
         if (text) {
-          onChange(value ? value + " " + text : text);
+          const cur = valueRef.current;
+          onChange(cur ? cur + " " + text : text);
           toast.success("Transcribed");
         }
       } catch {
@@ -64,7 +67,7 @@ export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
 
     wsRef.current = ws;
     recordRef.current = record;
-  }, [onChange, value]);
+  }, [onChange]);
 
   useEffect(() => {
     return () => {
