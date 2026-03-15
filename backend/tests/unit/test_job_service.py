@@ -110,10 +110,18 @@ class TestStateMachine:
     def test_waiting_to_failed(self) -> None:
         validate_state_transition(JobState.waiting_for_approval, JobState.failed)
 
-    def test_terminal_states_have_no_transitions(self) -> None:
+    def test_terminal_states_can_resume_to_running(self) -> None:
+        """Terminal states allow transition to running for job resumption."""
         for terminal in TERMINAL_STATES:
-            with pytest.raises(InvalidStateTransitionError):
-                validate_state_transition(terminal, JobState.running)
+            # Should NOT raise — terminal → running is valid for resume
+            validate_state_transition(terminal, JobState.running)
+
+    def test_terminal_states_cannot_transition_to_non_running(self) -> None:
+        """Terminal states cannot transition to queued or waiting_for_approval."""
+        for terminal in TERMINAL_STATES:
+            for invalid in (JobState.queued, JobState.waiting_for_approval):
+                with pytest.raises(InvalidStateTransitionError):
+                    validate_state_transition(terminal, invalid)
 
     def test_terminal_states_values(self) -> None:
         assert JobState.succeeded in TERMINAL_STATES

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import logging.handlers
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +30,7 @@ from backend.services.merge_service import MergeService
 from backend.services.retention_service import RetentionService
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
+from backend.services.summarization_service import SummarizationService
 from backend.services.voice_service import VoiceService
 
 if TYPE_CHECKING:
@@ -40,6 +43,80 @@ if TYPE_CHECKING:
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 log = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+_LOG_LEVEL_MAP: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warn": logging.WARNING,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+def setup_logging(log_file: str, console_level: str = "info") -> None:
+    """Configure structlog + stdlib logging.
+
+    Strategy
+    --------
+    * **File handler** — always at DEBUG verbosity so every log line is
+      persisted.  Uses a rotating handler (10 MB × 5 backups).
+    * **Stderr handler** — respects ``console_level`` from config (default
+      info) so the terminal stays readable at runtime.
+    * **structlog** — uses the same stdlib handlers so all structured context
+      fields are serialised consistently.
+    """
+    log_path = Path(log_file).expanduser().resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    console_int = _LOG_LEVEL_MAP.get(console_level.lower(), logging.INFO)
+
+    # Shared formatter — human-readable key=value pairs
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s  %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+
+    # File handler: DEBUG, rotating 10 MB × 5
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(fmt)
+
+    # Stderr handler: configured level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(console_int)
+    console_handler.setFormatter(fmt)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # let handlers decide what to suppress
+    root_logger.handlers.clear()
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+    # Suppress chatty third-party loggers from polluting the debug file
+    for noisy in ("uvicorn.access", "sqlalchemy.engine", "httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
 
 
 @asynccontextmanager
@@ -78,6 +155,10 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config.completion,
     )
+    summarization_service = SummarizationService(
+        session_factory=session_factory,
+        adapter=adapter,
+    )
 
     runtime_service = RuntimeService(
         session_factory=session_factory,
@@ -87,6 +168,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_service=approval_service,
         diff_service=diff_service,
         merge_service=merge_service,
+        summarization_service=summarization_service,
     )
 
     # Recover orphaned jobs from a previous crash
@@ -319,6 +401,9 @@ def up(host: str | None, port: int | None, dev: bool, tunnel: bool, password: st
     # Build frontend (unless --dev, which uses Vite's hot-reload server separately)
     if not dev:
         _build_frontend()
+
+    # Configure logging before everything else so all startup messages are captured
+    setup_logging(config.logging.file, console_level=config.logging.level)
 
     # Run Alembic migrations before starting the server
     run_migrations()

@@ -40,6 +40,9 @@ class JobRepository(BaseRepository):
             completed_at=row.completed_at,  # type: ignore[arg-type]
             pr_url=row.pr_url,  # type: ignore[arg-type]
             merge_status=row.merge_status,  # type: ignore[arg-type]
+            permission_mode=row.permission_mode or "auto",  # type: ignore[arg-type]
+            session_count=row.session_count or 1,  # type: ignore[arg-type]
+            sdk_session_id=row.sdk_session_id,  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -59,6 +62,9 @@ class JobRepository(BaseRepository):
             completed_at=job.completed_at,
             pr_url=job.pr_url,
             merge_status=job.merge_status,
+            permission_mode=job.permission_mode,
+            session_count=job.session_count,
+            sdk_session_id=job.sdk_session_id,
         )
         self._session.add(row)
         await self._session.flush()
@@ -132,4 +138,37 @@ class JobRepository(BaseRepository):
         row.merge_status = merge_status  # type: ignore[assignment]
         if pr_url is not None:
             row.pr_url = pr_url  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def reset_for_resume(self, job_id: str, new_session_count: int) -> None:
+        """Reset a terminal job back to running state for resumption."""
+        from datetime import UTC, datetime
+
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.state = "running"  # type: ignore[assignment]
+        row.completed_at = None  # type: ignore[assignment]
+        row.session_id = None  # type: ignore[assignment]
+        row.session_count = new_session_count  # type: ignore[assignment]
+        row.updated_at = datetime.now(UTC)  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def update_worktree_path(self, job_id: str, worktree_path: str) -> None:
+        """Update the worktree path (e.g. after re-creating a cleaned-up worktree)."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.worktree_path = worktree_path  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def update_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
+        """Persist the Copilot SDK session ID for future resumption."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.sdk_session_id = sdk_session_id  # type: ignore[assignment]
         await self._session.flush()

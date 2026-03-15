@@ -52,3 +52,20 @@ class EventRepository(BaseRepository):
         stmt = stmt.limit(limit)
         result = await self._session.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def list_by_job(
+        self,
+        job_id: str,
+        kinds: list[DomainEventKind],
+        limit: int = 2000,
+    ) -> list[DomainEvent]:
+        """List all events for a job filtered by kind, ordered by db id."""
+        stmt = (
+            select(EventRow)
+            .where(EventRow.job_id == job_id)
+            .where(EventRow.kind.in_([k.value for k in kinds]))
+            .order_by(EventRow.id)
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]

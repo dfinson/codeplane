@@ -40,6 +40,11 @@ class SingleAgentExecutor(ExecutionStrategy):
         self._session_id: str | None = None
         self._adapter: AgentAdapterInterface | None = None
 
+    @property
+    def session_id(self) -> str | None:
+        """SDK session ID set by the adapter during execute(), available from the first event."""
+        return self._session_id
+
     async def execute(
         self,
         config: SessionConfig,

@@ -97,6 +97,9 @@ class FakeAgentAdapter(AgentAdapterInterface):
     async def abort_session(self, session_id: str) -> None:
         self._aborted.add(session_id)
 
+    async def complete(self, prompt: str) -> str:
+        return "{}"
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -878,6 +881,9 @@ class ErrorAdapter(AgentAdapterInterface):
 
     async def abort_session(self, session_id: str) -> None:
         pass
+
+    async def complete(self, prompt: str) -> str:
+        return "{}"
 
 
 class TestErrorEventCausesFailure:

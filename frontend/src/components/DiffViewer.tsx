@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
-import { useTowerStore } from "../store";
+import { useTowerStore, selectJobDiffs } from "../store";
+import { fetchJobDiff } from "../api/client";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
 
@@ -44,11 +45,24 @@ function guessLanguage(path: string): string {
 }
 
 export default function DiffViewer({ jobId }: DiffViewerProps) {
-  const diffs = useTowerStore((s) => s.diffs[jobId] ?? []);
+  const diffs = useTowerStore(selectJobDiffs(jobId));
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [original, setOriginal] = useState("");
   const [modified, setModified] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Fetch historical diff from API on mount (for completed jobs / page refresh)
+  useEffect(() => {
+    fetchJobDiff(jobId)
+      .then((files) => {
+        if (files.length > 0) {
+          useTowerStore.setState((s) => ({
+            diffs: { ...s.diffs, [jobId]: files },
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [jobId]);
 
   const selectedFile = diffs[selectedIdx];
 

@@ -60,6 +60,13 @@ export interface TranscriptEntry {
   timestamp: string;
   role: string;
   content: string;
+  // Rich fields — only present for specific roles
+  title?: string;        // agent messages: optional annotation title
+  turnId?: string;       // groups reasoning + tool_calls + message into one turn
+  toolName?: string;     // tool_call: identifier
+  toolArgs?: string;     // tool_call: JSON-serialised arguments
+  toolResult?: string;   // tool_call: text output
+  toolSuccess?: boolean; // tool_call: success flag
 }
 
 // ---------------------------------------------------------------------------
@@ -151,8 +158,19 @@ export const useTowerStore = create<TowerState>((set, get) => ({
             timestamp: payload.timestamp as string,
             role: payload.role as string,
             content: payload.content as string,
+            title: payload.title as string | undefined,
+            turnId: payload.turnId as string | undefined,
+            toolName: payload.toolName as string | undefined,
+            toolArgs: payload.toolArgs as string | undefined,
+            toolResult: payload.toolResult as string | undefined,
+            toolSuccess: payload.toolSuccess as boolean | undefined,
           };
           const existing = state.transcript[jobId] ?? [];
+          // Deduplicate: two SSE connections (global + job-scoped) may deliver
+          // the same event; skip if identical role+content+timestamp already present.
+          if (existing.some((e) => e.timestamp === entry.timestamp && e.role === entry.role && e.content === entry.content)) {
+            return null;
+          }
           const updated = [...existing, entry];
           return {
             transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
@@ -232,6 +250,27 @@ export const useTowerStore = create<TowerState>((set, get) => ({
           };
         }
 
+        case "session_resumed": {
+          const jobId = payload.jobId as string;
+          const sessionNumber = payload.sessionNumber as number;
+          const timestamp = payload.timestamp as string;
+          const divider: TranscriptEntry = {
+            jobId,
+            seq: -99,
+            timestamp,
+            role: "divider",
+            content: `Session ${sessionNumber}`,
+          };
+          const existing = state.transcript[jobId] ?? [];
+          return {
+            transcript: { ...state.transcript, [jobId]: [...existing, divider] },
+            // Also update job state back to running
+            jobs: state.jobs[jobId]
+              ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running" } }
+              : state.jobs,
+          };
+        }
+
         default:
           return null;
       }
@@ -251,12 +290,20 @@ export const selectJobs = (state: TowerState) => state.jobs;
 export const selectConnectionStatus = (state: TowerState) =>
   state.connectionStatus;
 export const selectApprovals = (state: TowerState) => state.approvals;
+
+// Stable empty-array sentinels — MUST NOT be inline `?? []` because a new
+// array literal is a new reference on every call, causing useSyncExternalStore
+// to see a changed snapshot every render → infinite re-render loop (#185).
+const EMPTY_LOGS: LogLine[] = [];
+const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
+const EMPTY_DIFFS: DiffFileModel[] = [];
+
 export const selectJobLogs = (jobId: string) => (state: TowerState) =>
-  state.logs[jobId] ?? [];
+  state.logs[jobId] ?? EMPTY_LOGS;
 export const selectJobTranscript = (jobId: string) => (state: TowerState) =>
-  state.transcript[jobId] ?? [];
+  state.transcript[jobId] ?? EMPTY_TRANSCRIPT;
 export const selectJobDiffs = (jobId: string) => (state: TowerState) =>
-  state.diffs[jobId] ?? [];
+  state.diffs[jobId] ?? EMPTY_DIFFS;
 
 // Per-column selectors — only recompute when jobs in that column change
 function sortByUpdatedDesc(jobs: JobSummary[]): JobSummary[] {

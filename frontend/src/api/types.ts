@@ -16,6 +16,7 @@ export type RegisterRepoRequest = components["schemas"]["RegisterRepoRequest"];
 export type RegisterRepoResponse = components["schemas"]["RegisterRepoResponse"];
 export type RepoListResponse = components["schemas"]["RepoListResponse"];
 export type GlobalConfigResponse = components["schemas"]["GlobalConfigResponse"];
+export type PermissionMode = components["schemas"]["PermissionMode"];
 
 // SSE payload types — not in the OpenAPI schema since they're sent via SSE,
 // so we define them here matching the backend CamelModel shapes.

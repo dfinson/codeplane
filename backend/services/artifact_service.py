@@ -115,6 +115,46 @@ class ArtifactService:
         """Retrieve a single artifact by ID."""
         return await self._repo.get(artifact_id)
 
+    async def store_session_summary(self, job_id: str, session_number: int, summary_json: str) -> Artifact:
+        """Persist a session summary JSON as an agent_summary artifact."""
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        name = f"session-{session_number}-summary.json"
+
+        disk_dir = _ARTIFACTS_BASE / job_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path.write_text(summary_json, encoding="utf-8")
+        size_bytes = disk_path.stat().st_size
+
+        artifact = Artifact(
+            id=artifact_id,
+            job_id=job_id,
+            name=name,
+            type=ArtifactType.agent_summary,
+            mime_type="application/json",
+            size_bytes=size_bytes,
+            disk_path=str(disk_path),
+            phase=ExecutionPhase.post_completion,
+            created_at=datetime.now(UTC),
+        )
+        return await self._repo.create(artifact)
+
+    async def get_latest_session_summary(self, job_id: str) -> Artifact | None:
+        """Return the most recent agent_summary artifact for a job, or None."""
+        all_artifacts = await self._repo.list_for_job(job_id)
+        summaries = [a for a in all_artifacts if a.type == ArtifactType.agent_summary]
+        if not summaries:
+            return None
+
+        # Session summaries are named session-{n}-summary.json — return highest n
+        def _session_num(a: Artifact) -> int:
+            import re
+
+            m = re.search(r"session-(\d+)-summary", a.name)
+            return int(m.group(1)) if m else 0
+
+        return max(summaries, key=_session_num)
+
 
 def _guess_mime(filename: str) -> str:
     """Simple MIME type guessing from file extension."""

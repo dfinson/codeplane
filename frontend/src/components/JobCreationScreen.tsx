@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, Rocket, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { createJob, fetchRepos, fetchModels } from "../api/client";
+import type { PermissionMode } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
 import { Button } from "./ui/button";
@@ -22,6 +23,7 @@ export function JobCreationScreen() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("supervised");
 
   useEffect(() => {
     fetchRepos()
@@ -54,6 +56,7 @@ export function JobCreationScreen() {
         prompt: prompt.trim(),
         base_ref: baseRef || undefined,
         branch: branch || undefined,
+        permission_mode: permissionMode,
       });
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
@@ -62,7 +65,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, navigate]);
+  }, [repo, prompt, baseRef, branch, navigate, permissionMode]);
 
   return (
     <div className="max-w-xl mx-auto">
@@ -104,6 +107,33 @@ export function JobCreationScreen() {
           />
 
           <PromptWithVoice value={prompt} onChange={setPrompt} />
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Permission Mode</Label>
+            <div className="flex gap-2">
+              {(
+                [
+                  { value: "auto", label: "Auto", title: "Approve all operations silently" },
+                  { value: "supervised", label: "Supervised", title: "Block on writes and URL fetches only — shell and reads auto-approved" },
+                  { value: "readonly", label: "Read-only", title: "Deny writes and shell commands" },
+                ] as { value: PermissionMode; label: string; title: string }[]
+              ).map(({ value, label, title }) => (
+                <button
+                  key={value}
+                  type="button"
+                  title={title}
+                  onClick={() => setPermissionMode(value)}
+                  className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    permissionMode === value
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <hr className="border-border" />
 

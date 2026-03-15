@@ -52,6 +52,10 @@ _VALID_TRANSITIONS: dict[str | None, set[str]] = {
         JobState.failed,
         JobState.canceled,
     },
+    # Terminal states can transition back to running for job resumption
+    JobState.succeeded: {JobState.running},
+    JobState.failed: {JobState.running},
+    JobState.canceled: {JobState.running},
 }
 
 
@@ -69,6 +73,12 @@ def validate_state_transition(from_state: str | None, to_state: str) -> None:
     valid_targets = _VALID_TRANSITIONS.get(from_state, set())
     if to_state not in valid_targets:
         raise InvalidStateTransitionError(from_state, to_state)
+
+
+class PermissionMode(StrEnum):
+    auto = "auto"
+    supervised = "supervised"
+    readonly = "readonly"
 
 
 class SessionEventKind(StrEnum):
@@ -90,8 +100,14 @@ class SessionEvent:
 class SessionConfig:
     workspace_path: str
     prompt: str
+    job_id: str = ""
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
+    permission_mode: str = "auto"
+    # Injected by RuntimeService for supervised mode; callable[[description, proposed_action], Awaitable[str]]
+    blocking_permission_handler: object = None
+    # Set when resuming a job to reconnect to an existing Copilot SDK session
+    resume_sdk_session_id: str | None = None
 
 
 @dataclass
@@ -117,6 +133,9 @@ class Job:
     completed_at: datetime | None = None
     pr_url: str | None = None
     merge_status: str | None = None  # not_merged | merged | conflict | pr_created
+    permission_mode: str = "auto"
+    session_count: int = 1
+    sdk_session_id: str | None = None
 
 
 @dataclass

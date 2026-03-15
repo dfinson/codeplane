@@ -125,10 +125,22 @@ class JobTelemetry:
             "totalToolDurationMs": round(self.total_tool_duration_ms),
             "toolCalls": [
                 {"name": tc.name, "durationMs": round(tc.duration_ms), "success": tc.success}
-                for tc in self.tool_calls[-50:]
+                for tc in self.tool_calls[-200:]
             ],
             "llmCallCount": self.llm_call_count,
             "totalLlmDurationMs": round(self.total_llm_duration_ms),
+            "llmCalls": [
+                {
+                    "model": lc.model,
+                    "inputTokens": lc.input_tokens,
+                    "outputTokens": lc.output_tokens,
+                    "cacheReadTokens": lc.cache_read_tokens,
+                    "cacheWriteTokens": lc.cache_write_tokens,
+                    "cost": round(lc.cost, 6),
+                    "durationMs": round(lc.duration_ms),
+                }
+                for lc in self.llm_calls[-100:]
+            ],
             "approvalCount": self.approval_count,
             "totalApprovalWaitMs": round(self.total_approval_wait_ms),
             "agentMessages": self.agent_messages,

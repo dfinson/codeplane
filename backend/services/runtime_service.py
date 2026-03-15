@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from backend.services.execution_strategy import ExecutionStrategy
     from backend.services.job_service import JobService
     from backend.services.merge_service import MergeService
+    from backend.services.summarization_service import SummarizationService
 
 log = structlog.get_logger()
 
@@ -129,8 +130,10 @@ def _build_session_config(job: Job, config: TowerConfig) -> SessionConfig:
     return SessionConfig(
         workspace_path=workspace,
         prompt=job.prompt,
+        job_id=job.id,
         mcp_servers=mcp_servers,
         protected_paths=protected_paths,
+        permission_mode=job.permission_mode or "auto",
     )
 
 
@@ -146,6 +149,7 @@ class RuntimeService:
         approval_service: ApprovalService | None = None,
         diff_service: DiffService | None = None,
         merge_service: MergeService | None = None,
+        summarization_service: SummarizationService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
@@ -154,6 +158,7 @@ class RuntimeService:
         self._approval_service = approval_service
         self._diff_service = diff_service
         self._merge_service = merge_service
+        self._summarization_service = summarization_service
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._strategies: dict[str, ExecutionStrategy] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
@@ -161,6 +166,8 @@ class RuntimeService:
         self._session_ids: dict[str, str] = {}
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
+        # Contents to suppress when the SDK echoes them back (already published locally)
+        self._echo_suppress: dict[str, set[str]] = {}
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
         from backend.persistence.job_repo import JobRepository
@@ -182,7 +189,9 @@ class RuntimeService:
     def max_concurrent(self) -> int:
         return self._config.runtime.max_concurrent_jobs
 
-    async def start_or_enqueue(self, job: Job) -> None:
+    async def start_or_enqueue(
+        self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
+    ) -> None:
         """Start the job if capacity allows, otherwise keep it queued."""
         if self._shutting_down:
             log.warning("job_rejected_shutting_down", job_id=job.id)
@@ -199,9 +208,11 @@ class RuntimeService:
                 log.info("job_enqueued", job_id=job.id, running=self.running_count)
                 return
 
-            await self._start_job(job)
+            await self._start_job(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
 
-    async def _start_job(self, job: Job) -> None:
+    async def _start_job(
+        self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
+    ) -> None:
         """Create an asyncio task to execute the job."""
         if job.id in self._tasks:
             return  # Already running (race-condition guard)
@@ -232,13 +243,92 @@ class RuntimeService:
             await self._publish_state_event(job.id, job.state, JobState.running)
 
         session_config = _build_session_config(job, self._config)
+        if override_prompt is not None:
+            import dataclasses
+
+            session_config = dataclasses.replace(session_config, prompt=override_prompt)
+        if resume_sdk_session_id is not None:
+            import dataclasses
+
+            session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
+
+        # For supervised mode, inject the blocking approval callback so _on_permission
+        # can directly block the agent and await the operator decision.
+        if job.permission_mode == "supervised" and self._approval_service is not None:
+            import dataclasses
+
+            session_config = dataclasses.replace(
+                session_config,
+                blocking_permission_handler=self._make_blocking_handler(job.id),
+            )
 
         task = asyncio.create_task(
             self._run_job(job.id, strategy, session_config),
             name=f"job-{job.id}",
         )
         self._tasks[job.id] = task
+        # Pre-register prompt for echo suppression so the SDK user.message
+        # echo of the initial prompt is discarded (shown via the synthetic entry).
+        self._echo_suppress.setdefault(job.id, set()).add(session_config.prompt)
         log.info("job_started", job_id=job.id, strategy=strategy_name)
+
+    def _make_blocking_handler(self, job_id: str) -> object:
+        """Build an async callback for supervised-mode permission requests.
+
+        The callback is injected into SessionConfig.blocking_permission_handler.
+        It handles the full approval lifecycle: create record → publish SSE →
+        transition state → await operator → transition back → return resolution.
+        """
+        import time as _time
+
+        async def _handler(description: str, proposed_action: str | None) -> str:
+            assert self._approval_service is not None
+            approval = await self._approval_service.create_request(
+                job_id=job_id,
+                description=description,
+                proposed_action=proposed_action,
+            )
+            approval_event = DomainEvent(
+                event_id=_make_event_id(),
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.approval_requested,
+                payload={
+                    "approval_id": approval.id,
+                    "description": description,
+                    "proposed_action": proposed_action,
+                },
+            )
+            async with self._session_factory() as sess:
+                svc = self._make_job_service(sess)
+                await svc.transition_state(job_id, JobState.waiting_for_approval)
+                await sess.commit()
+            await self._event_bus.publish(approval_event)
+
+            resolution = await self._approval_service.wait_for_resolution(approval.id)
+
+            await self._event_bus.publish(
+                DomainEvent(
+                    event_id=_make_event_id(),
+                    job_id=job_id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.approval_resolved,
+                    payload={
+                        "approval_id": approval.id,
+                        "resolution": resolution,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )
+            )
+            async with self._session_factory() as sess:
+                svc = self._make_job_service(sess)
+                await svc.transition_state(job_id, JobState.running)
+                await sess.commit()
+            await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+            self._last_activity[job_id] = _time.monotonic()
+            return resolution
+
+        return _handler
 
     async def _run_job(
         self,
@@ -290,66 +380,27 @@ class RuntimeService:
                     await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
                     continue
 
+                # Capture SDK session_id on first event (strategy sets _session_id before first yield)
+                if session_id is None and hasattr(strategy, "session_id") and strategy.session_id:
+                    session_id = strategy.session_id
+                    self._session_ids[job_id] = session_id
+                    asyncio.create_task(
+                        self._persist_sdk_session_id(job_id, session_id),
+                        name=f"persist-session-{job_id}",
+                    )
+
                 domain_event = self._translate_event(job_id, session_event)
                 if domain_event is not None:
-                    if session_id is None and domain_event.payload.get("session_id"):
-                        session_id = domain_event.payload["session_id"]
-                        self._session_ids[job_id] = session_id
-                        # Wire telemetry: let the adapter know which job this session belongs to
-                        if hasattr(self._adapter, "set_job_id"):
-                            self._adapter.set_job_id(session_id, job_id)
                     if domain_event.kind == DomainEventKind.job_failed:
                         error_reason = domain_event.payload.get("message", "Agent error")
 
-                    # Handle approval requests: persist, transition, wait, resume
-                    if domain_event.kind == DomainEventKind.approval_requested and self._approval_service is not None:
-                        approval = await self._approval_service.create_request(
-                            job_id=job_id,
-                            description=domain_event.payload.get("description", ""),
-                            proposed_action=domain_event.payload.get("proposed_action"),
-                        )
-                        # Inject approval_id into the event payload
-                        domain_event.payload["approval_id"] = approval.id
-
-                        # Transition to waiting_for_approval
-                        async with self._session_factory() as sess:
-                            svc = self._make_job_service(sess)
-                            await svc.transition_state(job_id, JobState.waiting_for_approval)
-                            await sess.commit()
-
-                        await self._event_bus.publish(domain_event)
-
-                        # Wait for operator resolution
-                        resolution = await self._approval_service.wait_for_resolution(approval.id)
-
-                        # Publish approval_resolved event
-                        await self._event_bus.publish(
-                            DomainEvent(
-                                event_id=_make_event_id(),
-                                job_id=job_id,
-                                timestamp=datetime.now(UTC),
-                                kind=DomainEventKind.approval_resolved,
-                                payload={
-                                    "approval_id": approval.id,
-                                    "resolution": resolution,
-                                    "timestamp": datetime.now(UTC).isoformat(),
-                                },
-                            )
-                        )
-
-                        # Transition back to running
-                        async with self._session_factory() as sess:
-                            svc = self._make_job_service(sess)
-                            await svc.transition_state(job_id, JobState.running)
-                            await sess.commit()
-                        await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
-                        self._last_activity[job_id] = time.monotonic()
-
-                        # If rejected, abort
-                        if resolution == "rejected":
-                            error_reason = "Approval rejected by operator"
-                            break
-                        continue
+                    # Suppress SDK echoes for messages already published locally
+                    # (operator messages and silent system instructions like pause).
+                    if domain_event.kind == DomainEventKind.transcript_updated and job_id in self._echo_suppress:
+                        content = domain_event.payload.get("content", "")
+                        if content in self._echo_suppress[job_id]:
+                            self._echo_suppress[job_id].discard(content)
+                            continue
 
                     await self._event_bus.publish(domain_event)
 
@@ -457,10 +508,17 @@ class RuntimeService:
             self._strategies.pop(job_id, None)
             self._last_activity.pop(job_id, None)
             self._session_ids.pop(job_id, None)
+            self._echo_suppress.pop(job_id, None)
             if self._approval_service is not None:
                 self._approval_service.cleanup_job(job_id)
             if self._diff_service is not None:
                 self._diff_service.cleanup(job_id)
+            # Fire background summarization for completed/failed sessions
+            if self._summarization_service is not None:
+                asyncio.create_task(
+                    self._summarize_session_background(job_id),
+                    name=f"summarize-{job_id}",
+                )
             # Check if any queued jobs can now start
             await self._dequeue_next()
 
@@ -520,12 +578,57 @@ class RuntimeService:
             log.info("job_cancel_no_running_task", job_id=job_id)
 
     async def send_message(self, job_id: str, message: str) -> bool:
-        """Send a message to a running job's strategy. Returns True if sent."""
+        """Send an operator message to a running job.
+
+        Publishes the transcript event locally for immediate UI feedback and
+        suppresses the SDK echo to avoid showing the message twice.
+        """
         strategy = self._strategies.get(job_id)
         if strategy is None:
             log.warning("send_message_no_strategy", job_id=job_id)
             return False
+        now = datetime.now(UTC)
         await strategy.send_message(message)
+        # Publish immediately so the operator message appears in the transcript
+        # without waiting for the SDK to echo it back.
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=_make_event_id(),
+                job_id=job_id,
+                timestamp=now,
+                kind=DomainEventKind.transcript_updated,
+                payload={
+                    "job_id": job_id,
+                    "seq": 0,
+                    "timestamp": now.isoformat(),
+                    "role": "operator",
+                    "content": message,
+                },
+            )
+        )
+        # Suppress the SDK echo so the same content is not published twice.
+        self._echo_suppress.setdefault(job_id, set()).add(message)
+        return True
+
+    async def pause_job(self, job_id: str) -> bool:
+        """Send a silent pause instruction to the agent. Returns True if sent.
+
+        The pause message is never shown in the transcript — the agent receives
+        the instruction to stop and wait for further operator input.
+        """
+        _pause_msg = (
+            "Please stop what you are doing right now and wait. "
+            "Do not take any further actions until the operator sends a follow-up message."
+        )
+        strategy = self._strategies.get(job_id)
+        if strategy is None:
+            log.warning("pause_job_no_strategy", job_id=job_id)
+            return False
+        # Pre-register the echo suppression before sending so the SDK echo
+        # (if any) is discarded and never appears in the transcript.
+        self._echo_suppress.setdefault(job_id, set()).add(_pause_msg)
+        await strategy.send_message(_pause_msg)
+        log.info("job_pause_requested", job_id=job_id)
         return True
 
     async def _dequeue_next(self) -> None:
@@ -548,6 +651,7 @@ class RuntimeService:
         try:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
+                await svc.get_job(job_id)
                 await svc.transition_state(job_id, JobState.failed)
                 await session.commit()
             await self._event_bus.publish(
@@ -561,6 +665,172 @@ class RuntimeService:
             )
         except Exception:
             log.error("fail_job_transition_failed", job_id=job_id, exc_info=True)
+
+    async def _summarize_session_background(self, job_id: str) -> None:
+        """Fire-and-forget background task: summarize completed/failed session."""
+        if self._summarization_service is None:
+            return
+        try:
+            async with self._session_factory() as session:
+                from backend.persistence.job_repo import JobRepository
+
+                job_repo = JobRepository(session)
+                job = await job_repo.get(job_id)
+            if job is None:
+                return
+            # Skip if already summarized (e.g. rapid retry)
+            from backend.persistence.artifact_repo import ArtifactRepository
+            from backend.services.artifact_service import ArtifactService
+
+            async with self._session_factory() as session:
+                artifact_svc = ArtifactService(ArtifactRepository(session))
+                existing = await artifact_svc.get_latest_session_summary(job_id)
+                if existing is not None:
+                    return
+            await self._summarization_service.summarize_and_store(job_id, job.session_count, job.prompt)
+        except Exception:
+            log.warning("summarize_session_background_failed", job_id=job_id, exc_info=True)
+
+    async def _persist_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
+        """Persist the Copilot SDK session ID so resume_job() can reconnect to it later."""
+        try:
+            async with self._session_factory() as session:
+                from backend.persistence.job_repo import JobRepository
+
+                job_repo = JobRepository(session)
+                await job_repo.update_sdk_session_id(job_id, sdk_session_id)
+                await session.commit()
+        except Exception:
+            log.warning("persist_sdk_session_id_failed", job_id=job_id, exc_info=True)
+
+    async def resume_job(self, job_id: str, instruction: str) -> Job:
+        """Resume a terminal job in-place.
+
+        Primary path: reconnect to the existing Copilot SDK session (full conversation history
+        intact, no summarization cost). Fallback: use LLM-generated session summary when the
+        SDK session is no longer available (daemon restart, session expired, etc.).
+        """
+        from pathlib import Path
+
+        from backend.models.domain import TERMINAL_STATES
+        from backend.persistence.job_repo import JobRepository
+        from backend.services.job_service import JobNotFoundError, StateConflictError
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            job = await job_repo.get(job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job {job_id} does not exist.")
+            if job.state not in TERMINAL_STATES:
+                raise StateConflictError(f"Job {job_id} is not in a terminal state (current: {job.state}).")
+
+            # Ensure worktree still exists; re-create from branch if missing
+            if job.worktree_path and job.worktree_path != job.repo:
+                wt = Path(job.worktree_path)
+                if not wt.exists() and job.branch:
+                    from backend.services.git_service import GitService
+
+                    git = GitService(self._config)
+                    try:
+                        new_wt = await git.reattach_worktree(job.repo, job.id, job.branch)
+                        await job_repo.update_worktree_path(job_id, new_wt)
+                        job.worktree_path = new_wt
+                        log.info("worktree_reattached", job_id=job_id, path=new_wt)
+                    except Exception:
+                        log.warning("worktree_reattach_failed", job_id=job_id, exc_info=True)
+
+            new_session_count = job.session_count + 1
+
+            if job.sdk_session_id:
+                # Primary path: SDK native session resume — full history intact, no summarization cost.
+                log.info("resume_via_sdk_session", job_id=job_id, sdk_session_id=job.sdk_session_id)
+                override_prompt = instruction
+                resume_sdk_session_id: str | None = job.sdk_session_id
+            else:
+                # Fallback path: summarization-based context injection.
+                log.info("resume_via_summarization", job_id=job_id)
+                from backend.persistence.artifact_repo import ArtifactRepository
+                from backend.persistence.event_repo import EventRepository
+                from backend.services.artifact_service import ArtifactService
+                from backend.services.summarization_service import _build_resume_prompt, _extract_changed_files
+
+                artifact_repo = ArtifactRepository(session)
+                artifact_svc = ArtifactService(artifact_repo)
+                summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
+
+                event_repo = EventRepository(session)
+                diff_events = await event_repo.list_by_job(job_id, kinds=[DomainEventKind.diff_updated])
+                changed_files = _extract_changed_files(diff_events)
+
+                if summary_artifact is None and self._summarization_service is not None:
+                    try:
+                        await self._summarization_service.summarize_and_store(job_id, job.session_count, job.prompt)
+                        summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
+                    except Exception:
+                        log.warning("inline_summarization_failed", job_id=job_id, exc_info=True)
+
+                summary_text: str | None = None
+                if summary_artifact is not None:
+                    try:
+                        summary_text = Path(summary_artifact.disk_path).read_text(encoding="utf-8")
+                    except Exception:
+                        log.warning("summary_read_failed", job_id=job_id, exc_info=True)
+
+                override_prompt = _build_resume_prompt(
+                    summary_text, changed_files, instruction, new_session_count, job_id, job.prompt
+                )
+                resume_sdk_session_id = None
+
+            await job_repo.reset_for_resume(job_id, new_session_count)
+            await session.commit()
+
+        # Publish session_resumed event
+        now = datetime.now(UTC)
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=_make_event_id(),
+                job_id=job_id,
+                timestamp=now,
+                kind=DomainEventKind.session_resumed,
+                payload={
+                    "session_number": new_session_count,
+                    "instruction": instruction,
+                    "timestamp": now.isoformat(),
+                },
+            )
+        )
+
+        # Reload job and start execution
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            job = await job_repo.get(job_id)
+        if job is None:
+            raise ValueError(f"Job {job_id} not found after resume reset")
+        await self.start_or_enqueue(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            reloaded = await job_repo.get(job_id)
+        if reloaded is None:
+            raise ValueError(f"Job {job_id} not found after start")
+        return reloaded
+
+    async def _cleanup_job_worktree(self, job: Job) -> None:
+        """Remove the secondary worktree for a finished job (failed/canceled).
+
+        The main worktree (where worktree_path == repo) is never removed.
+        """
+        import contextlib
+
+        worktree_path = job.worktree_path
+        if not worktree_path or worktree_path == job.repo:
+            return  # main worktree — leave it alone
+        from backend.services.git_service import GitService
+
+        git = GitService(self._config)
+        with contextlib.suppress(Exception):
+            await git.remove_worktree(job.repo, worktree_path)
+            log.info("worktree_cleaned_up", job_id=job.id, worktree=worktree_path)
 
     async def _try_create_pr(self, job_id: str) -> str | None:
         """Best-effort PR creation via ``gh pr create``. Returns the PR URL or None."""

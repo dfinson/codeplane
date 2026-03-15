@@ -19,6 +19,7 @@ from backend.models.api_schemas import (
     MergeCompletedPayload,
     MergeConflictPayload,
     SessionHeartbeatPayload,
+    SessionResumedPayload,
     SnapshotPayload,
     TranscriptPayload,
 )
@@ -47,6 +48,7 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
     DomainEventKind.session_heartbeat: "session_heartbeat",
     DomainEventKind.merge_completed: "merge_completed",
     DomainEventKind.merge_conflict: "merge_conflict",
+    DomainEventKind.session_resumed: "session_resumed",
 }
 
 # State implied by each domain event kind (for job_state_changed payloads)
@@ -133,12 +135,18 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             timestamp=event.payload.get("timestamp", event.timestamp),
             role=event.payload.get("role", "agent"),
             content=event.payload.get("content", ""),
+            title=event.payload.get("title"),
+            turn_id=event.payload.get("turn_id"),
+            tool_name=event.payload.get("tool_name"),
+            tool_args=event.payload.get("tool_args"),
+            tool_result=event.payload.get("tool_result"),
+            tool_success=event.payload.get("tool_success"),
         ).model_dump_json(by_alias=True)
 
     if sse_type == "diff_update":
         return DiffUpdatePayload(
             job_id=event.job_id,
-            changed_files=event.payload.get("changed_files", []),
+            changed_files=event.payload.get("changedFiles", []),
         ).model_dump_json(by_alias=True)
 
     if sse_type == "approval_requested":
@@ -182,6 +190,13 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             conflict_files=event.payload.get("conflict_files", []),
             fallback=event.payload.get("fallback", "none"),
             pr_url=event.payload.get("pr_url"),
+            timestamp=event.payload.get("timestamp", event.timestamp),
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "session_resumed":
+        return SessionResumedPayload(
+            job_id=event.job_id,
+            session_number=event.payload.get("session_number", 1),
             timestamp=event.payload.get("timestamp", event.timestamp),
         ).model_dump_json(by_alias=True)
 

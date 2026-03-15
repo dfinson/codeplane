@@ -9,11 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
 from backend.config import TowerConfig, load_config
 from backend.models.api_schemas import (
+    ContinueJobRequest,
     CreateJobRequest,
     CreateJobResponse,
+    DiffFileModel,
     JobListResponse,
     JobResponse,
+    LogLinePayload,
+    ResumeJobRequest,
+    TranscriptPayload,
 )
+from backend.models.events import DomainEventKind
+from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
 from backend.services.git_service import GitService
 from backend.services.job_service import JobNotFoundError, JobService, RepoNotAllowedError, StateConflictError
@@ -81,6 +88,7 @@ async def create_job(
             base_ref=body.base_ref,
             branch=body.branch,
             strategy=body.strategy or "single_agent",
+            permission_mode=body.permission_mode or "auto",
         )
     except RepoNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -163,6 +171,8 @@ async def cancel_job(
 async def rerun_job(
     job_id: str,
     svc: Annotated[JobService, Depends(_get_job_service)],
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    request: Request,
 ) -> CreateJobResponse:
     """Create a new job from an existing job's configuration."""
     try:
@@ -171,6 +181,14 @@ async def rerun_job(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RepoNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await session.commit()
+
+    if job.state != "failed":
+        runtime: RuntimeService = request.app.state.runtime_service
+        await runtime.start_or_enqueue(job)
+        job = await svc.get_job(job.id)
+
     return CreateJobResponse(
         id=job.id,
         state=job.state,
@@ -178,6 +196,72 @@ async def rerun_job(
         worktree_path=job.worktree_path,
         created_at=job.created_at,
     )
+
+
+@router.post("/jobs/{job_id}/pause", status_code=204)
+async def pause_job(
+    job_id: str,
+    svc: Annotated[JobService, Depends(_get_job_service)],
+    request: Request,
+) -> None:
+    """Send a silent pause instruction to the agent of a running job."""
+    try:
+        await svc.get_job(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    runtime: RuntimeService = request.app.state.runtime_service
+    sent = await runtime.pause_job(job_id)
+    if not sent:
+        raise HTTPException(status_code=409, detail="Job is not currently running")
+
+
+@router.post("/jobs/{job_id}/continue", response_model=CreateJobResponse, status_code=201)
+async def continue_job(
+    job_id: str,
+    body: ContinueJobRequest,
+    svc: Annotated[JobService, Depends(_get_job_service)],
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    request: Request,
+) -> CreateJobResponse:
+    """Create a follow-up job with a new instruction on the same repo/config."""
+    try:
+        job = await svc.continue_job(job_id, body.instruction)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RepoNotAllowedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await session.commit()
+
+    if job.state != "failed":
+        runtime: RuntimeService = request.app.state.runtime_service
+        await runtime.start_or_enqueue(job)
+        job = await svc.get_job(job.id)
+
+    return CreateJobResponse(
+        id=job.id,
+        state=job.state,
+        branch=job.branch,
+        worktree_path=job.worktree_path,
+        created_at=job.created_at,
+    )
+
+
+@router.post("/jobs/{job_id}/resume", response_model=JobResponse)
+async def resume_job(
+    job_id: str,
+    body: ResumeJobRequest,
+    request: Request,
+) -> JobResponse:
+    """Resume a completed/failed/canceled job in-place with a new instruction."""
+    runtime: RuntimeService = request.app.state.runtime_service
+    try:
+        job = await runtime.resume_job(job_id, body.instruction)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _job_to_response(job)
 
 
 @router.get("/models")
@@ -196,6 +280,80 @@ async def list_models() -> list[dict[str, object]]:
 
         structlog.get_logger().warning("list_models_failed", error=str(exc))
         return []
+
+
+@router.get("/jobs/{job_id}/logs", response_model=list[LogLinePayload])
+async def get_job_logs(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    level: Annotated[str, Query(pattern="^(debug|info|warn|error)$")] = "debug",
+    limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
+) -> list[LogLinePayload]:
+    """Return historical log lines for a job, filtered by minimum severity.
+
+    ``level`` is a *minimum* severity filter (inclusive):
+    - ``debug``  → all lines (debug, info, warn, error)
+    - ``info``   → info, warn, error
+    - ``warn``   → warn, error
+    - ``error``  → error only
+    """
+    _level_order = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+    min_priority = _level_order.get(level, 0)
+    event_repo = EventRepository(session)
+    events = await event_repo.list_by_job(job_id, [DomainEventKind.log_line_emitted], limit=limit)
+    return [
+        LogLinePayload(
+            job_id=event.job_id,
+            seq=event.payload.get("seq", 0),
+            timestamp=event.payload.get("timestamp", event.timestamp),
+            level=event.payload.get("level", "info"),
+            message=event.payload.get("message", ""),
+            context=event.payload.get("context"),
+        )
+        for event in events
+        if _level_order.get(event.payload.get("level", "info"), 1) >= min_priority
+    ]
+
+
+@router.get("/jobs/{job_id}/diff", response_model=list[DiffFileModel])
+async def get_job_diff(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+) -> list[DiffFileModel]:
+    """Return the most recent diff snapshot for a job from the event store."""
+    event_repo = EventRepository(session)
+    events = await event_repo.list_by_job(job_id, [DomainEventKind.diff_updated])
+    if not events:
+        return []
+    raw_files = events[-1].payload.get("changedFiles", [])
+    return [DiffFileModel.model_validate(f) for f in raw_files]
+
+
+@router.get("/jobs/{job_id}/transcript", response_model=list[TranscriptPayload])
+async def get_job_transcript(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
+) -> list[TranscriptPayload]:
+    """Return historical transcript entries for a job from the event store."""
+    event_repo = EventRepository(session)
+    events = await event_repo.list_by_job(job_id, [DomainEventKind.transcript_updated], limit=limit)
+    return [
+        TranscriptPayload(
+            job_id=event.job_id,
+            seq=event.payload.get("seq", 0),
+            timestamp=event.payload.get("timestamp", event.timestamp),
+            role=event.payload.get("role", "agent"),
+            content=event.payload.get("content", ""),
+            title=event.payload.get("title"),
+            turn_id=event.payload.get("turn_id"),
+            tool_name=event.payload.get("tool_name"),
+            tool_args=event.payload.get("tool_args"),
+            tool_result=event.payload.get("tool_result"),
+            tool_success=event.payload.get("tool_success"),
+        )
+        for event in events
+    ]
 
 
 @router.get("/jobs/{job_id}/telemetry")

@@ -26,6 +26,7 @@ class DomainEventKind(StrEnum):
     session_heartbeat = "SessionHeartbeat"
     merge_completed = "MergeCompleted"
     merge_conflict = "MergeConflict"
+    session_resumed = "SessionResumed"
 
 
 @dataclass

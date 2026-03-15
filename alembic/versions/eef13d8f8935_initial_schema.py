@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("worktree_path", sa.String(), nullable=True),
         sa.Column("session_id", sa.String(), nullable=True),
         sa.Column("pr_url", sa.String(), nullable=True),
+        sa.Column("permission_mode", sa.String(), nullable=False, server_default="auto"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),

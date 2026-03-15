@@ -187,10 +187,38 @@ class GitService:
             GitError: If git operations fail.
         """
         branch_name = branch or f"tower/{job_id}"
+        resolved_base_ref = await self._resolve_ref(repo_path, base_ref)
 
+        if use_main and not await self._is_worktree_dirty(repo_path):
+            return await self._setup_main_worktree(repo_path, resolved_base_ref, branch_name)
         if use_main:
-            return await self._setup_main_worktree(repo_path, base_ref, branch_name)
-        return await self._setup_secondary_worktree(repo_path, job_id, base_ref, branch_name)
+            log.info("worktree_main_dirty_using_secondary", repo=repo_path, job_id=job_id)
+        return await self._setup_secondary_worktree(repo_path, job_id, resolved_base_ref, branch_name)
+
+    async def _is_worktree_dirty(self, repo_path: str) -> bool:
+        """Return True if the working tree has uncommitted changes."""
+        try:
+            result = await self._run_git("status", "--porcelain", cwd=repo_path)
+            return bool(result.strip())
+        except GitError:
+            return False
+
+    async def _resolve_ref(self, repo_path: str, ref: str) -> str:
+        """Resolve a ref, falling back to origin/{ref} if the bare ref doesn't exist locally."""
+        try:
+            await self._run_git("rev-parse", "--verify", ref, cwd=repo_path)
+            return ref
+        except GitError:
+            remote_ref = f"origin/{ref}"
+            try:
+                await self._run_git("rev-parse", "--verify", remote_ref, cwd=repo_path)
+                log.info("ref_resolved_via_remote", ref=ref, resolved=remote_ref)
+                return remote_ref
+            except GitError:
+                raise GitError(
+                    f"Cannot resolve ref '{ref}': not found locally or as '{remote_ref}'",
+                    stderr=f"unknown revision: {ref}",
+                ) from None
 
     async def _setup_main_worktree(
         self,
@@ -221,6 +249,25 @@ class GitService:
         worktrees_dir.mkdir(parents=True, exist_ok=True)
         worktree_path = worktrees_dir / job_id
 
+        # Prune any stale worktree registrations whose directories no longer exist.
+        # This is needed after a DB wipe where the same job IDs get reused so that
+        # 'git branch -D' can succeed (it refuses to delete branches checked out in
+        # a registered worktree, even if the directory is gone from disk).
+        with contextlib.suppress(GitError):
+            await self._run_git("worktree", "prune", cwd=repo_path)
+
+        # If a worktree is still registered at the target path (directory exists),
+        # force-remove it so both the directory and the registration are gone.
+        if worktree_path.exists():
+            with contextlib.suppress(GitError):
+                await self._run_git("worktree", "remove", "--force", str(worktree_path), cwd=repo_path)
+                log.info("stale_worktree_removed", repo=repo_path, path=str(worktree_path))
+
+        # Now the branch should be detachable; delete it if it exists.
+        with contextlib.suppress(GitError):
+            await self._run_git("branch", "-D", branch_name, cwd=repo_path)
+            log.info("stale_branch_deleted", repo=repo_path, branch=branch_name)
+
         try:
             await self._run_git(
                 "worktree",
@@ -244,6 +291,36 @@ class GitService:
             branch=branch_name,
         )
         return str(worktree_path), branch_name
+
+    async def reattach_worktree(self, repo_path: str, job_id: str, branch: str) -> str:
+        """Re-add an existing branch as a secondary worktree after the directory was removed.
+
+        Used when resuming a job whose worktree dir no longer exists but the branch is intact.
+        Returns the worktree path string.
+        """
+        worktrees_dir = Path(repo_path) / self._worktrees_dirname
+        worktrees_dir.mkdir(parents=True, exist_ok=True)
+        worktree_path = worktrees_dir / job_id
+
+        if worktree_path.exists():
+            return str(worktree_path)
+
+        try:
+            await self._run_git(
+                "worktree",
+                "add",
+                "--checkout",
+                str(worktree_path),
+                branch,
+                cwd=repo_path,
+            )
+        except GitError as exc:
+            raise GitError(
+                f"Failed to reattach worktree for {job_id} on branch '{branch}': {exc.stderr}",
+                stderr=exc.stderr,
+            ) from exc
+        log.info("worktree_reattached", repo=repo_path, job_id=job_id, branch=branch)
+        return str(worktree_path)
 
     async def remove_worktree(self, repo_path: str, worktree_path: str) -> None:
         """Remove a secondary worktree and its branch."""

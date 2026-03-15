@@ -4,14 +4,11 @@ import { ArrowLeft, RotateCcw, XCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useTowerStore, selectJobs } from "../store";
 import type { JobSummary } from "../store";
-import { fetchJob, cancelJob, rerunJob } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { LogsPanel } from "./LogsPanel";
-import { ExecutionTimeline } from "./ExecutionTimeline";
-import { ApprovalBanner } from "./ApprovalBanner";
-import { TelemetryPanel } from "./TelemetryPanel";
+import { InsightsPanel } from "./InsightsPanel";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -29,6 +26,8 @@ export function JobDetailScreen() {
   const [actionLoading, setActionLoading] = useState(false);
   const [tab, setTab] = useState("live");
 
+  // Open a job-scoped SSE connection for full event streaming (no suppression
+  // even when >20 active jobs). Closed automatically when navigating away.
   useSSE(jobId);
 
   useEffect(() => {
@@ -39,6 +38,24 @@ export function JobDetailScreen() {
       .then((f) => useTowerStore.setState((s) => ({ jobs: { ...s.jobs, [f.id]: f } })))
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, [jobId]);
+
+  // Load historical transcript from the backend event store.
+  // Logs are fetched directly by LogsPanel based on the active min-level.
+  useEffect(() => {
+    if (!jobId) return;
+    fetchJobTranscript(jobId).then((transcript) => {
+        useTowerStore.setState((s) => {
+          const existingTranscript = s.transcript[jobId] ?? [];
+          const mergedTx = [
+            ...transcript,
+            ...existingTranscript.filter((e) => !transcript.some((ne) => ne.seq === e.seq)),
+          ].sort((a, b) => a.seq - b.seq);
+          return {
+            transcript: { ...s.transcript, [jobId]: mergedTx },
+          };
+        });
+    }).catch(() => {});
   }, [jobId]);
 
   const handleCancel = useCallback(async () => {
@@ -88,7 +105,7 @@ export function JobDetailScreen() {
   const repoName = job.repo.split("/").pop() ?? job.repo;
   const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
   const canRerun = ["succeeded", "failed", "canceled"].includes(job.state);
-  const isInteractive = ["running", "waiting_for_approval"].includes(job.state);
+  const isRunning = job.state === "running";
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -170,13 +187,10 @@ export function JobDetailScreen() {
 
       {tab === "live" && (
         <div className="flex flex-col gap-4">
-          <ApprovalBanner jobId={jobId} />
-          <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1" style={{ minHeight: 400 }}>
-            <TranscriptPanel jobId={jobId} interactive={isInteractive} />
-            <LogsPanel jobId={jobId} />
+          <div className="h-[32rem]">
+            <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
-          <ExecutionTimeline jobId={jobId} />
-          <TelemetryPanel jobId={jobId} />
+          <InsightsPanel jobId={jobId} />
         </div>
       )}
 
@@ -197,6 +211,7 @@ export function JobDetailScreen() {
           <ArtifactViewer jobId={jobId} />
         </Suspense>
       )}
+
     </div>
   );
 }

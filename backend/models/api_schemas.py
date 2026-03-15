@@ -37,6 +37,12 @@ class StrategyKind(StrEnum):
     single_agent = "single_agent"
 
 
+class PermissionMode(StrEnum):
+    auto = "auto"
+    supervised = "supervised"
+    readonly = "readonly"
+
+
 class JobState(StrEnum):
     queued = "queued"
     running = "running"
@@ -83,6 +89,9 @@ class WorkspaceEntryType(StrEnum):
 class TranscriptRole(StrEnum):
     agent = "agent"
     operator = "operator"
+    tool_call = "tool_call"
+    reasoning = "reasoning"
+    divider = "divider"
 
 
 class DiffLineType(StrEnum):
@@ -107,10 +116,19 @@ class CreateJobRequest(BaseModel):
     base_ref: str | None = None
     branch: str | None = None
     strategy: StrategyKind | None = None
+    permission_mode: PermissionMode | None = None
 
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=10_000)
+
+
+class ResumeJobRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=50_000)
+
+
+class ContinueJobRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=10_000)
 
 
 class ResolveApprovalRequest(BaseModel):
@@ -160,6 +178,12 @@ class JobListResponse(CamelModel):
 
 class SendMessageResponse(CamelModel):
     seq: int
+    timestamp: datetime
+
+
+class SessionResumedPayload(CamelModel):
+    job_id: str
+    session_number: int
     timestamp: datetime
 
 
@@ -251,6 +275,13 @@ class TranscriptPayload(CamelModel):
     timestamp: datetime
     role: TranscriptRole
     content: str
+    # Optional rich fields — only present for specific roles
+    title: str | None = None  # annotation title on agent messages
+    turn_id: str | None = None  # groups reasoning + tool_calls + message
+    tool_name: str | None = None  # role=tool_call: tool identifier
+    tool_args: str | None = None  # role=tool_call: JSON-serialized arguments
+    tool_result: str | None = None  # role=tool_call: text output from tool
+    tool_success: bool | None = None  # role=tool_call: whether execution succeeded
 
 
 class DiffLineModel(CamelModel):

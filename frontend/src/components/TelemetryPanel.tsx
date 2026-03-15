@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BarChart3, ChevronDown, ChevronRight, Cpu, Clock, Wrench, MessageSquare } from "lucide-react";
 import { fetchJobTelemetry } from "../api/client";
 import { Badge } from "./ui/badge";
@@ -9,10 +9,11 @@ interface TelemetryData {
   available: boolean;
   model?: string;
   durationMs?: number;
-  promptTokens?: number;
-  completionTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   totalTokens?: number;
   contextWindowSize?: number;
+  currentContextTokens?: number;
   toolCallCount?: number;
   totalToolDurationMs?: number;
   toolCalls?: { name: string; durationMs: number; success: boolean }[];
@@ -40,14 +41,23 @@ export function TelemetryPanel({ jobId }: { jobId: string }) {
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const dataRef = useRef(data);
+  dataRef.current = data;
+
   useEffect(() => {
-    if (!expanded || data) return;
-    setLoading(true);
-    fetchJobTelemetry(jobId)
-      .then(setData)
-      .catch(() => setData({ available: false }))
-      .finally(() => setLoading(false));
-  }, [expanded, data, jobId]);
+    if (!expanded) return;
+    let cancelled = false;
+    const load = () => {
+      setLoading((prev) => !dataRef.current && prev === false ? true : prev);
+      fetchJobTelemetry(jobId)
+        .then((d) => { if (!cancelled) setData(d); })
+        .catch(() => { if (!cancelled) setData({ available: false }); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    };
+    load();
+    const interval = setInterval(load, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [expanded, jobId]);
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -82,12 +92,12 @@ export function TelemetryPanel({ jobId }: { jobId: string }) {
                 </div>
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div>
-                    <p className="text-lg font-bold">{formatTokens(data.promptTokens ?? 0)}</p>
-                    <p className="text-xs text-muted-foreground">Prompt</p>
+                    <p className="text-lg font-bold">{formatTokens(data.inputTokens ?? 0)}</p>
+                    <p className="text-xs text-muted-foreground">Input</p>
                   </div>
                   <div>
-                    <p className="text-lg font-bold">{formatTokens(data.completionTokens ?? 0)}</p>
-                    <p className="text-xs text-muted-foreground">Completion</p>
+                    <p className="text-lg font-bold">{formatTokens(data.outputTokens ?? 0)}</p>
+                    <p className="text-xs text-muted-foreground">Output</p>
                   </div>
                   <div>
                     <p className="text-lg font-bold">{formatTokens(data.totalTokens ?? 0)}</p>
@@ -99,12 +109,12 @@ export function TelemetryPanel({ jobId }: { jobId: string }) {
                     <div className="flex justify-between mb-1">
                       <span className="text-xs text-muted-foreground">Context window</span>
                       <span className="text-xs text-muted-foreground">
-                        {formatTokens(data.totalTokens ?? 0)} / {formatTokens(data.contextWindowSize)}
+                        {formatTokens(data.currentContextTokens ?? data.totalTokens ?? 0)} / {formatTokens(data.contextWindowSize)}
                       </span>
                     </div>
                     <Progress
-                      value={Math.min(100, ((data.totalTokens ?? 0) / data.contextWindowSize) * 100)}
-                      color={((data.totalTokens ?? 0) / data.contextWindowSize) > 0.8 ? "red" : "blue"}
+                      value={Math.min(100, ((data.currentContextTokens ?? data.totalTokens ?? 0) / data.contextWindowSize) * 100)}
+                      color={((data.currentContextTokens ?? data.totalTokens ?? 0) / data.contextWindowSize) > 0.8 ? "red" : "blue"}
                     />
                   </div>
                 ) : null}

@@ -10,6 +10,7 @@ import type {
   CreateJobRequest,
   CreateJobResponse,
   ApprovalRequest,
+  DiffFileModel,
   GlobalConfigResponse,
   HealthResponse,
   Job,
@@ -75,6 +76,18 @@ export function fetchJob(jobId: string): Promise<Job> {
   return request(`/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function fetchJobLogs(jobId: string, level: string = "debug", limit = 2000): Promise<import("../store").LogLine[]> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/logs?level=${encodeURIComponent(level)}&limit=${limit}`);
+}
+
+export function fetchJobTranscript(jobId: string, limit = 2000): Promise<import("../store").TranscriptEntry[]> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/transcript?limit=${limit}`);
+}
+
+export function fetchJobDiff(jobId: string): Promise<DiffFileModel[]> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/diff`);
+}
+
 export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
   return request("/jobs", {
     method: "POST",
@@ -119,7 +132,9 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   toolCalls?: { name: string; durationMs: number; success: boolean }[];
   llmCallCount?: number;
   totalLlmDurationMs?: number;
+  llmCalls?: { model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number }[];
   approvalCount?: number;
+  totalApprovalWaitMs?: number;
   agentMessages?: number;
   operatorMessages?: number;
 }> {
@@ -237,6 +252,32 @@ export function sendOperatorMessage(
   return request(`/jobs/${encodeURIComponent(jobId)}/messages`, {
     method: "POST",
     body: JSON.stringify({ content }),
+  });
+}
+
+export function pauseJob(jobId: string): Promise<void> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/pause`, {
+    method: "POST",
+  });
+}
+
+export function continueJob(
+  jobId: string,
+  instruction: string,
+): Promise<{ id: string; state: string; branch: string | null; worktreePath: string | null; createdAt: string }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/continue`, {
+    method: "POST",
+    body: JSON.stringify({ instruction }),
+  });
+}
+
+export function resumeJob(
+  jobId: string,
+  instruction: string,
+): Promise<{ id: string; state: string; branch: string | null; worktreePath: string | null; createdAt: string; updatedAt: string }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ instruction }),
   });
 }
 
