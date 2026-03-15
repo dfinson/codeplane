@@ -1,3 +1,6 @@
+/* CSS layer ordering: Tailwind base/utilities must not override Mantine */
+@layer theme, base, mantine, components, utilities;
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

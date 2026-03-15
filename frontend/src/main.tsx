@@ -4,10 +4,10 @@ import { BrowserRouter } from "react-router-dom";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 
-// Mantine styles imported as JS — must be BEFORE Tailwind to avoid
-// Tailwind's CSS processing corrupting Mantine's CSS-in-JS.
-import "@mantine/core/styles.css";
-import "@mantine/notifications/styles.css";
+// Mantine layered styles — must use .layer.css variant so CSS layers
+// don't conflict with Tailwind's preflight/base rules.
+import "@mantine/core/styles.layer.css";
+import "@mantine/notifications/styles.layer.css";
 
 import { theme } from "./theme";
 import { App } from "./App";
