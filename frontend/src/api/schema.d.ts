@@ -458,6 +458,8 @@ export interface components {
             branch?: string | null;
             strategy?: components["schemas"]["StrategyKind"] | null;
             permission_mode?: components["schemas"]["PermissionMode"] | null;
+            /** Model */
+            model?: string | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {

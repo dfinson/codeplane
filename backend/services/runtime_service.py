@@ -131,6 +131,7 @@ def _build_session_config(job: Job, config: TowerConfig) -> SessionConfig:
         workspace_path=workspace,
         prompt=job.prompt,
         job_id=job.id,
+        model=job.model,
         mcp_servers=mcp_servers,
         protected_paths=protected_paths,
         permission_mode=job.permission_mode or "auto",
@@ -349,7 +350,7 @@ class RuntimeService:
         # Start telemetry tracking
         from backend.services.telemetry import collector as tel
 
-        tel.start_job(job_id)
+        tel.start_job(job_id, model=config.model or "")
 
         # Resolve worktree_path and base_ref for diff calculations
         worktree_path: str | None = None

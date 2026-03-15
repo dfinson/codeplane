@@ -44,6 +44,7 @@ class JobRepository(BaseRepository):
             permission_mode=row.permission_mode or "auto",  # type: ignore[arg-type]
             session_count=row.session_count or 1,  # type: ignore[arg-type]
             sdk_session_id=row.sdk_session_id,  # type: ignore[arg-type]
+            model=row.model,  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -67,6 +68,7 @@ class JobRepository(BaseRepository):
             permission_mode=job.permission_mode,
             session_count=job.session_count,
             sdk_session_id=job.sdk_session_id,
+            model=job.model,
         )
         self._session.add(row)
         await self._session.flush()

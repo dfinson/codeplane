@@ -9,6 +9,7 @@ import { fetchJob, cancelJob, rerunJob, fetchJobTranscript } from "../api/client
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
+import { TelemetryPanel } from "./TelemetryPanel";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -192,6 +193,7 @@ export function JobDetailScreen() {
             <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
           <InsightsPanel jobId={jobId} />
+          <TelemetryPanel jobId={jobId} isRunning={isRunning} />
         </div>
       )}
 

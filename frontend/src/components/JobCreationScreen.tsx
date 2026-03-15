@@ -57,6 +57,7 @@ export function JobCreationScreen() {
         base_ref: baseRef || undefined,
         branch: branch || undefined,
         permission_mode: permissionMode,
+        model: model || undefined,
       });
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
@@ -65,7 +66,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, navigate, permissionMode]);
+  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode]);
 
   return (
     <div className="max-w-xl mx-auto">

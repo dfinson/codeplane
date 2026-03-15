@@ -101,6 +101,7 @@ class SessionConfig:
     workspace_path: str
     prompt: str
     job_id: str = ""
+    model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
     permission_mode: str = "auto"
@@ -137,6 +138,7 @@ class Job:
     permission_mode: str = "auto"
     session_count: int = 1
     sdk_session_id: str | None = None
+    model: str | None = None
 
 
 @dataclass

@@ -32,6 +32,7 @@ class JobRow(Base):
     permission_mode = Column(String, nullable=False, default="auto")
     session_count = Column(Integer, nullable=False, default=1)
     sdk_session_id = Column(String, nullable=True)
+    model = Column(String, nullable=True)
     created_at = Column(TZDateTime, nullable=False)
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)

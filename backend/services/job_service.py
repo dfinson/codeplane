@@ -84,6 +84,7 @@ class JobService:
         branch: str | None = None,
         strategy: str = "single_agent",
         permission_mode: str = "auto",
+        model: str | None = None,
     ) -> Job:
         """Create a new job, set up workspace, and persist it.
 
@@ -145,6 +146,7 @@ class JobService:
                 completed_at=now,
                 title=title,
                 permission_mode=permission_mode,
+                model=model,
             )
             await self._job_repo.create(job)
             log.error("job_worktree_failed", job_id=job_id, error=str(exc))
@@ -168,6 +170,7 @@ class JobService:
             updated_at=now,
             title=title,
             permission_mode=permission_mode,
+            model=model,
         )
         await self._job_repo.create(job)
         log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
@@ -234,6 +237,7 @@ class JobService:
             base_ref=original.base_ref,
             strategy=original.strategy,
             permission_mode=original.permission_mode,
+            model=original.model,
         )
 
     async def continue_job(self, job_id: str, instruction: str) -> Job:
@@ -245,6 +249,7 @@ class JobService:
             base_ref=original.base_ref,
             strategy=original.strategy,
             permission_mode=original.permission_mode,
+            model=original.model,
         )
 
     async def count_active_jobs(self) -> int:

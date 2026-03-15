@@ -117,6 +117,7 @@ class CreateJobRequest(BaseModel):
     branch: str | None = None
     strategy: StrategyKind | None = None
     permission_mode: PermissionMode | None = None
+    model: str | None = None
 
 
 class SendMessageRequest(BaseModel):

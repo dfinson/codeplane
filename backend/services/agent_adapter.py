@@ -125,33 +125,26 @@ class CopilotAdapter(AgentAdapterInterface):
             # --- auto (default): approve everything silently ---
             return _Result(kind="approved")
 
+        # Build session options dict — used for both create and resume
+        session_opts: dict[str, object] = {
+            "working_directory": config.workspace_path,
+            "on_permission_request": _on_permission,
+        }
+        if config.model:
+            session_opts["model"] = config.model
+
         # Create or resume SDK session; use the SDK-assigned session_id as Tower's identifier.
         _resume_id = config.resume_sdk_session_id
         if _resume_id:
             try:
-                session = await client.resume_session(
-                    _resume_id,
-                    {
-                        "working_directory": config.workspace_path,
-                        "on_permission_request": _on_permission,
-                    },
-                )
+                session = await client.resume_session(_resume_id, session_opts)
                 log.info("sdk_session_resumed", sdk_session_id=_resume_id)
             except Exception:
                 log.warning("sdk_session_resume_failed_creating_new", sdk_session_id=_resume_id, exc_info=True)
-                session = await client.create_session(
-                    {
-                        "working_directory": config.workspace_path,
-                        "on_permission_request": _on_permission,
-                    }
-                )
+                session = await client.create_session(session_opts)
         else:
-            session = await client.create_session(
-                {
-                    "working_directory": config.workspace_path,
-                    "on_permission_request": _on_permission,
-                }
-            )
+            session = await client.create_session(session_opts)
+
         session_id = session.session_id  # Use SDK-assigned ID as Tower's session identifier
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
