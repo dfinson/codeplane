@@ -83,7 +83,7 @@ class JobService:
         base_ref: str | None = None,
         branch: str | None = None,
         strategy: str = "single_agent",
-        permission_mode: str = "auto",
+        permission_mode: str = "permissive",
         model: str | None = None,
     ) -> Job:
         """Create a new job, set up workspace, and persist it.
@@ -188,32 +188,48 @@ class JobService:
         state: str | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        archived: bool | None = None,
     ) -> tuple[list[Job], str | None, bool]:
         """List jobs with optional filtering and pagination.
 
+        Args:
+            archived: True = only archived, False = exclude archived, None = all.
+
         Returns (jobs, next_cursor, has_more).
         """
-        # Fetch one extra to determine has_more
-        jobs = await self._job_repo.list(state=state, limit=limit + 1, cursor=cursor)
+        include_archived: bool | None = None  # repo default: return all
+        if archived is True:
+            include_archived = True  # only archived
+        elif archived is False:
+            include_archived = False  # exclude archived
+
+        jobs = await self._job_repo.list(
+            state=state,
+            limit=limit + 1,
+            cursor=cursor,
+            include_archived=include_archived,
+        )
         has_more = len(jobs) > limit
         if has_more:
             jobs = jobs[:limit]
         next_cursor = jobs[-1].id if has_more and jobs else None
         return jobs, next_cursor, has_more
 
-    async def transition_state(self, job_id: str, new_state: str) -> Job:
+    async def transition_state(self, job_id: str, new_state: str, *, failure_reason: str | None = None) -> Job:
         """Transition a job's state. Validates the transition."""
         job = await self.get_job(job_id)
         validate_state_transition(job.state, new_state)
 
         now = datetime.now(UTC)
         completed_at = now if new_state in TERMINAL_STATES else None
-        await self._job_repo.update_state(job_id, new_state, now, completed_at)
+        await self._job_repo.update_state(job_id, new_state, now, completed_at, failure_reason=failure_reason)
 
         job.state = new_state
         job.updated_at = now
         if completed_at:
             job.completed_at = completed_at
+        if failure_reason is not None:
+            job.failure_reason = failure_reason
 
         log.info("job_state_changed", job_id=job_id, new_state=new_state)
         return job
@@ -264,3 +280,26 @@ class JobService:
         """Count queued jobs."""
         jobs = await self._job_repo.list(state=JobState.queued, limit=10000)
         return len(jobs)
+
+    async def resolve_job(self, job_id: str, action: str) -> Job:
+        """Resolve a succeeded job by merging, creating a PR, or discarding."""
+        job = await self.get_job(job_id)
+        if job.state != JobState.succeeded:
+            raise StateConflictError(f"Job {job_id} is in state {job.state!r}, not 'succeeded'")
+        if job.resolution not in (None, "unresolved", "conflict"):
+            raise StateConflictError(f"Job {job_id} already resolved as {job.resolution!r}")
+        return job
+
+    async def archive_job(self, job_id: str) -> Job:
+        """Archive a job (hide from Kanban board)."""
+        job = await self.get_job(job_id)
+        if job.state not in TERMINAL_STATES:
+            raise StateConflictError(f"Job {job_id} is in state {job.state!r}, cannot archive active jobs")
+        await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+        return await self.get_job(job_id)
+
+    async def unarchive_job(self, job_id: str) -> Job:
+        """Unarchive a job (show on Kanban board again)."""
+        await self.get_job(job_id)
+        await self._job_repo.update_archived_at(job_id, None)
+        return await self.get_job(job_id)

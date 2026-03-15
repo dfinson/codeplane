@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING
+from typing import Protocol, runtime_checkable
 
 import structlog
 
-if TYPE_CHECKING:
-    from backend.services.agent_adapter import AgentAdapterInterface
-
 log = structlog.get_logger()
+
+
+@runtime_checkable
+class Completable(Protocol):
+    """Anything with an async complete(prompt) → str method."""
+
+    async def complete(self, prompt: str) -> str: ...
+
 
 _NAMING_PROMPT = """\
 You are a naming assistant for a coding task manager. Given a task description,
@@ -80,8 +85,8 @@ def _fallback_title(prompt: str) -> str:
 class NamingService:
     """Generates intelligent job titles and branch names from task prompts."""
 
-    def __init__(self, adapter: AgentAdapterInterface) -> None:
-        self._adapter = adapter
+    def __init__(self, backend: Completable) -> None:
+        self._backend = backend
 
     async def generate(self, prompt: str) -> tuple[str, str | None]:
         """Generate a title and branch name from a task prompt.
@@ -91,7 +96,7 @@ class NamingService:
             generation fails, signaling the caller to use the default.
         """
         try:
-            raw = await self._adapter.complete(_NAMING_PROMPT + prompt)
+            raw = await self._backend.complete(_NAMING_PROMPT + prompt)
             if not raw:
                 log.warning("naming_empty_response")
                 return _fallback_title(prompt), None

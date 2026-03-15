@@ -74,6 +74,14 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "approval_resolved",
         "session_heartbeat",
         "snapshot",
+        "job_succeeded",
+        "job_failed",
+        "job_resolved",
+        "job_archived",
+        "session_resumed",
+        "job_title_updated",
+        "progress_headline",
+        "model_downgraded",
       ];
 
       for (const eventType of eventTypes) {

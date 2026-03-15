@@ -88,10 +88,18 @@ class DiffService:
         worktree_path: str,
         base_ref: str,
     ) -> list[DiffFileModel]:
-        """Run git diff and parse the output into structured models."""
+        """Run git diff and parse the output into structured models.
+
+        Uses a two-dot diff (base_ref vs working tree) so uncommitted
+        changes are captured.  Untracked new files are surfaced via
+        ``git add -N`` (intent-to-add) before diffing.
+        """
         try:
+            # Mark untracked files so they appear in the diff output.
+            await self._git.add_intent_to_add(cwd=worktree_path)
+            # Two-dot diff: captures committed + uncommitted changes.
             raw = await self._git.diff(
-                f"{base_ref}...HEAD",
+                base_ref,
                 cwd=worktree_path,
             )
         except Exception:

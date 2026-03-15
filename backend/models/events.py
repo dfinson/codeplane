@@ -27,6 +27,11 @@ class DomainEventKind(StrEnum):
     merge_completed = "MergeCompleted"
     merge_conflict = "MergeConflict"
     session_resumed = "SessionResumed"
+    job_resolved = "JobResolved"
+    job_archived = "JobArchived"
+    job_title_updated = "JobTitleUpdated"
+    progress_headline = "ProgressHeadline"
+    model_downgraded = "ModelDowngraded"
 
 
 @dataclass

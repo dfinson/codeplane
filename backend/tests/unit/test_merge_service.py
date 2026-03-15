@@ -119,7 +119,7 @@ def _make_service(
         git_service=GitService(TowerConfig()),
         event_bus=event_bus,
         session_factory=sf,
-        config=CompletionConfig(**defaults),  # type: ignore[arg-type]
+        config=CompletionConfig(**defaults),
     )
 
 

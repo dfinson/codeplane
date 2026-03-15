@@ -144,10 +144,10 @@ class TestTypeMismatches:
 
     def test_boolean_as_string(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"
-        f.write_text("voice:\n  enabled: 'yes'\n")
+        f.write_text("retention:\n  cleanup_on_startup: 'yes'\n")
         config = load_config(f)
         # YAML 'yes' is bool True when unquoted; quoted is string
-        assert config.voice.enabled == "yes"  # type: ignore[comparison-overlap]
+        assert config.retention.cleanup_on_startup == "yes"  # type: ignore[comparison-overlap]
 
 
 # ── Repos field edge cases ───────────────────────────────────────
@@ -220,43 +220,6 @@ class TestReposField:
         f.write_text("repos: true\n")
         config = load_config(f)
         assert config.repos == []
-
-
-# ── repos_base_dir edge cases ───────────────────────────────────
-
-
-class TestReposBaseDir:
-    def test_repos_base_dir_default(self, tmp_path: Path) -> None:
-        f = tmp_path / "config.yaml"
-        f.write_text("{}\n")
-        config = load_config(f)
-        assert config.repos_base_dir == "~/tower-repos"
-
-    def test_repos_base_dir_absolute(self, tmp_path: Path) -> None:
-        f = tmp_path / "config.yaml"
-        f.write_text("repos_base_dir: /custom/path\n")
-        config = load_config(f)
-        assert config.repos_base_dir == "/custom/path"
-
-    def test_repos_base_dir_traversal(self, tmp_path: Path) -> None:
-        f = tmp_path / "config.yaml"
-        f.write_text("repos_base_dir: /../../../etc\n")
-        config = load_config(f)
-        # Loads as-is — validation must happen downstream
-        assert config.repos_base_dir == "/../../../etc"
-
-    def test_repos_base_dir_as_int(self, tmp_path: Path) -> None:
-        f = tmp_path / "config.yaml"
-        f.write_text("repos_base_dir: 42\n")
-        config = load_config(f)
-        assert config.repos_base_dir == 42  # type: ignore[comparison-overlap]
-
-    def test_repos_base_dir_as_null(self, tmp_path: Path) -> None:
-        f = tmp_path / "config.yaml"
-        f.write_text("repos_base_dir: null\n")
-        config = load_config(f)
-        # raw.get returns None, should fall back to default
-        assert config.repos_base_dir is None or config.repos_base_dir == "~/tower-repos"
 
 
 # ── YAML injection / advanced ────────────────────────────────────

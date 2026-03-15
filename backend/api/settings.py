@@ -7,23 +7,27 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.config import (
     TowerConfig,
     load_config,
     register_repo,
+    save_config,
     unregister_repo,
 )
 from backend.models.api_schemas import (
-    GlobalConfigResponse,
+    PlatformStatusListResponse,
+    PlatformStatusResponse,
     RegisterRepoRequest,
     RegisterRepoResponse,
     RepoDetailResponse,
     RepoListResponse,
-    UpdateGlobalConfigRequest,
+    SettingsResponse,
+    UpdateSettingsRequest,
 )
 from backend.services.git_service import GitError, GitService
+from backend.services.platform_adapter import PlatformRegistry, detect_platform
 
 router = APIRouter(tags=["settings"])
 
@@ -50,35 +54,62 @@ def _get_git_service(config: Annotated[TowerConfig, Depends(_get_config)]) -> Gi
     return GitService(config)
 
 
-@router.get("/settings/global", response_model=GlobalConfigResponse)
-async def get_global_config() -> GlobalConfigResponse:
-    """Get current global config as YAML."""
-    from backend.config import DEFAULT_CONFIG_PATH
+def _config_to_response(config: TowerConfig) -> SettingsResponse:
+    return SettingsResponse(
+        max_concurrent_jobs=config.runtime.max_concurrent_jobs,
+        permission_mode=config.runtime.permission_mode,
+        voice_model=config.voice.model,
+        completion_strategy=config.completion.strategy,
+        auto_push=config.completion.auto_push,
+        cleanup_worktree=config.completion.cleanup_worktree,
+        delete_branch_after_merge=config.completion.delete_branch_after_merge,
+        artifact_retention_days=config.retention.artifact_retention_days,
+        max_artifact_size_mb=config.retention.max_artifact_size_mb,
+        auto_archive_days=config.retention.auto_archive_days,
+    )
 
-    if DEFAULT_CONFIG_PATH.exists():
-        return GlobalConfigResponse(config_yaml=DEFAULT_CONFIG_PATH.read_text())
-    return GlobalConfigResponse(config_yaml="")
+
+@router.get("/settings", response_model=SettingsResponse)
+async def get_settings(
+    config: Annotated[TowerConfig, Depends(_get_config)],
+) -> SettingsResponse:
+    """Get current settings as structured data."""
+    return _config_to_response(config)
 
 
-@router.put("/settings/global", response_model=GlobalConfigResponse)
-async def update_global_config(body: UpdateGlobalConfigRequest) -> GlobalConfigResponse:
-    """Update global config from YAML string.
+@router.put("/settings", response_model=SettingsResponse)
+async def update_settings(
+    body: UpdateSettingsRequest,
+) -> SettingsResponse:
+    """Update settings. Only provided fields are changed."""
+    config = load_config()
+    updates = body.model_dump(exclude_none=True)
+    if "max_concurrent_jobs" in updates:
+        config.runtime.max_concurrent_jobs = updates["max_concurrent_jobs"]
+    if "permission_mode" in updates:
+        config.runtime.permission_mode = updates["permission_mode"]
+    if "voice_model" in updates:
+        from backend.services.voice_service import ALLOWED_MODELS
 
-    Non-destructive: incoming YAML is merged into the existing config.
-    Keys not present in the incoming YAML are preserved.
-    """
-    import yaml
-
-    from backend.config import merge_config_yaml
-
-    # Validate YAML syntax
-    try:
-        yaml.safe_load(body.config_yaml)
-    except yaml.YAMLError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid YAML: {exc}") from exc
-
-    result_yaml = merge_config_yaml(body.config_yaml)
-    return GlobalConfigResponse(config_yaml=result_yaml)
+        if updates["voice_model"] not in ALLOWED_MODELS:
+            raise HTTPException(status_code=400, detail=f"Invalid voice model. Allowed: {sorted(ALLOWED_MODELS)}")
+        config.voice.model = updates["voice_model"]
+    if "completion_strategy" in updates:
+        config.completion.strategy = updates["completion_strategy"]
+    if "auto_push" in updates:
+        config.completion.auto_push = updates["auto_push"]
+    if "cleanup_worktree" in updates:
+        config.completion.cleanup_worktree = updates["cleanup_worktree"]
+    if "delete_branch_after_merge" in updates:
+        config.completion.delete_branch_after_merge = updates["delete_branch_after_merge"]
+    if "artifact_retention_days" in updates:
+        config.retention.artifact_retention_days = updates["artifact_retention_days"]
+    if "max_artifact_size_mb" in updates:
+        config.retention.max_artifact_size_mb = updates["max_artifact_size_mb"]
+    if "auto_archive_days" in updates:
+        config.retention.auto_archive_days = updates["auto_archive_days"]
+    save_config(config)
+    return _config_to_response(config)
 
 
 @router.get("/settings/repos", response_model=RepoListResponse)
@@ -113,6 +144,7 @@ async def get_repo_detail(
         path=resolved,
         origin_url=origin_url,
         base_branch=base_branch,
+        platform=detect_platform(origin_url),
     )
 
 
@@ -126,8 +158,12 @@ async def register_repo_endpoint(
     source = body.source
 
     if GitService.is_remote_url(source):
-        # Clone remote repo
-        clone_dir = GitService.derive_clone_dir(source, config.repos_base_dir)
+        if not body.clone_to:
+            raise HTTPException(
+                status_code=400,
+                detail="clone_to path is required when registering a remote URL",
+            )
+        clone_dir = str(Path(body.clone_to).expanduser().resolve())
         if Path(clone_dir).exists():
             raise HTTPException(
                 status_code=409,
@@ -222,3 +258,32 @@ async def browse_directories(
         "parent": str(base.parent) if base != home else None,
         "items": entries,
     }
+
+
+# --- Platform status ---
+
+
+def _get_platform_registry(request: Request) -> PlatformRegistry | None:
+    return getattr(request.app.state, "platform_registry", None)
+
+
+@router.get("/platforms/status", response_model=PlatformStatusListResponse)
+async def get_platform_status(
+    request: Request,
+) -> PlatformStatusListResponse:
+    """Check auth status for all detected git hosting platforms."""
+    registry = _get_platform_registry(request)
+    if registry is None:
+        return PlatformStatusListResponse(items=[])
+    statuses = await registry.check_all()
+    return PlatformStatusListResponse(
+        items=[
+            PlatformStatusResponse(
+                platform=s.platform,
+                authenticated=s.authenticated,
+                user=s.user,
+                error=s.error,
+            )
+            for s in statuses
+        ]
+    )

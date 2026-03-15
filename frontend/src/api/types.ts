@@ -15,8 +15,21 @@ export type HealthResponse = components["schemas"]["HealthResponse"];
 export type RegisterRepoRequest = components["schemas"]["RegisterRepoRequest"];
 export type RegisterRepoResponse = components["schemas"]["RegisterRepoResponse"];
 export type RepoListResponse = components["schemas"]["RepoListResponse"];
-export type GlobalConfigResponse = components["schemas"]["GlobalConfigResponse"];
 export type PermissionMode = components["schemas"]["PermissionMode"];
+export type CompletionStrategy = components["schemas"]["CompletionStrategy"];
+
+export interface Settings {
+  maxConcurrentJobs: number;
+  permissionMode: string;
+  voiceModel: string;
+  completionStrategy: string;
+  autoPush: boolean;
+  cleanupWorktree: boolean;
+  deleteBranchAfterMerge: boolean;
+  artifactRetentionDays: number;
+  maxArtifactSizeMb: number;
+  autoArchiveDays: number;
+}
 
 // SSE payload types — not in the OpenAPI schema since they're sent via SSE,
 // so we define them here matching the backend CamelModel shapes.
@@ -83,6 +96,14 @@ export interface DiffFileModel {
 export interface DiffUpdatePayload {
   jobId: string;
   changedFiles: DiffFileModel[];
+}
+
+// --- Resolve types ---
+
+export interface ResolveJobResponse {
+  resolution: string;
+  prUrl?: string | null;
+  conflictFiles?: string[] | null;
 }
 
 // --- Artifact types ---

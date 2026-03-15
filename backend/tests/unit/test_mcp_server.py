@@ -150,12 +150,13 @@ class TestConfigTools:
                 assert result["items"] == ["/test/repo"]
 
     @pytest.mark.asyncio
-    async def test_tower_settings_update_invalid_yaml(self, mcp_server) -> None:
+    async def test_tower_settings_get(self, mcp_server) -> None:
         tools = mcp_server._tool_manager._tools
-        update_fn = tools.get("tower_settings_update")
-        if update_fn:
-            result = await update_fn.fn(config_yaml=": invalid: - yaml [")
-            assert "error" in result
+        get_fn = tools.get("tower_settings_get")
+        if get_fn:
+            result = await get_fn.fn()
+            assert "max_concurrent_jobs" in result
+            assert "completion_strategy" in result
 
 
 class TestApprovalTools:

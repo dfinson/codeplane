@@ -8,6 +8,7 @@ and workspace context.
 from __future__ import annotations
 
 import os
+import re
 from enum import StrEnum
 
 import structlog
@@ -20,6 +21,39 @@ class PolicyDecision(StrEnum):
 
     approve = "approve"
     ask = "ask"
+
+
+# Shell command patterns that always require operator approval, even in auto mode.
+# Matches against the full command text (case-insensitive).
+_DANGEROUS_SHELL_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\brm\s+.*-[^\s]*r",  # rm -r, rm -rf, rm -Rf, etc.
+        r"\bsudo\b",
+        r"\bchmod\b",
+        r"\bchown\b",
+        r"\bmkfs\b",
+        r"\bdd\b\s+",
+        r"\bcurl\b",
+        r"\bwget\b",
+        r"\bssh\b",
+        r"\bscp\b",
+        r"\brsync\b",
+        r"\bdocker\b",
+        r"\bkubectl\b",
+        r"\bhelm\b",
+        r"\bterraform\b",
+        r"\bpulumi\b",
+        r"\baws\b",
+        r"\baz\b\s",
+        r"\bgcloud\b",
+        r"\bgit\s+push\b",
+        r"\bgit\s+remote\b",
+        r"\bnpm\s+publish\b",
+        r"\byarn\s+publish\b",
+        r"\bpip\s+install\b(?!.*-e\s)",  # pip install (but allow editable installs)
+    ]
+]
 
 
 def _is_path_within_workspace(path: str, workspace: str) -> bool:
@@ -56,30 +90,13 @@ def evaluate(
     file_name: str | None = None,
     path: str | None = None,
     read_only: bool | None = None,
+    full_command_text: str | None = None,
+    url: str | None = None,
 ) -> PolicyDecision:
     """Evaluate a permission request under ``auto`` mode.
 
     ``permissive`` and ``supervised`` modes are short-circuited by the
     caller before reaching this function.
-
-    Parameters
-    ----------
-    kind:
-        The SDK ``PermissionRequestKind`` value (``shell``, ``read``,
-        ``write``, ``url``, ``mcp``, ``custom-tool``, ``memory``).
-    workspace_path:
-        Absolute path to the job's worktree / workspace directory.
-    protected_paths:
-        Relative path prefixes from ``.tower.yml`` that always require
-        operator approval.
-    possible_paths:
-        Paths the SDK reports might be read or written.
-    file_name:
-        File being written to (from ``PermissionRequest.file_name``).
-    path:
-        File or directory being read (from ``PermissionRequest.path``).
-    read_only:
-        Whether an MCP tool is declared read-only.
     """
 
     # --- Memory operations are always safe ---
@@ -109,12 +126,20 @@ def evaluate(
         # No path info for a write → ask to be safe
         return PolicyDecision.ask
 
-    # --- Shell commands always require approval in auto mode ---
+    # --- Shell: approve unless command matches a dangerous pattern ---
     if kind == "shell":
-        return PolicyDecision.ask
+        cmd = full_command_text or ""
+        for pattern in _DANGEROUS_SHELL_PATTERNS:
+            if pattern.search(cmd):
+                log.debug("shell_blocked_by_pattern", pattern=pattern.pattern, cmd=cmd[:120])
+                return PolicyDecision.ask
+        return PolicyDecision.approve
 
-    # --- URL fetches always require approval ---
+    # --- URL fetches: approve localhost, ask for external ---
     if kind == "url":
+        u = (url or "").lower()
+        if u.startswith("http://localhost") or u.startswith("http://127.0.0.1") or u.startswith("http://[::1]"):
+            return PolicyDecision.approve
         return PolicyDecision.ask
 
     # --- MCP tools: approve if read-only, otherwise ask ---

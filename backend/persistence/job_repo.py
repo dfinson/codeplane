@@ -45,6 +45,10 @@ class JobRepository(BaseRepository):
             session_count=row.session_count or 1,  # type: ignore[arg-type]
             sdk_session_id=row.sdk_session_id,  # type: ignore[arg-type]
             model=row.model,  # type: ignore[arg-type]
+            resolution=row.resolution,  # type: ignore[arg-type]
+            archived_at=row.archived_at,  # type: ignore[arg-type]
+            completion_strategy=row.completion_strategy,  # type: ignore[arg-type]
+            failure_reason=row.failure_reason,  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -69,6 +73,9 @@ class JobRepository(BaseRepository):
             session_count=job.session_count,
             sdk_session_id=job.sdk_session_id,
             model=job.model,
+            resolution=job.resolution,
+            archived_at=job.archived_at,
+            completion_strategy=job.completion_strategy,
         )
         self._session.add(row)
         await self._session.flush()
@@ -87,12 +94,21 @@ class JobRepository(BaseRepository):
         state: str | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        include_archived: bool | None = None,
     ) -> list[Job]:
-        """List jobs, optionally filtered by state, with cursor-based pagination."""
+        """List jobs, optionally filtered by state, with cursor-based pagination.
+
+        Args:
+            include_archived: None = all jobs, False = exclude archived, True = only archived.
+        """
         stmt = select(JobRow).order_by(JobRow.created_at.desc(), JobRow.id.desc())
         if state is not None:
             states = [s.strip() for s in state.split(",")]
             stmt = stmt.where(JobRow.state.in_(states))
+        if include_archived is False:
+            stmt = stmt.where(JobRow.archived_at.is_(None))
+        elif include_archived is True:
+            stmt = stmt.where(JobRow.archived_at.is_not(None))
         if cursor is not None:
             # Keyset pagination: look up the cursor row's created_at for proper ordering
             cursor_time = select(JobRow.created_at).where(JobRow.id == cursor).scalar_subquery()
@@ -112,6 +128,7 @@ class JobRepository(BaseRepository):
         new_state: str,
         updated_at: datetime,
         completed_at: datetime | None = None,
+        failure_reason: str | None = None,
     ) -> None:
         """Update a job's state and timestamps."""
         result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
@@ -122,6 +139,8 @@ class JobRepository(BaseRepository):
         row.updated_at = updated_at  # type: ignore[assignment]
         if completed_at is not None:
             row.completed_at = completed_at  # type: ignore[assignment]
+        if failure_reason is not None:
+            row.failure_reason = failure_reason  # type: ignore[assignment]
         await self._session.flush()
 
     async def update_pr_url(self, job_id: str, pr_url: str) -> None:
@@ -168,6 +187,35 @@ class JobRepository(BaseRepository):
         row.worktree_path = worktree_path  # type: ignore[assignment]
         await self._session.flush()
 
+    async def update_resolution(self, job_id: str, resolution: str, pr_url: str | None = None) -> None:
+        """Update the resolution status (and optionally PR URL) on a job row."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.resolution = resolution  # type: ignore[assignment]
+        if pr_url is not None:
+            row.pr_url = pr_url  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def update_archived_at(self, job_id: str, archived_at: datetime | None) -> None:
+        """Set or clear the archived_at timestamp."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.archived_at = archived_at  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def update_completion_strategy(self, job_id: str, strategy: str) -> None:
+        """Set the completion strategy for a job."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        row.completion_strategy = strategy  # type: ignore[assignment]
+        await self._session.flush()
+
     async def update_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
         """Persist the Copilot SDK session ID for future resumption."""
         result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
@@ -175,4 +223,16 @@ class JobRepository(BaseRepository):
         if row is None:
             return
         row.sdk_session_id = sdk_session_id  # type: ignore[assignment]
+        await self._session.flush()
+
+    async def update_title_and_branch(self, job_id: str, title: str | None = None, branch: str | None = None) -> None:
+        """Update the title and/or branch of a job (used by async naming)."""
+        result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return
+        if title is not None:
+            row.title = title  # type: ignore[assignment]
+        if branch is not None:
+            row.branch = branch  # type: ignore[assignment]
         await self._session.flush()

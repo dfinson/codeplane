@@ -14,10 +14,17 @@ from backend.models.api_schemas import (
     ApprovalRequestedPayload,
     ApprovalResolvedPayload,
     DiffUpdatePayload,
+    JobArchivedPayload,
+    JobFailedPayload,
+    JobResolvedPayload,
     JobStateChangedPayload,
+    JobSucceededPayload,
+    JobTitleUpdatedPayload,
     LogLinePayload,
     MergeCompletedPayload,
     MergeConflictPayload,
+    ModelDowngradedPayload,
+    ProgressHeadlinePayload,
     SessionHeartbeatPayload,
     SessionResumedPayload,
     SnapshotPayload,
@@ -41,14 +48,19 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
     DomainEventKind.diff_updated: "diff_update",
     DomainEventKind.approval_requested: "approval_requested",
     DomainEventKind.approval_resolved: "approval_resolved",
-    DomainEventKind.job_succeeded: "job_state_changed",
-    DomainEventKind.job_failed: "job_state_changed",
+    DomainEventKind.job_succeeded: "job_succeeded",
+    DomainEventKind.job_failed: "job_failed",
     DomainEventKind.job_canceled: "job_state_changed",
     DomainEventKind.job_state_changed: "job_state_changed",
     DomainEventKind.session_heartbeat: "session_heartbeat",
     DomainEventKind.merge_completed: "merge_completed",
     DomainEventKind.merge_conflict: "merge_conflict",
     DomainEventKind.session_resumed: "session_resumed",
+    DomainEventKind.job_resolved: "job_resolved",
+    DomainEventKind.job_archived: "job_archived",
+    DomainEventKind.job_title_updated: "job_title_updated",
+    DomainEventKind.progress_headline: "progress_headline",
+    DomainEventKind.model_downgraded: "model_downgraded",
 }
 
 # State implied by each domain event kind (for job_state_changed payloads)
@@ -200,6 +212,63 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             timestamp=event.payload.get("timestamp", event.timestamp),
         ).model_dump_json(by_alias=True)
 
+    if sse_type == "job_failed":
+        return JobFailedPayload(
+            job_id=event.job_id,
+            reason=event.payload.get("reason", "Unknown error"),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "job_succeeded":
+        return JobSucceededPayload(
+            job_id=event.job_id,
+            pr_url=event.payload.get("pr_url"),
+            merge_status=event.payload.get("merge_status"),
+            resolution=event.payload.get("resolution"),
+            model_downgraded=bool(event.payload.get("model_downgraded", False)),
+            requested_model=event.payload.get("requested_model"),
+            actual_model=event.payload.get("actual_model"),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "job_resolved":
+        return JobResolvedPayload(
+            job_id=event.job_id,
+            resolution=event.payload.get("resolution", "unresolved"),
+            pr_url=event.payload.get("pr_url"),
+            conflict_files=event.payload.get("conflict_files"),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "job_archived":
+        return JobArchivedPayload(
+            job_id=event.job_id,
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "job_title_updated":
+        return JobTitleUpdatedPayload(
+            job_id=event.job_id,
+            title=event.payload.get("title"),
+            branch=event.payload.get("branch"),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "progress_headline":
+        return ProgressHeadlinePayload(
+            job_id=event.job_id,
+            headline=event.payload.get("headline", ""),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "model_downgraded":
+        return ModelDowngradedPayload(
+            job_id=event.job_id,
+            requested_model=event.payload.get("requested_model", ""),
+            actual_model=event.payload.get("actual_model", ""),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
     # Fallback (should not happen for known types)
     return json.dumps(event.payload, default=str)
 
@@ -297,6 +366,21 @@ class SSEManager:
             )
             await self._broadcast_frame(state_frame, event.job_id)
 
+        elif event.kind in (DomainEventKind.job_succeeded, DomainEventKind.job_failed):
+            new_state = _KIND_TO_STATE[event.kind]
+            state_payload = JobStateChangedPayload(
+                job_id=event.job_id,
+                previous_state=None,
+                new_state=new_state,
+                timestamp=event.timestamp,
+            )
+            state_frame = _format_sse(
+                None,
+                "job_state_changed",
+                state_payload.model_dump_json(by_alias=True),
+            )
+            await self._broadcast_frame(state_frame, event.job_id)
+
     async def _broadcast_frame(self, frame: str, job_id: str) -> None:
         """Send a pre-formatted frame to all relevant connections."""
         for conn in list(self._connections):
@@ -372,6 +456,11 @@ class SSEManager:
                     created_at=j.created_at,
                     updated_at=j.updated_at,
                     completed_at=j.completed_at,
+                    pr_url=j.pr_url,
+                    merge_status=j.merge_status,
+                    resolution=j.resolution,
+                    completion_strategy=j.completion_strategy,
+                    failure_reason=j.failure_reason,
                 )
                 for j in fetched_jobs
             ]
@@ -419,6 +508,21 @@ class SSEManager:
                     job_id=event.job_id,
                     previous_state="waiting_for_approval",
                     new_state=new_state,
+                    timestamp=event.timestamp,
+                )
+                await conn.send(
+                    _format_sse(
+                        sse_id,
+                        "job_state_changed",
+                        derived_payload.model_dump_json(by_alias=True),
+                    )
+                )
+            elif event.kind in (DomainEventKind.job_succeeded, DomainEventKind.job_failed):
+                derived_state = _KIND_TO_STATE[event.kind]
+                derived_payload = JobStateChangedPayload(
+                    job_id=event.job_id,
+                    previous_state=None,
+                    new_state=derived_state,
                     timestamp=event.timestamp,
                 )
                 await conn.send(

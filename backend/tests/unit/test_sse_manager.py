@@ -513,21 +513,28 @@ class TestSSEManager:
             DomainEventKind.job_failed,
             DomainEventKind.job_canceled,
             DomainEventKind.session_heartbeat,
+            DomainEventKind.job_resolved,
+            DomainEventKind.job_archived,
         ]
 
         for i, kind in enumerate(mappable_kinds):
             payload: dict[str, object] = {}
             if kind == DomainEventKind.approval_resolved:
                 payload = {"resolution": "approved"}
+            if kind == DomainEventKind.job_failed:
+                payload = {"reason": "test error"}
+            if kind == DomainEventKind.job_resolved:
+                payload = {"resolution": "merged"}
             await mgr.handle_event(_make_event(kind=kind, event_id=f"evt-{i}", payload=payload))
 
         frames = []
         while not conn.queue.empty():
             frames.append(conn.queue.get_nowait())
 
-        # Each mappable kind produces at least 1 frame. approval_* produce 2 each.
-        # 10 kinds, 2 of which produce secondary frames = 12 total
-        assert len(frames) == 12
+        # 12 kinds. approval_requested/resolved produce 2 each (secondary job_state_changed).
+        # job_succeeded/job_failed produce 2 each (secondary job_state_changed).
+        # That's 12 primary + 4 secondary = 16 total.
+        assert len(frames) == 16
 
     @pytest.mark.asyncio
     async def test_approval_resolved_secondary_frame_has_no_id(self) -> None:

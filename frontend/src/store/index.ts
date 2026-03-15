@@ -34,6 +34,17 @@ export interface JobSummary {
   updatedAt: string;
   completedAt: string | null;
   prUrl?: string | null;
+  resolution?: string | null;
+  archivedAt?: string | null;
+  completionStrategy?: string | null;
+  mergeStatus?: string | null;
+  conflictFiles?: string[] | null;
+  failureReason?: string | null;
+  progressHeadline?: string | null;
+  model?: string | null;
+  modelDowngraded?: boolean;
+  requestedModel?: string | null;
+  actualModel?: string | null;
 }
 
 export interface ApprovalRequest {
@@ -71,6 +82,21 @@ export interface TranscriptEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const MODEL_DOWNGRADE_RE = /^Model downgraded: requested (.+) but received (.+)$/;
+
+/** Enrich a job loaded from the REST API with parsed model downgrade info. */
+export function enrichJob(job: JobSummary): JobSummary {
+  if (job.modelDowngraded) return job; // already enriched (e.g. from SSE)
+  if (!job.failureReason) return job;
+  const m = MODEL_DOWNGRADE_RE.exec(job.failureReason);
+  if (!m) return job;
+  return { ...job, modelDowngraded: true, requestedModel: m[1], actualModel: m[2] };
+}
+
+// ---------------------------------------------------------------------------
 // Store shape
 // ---------------------------------------------------------------------------
 
@@ -103,7 +129,7 @@ export const useTowerStore = create<TowerState>((set, get) => ({
 
   applySnapshot: (jobs, approvals) =>
     set({
-      jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
+      jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
       approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
     }),
 
@@ -216,7 +242,7 @@ export const useTowerStore = create<TowerState>((set, get) => ({
           const approvals =
             (payload.pendingApprovals as ApprovalRequest[]) ?? [];
           return {
-            jobs: Object.fromEntries(jobs.map((j) => [j.id, j])),
+            jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
             approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
           };
         }
@@ -231,12 +257,86 @@ export const useTowerStore = create<TowerState>((set, get) => ({
         case "job_succeeded": {
           const jobId = payload.jobId as string;
           const prUrl = (payload.prUrl as string | null) ?? null;
+          const resolution = (payload.resolution as string | null) ?? null;
+          const mergeStatus = (payload.mergeStatus as string | null) ?? null;
+          const modelDowngraded = (payload.modelDowngraded as boolean) ?? false;
+          const requestedModel = (payload.requestedModel as string | null) ?? null;
+          const actualModel = (payload.actualModel as string | null) ?? null;
           const existing = state.jobs[jobId];
-          if (existing && prUrl) {
+          if (existing) {
             return {
               jobs: {
                 ...state.jobs,
-                [jobId]: { ...existing, prUrl },
+                [jobId]: {
+                  ...existing,
+                  state: "succeeded",
+                  ...(prUrl && { prUrl }),
+                  ...(resolution && { resolution }),
+                  ...(mergeStatus && { mergeStatus }),
+                  failureReason: null,
+                  progressHeadline: null,
+                  ...(modelDowngraded && { modelDowngraded, requestedModel, actualModel }),
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "job_failed": {
+          const jobId = payload.jobId as string;
+          const reason = (payload.reason as string | null) ?? "Unknown error";
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  state: "failed",
+                  failureReason: reason,
+                  progressHeadline: null,
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "job_resolved": {
+          const jobId = payload.jobId as string;
+          const resolution = payload.resolution as string;
+          const prUrl = (payload.prUrl as string | null) ?? null;
+          const conflictFiles = (payload.conflictFiles as string[] | null) ?? null;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  resolution,
+                  prUrl: prUrl ?? existing.prUrl,
+                  conflictFiles,
+                  updatedAt: (payload.timestamp as string) ?? existing.updatedAt,
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "job_archived": {
+          const jobId = payload.jobId as string;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  archivedAt: new Date().toISOString(),
+                },
               },
             };
           }
@@ -263,6 +363,10 @@ export const useTowerStore = create<TowerState>((set, get) => ({
             content: `Session ${sessionNumber}`,
           };
           const existing = state.transcript[jobId] ?? [];
+          // Deduplicate: two SSE connections may deliver the same event
+          if (existing.some((e) => e.role === "divider" && e.content === divider.content && e.timestamp === divider.timestamp)) {
+            return { jobs: state.jobs[jobId] ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running" } } : state.jobs };
+          }
           return {
             transcript: { ...state.transcript, [jobId]: [...existing, divider] },
             // Also update job state back to running
@@ -270,6 +374,65 @@ export const useTowerStore = create<TowerState>((set, get) => ({
               ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running" } }
               : state.jobs,
           };
+        }
+
+        case "job_title_updated": {
+          const jobId = payload.jobId as string;
+          const title = (payload.title as string | null) ?? null;
+          const branch = (payload.branch as string | null) ?? null;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  ...(title && { title }),
+                  ...(branch && { branch }),
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "progress_headline": {
+          const jobId = payload.jobId as string;
+          const headline = payload.headline as string;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  progressHeadline: headline,
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "model_downgraded": {
+          const jobId = payload.jobId as string;
+          const requestedModel = payload.requestedModel as string;
+          const actualModel = payload.actualModel as string;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  modelDowngraded: true,
+                  requestedModel,
+                  actualModel,
+                },
+              },
+            };
+          }
+          return null;
         }
 
         default:
@@ -321,21 +484,44 @@ export const selectActiveJobs = (state: TowerState): JobSummary[] =>
     ),
   );
 
+/** Sign-off: everything that needs operator attention before archival.
+ *  - waiting_for_approval
+ *  - succeeded (any resolution) — not archived
+ *  - canceled — not archived
+ */
 export const selectSignoffJobs = (state: TowerState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
-      (j) => j.state === "waiting_for_approval",
+      (j) =>
+        !j.archivedAt &&
+        (j.state === "waiting_for_approval" ||
+          j.state === "succeeded" ||
+          j.state === "canceled"),
     ),
   );
 
-export const selectFailedJobs = (state: TowerState): JobSummary[] =>
-  sortByUpdatedDesc(
-    Object.values(state.jobs).filter((j) => j.state === "failed"),
-  );
+/** @deprecated Use selectSignoffJobs instead */
+export const selectReviewJobs = (state: TowerState): JobSummary[] =>
+  selectSignoffJobs(state);
 
-export const selectHistoryJobs = (state: TowerState): JobSummary[] =>
+/** Attention: failed jobs that haven't been archived. */
+export const selectAttentionJobs = (state: TowerState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
-      (j) => j.state === "succeeded" || j.state === "canceled",
+      (j) => !j.archivedAt && j.state === "failed",
     ),
   );
+
+/** @deprecated Use selectAttentionJobs instead */
+export const selectFailedJobs = (state: TowerState): JobSummary[] =>
+  selectAttentionJobs(state);
+
+/** Archived jobs loaded into the store (for the history browser). */
+export const selectArchivedJobs = (state: TowerState): JobSummary[] =>
+  sortByUpdatedDesc(
+    Object.values(state.jobs).filter((j) => !!j.archivedAt),
+  );
+
+/** Count of archived jobs known to the store (badge hint). */
+export const selectArchivedCount = (state: TowerState): number =>
+  Object.values(state.jobs).filter((j) => !!j.archivedAt).length;

@@ -720,6 +720,8 @@ data: {json_payload}
 | `approval_resolved` | `{ job_id, approval_id, resolution, timestamp }` |
 | `session_heartbeat` | `{ job_id, session_id, timestamp }` |
 | `snapshot` | `{ jobs: JobResponse[], pending_approvals: ApprovalResponse[] }` |
+| `job_resolved` | `{ jobId, resolution, prUrl?, conflictFiles? }` |
+| `job_archived` | `{ jobId }` |
 
 ### 5.3.1 Domain Event to SSE Event Mapping
 
@@ -1005,6 +1007,12 @@ On job completion (success, failure, or cancel):
 - Secondary worktrees are not automatically deleted; operators must explicitly clean them up via a settings action
 - A background cleanup command may be scheduled via settings: `POST /api/settings/cleanup-worktrees`
 
+Jobs have a `completion_strategy` that controls what happens after success:
+
+- **`manual`** (default): the job is left as `unresolved` for operator decision via the Review column
+- **`auto_merge`**: the existing escalation runs automatically — fast-forward merge is attempted first, then a regular merge, and if both fail a PR is created as a fallback
+- **`pr_only`**: a PR is always created immediately upon success
+
 ### 8.4 Protected Paths
 
 If a per-repository config defines `protected_paths`, the adapter translates these into SDK-native permission rules at session creation time. Any write to a protected path triggers the SDK's built-in permission request flow, which the adapter routes to the operator via the approval system (Section 18).
@@ -1043,7 +1051,36 @@ This is a best-effort operation — if PR creation fails (e.g., no remote config
 
 Completed branches are **not** auto-deleted after merge. The branch remains on disk until the operator explicitly cleans it up or the retention policy removes the worktree.
 
-### 8.8 Repository Registration
+### 8.8 Job Resolution
+
+When a job succeeds with `completion_strategy = "manual"` (the default), it enters
+the Review column with `resolution = "unresolved"`. The operator resolves it via:
+
+    POST /api/jobs/{id}/resolve
+    Body: { "action": "merge" | "create_pr" | "discard" }
+
+**Merge**: Attempts fast-forward merge, then regular merge. On success, resolution
+becomes `merged`, worktree is cleaned up, and branch is deleted. On conflict, the
+merge is aborted (worktree stays clean), resolution becomes `conflict`, and the job
+stays in Review with a conflict badge showing the affected files.
+
+**Create PR**: Pushes the branch to origin and creates a PR via `gh pr create`.
+Resolution becomes `pr_created`, worktree is cleaned up (branch kept on remote).
+
+**Discard**: Removes the worktree and deletes the branch. Resolution becomes
+`discarded`.
+
+Jobs with `resolution = "conflict"` can be further resolved with `create_pr` or
+`discard` (but not `merge`).
+
+Terminal jobs can be archived to hide them from the Kanban board:
+
+    POST /api/jobs/{id}/archive     → 204
+    POST /api/jobs/{id}/unarchive   → 204
+
+Resolved jobs are auto-archived after `retention.auto_archive_days` (default: 7 days).
+
+### 8.9 Repository Registration
 
 Operators manage the set of repositories Tower can work with through the web UI or by editing the global config directly.
 
@@ -1446,6 +1483,8 @@ Sequential integers are preferred over UUIDs because:
 | `failed` | Session terminated with an error |
 | `canceled` | Operator canceled the job |
 
+Succeeded jobs carry a **resolution status** that tracks how the job's changes were handled: `unresolved` (awaiting operator decision), `merged` (changes merged into base branch), `pr_created` (PR was created), `discarded` (changes thrown away), or `conflict` (merge attempted but conflicts detected). Jobs in `unresolved` or `conflict` state appear in the Review column for operator action.
+
 ### 12.2 State Transition Table
 
 | From | Event | To |
@@ -1463,6 +1502,8 @@ Sequential integers are preferred over UUIDs because:
 | `waiting_for_approval` | `JobCanceled` | `canceled` |
 
 Terminal states (`succeeded`, `failed`, `canceled`) have no further transitions.
+
+After reaching `succeeded`, the job enters a resolution lifecycle managed by `POST /api/jobs/{id}/resolve`. Resolution transitions: `unresolved` → `merged|pr_created|discarded|conflict`, `conflict` → `pr_created|discarded`.
 
 ### 12.3 Rerun
 
@@ -1494,9 +1535,9 @@ Columns:
 | Column | States shown |
 |---|---|
 | Active | `queued`, `running` |
-| Sign-off | `waiting_for_approval` |
-| Failed | `failed` |
-| History | `succeeded`, `canceled` |
+| Review | `waiting_for_approval`, or `succeeded` with resolution `unresolved` or `conflict` |
+| Failed | `failed`, `canceled` |
+| History | `succeeded` with resolution `merged`, `pr_created`, or `discarded` (excludes archived) |
 
 Each card displays: job ID, repository name, prompt excerpt, elapsed time, and status badge.
 

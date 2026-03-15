@@ -71,6 +71,16 @@ async def resolve_approval(
     return _to_response(approval)
 
 
+@router.post("/jobs/{job_id}/approvals/trust")
+async def trust_job(
+    job_id: str,
+    svc: Annotated[ApprovalService, Depends(_get_approval_service)],
+) -> dict[str, int]:
+    """Trust a job session — auto-approve all current and future permission requests."""
+    count = await svc.trust_job(job_id)
+    return {"resolved": count}
+
+
 @router.post("/jobs/{job_id}/messages", response_model=SendMessageResponse)
 async def send_message(
     job_id: str,

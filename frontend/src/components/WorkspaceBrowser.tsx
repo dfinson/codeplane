@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown } from "lucide-react";
+import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -128,68 +128,100 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   if (loading) return <div className="flex justify-center py-10"><Spinner /></div>;
 
   const showMdToggle = selected != null && isMarkdown(selected) && fileContent != null && !fileLoading;
+  const mobileShowFile = isMobile && selected != null;
+
+  const treePanel = (
+    <div className={cn(
+      "shrink-0 flex flex-col overflow-hidden rounded-lg border border-border bg-card",
+      isMobile ? "flex-1" : "w-64",
+    )}>
+      <div className="px-3 py-2.5 border-b border-border">
+        <span className="text-xs font-semibold text-muted-foreground">Files</span>
+      </div>
+      <div className="flex-1 overflow-y-auto py-1">
+        {entries.map((e) => (
+          <TreeNode key={e.path} entry={e} depth={0} selected={selected} onSelect={handleSelect} jobId={jobId} />
+        ))}
+      </div>
+    </div>
+  );
+
+  const filePanel = (
+    <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card flex flex-col">
+      {(isMobile || showMdToggle) && (
+        <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border shrink-0">
+          {isMobile && (
+            <button
+              type="button"
+              onClick={() => { setSelected(null); setFileContent(null); }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mr-auto"
+            >
+              <ArrowLeft size={14} />
+              Back
+            </button>
+          )}
+          {showMdToggle && (
+            <>
+              <button
+                type="button"
+                onClick={() => setMdMode("preview")}
+                className={cn(
+                  "px-2.5 py-0.5 rounded text-xs font-medium transition-colors",
+                  mdMode === "preview" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setMdMode("raw")}
+                className={cn(
+                  "px-2.5 py-0.5 rounded text-xs font-medium transition-colors",
+                  mdMode === "raw" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Raw
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {fileLoading ? (
+        <div className="flex items-center justify-center flex-1"><Spinner /></div>
+      ) : selected && fileContent != null ? (
+        showMdToggle && mdMode === "preview" ? (
+          <div className="flex-1 overflow-y-auto p-5 prose prose-sm prose-invert max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{fileContent}</ReactMarkdown>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-hidden">
+            <Editor
+              value={fileContent}
+              language={guessLang(selected)}
+              theme="vs-dark"
+              options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: isMobile ? 12 : 13 }}
+            />
+          </div>
+        )
+      ) : (
+        <p className="text-sm text-muted-foreground text-center py-8">Select a file to preview</p>
+      )}
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="flex flex-col h-[60vh] min-h-[300px]">
+        {mobileShowFile ? filePanel : treePanel}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col md:flex-row gap-3 h-[60vh] min-h-[300px] max-h-[600px]">
-      <div className="md:w-64 shrink-0 flex flex-col overflow-hidden rounded-lg border border-border bg-card max-md:max-h-[30%]">
-        <div className="px-3 py-2.5 border-b border-border">
-          <span className="text-xs font-semibold text-muted-foreground">Files</span>
-        </div>
-        <div className="flex-1 overflow-y-auto py-1">
-          {entries.map((e) => (
-            <TreeNode key={e.path} entry={e} depth={0} selected={selected} onSelect={handleSelect} jobId={jobId} />
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card flex flex-col">
-        {showMdToggle && (
-          <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border shrink-0">
-            <button
-              type="button"
-              onClick={() => setMdMode("preview")}
-              className={cn(
-                "px-2.5 py-0.5 rounded text-xs font-medium transition-colors",
-                mdMode === "preview" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              Preview
-            </button>
-            <button
-              type="button"
-              onClick={() => setMdMode("raw")}
-              className={cn(
-                "px-2.5 py-0.5 rounded text-xs font-medium transition-colors",
-                mdMode === "raw" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              Raw
-            </button>
-          </div>
-        )}
-
-
-        {fileLoading ? (
-          <div className="flex items-center justify-center flex-1"><Spinner /></div>
-        ) : selected && fileContent != null ? (
-          showMdToggle && mdMode === "preview" ? (
-            <div className="flex-1 overflow-y-auto p-5 prose prose-sm prose-invert max-w-none">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{fileContent}</ReactMarkdown>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-hidden">
-              <Editor
-                value={fileContent}
-                language={guessLang(selected)}
-                theme="vs-dark"
-                options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: isMobile ? 12 : 13 }}
-              />
-            </div>
-          )
-        ) : (
-          <p className="text-sm text-muted-foreground text-center py-8">Select a file to preview</p>
-        )}
-      </div>
+    <div className="flex flex-row gap-3 h-[60vh] min-h-[300px] max-h-[600px]">
+      {treePanel}
+      {filePanel}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, memo } from "react";
 import {
   Send, Bot, User, PauseCircle, ChevronDown, Brain, X,
   ShieldQuestion, CheckCircle2, XCircle as XCircleIcon,
+  ArrowDown,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -497,6 +498,7 @@ export function TranscriptPanel({
   const [msg, setMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [pausing, setPausing] = useState(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   const agentMessageCount = rawEntries.filter((e) => e.role === "agent").length;
 
@@ -508,8 +510,18 @@ export function TranscriptPanel({
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    stickRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
   };
+
+  const scrollToBottom = useCallback(() => {
+    if (viewportRef.current) {
+      viewportRef.current.scrollTo({ top: viewportRef.current.scrollHeight, behavior: "smooth" });
+      stickRef.current = true;
+      setShowScrollBtn(false);
+    }
+  }, []);
 
   const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
 
@@ -566,9 +578,10 @@ export function TranscriptPanel({
       </div>
 
       {/* Message list */}
+      <div className="relative flex-1 min-h-0">
       <div
         ref={viewportRef}
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
+        className="h-full overflow-y-auto overscroll-contain"
         onScroll={handleScroll}
       >
         {displayItems.length === 0 ? (
@@ -619,6 +632,18 @@ export function TranscriptPanel({
             })}
           </div>
         )}
+      </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg hover:bg-primary/90 transition-opacity animate-in fade-in duration-200"
+        >
+          <ArrowDown size={12} />
+          Jump to bottom
+        </button>
+      )}
       </div>
 
       {/* Input */}

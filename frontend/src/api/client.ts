@@ -11,11 +11,11 @@ import type {
   CreateJobResponse,
   ApprovalRequest,
   DiffFileModel,
-  GlobalConfigResponse,
   HealthResponse,
   Job,
   JobListResponse,
   RepoListResponse,
+  Settings,
   WorkspaceListResponse,
 } from "./types";
 
@@ -63,11 +63,13 @@ export function fetchJobs(params?: {
   state?: string;
   limit?: number;
   cursor?: string;
+  archived?: boolean;
 }): Promise<JobListResponse> {
   const qs = new URLSearchParams();
   if (params?.state) qs.set("state", params.state);
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
+  if (params?.archived !== undefined) qs.set("archived", String(params.archived));
   const query = qs.toString();
   return request(`/jobs${query ? `?${query}` : ""}`);
 }
@@ -156,10 +158,10 @@ export function fetchRepoDetail(repoPath: string): Promise<{
   return request(`/settings/repos/${encodeURIComponent(repoPath)}`);
 }
 
-export function registerRepo(source: string): Promise<{ path: string; source: string; cloned: boolean }> {
+export function registerRepo(source: string, cloneTo?: string): Promise<{ path: string; source: string; cloned: boolean }> {
   return request("/settings/repos", {
     method: "POST",
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, clone_to: cloneTo }),
   });
 }
 
@@ -180,14 +182,14 @@ export function browseDirectories(path?: string): Promise<{
 
 // --- Settings ---
 
-export function fetchGlobalConfig(): Promise<GlobalConfigResponse> {
-  return request("/settings/global");
+export function fetchSettings(): Promise<Settings> {
+  return request("/settings");
 }
 
-export function updateGlobalConfig(configYaml: string): Promise<GlobalConfigResponse> {
-  return request("/settings/global", {
+export function updateSettings(settings: Partial<Settings>): Promise<Settings> {
+  return request("/settings", {
     method: "PUT",
-    body: JSON.stringify({ config_yaml: configYaml }),
+    body: JSON.stringify(settings),
   });
 }
 
@@ -243,6 +245,12 @@ export function resolveApproval(
   });
 }
 
+export function trustJob(jobId: string): Promise<{ resolved: number }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/approvals/trust`, {
+    method: "POST",
+  });
+}
+
 // --- Operator Messages ---
 
 export function sendOperatorMessage(
@@ -278,6 +286,30 @@ export function resumeJob(
   return request(`/jobs/${encodeURIComponent(jobId)}/resume`, {
     method: "POST",
     body: JSON.stringify({ instruction }),
+  });
+}
+
+// --- Job Resolution ---
+
+export function resolveJob(
+  jobId: string,
+  action: "merge" | "create_pr" | "discard",
+): Promise<{ resolution: string; prUrl?: string | null; conflictFiles?: string[] | null }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+}
+
+export function archiveJob(jobId: string): Promise<void> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/archive`, {
+    method: "POST",
+  });
+}
+
+export function unarchiveJob(jobId: string): Promise<void> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/unarchive`, {
+    method: "POST",
   });
 }
 

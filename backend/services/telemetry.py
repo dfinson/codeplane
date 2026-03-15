@@ -127,7 +127,12 @@ class JobTelemetry:
             "toolCallCount": self.tool_call_count,
             "totalToolDurationMs": round(self.total_tool_duration_ms),
             "toolCalls": [
-                {"name": tc.name, "durationMs": round(tc.duration_ms), "success": tc.success}
+                {
+                    "name": tc.name,
+                    "durationMs": round(tc.duration_ms),
+                    "success": tc.success,
+                    "offsetSec": round(tc.timestamp - self.start_time, 1) if self.start_time else 0,
+                }
                 for tc in self.tool_calls[-200:]
             ],
             "llmCallCount": self.llm_call_count,
@@ -141,6 +146,7 @@ class JobTelemetry:
                     "cacheWriteTokens": lc.cache_write_tokens,
                     "cost": round(lc.cost, 6),
                     "durationMs": round(lc.duration_ms),
+                    "offsetSec": round(lc.timestamp - self.start_time, 1) if self.start_time else 0,
                 }
                 for lc in self.llm_calls[-100:]
             ],

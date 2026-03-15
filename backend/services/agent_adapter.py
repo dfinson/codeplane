@@ -91,6 +91,8 @@ class CopilotAdapter(AgentAdapterInterface):
 
     async def create_session(self, config: SessionConfig) -> str:
         from copilot import CopilotClient, PermissionRequest
+        from copilot.types import ResumeSessionConfig
+        from copilot.types import SessionConfig as SdkSessionConfig
 
         client = CopilotClient()
 
@@ -106,6 +108,13 @@ class CopilotAdapter(AgentAdapterInterface):
             # --- permissive: approve everything ---
             if mode == PermissionMode.permissive:
                 log.debug("permission_auto_approved", mode="permissive", kind=kind_val)
+                return _Result(kind="approved")
+
+            # --- Check if operator has trusted this job session ---
+            approval_service = self._approval_service
+            job_id = self._session_to_job.get(sid)
+            if approval_service is not None and job_id and approval_service.is_trusted(job_id):
+                log.debug("permission_auto_approved", mode="trusted", kind=kind_val)
                 return _Result(kind="approved")
 
             # --- readonly: deny any mutation ---
@@ -133,6 +142,8 @@ class CopilotAdapter(AgentAdapterInterface):
                     file_name=request.file_name,
                     path=request.path,
                     read_only=request.read_only,
+                    full_command_text=request.full_command_text,
+                    url=getattr(request, "url", None),
                 )
 
                 if decision == PolicyDecision.approve:
@@ -196,18 +207,26 @@ class CopilotAdapter(AgentAdapterInterface):
             return _Result(kind="denied-interactively-by-user")
 
         # Build session options dict — used for both create and resume
-        session_opts: dict[str, object] = {
-            "working_directory": config.workspace_path,
-            "on_permission_request": _on_permission,
-        }
+        session_opts = SdkSessionConfig(
+            working_directory=config.workspace_path,
+            on_permission_request=_on_permission,
+        )
+        requested_model = config.model or ""
         if config.model:
             session_opts["model"] = config.model
+            log.info("sdk_session_model_requested", model=config.model)
 
         # Create or resume SDK session; use the SDK-assigned session_id as Tower's identifier.
         _resume_id = config.resume_sdk_session_id
         if _resume_id:
+            resume_opts = ResumeSessionConfig(
+                working_directory=config.workspace_path,
+                on_permission_request=_on_permission,
+            )
+            if config.model:
+                resume_opts["model"] = config.model
             try:
-                session = await client.resume_session(_resume_id, session_opts)
+                session = await client.resume_session(_resume_id, resume_opts)
                 log.info("sdk_session_resumed", sdk_session_id=_resume_id)
             except Exception:
                 log.warning("sdk_session_resume_failed_creating_new", sdk_session_id=_resume_id, exc_info=True)
@@ -228,6 +247,9 @@ class CopilotAdapter(AgentAdapterInterface):
         # Sequence counter for log events emitted from this session.
         log_seq = [0]
 
+        # Track whether we've verified the model on the first usage event.
+        _model_verified = [False]
+
         # Register SDK callback that bridges into the async queue
         # and extracts telemetry from Copilot-specific event types.
         def _on_event(sdk_event: SdkSessionEvent) -> None:
@@ -243,9 +265,32 @@ class CopilotAdapter(AgentAdapterInterface):
                 from backend.services.telemetry import collector as tel
 
                 if kind_str == "assistant.usage":
+                    actual_model = data.model or ""
+                    if not _model_verified[0] and requested_model and actual_model:
+                        _model_verified[0] = True
+                        if actual_model != requested_model:
+                            log.error(
+                                "model_mismatch",
+                                requested=requested_model,
+                                actual=actual_model,
+                                job_id=job_id,
+                            )
+                            # Emit model_downgraded event so RuntimeService
+                            # can abort and move the job to sign-off.
+                            queue.put_nowait(
+                                SessionEvent(
+                                    kind=SessionEventKind.model_downgraded,
+                                    payload={
+                                        "requested_model": requested_model,
+                                        "actual_model": actual_model,
+                                    },
+                                )
+                            )
+                        else:
+                            log.info("model_confirmed", model=actual_model, job_id=job_id)
                     tel.record_llm_usage(
                         job_id,
-                        model=data.model or "",
+                        model=actual_model,
                         input_tokens=int(data.input_tokens or 0),
                         output_tokens=int(data.output_tokens or 0),
                         cache_read_tokens=int(data.cache_read_tokens or 0),
@@ -346,8 +391,14 @@ class CopilotAdapter(AgentAdapterInterface):
                 in_tok = int(data.input_tokens or 0)
                 out_tok = int(data.output_tokens or 0)
                 model = data.model or ""
-                _log_msg = f"LLM call: {model} ({in_tok}+{out_tok} tokens)"
-                _log_level = "debug"
+                if model and requested_model and model != requested_model:
+                    _log_msg = (
+                        f"⚠ MODEL MISMATCH: requested {requested_model} but serving {model} ({in_tok}+{out_tok} tokens)"
+                    )
+                    _log_level = "error"
+                else:
+                    _log_msg = f"LLM call: {model} ({in_tok}+{out_tok} tokens)"
+                    _log_level = "debug"
             elif kind_str == "session.compaction_complete" and data:
                 pre = int(data.pre_compaction_tokens or 0)
                 post = int(data.post_compaction_tokens or 0)
@@ -508,23 +559,23 @@ class CopilotAdapter(AgentAdapterInterface):
     async def complete(self, prompt: str) -> str:
         """Create a minimal session for single-turn completion, collect the response."""
         from copilot import CopilotClient
+        from copilot import PermissionRequestResult as _Result
+        from copilot.types import SessionConfig as SdkSessionConfig
 
         client = CopilotClient()
         tmp_session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[tmp_session_id] = queue
 
-        async def _noop_permission(request: object, invocation: object) -> object:
-            from copilot import PermissionRequestResult
-
-            return PermissionRequestResult(kind="approved")
+        async def _noop_permission(request: object, invocation: dict[str, str]) -> PermissionRequestResult:
+            return _Result(kind="approved")
 
         try:
             session = await client.create_session(
-                {
-                    "working_directory": "/tmp",
-                    "on_permission_request": _noop_permission,
-                }
+                SdkSessionConfig(
+                    working_directory="/tmp",
+                    on_permission_request=_noop_permission,
+                )
             )
             self._sessions[tmp_session_id] = session
 

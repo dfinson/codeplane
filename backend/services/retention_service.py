@@ -36,6 +36,7 @@ class RetentionService:
     ) -> None:
         self._session_factory = session_factory
         self._retention_days = config.retention.artifact_retention_days
+        self._auto_archive_days = config.retention.auto_archive_days
         self._worktrees_dirname = config.runtime.worktrees_dirname
 
     async def run_cleanup(self) -> dict[str, int]:
@@ -50,10 +51,14 @@ class RetentionService:
         snapshots_deleted = await self._cleanup_diff_snapshots(cutoff)
         worktrees_deleted = await self._cleanup_worktrees(cutoff)
 
+        archive_cutoff = datetime.now(tz=UTC) - timedelta(days=self._auto_archive_days)
+        auto_archived = await self._auto_archive_resolved_jobs(archive_cutoff)
+
         summary = {
             "artifacts_deleted": artifacts_deleted,
             "snapshots_deleted": snapshots_deleted,
             "worktrees_deleted": worktrees_deleted,
+            "auto_archived": auto_archived,
         }
         log.info("retention_cleanup_done", **summary)
         return summary
@@ -159,4 +164,26 @@ class RetentionService:
                     count += 1
                     log.info("retention_worktree_removed", path=str(wt_path))
 
+            return count
+
+    async def _auto_archive_resolved_jobs(self, cutoff: datetime) -> int:
+        """Auto-archive resolved jobs older than the cutoff."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(JobRow).where(
+                    JobRow.state == "succeeded",
+                    JobRow.resolution.in_(["merged", "pr_created", "discarded"]),
+                    JobRow.archived_at.is_(None),
+                    JobRow.completed_at < cutoff,
+                )
+            )
+            rows = result.scalars().all()
+            now = datetime.now(UTC)
+            count = 0
+            for row in rows:
+                row.archived_at = now  # type: ignore[assignment]
+                count += 1
+            await session.commit()
+            if count > 0:
+                log.info("auto_archived_resolved_jobs", count=count)
             return count

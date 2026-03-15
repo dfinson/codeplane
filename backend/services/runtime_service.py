@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from backend.services.execution_strategy import ExecutionStrategy
     from backend.services.job_service import JobService
     from backend.services.merge_service import MergeService
+    from backend.services.platform_adapter import PlatformRegistry
     from backend.services.summarization_service import SummarizationService
 
 log = structlog.get_logger()
@@ -192,6 +193,8 @@ class RuntimeService:
         diff_service: DiffService | None = None,
         merge_service: MergeService | None = None,
         summarization_service: SummarizationService | None = None,
+        platform_registry: PlatformRegistry | None = None,
+        utility_session: object | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
@@ -201,14 +204,19 @@ class RuntimeService:
         self._diff_service = diff_service
         self._merge_service = merge_service
         self._summarization_service = summarization_service
+        self._platform_registry = platform_registry
+        self._utility_session = utility_session
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._strategies: dict[str, ExecutionStrategy] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
+        self._headline_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, float] = {}
         self._session_ids: dict[str, str] = {}
         self._permission_overrides: dict[str, str] = {}  # job_id → permission_mode
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
+        # Transcript buffer for headline generation (last N agent turns per job)
+        self._headline_transcript: dict[str, list[str]] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
 
@@ -331,6 +339,15 @@ class RuntimeService:
         )
         self._heartbeat_tasks[job_id] = heartbeat_task
 
+        # Start progress headline generation (periodically summarises what the agent is doing)
+        if self._utility_session is not None:
+            self._headline_transcript[job_id] = []
+            headline_task = asyncio.create_task(
+                self._headline_loop(job_id),
+                name=f"headline-{job_id}",
+            )
+            self._headline_tasks[job_id] = headline_task
+
         # Start telemetry tracking
         from backend.services.telemetry import collector as tel
 
@@ -437,6 +454,64 @@ class RuntimeService:
                             break
                         continue
 
+                    # Handle model downgrade: abort the agent and move
+                    # the job to sign-off so the operator can decide.
+                    if domain_event.kind == DomainEventKind.model_downgraded:
+                        requested = domain_event.payload.get("requested_model", "")
+                        actual = domain_event.payload.get("actual_model", "")
+                        log.warning(
+                            "model_downgrade_detected",
+                            job_id=job_id,
+                            requested=requested,
+                            actual=actual,
+                        )
+                        await self._event_bus.publish(domain_event)
+                        # Abort the running strategy/session
+                        try:
+                            await strategy.abort()
+                        except Exception:
+                            log.warning("strategy_abort_on_downgrade_failed", job_id=job_id, exc_info=True)
+
+                        # Transition to succeeded with unresolved resolution
+                        # so the job lands in the sign-off column.
+                        reason = f"Model downgraded: requested {requested} but received {actual}"
+                        async with self._session_factory() as session:
+                            svc = self._make_job_service(session)
+                            await svc.transition_state(job_id, JobState.succeeded, failure_reason=reason)
+                            from backend.persistence.job_repo import JobRepository
+
+                            job_repo = JobRepository(session)
+                            await job_repo.update_resolution(job_id, "unresolved")
+                            await session.commit()
+
+                        await self._event_bus.publish(
+                            DomainEvent(
+                                event_id=_make_event_id(),
+                                job_id=job_id,
+                                timestamp=datetime.now(UTC),
+                                kind=DomainEventKind.job_succeeded,
+                                payload={
+                                    "resolution": "unresolved",
+                                    "model_downgraded": True,
+                                    "requested_model": requested,
+                                    "actual_model": actual,
+                                },
+                            )
+                        )
+                        log.info("job_moved_to_signoff_model_downgrade", job_id=job_id)
+                        return  # skip normal completion flow
+
+                    # Buffer transcript content for progress headlines
+                    if domain_event.kind == DomainEventKind.transcript_updated:
+                        role = domain_event.payload.get("role", "")
+                        content = domain_event.payload.get("content", "")
+                        if role == "agent" and content and job_id in self._headline_transcript:
+                            buf = self._headline_transcript[job_id]
+                            buf.append(content)
+                            # Keep only last 5 agent messages
+                            if len(buf) > 5:
+                                self._headline_transcript[job_id] = buf[-5:]
+
                     await self._event_bus.publish(domain_event)
 
             if error_reason:
@@ -451,15 +526,28 @@ class RuntimeService:
                 except Exception:
                     log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
 
-            # Merge-back or PR creation
+            # Determine completion strategy
             merge_result = None
             pr_url: str | None = None
-            if self._merge_service is not None and base_ref:
-                try:
-                    async with self._session_factory() as session:
-                        svc = self._make_job_service(session)
-                        full_job = await svc.get_job(job_id)
-                    if full_job is not None:
+            final_resolution: str | None = None
+
+            # Get the full job to read completion_strategy
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                full_job = await svc.get_job(job_id)
+
+            if full_job is not None:
+                # Use per-job strategy or fall back to config default
+                comp_strategy = full_job.completion_strategy
+                if comp_strategy is None and self._merge_service is not None:
+                    comp_strategy = self._merge_service._config.strategy  # noqa: SLF001
+
+                if comp_strategy == "manual":
+                    # Leave for operator to resolve
+                    final_resolution = "unresolved"
+                    log.info("job_manual_resolution", job_id=job_id)
+                elif self._merge_service is not None and base_ref:
+                    try:
                         merge_result = await self._merge_service.try_merge_back(
                             job_id=job_id,
                             repo_path=full_job.repo,
@@ -469,20 +557,33 @@ class RuntimeService:
                             prompt=full_job.prompt,
                         )
                         pr_url = merge_result.pr_url
-                except Exception:
-                    log.warning("merge_back_failed", job_id=job_id, exc_info=True)
-            else:
-                pr_url = await self._try_create_pr(job_id)
+                        # Map merge result to resolution
+                        if merge_result.status == "merged":
+                            final_resolution = "merged"
+                        elif merge_result.status == "pr_created":
+                            final_resolution = "pr_created"
+                        elif merge_result.status == "conflict":
+                            final_resolution = "conflict"
+                        else:
+                            final_resolution = "unresolved"
+                    except Exception:
+                        log.warning("merge_back_failed", job_id=job_id, exc_info=True)
+                        final_resolution = "unresolved"
+                else:
+                    pr_url = await self._try_create_pr(job_id)
+                    final_resolution = "pr_created" if pr_url else "unresolved"
 
             # Strategy completed normally → succeeded
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.transition_state(job_id, JobState.succeeded)
-                if pr_url:
-                    from backend.persistence.job_repo import JobRepository
+                from backend.persistence.job_repo import JobRepository
 
-                    job_repo = JobRepository(session)
+                job_repo = JobRepository(session)
+                if pr_url:
                     await job_repo.update_pr_url(job_id, pr_url)
+                if final_resolution:
+                    await job_repo.update_resolution(job_id, final_resolution, pr_url=pr_url)
                 await session.commit()
 
             payload: dict[str, str] = {}
@@ -490,6 +591,8 @@ class RuntimeService:
                 payload["pr_url"] = pr_url
             if merge_result:
                 payload["merge_status"] = merge_result.status
+            if final_resolution:
+                payload["resolution"] = final_resolution
 
             await self._event_bus.publish(
                 DomainEvent(
@@ -505,6 +608,7 @@ class RuntimeService:
                 job_id=job_id,
                 pr_url=pr_url,
                 merge_status=merge_result.status if merge_result else None,
+                resolution=final_resolution,
             )
         except asyncio.CancelledError:
             log.info("job_canceled_by_task", job_id=job_id)
@@ -539,6 +643,10 @@ class RuntimeService:
             tel.end_job(job_id)
             heartbeat_task.cancel()
             self._heartbeat_tasks.pop(job_id, None)
+            headline_t = self._headline_tasks.pop(job_id, None)
+            if headline_t is not None:
+                headline_t.cancel()
+            self._headline_transcript.pop(job_id, None)
             self._tasks.pop(job_id, None)
             self._strategies.pop(job_id, None)
             self._last_activity.pop(job_id, None)
@@ -595,6 +703,46 @@ class RuntimeService:
                         },
                     )
                 )
+        except asyncio.CancelledError:
+            pass
+
+    async def _headline_loop(self, job_id: str) -> None:
+        """Periodically generate a one-line progress headline from recent transcript."""
+        headline_prompt = (
+            "Given the following recent agent messages from a coding session, "
+            "write a single short sentence (max 12 words) describing what the agent "
+            "is currently doing. Use present continuous tense. No period at the end. "
+            "Respond with ONLY the headline, nothing else.\n\nMessages:\n"
+        )
+        try:
+            while True:
+                await asyncio.sleep(45)  # generate every ~45 seconds
+
+                buf = self._headline_transcript.get(job_id)
+                if not buf:
+                    continue
+
+                # Snapshot and clear buffer
+                recent = list(buf)
+                buf.clear()
+
+                prompt = headline_prompt + "\n---\n".join(msg[:300] for msg in recent)
+
+                try:
+                    headline = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
+                    headline = headline.strip().strip('"').strip(".")
+                    if headline and len(headline) > 3:
+                        await self._event_bus.publish(
+                            DomainEvent(
+                                event_id=_make_event_id(),
+                                job_id=job_id,
+                                timestamp=datetime.now(UTC),
+                                kind=DomainEventKind.progress_headline,
+                                payload={"headline": headline},
+                            )
+                        )
+                except Exception:
+                    log.debug("headline_generation_failed", job_id=job_id, exc_info=True)
         except asyncio.CancelledError:
             pass
 
@@ -687,7 +835,7 @@ class RuntimeService:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.get_job(job_id)
-                await svc.transition_state(job_id, JobState.failed)
+                await svc.transition_state(job_id, JobState.failed, failure_reason=reason)
                 await session.commit()
             await self._event_bus.publish(
                 DomainEvent(
@@ -834,6 +982,24 @@ class RuntimeService:
                 },
             )
         )
+        # Publish the operator's instruction as a transcript entry so it
+        # appears in the chat trace.  The echo-suppression registered in
+        # _start_job will prevent the SDK echo from duplicating it.
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=_make_event_id(),
+                job_id=job_id,
+                timestamp=now,
+                kind=DomainEventKind.transcript_updated,
+                payload={
+                    "job_id": job_id,
+                    "seq": 0,
+                    "timestamp": now.isoformat(),
+                    "role": "operator",
+                    "content": instruction,
+                },
+            )
+        )
 
         # Reload job and start execution
         async with self._session_factory() as session:
@@ -868,13 +1034,9 @@ class RuntimeService:
             log.info("worktree_cleaned_up", job_id=job.id, worktree=worktree_path)
 
     async def _try_create_pr(self, job_id: str) -> str | None:
-        """Best-effort PR creation via ``gh pr create``. Returns the PR URL or None."""
-        import re
-        import shutil
-        import subprocess  # noqa: S404
-
-        if shutil.which("gh") is None:
-            log.info("pr_creation_skipped_no_gh", job_id=job_id)
+        """Best-effort PR creation via platform adapter. Returns the PR URL or None."""
+        if self._platform_registry is None:
+            log.info("pr_creation_skipped_no_registry", job_id=job_id)
             return None
 
         async with self._session_factory() as session:
@@ -885,7 +1047,8 @@ class RuntimeService:
             log.info("pr_creation_skipped_no_worktree", job_id=job_id)
             return None
 
-        # Validate branch and base_ref to prevent argument injection
+        import re
+
         _ref_pattern = re.compile(r"^[a-zA-Z0-9/_.-]+$")
         if not _ref_pattern.match(job.branch):
             log.warning("pr_creation_invalid_branch", job_id=job_id)
@@ -894,40 +1057,18 @@ class RuntimeService:
             log.warning("pr_creation_invalid_base_ref", job_id=job_id)
             return None
 
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,  # noqa: S603
-                [
-                    "gh",
-                    "pr",
-                    "create",
-                    "--title",
-                    f"[Tower] {job.prompt[:80]}",
-                    "--body",
-                    f"Automated PR created by Tower for job `{job_id}`.",
-                    "--head",
-                    job.branch,
-                    "--base",
-                    job.base_ref,
-                    "--",
-                ],
-                capture_output=True,
-                text=True,
-                cwd=job.worktree_path,
-                timeout=60,
-            )
-            if result.returncode == 0:
-                pr_url = result.stdout.strip()
-                log.info("pr_created", job_id=job_id, pr_url=pr_url)
-                return pr_url
-            log.warning(
-                "pr_creation_failed",
-                job_id=job_id,
-                returncode=result.returncode,
-                stderr=result.stderr[:500],
-            )
-        except Exception:
-            log.warning("pr_creation_error", job_id=job_id, exc_info=True)
+        adapter = await self._platform_registry.get_adapter(job.repo)
+        pr_result = await adapter.create_pr(
+            cwd=job.worktree_path,
+            head=job.branch,
+            base=job.base_ref,
+            title=f"[Tower] {job.prompt[:80]}",
+            body=f"Automated PR created by Tower for job `{job_id}`.",
+        )
+        if pr_result.ok:
+            log.info("pr_created", job_id=job_id, pr_url=pr_result.url, platform=adapter.name)
+            return pr_result.url
+        log.warning("pr_creation_failed", job_id=job_id, platform=adapter.name, error=pr_result.error)
         return None
 
     async def _publish_state_event(self, job_id: str, previous_state: str | None, new_state: str) -> None:
@@ -952,6 +1093,7 @@ class RuntimeService:
             SessionEventKind.transcript: DomainEventKind.transcript_updated,
             SessionEventKind.approval_request: DomainEventKind.approval_requested,
             SessionEventKind.error: DomainEventKind.job_failed,
+            SessionEventKind.model_downgraded: DomainEventKind.model_downgraded,
         }
         kind = mapping.get(event.kind)
         if kind is None:

@@ -108,6 +108,232 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Job
+         * @description Send a silent pause instruction to the agent of a running job.
+         */
+        post: operations["pause_job_api_jobs__job_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Job
+         * @description Create a follow-up job with a new instruction on the same repo/config.
+         */
+        post: operations["continue_job_api_jobs__job_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Job
+         * @description Resume a completed/failed/canceled job in-place with a new instruction.
+         */
+        post: operations["resume_job_api_jobs__job_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Models
+         * @description List available models from the Copilot SDK.
+         */
+        get: operations["list_models_api_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Logs
+         * @description Return historical log lines for a job, filtered by minimum severity.
+         *
+         *     ``level`` is a *minimum* severity filter (inclusive):
+         *     - ``debug``  → all lines (debug, info, warn, error)
+         *     - ``info``   → info, warn, error
+         *     - ``warn``   → warn, error
+         *     - ``error``  → error only
+         */
+        get: operations["get_job_logs_api_jobs__job_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Diff
+         * @description Return the most recent diff snapshot for a job from the event store.
+         */
+        get: operations["get_job_diff_api_jobs__job_id__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Transcript
+         * @description Return historical transcript entries for a job from the event store.
+         */
+        get: operations["get_job_transcript_api_jobs__job_id__transcript_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Telemetry
+         * @description Get telemetry data for a job run.
+         */
+        get: operations["get_job_telemetry_api_jobs__job_id__telemetry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Job
+         * @description Resolve a succeeded job: merge, create PR, or discard.
+         */
+        post: operations["resolve_job_api_jobs__job_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Archive Job
+         * @description Archive a completed job (hide from Kanban board).
+         */
+        post: operations["archive_job_api_jobs__job_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unarchive Job
+         * @description Unarchive a job (show on Kanban board again).
+         */
+        post: operations["unarchive_job_api_jobs__job_id__unarchive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events": {
         parameters: {
             query?: never;
@@ -165,6 +391,26 @@ export interface paths {
          * @description Approve or reject a pending approval request.
          */
         post: operations["resolve_approval_api_approvals__approval_id__resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/approvals/trust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trust Job
+         * @description Trust a job session — auto-approve all current and future permission requests.
+         */
+        post: operations["trust_job_api_jobs__job_id__approvals_trust_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -306,6 +552,9 @@ export interface paths {
         /**
          * Update Global Config
          * @description Update global config from YAML string.
+         *
+         *     Non-destructive: incoming YAML is merged into the existing config.
+         *     Keys not present in the incoming YAML are preserved.
          */
         put: operations["update_global_config_api_settings_global_put"];
         post?: never;
@@ -383,6 +632,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/browse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Browse Directories
+         * @description List directories at a given path for the repo browser.
+         *
+         *     Returns subdirectories and indicates which are git repos.
+         */
+        get: operations["browse_directories_api_settings_browse_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -446,6 +717,16 @@ export interface components {
             /** Audio */
             audio: string;
         };
+        /**
+         * CompletionStrategy
+         * @enum {string}
+         */
+        CompletionStrategy: "auto_merge" | "pr_only" | "manual";
+        /** ContinueJobRequest */
+        ContinueJobRequest: {
+            /** Instruction */
+            instruction: string;
+        };
         /** CreateJobRequest */
         CreateJobRequest: {
             /** Repo */
@@ -460,6 +741,7 @@ export interface components {
             permission_mode?: components["schemas"]["PermissionMode"] | null;
             /** Model */
             model?: string | null;
+            completion_strategy?: components["schemas"]["CompletionStrategy"] | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {
@@ -479,6 +761,47 @@ export interface components {
              */
             createdAt: string;
         };
+        /** DiffFileModel */
+        DiffFileModel: {
+            /** Path */
+            path: string;
+            status: components["schemas"]["DiffFileStatus"];
+            /** Additions */
+            additions: number;
+            /** Deletions */
+            deletions: number;
+            /** Hunks */
+            hunks: components["schemas"]["DiffHunkModel"][];
+        };
+        /**
+         * DiffFileStatus
+         * @enum {string}
+         */
+        DiffFileStatus: "added" | "modified" | "deleted" | "renamed";
+        /** DiffHunkModel */
+        DiffHunkModel: {
+            /** Oldstart */
+            oldStart: number;
+            /** Oldlines */
+            oldLines: number;
+            /** Newstart */
+            newStart: number;
+            /** Newlines */
+            newLines: number;
+            /** Lines */
+            lines: components["schemas"]["DiffLineModel"][];
+        };
+        /** DiffLineModel */
+        DiffLineModel: {
+            type: components["schemas"]["DiffLineType"];
+            /** Content */
+            content: string;
+        };
+        /**
+         * DiffLineType
+         * @enum {string}
+         */
+        DiffLineType: "context" | "addition" | "deletion";
         /**
          * ExecutionPhase
          * @enum {string}
@@ -539,6 +862,7 @@ export interface components {
             worktreePath: string | null;
             /** Branch */
             branch: string | null;
+            permissionMode?: components["schemas"]["PermissionMode"] | null;
             /**
              * Createdat
              * Format: date-time
@@ -553,7 +877,44 @@ export interface components {
             completedAt: string | null;
             /** Prurl */
             prUrl?: string | null;
+            /** Mergestatus */
+            mergeStatus?: string | null;
+            /** Resolution */
+            resolution?: string | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Completionstrategy */
+            completionStrategy?: string | null;
         };
+        /**
+         * LogLevel
+         * @enum {string}
+         */
+        LogLevel: "debug" | "info" | "warn" | "error";
+        /** LogLinePayload */
+        LogLinePayload: {
+            /** Jobid */
+            jobId: string;
+            /** Seq */
+            seq: number;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            level: components["schemas"]["LogLevel"];
+            /** Message */
+            message: string;
+            /** Context */
+            context?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * PermissionMode
+         * @enum {string}
+         */
+        PermissionMode: "permissive" | "auto" | "supervised" | "readonly";
         /** RegisterRepoRequest */
         RegisterRepoRequest: {
             /** Source */
@@ -591,6 +952,25 @@ export interface components {
         ResolveApprovalRequest: {
             resolution: components["schemas"]["ApprovalResolution"];
         };
+        /** ResolveJobRequest */
+        ResolveJobRequest: {
+            /** Action */
+            action: string;
+        };
+        /** ResolveJobResponse */
+        ResolveJobResponse: {
+            /** Resolution */
+            resolution: string;
+            /** Prurl */
+            prUrl?: string | null;
+            /** Conflictfiles */
+            conflictFiles?: string[] | null;
+        };
+        /** ResumeJobRequest */
+        ResumeJobRequest: {
+            /** Instruction */
+            instruction: string;
+        };
         /** SendMessageRequest */
         SendMessageRequest: {
             /** Content */
@@ -607,11 +987,6 @@ export interface components {
             timestamp: string;
         };
         /**
-         * PermissionMode
-         * @enum {string}
-         */
-        PermissionMode: "auto" | "supervised" | "readonly";
-        /**
          * StrategyKind
          * @enum {string}
          */
@@ -621,6 +996,38 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** TranscriptPayload */
+        TranscriptPayload: {
+            /** Jobid */
+            jobId: string;
+            /** Seq */
+            seq: number;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            role: components["schemas"]["TranscriptRole"];
+            /** Content */
+            content: string;
+            /** Title */
+            title?: string | null;
+            /** Turnid */
+            turnId?: string | null;
+            /** Toolname */
+            toolName?: string | null;
+            /** Toolargs */
+            toolArgs?: string | null;
+            /** Toolresult */
+            toolResult?: string | null;
+            /** Toolsuccess */
+            toolSuccess?: boolean | null;
+        };
+        /**
+         * TranscriptRole
+         * @enum {string}
+         */
+        TranscriptRole: "agent" | "operator" | "tool_call" | "reasoning" | "divider";
         /** UpdateGlobalConfigRequest */
         UpdateGlobalConfigRequest: {
             /** Config Yaml */
@@ -849,6 +1256,351 @@ export interface operations {
             };
         };
     };
+    pause_job_api_jobs__job_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_job_api_jobs__job_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinueJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_job_api_jobs__job_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResumeJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_models_api_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    get_job_logs_api_jobs__job_id__logs_get: {
+        parameters: {
+            query?: {
+                level?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogLinePayload"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_diff_api_jobs__job_id__diff_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffFileModel"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_transcript_api_jobs__job_id__transcript_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptPayload"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_telemetry_api_jobs__job_id__telemetry_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_job_api_jobs__job_id__resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_job_api_jobs__job_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_job_api_jobs__job_id__unarchive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     stream_events_api_events_get: {
         parameters: {
             query?: {
@@ -934,6 +1686,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trust_job_api_jobs__job_id__approvals_trust_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -1332,6 +2117,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: number;
                     };
+                };
+            };
+        };
+    };
+    browse_directories_api_settings_browse_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

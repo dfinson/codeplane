@@ -18,6 +18,7 @@ interface AddRepoModalProps {
 export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
   const [tab, setTab] = useState("path");
   const [input, setInput] = useState("");
+  const [cloneTo, setCloneTo] = useState("");
   const [adding, setAdding] = useState(false);
 
   const [browsePath, setBrowsePath] = useState("~");
@@ -26,14 +27,15 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
   const [browseLoading, setBrowseLoading] = useState(false);
 
   const handleAdd = useCallback(
-    async (source: string) => {
+    async (source: string, cloneTarget?: string) => {
       if (!source.trim()) return;
       setAdding(true);
       try {
-        const result = await registerRepo(source.trim());
+        const result = await registerRepo(source.trim(), cloneTarget?.trim() || undefined);
         toast.success(`Added: ${result.path.split("/").pop()}`);
         onAdded(result.path);
         setInput("");
+        setCloneTo("");
         onClose();
       } catch (e) {
         toast.error(String(e));
@@ -114,14 +116,21 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
                     placeholder="https://github.com/user/repo.git"
                     value={input}
                     onChange={(e) => setInput(e.currentTarget.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAdd(input)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>Clone to</Label>
+                  <Input
+                    placeholder="/home/user/projects/repo"
+                    value={cloneTo}
+                    onChange={(e) => setCloneTo(e.currentTarget.value)}
                   />
                   <p className="text-xs text-muted-foreground">
-                    The repository will be cloned to the server.
+                    Local directory where the repository will be cloned
                   </p>
                 </div>
                 <div className="flex justify-end">
-                  <Button loading={adding} disabled={!input.trim()} onClick={() => handleAdd(input)}>
+                  <Button loading={adding} disabled={!input.trim() || !cloneTo.trim()} onClick={() => handleAdd(input, cloneTo)}>
                     Clone &amp; Add
                   </Button>
                 </div>

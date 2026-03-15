@@ -37,6 +37,16 @@ ACTIVE_STATES: frozenset[str] = frozenset(
     }
 )
 
+
+# Resolution statuses for completed jobs
+class Resolution(StrEnum):
+    unresolved = "unresolved"
+    merged = "merged"
+    pr_created = "pr_created"
+    discarded = "discarded"
+    conflict = "conflict"
+
+
 # Valid state transitions: (from_state) -> set of valid to_states
 _VALID_TRANSITIONS: dict[str | None, set[str]] = {
     None: {JobState.running, JobState.queued},
@@ -97,6 +107,7 @@ class SessionEventKind(StrEnum):
     transcript = "transcript"
     file_changed = "file_changed"
     approval_request = "approval_request"
+    model_downgraded = "model_downgraded"
     done = "done"
     error = "error"
 
@@ -145,11 +156,15 @@ class Job:
     completed_at: datetime | None = None
     pr_url: str | None = None
     merge_status: str | None = None  # not_merged | merged | conflict | pr_created
+    resolution: str | None = None  # unresolved | merged | pr_created | discarded | conflict
+    archived_at: datetime | None = None
+    completion_strategy: str | None = None  # auto_merge | pr_only | manual
     title: str | None = None
     permission_mode: str = "auto"
     session_count: int = 1
     sdk_session_id: str | None = None
     model: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass

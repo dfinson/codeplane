@@ -178,13 +178,13 @@ class TestStubRoutes:
         assert resp.status_code in (404, 405, 422, 500)
 
     @pytest.mark.asyncio
-    async def test_get_global_settings_returns_200(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/settings/global")
+    async def test_get_settings_returns_200(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/settings")
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_put_global_settings_returns_200(self, client: AsyncClient) -> None:
-        resp = await client.put("/api/settings/global", json={"config_yaml": "server:\n  host: 127.0.0.1"})
+    async def test_put_settings_returns_200(self, client: AsyncClient) -> None:
+        resp = await client.put("/api/settings", json={"max_concurrent_jobs": 3})
         assert resp.status_code == 200
 
 

@@ -4,18 +4,27 @@ import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
 import { cn } from "../lib/utils";
 
-const TAB_STATES: Record<string, string[]> = {
-  Active: ["queued", "running"],
-  "Sign-off": ["waiting_for_approval"],
-  Failed: ["failed"],
-  History: ["succeeded", "canceled"],
-};
+const TABS = ["Active", "Sign-off", "Attention"] as const;
 
-const TABS = ["Active", "Sign-off", "Failed", "History"] as const;
-
-function filterAndSort(jobs: Record<string, JobSummary>, states: string[]): JobSummary[] {
+function filterForTab(jobs: Record<string, JobSummary>, tab: string): JobSummary[] {
   return Object.values(jobs)
-    .filter((j) => states.includes(j.state))
+    .filter((j) => {
+      switch (tab) {
+        case "Active":
+          return j.state === "queued" || j.state === "running";
+        case "Sign-off":
+          return (
+            !j.archivedAt &&
+            (j.state === "waiting_for_approval" ||
+              j.state === "succeeded" ||
+              j.state === "canceled")
+          );
+        case "Attention":
+          return !j.archivedAt && j.state === "failed";
+        default:
+          return false;
+      }
+    })
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
@@ -25,7 +34,7 @@ export function MobileJobList() {
   const approvals = useTowerStore(selectApprovals);
   const pendingCount = Object.values(approvals).filter((a) => !a.resolvedAt).length;
 
-  const filtered = useMemo(() => filterAndSort(jobs, TAB_STATES[tab] ?? []), [jobs, tab]);
+  const filtered = useMemo(() => filterForTab(jobs, tab), [jobs, tab]);
 
   return (
     <div className="sm:hidden">

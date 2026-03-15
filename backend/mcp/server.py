@@ -23,7 +23,6 @@ from backend.models.api_schemas import (
     ApprovalResponse,
     ArtifactResponse,
     CreateJobResponse,
-    GlobalConfigResponse,
     HealthResponse,
     HealthStatus,
     JobListResponse,
@@ -32,6 +31,7 @@ from backend.models.api_schemas import (
     RepoDetailResponse,
     RepoListResponse,
     SendMessageResponse,
+    SettingsResponse,
     WorkspaceEntry,
     WorkspaceEntryType,
     WorkspaceListResponse,
@@ -46,6 +46,7 @@ from backend.services.job_service import (
     RepoNotAllowedError,
     StateConflictError,
 )
+from backend.services.platform_adapter import detect_platform as _detect_platform
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -520,27 +521,54 @@ def _register_artifact_tools(mcp: FastMCP) -> None:
 
 
 def _register_config_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_settings_get", description="Get global configuration as YAML")
+    @mcp.tool(name="tower_settings_get", description="Get current settings as structured data")
     async def tower_settings_get() -> dict[str, Any]:
-        from backend.config import DEFAULT_CONFIG_PATH
+        config = load_config()
+        return SettingsResponse(
+            max_concurrent_jobs=config.runtime.max_concurrent_jobs,
+            permission_mode=config.runtime.permission_mode,
+            voice_model=config.voice.model,
+            completion_strategy=config.completion.strategy,
+            auto_push=config.completion.auto_push,
+            cleanup_worktree=config.completion.cleanup_worktree,
+            delete_branch_after_merge=config.completion.delete_branch_after_merge,
+            artifact_retention_days=config.retention.artifact_retention_days,
+            max_artifact_size_mb=config.retention.max_artifact_size_mb,
+            auto_archive_days=config.retention.auto_archive_days,
+        ).model_dump(mode="json")
 
-        if DEFAULT_CONFIG_PATH.exists():
-            return GlobalConfigResponse(config_yaml=DEFAULT_CONFIG_PATH.read_text()).model_dump(mode="json")
-        return GlobalConfigResponse(config_yaml="").model_dump(mode="json")
+    @mcp.tool(
+        name="tower_settings_update",
+        description=(
+            "Update settings. Fields: max_concurrent_jobs, permission_mode,"
+            " voice_model, completion_strategy, auto_push, cleanup_worktree,"
+            " delete_branch_after_merge, artifact_retention_days,"
+            " max_artifact_size_mb, auto_archive_days"
+        ),
+    )
+    async def tower_settings_update(**kwargs: Any) -> dict[str, Any]:
+        from backend.config import save_config
 
-    @mcp.tool(name="tower_settings_update", description="Update global configuration from YAML string")
-    async def tower_settings_update(config_yaml: str) -> dict[str, Any]:
-        import yaml
-
-        from backend.config import merge_config_yaml
-
-        try:
-            yaml.safe_load(config_yaml)
-        except yaml.YAMLError as exc:
-            return {"error": f"Invalid YAML: {exc}"}
-
-        result_yaml = merge_config_yaml(config_yaml)
-        return GlobalConfigResponse(config_yaml=result_yaml).model_dump(mode="json")
+        config = load_config()
+        field_map = {
+            "max_concurrent_jobs": ("runtime", "max_concurrent_jobs"),
+            "permission_mode": ("runtime", "permission_mode"),
+            "voice_model": ("voice", "model"),
+            "completion_strategy": ("completion", "strategy"),
+            "auto_push": ("completion", "auto_push"),
+            "cleanup_worktree": ("completion", "cleanup_worktree"),
+            "delete_branch_after_merge": ("completion", "delete_branch_after_merge"),
+            "artifact_retention_days": ("retention", "artifact_retention_days"),
+            "max_artifact_size_mb": ("retention", "max_artifact_size_mb"),
+            "auto_archive_days": ("retention", "auto_archive_days"),
+        }
+        for key, value in kwargs.items():
+            if key in field_map:
+                section_name, attr = field_map[key]
+                section = getattr(config, section_name)
+                setattr(section, attr, value)
+        save_config(config)
+        return await tower_settings_get()  # type: ignore[no-any-return]
 
     @mcp.tool(name="tower_repo_list", description="List registered repositories")
     async def tower_repo_list() -> dict[str, Any]:
@@ -568,15 +596,20 @@ def _register_config_tools(mcp: FastMCP) -> None:
             path=resolved,
             origin_url=origin_url,
             base_branch=base_branch,
+            platform=_detect_platform(origin_url),
         ).model_dump(mode="json")
 
-    @mcp.tool(name="tower_repo_register", description="Register a repository (path or URL)")
-    async def tower_repo_register(source: str) -> dict[str, Any]:
+    @mcp.tool(
+        name="tower_repo_register", description="Register a repository (path or URL). If URL, clone_to is required."
+    )
+    async def tower_repo_register(source: str, clone_to: str | None = None) -> dict[str, Any]:
         config = load_config()
         git = GitService(config)
 
         if GitService.is_remote_url(source):
-            clone_dir = GitService.derive_clone_dir(source, config.repos_base_dir)
+            if not clone_to:
+                return {"error": "clone_to is required when registering a remote URL"}
+            clone_dir = str(Path(clone_to).expanduser().resolve())
             if Path(clone_dir).exists():
                 return {"error": f"Clone directory already exists: {clone_dir}"}
             try:

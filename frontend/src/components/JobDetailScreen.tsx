@@ -1,15 +1,15 @@
 import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, RotateCcw, XCircle, ExternalLink } from "lucide-react";
+import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive } from "lucide-react";
 import { toast } from "sonner";
-import { useTowerStore, selectJobs } from "../store";
+import { useTowerStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, resolveJob } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
-import { TelemetryPanel } from "./TelemetryPanel";
+import { CompleteJobDialog } from "./CompleteJobDialog";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
@@ -25,7 +25,11 @@ export function JobDetailScreen() {
   const job: JobSummary | undefined = jobId ? jobs[jobId] : undefined;
   const [loading, setLoading] = useState(!job);
   const [actionLoading, setActionLoading] = useState(false);
+  const [resolveLoading, setResolveLoading] = useState<string | null>(null);
+  const [completeOpen, setCompleteOpen] = useState(false);
   const [tab, setTab] = useState("live");
+  const diffs = useTowerStore(selectJobDiffs(jobId ?? ""));
+  const hasChanges = diffs.length > 0;
 
   // Open a job-scoped SSE connection for full event streaming (no suppression
   // even when >20 active jobs). Closed automatically when navigating away.
@@ -36,7 +40,7 @@ export function JobDetailScreen() {
     const existing = useTowerStore.getState().jobs[jobId];
     if (existing) { setLoading(false); return; }
     fetchJob(jobId)
-      .then((f) => useTowerStore.setState((s) => ({ jobs: { ...s.jobs, [f.id]: f } })))
+      .then((f) => useTowerStore.setState((s) => ({ jobs: { ...s.jobs, [f.id]: enrichJob(f as JobSummary) } })))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [jobId]);
@@ -59,6 +63,19 @@ export function JobDetailScreen() {
     }).catch(() => {});
   }, [jobId]);
 
+  // Load diff data: on mount, when job reaches terminal state, or when diff tab selected.
+  const jobState = job?.state;
+  useEffect(() => {
+    if (!jobId) return;
+    fetchJobDiff(jobId)
+      .then((files) => {
+        useTowerStore.setState((s) => ({
+          diffs: { ...s.diffs, [jobId]: files },
+        }));
+      })
+      .catch(() => {});
+  }, [jobId, jobState, tab]);
+
   const handleCancel = useCallback(async () => {
     if (!jobId) return;
     setActionLoading(true);
@@ -80,6 +97,16 @@ export function JobDetailScreen() {
     } catch (e) { toast.error(String(e)); }
     finally { setActionLoading(false); }
   }, [jobId, navigate]);
+
+  const handleResolve = useCallback(async (action: "merge" | "create_pr" | "discard") => {
+    if (!jobId) return;
+    setResolveLoading(action);
+    try {
+      await resolveJob(jobId, action);
+      toast.success(action === "merge" ? "Merged" : action === "create_pr" ? "PR created" : "Discarded");
+    } catch (e) { toast.error(String(e)); }
+    finally { setResolveLoading(null); }
+  }, [jobId]);
 
   if (!jobId) return null;
 
@@ -119,7 +146,13 @@ export function JobDetailScreen() {
       <div className="rounded-lg border border-border bg-card p-4 mb-4">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold text-foreground">{job.title ?? job.id}</span>
+            {job.title ? (
+              <span className="text-lg font-bold text-foreground">{job.title}</span>
+            ) : (job.state === "queued" || job.state === "running") && (Date.now() - new Date(job.createdAt).getTime() < 30_000) ? (
+              <span className="h-6 w-48 bg-muted animate-pulse rounded" />
+            ) : (
+              <span className="text-lg font-bold text-foreground">{job.id}</span>
+            )}
             <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
             <StateBadge state={job.state} />
           </div>
@@ -144,6 +177,10 @@ export function JobDetailScreen() {
             )}
           </div>
         </div>
+
+        {job.progressHeadline && (job.state === "running" || job.state === "queued") && (
+          <p className="text-sm italic text-primary/70 mb-3">{job.progressHeadline}</p>
+        )}
 
         <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-6 gap-y-2 text-sm mb-3">
           {[
@@ -176,7 +213,168 @@ export function JobDetailScreen() {
         <div className="rounded-md border border-border bg-background p-3 mt-3">
           <p className="text-sm whitespace-pre-wrap leading-relaxed text-foreground">{job.prompt}</p>
         </div>
+
+        {/* Model downgrade banner */}
+        {job.modelDowngraded && (
+          <div className="flex items-start gap-2 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+            <ArrowDownCircle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-500">Model downgraded</p>
+              <p className="text-sm text-amber-400 mt-0.5">
+                Requested <span className="font-semibold">{job.requestedModel}</span> but the SDK served <span className="font-semibold">{job.actualModel}</span>.
+                The job was stopped before the agent could proceed with the wrong model.
+              </p>
+              <p className="text-xs text-amber-400/70 mt-1">
+                You can discard this job, create a PR with any partial changes, or resume with additional instructions.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Failure banner */}
+        {job.state === "failed" && (
+          <div className="flex items-start gap-2 mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3">
+            <XCircle size={16} className="text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-red-500">Job failed</p>
+              <p className="text-sm text-red-400 mt-0.5">{job.failureReason ?? "No additional details available"}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Success banner */}
+        {job.state === "succeeded" && (
+          <div className="mt-3 rounded-md border border-green-500/30 bg-green-500/10 p-3">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 size={16} className="text-green-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-green-500">Job succeeded</p>
+                <p className="text-sm text-green-400 mt-0.5">
+                  {job.resolution === "merged" && "Changes merged into base branch."}
+                  {job.resolution === "pr_created" && "Pull request created."}
+                  {job.resolution === "discarded" && (hasChanges ? "Changes discarded." : "Completed — no changes to merge.")}
+                  {job.resolution === "conflict" && "Merge conflict — changes pushed to branch for manual resolution."}
+                  {(job.resolution === "unresolved" || !job.resolution) && (
+                    hasChanges
+                      ? "Awaiting resolution — merge, create PR, or discard."
+                      : "Completed with no changes to merge."
+                  )}
+                </p>
+              </div>
+            </div>
+            {/* Resolution action buttons */}
+            {(job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution) && hasChanges && (
+              <div className="flex gap-2 mt-3 ml-6">
+                {job.resolution !== "conflict" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1"
+                    loading={resolveLoading === "merge"}
+                    disabled={resolveLoading !== null}
+                    onClick={() => handleResolve("merge")}
+                  >
+                    <GitMerge size={14} />
+                    Merge
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  loading={resolveLoading === "create_pr"}
+                  disabled={resolveLoading !== null}
+                  onClick={() => handleResolve("create_pr")}
+                >
+                  <GitPullRequest size={14} />
+                  Create PR
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                  loading={resolveLoading === "discard"}
+                  disabled={resolveLoading !== null}
+                  onClick={() => handleResolve("discard")}
+                >
+                  <Trash2 size={14} />
+                  Discard
+                </Button>
+              </div>
+            )}
+            {/* No changes — just mark done */}
+            {(job.resolution === "unresolved" || !job.resolution) && !hasChanges && (
+              <div className="flex gap-2 mt-3 ml-6">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  loading={resolveLoading === "discard"}
+                  disabled={resolveLoading !== null}
+                  onClick={() => handleResolve("discard")}
+                >
+                  <CheckCircle2 size={14} />
+                  Mark Done
+                </Button>
+              </div>
+            )}
+            {/* Complete button for resolved jobs */}
+            {job.resolution && job.resolution !== "unresolved" && job.resolution !== "conflict" && (
+              <div className="flex gap-2 mt-3 ml-6">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1 text-green-600 border-green-500/40 hover:bg-green-500/10"
+                  onClick={() => setCompleteOpen(true)}
+                >
+                  <CheckCircle2 size={14} />
+                  Complete & Archive
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Canceled banner */}
+        {job.state === "canceled" && (
+          <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-sm font-medium text-amber-500">Job canceled</p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gap-1 text-muted-foreground"
+                onClick={() => setCompleteOpen(true)}
+              >
+                <Archive size={14} />
+                Archive
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Failed banner — add archive button */}
+        {job.state === "failed" && !job.archivedAt && (
+          <div className="flex gap-2 mt-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="gap-1 text-muted-foreground"
+              onClick={() => setCompleteOpen(true)}
+            >
+              <Archive size={14} />
+              Archive
+            </Button>
+          </div>
+        )}
       </div>
+
+      {completeOpen && job && (
+        <CompleteJobDialog job={job} open={completeOpen} onClose={() => setCompleteOpen(false)} />
+      )}
 
       <Tabs value={tab} onValueChange={setTab} className="mb-4">
         <TabsList className="overflow-x-auto">
@@ -193,7 +391,6 @@ export function JobDetailScreen() {
             <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
           <InsightsPanel jobId={jobId} />
-          <TelemetryPanel jobId={jobId} isRunning={isRunning} />
         </div>
       )}
 

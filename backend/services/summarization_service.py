@@ -20,7 +20,7 @@ from backend.models.events import DomainEventKind
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.services.agent_adapter import AgentAdapterInterface
+    from backend.services.naming_service import Completable
 
 log = structlog.get_logger()
 
@@ -127,7 +127,7 @@ class SummarizationService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        adapter: AgentAdapterInterface,
+        adapter: Completable,
     ) -> None:
         self._session_factory = session_factory
         self._adapter = adapter

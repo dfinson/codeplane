@@ -39,6 +39,7 @@ class ApprovalService:
         self._session_factory = session_factory
         self._pending_futures: dict[str, asyncio.Future[str]] = {}
         self._approval_to_job: dict[str, str] = {}  # approval_id → job_id
+        self._trusted_jobs: set[str] = set()  # jobs with "approve all" active
 
     def _make_repo(self, session: AsyncSession) -> ApprovalRepository:
         from backend.persistence.approval_repo import ApprovalRepository
@@ -128,6 +129,7 @@ class ApprovalService:
 
     def cleanup_job(self, job_id: str) -> None:
         """Cancel any pending futures for a job (e.g. on job cancel/fail)."""
+        self._trusted_jobs.discard(job_id)
         to_remove = [
             aid
             for aid, fut in self._pending_futures.items()
@@ -138,3 +140,31 @@ class ApprovalService:
             self._approval_to_job.pop(aid, None)
             if fut is not None and not fut.done():
                 fut.cancel()
+
+    def is_trusted(self, job_id: str) -> bool:
+        """Return True if the operator has approved all for this job."""
+        return job_id in self._trusted_jobs
+
+    async def trust_job(self, job_id: str) -> int:
+        """Mark a job as trusted and approve all its pending requests.
+
+        Returns the number of approvals that were auto-resolved.
+        """
+        self._trusted_jobs.add(job_id)
+
+        # Resolve all pending futures for this job
+        resolved_count = 0
+        pending_ids = [
+            aid
+            for aid, jid in self._approval_to_job.items()
+            if jid == job_id and aid in self._pending_futures and not self._pending_futures[aid].done()
+        ]
+        for aid in pending_ids:
+            try:
+                await self.resolve(aid, "approved")
+                resolved_count += 1
+            except (ApprovalNotFoundError, ApprovalAlreadyResolvedError):
+                pass
+
+        log.info("job_trusted", job_id=job_id, resolved=resolved_count)
+        return resolved_count

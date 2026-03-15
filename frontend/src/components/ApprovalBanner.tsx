@@ -1,13 +1,14 @@
 import { useCallback, useState } from "react";
-import { ShieldQuestion } from "lucide-react";
+import { ShieldQuestion, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useTowerStore, selectApprovals } from "../store";
-import { resolveApproval } from "../api/client";
+import { resolveApproval, trustJob } from "../api/client";
 import { Button } from "./ui/button";
 
 export function ApprovalBanner({ jobId }: { jobId: string }) {
   const approvals = useTowerStore(selectApprovals);
   const [loading, setLoading] = useState<string | null>(null);
+  const [trusting, setTrusting] = useState(false);
 
   const pending = Object.values(approvals).filter(
     (a) => a.jobId === jobId && !a.resolvedAt,
@@ -28,10 +29,38 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
     [],
   );
 
+  const handleTrustSession = useCallback(async () => {
+    setTrusting(true);
+    try {
+      const { resolved } = await trustJob(jobId);
+      toast.success(`Session trusted — ${resolved} pending approval${resolved !== 1 ? "s" : ""} auto-approved`);
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setTrusting(false);
+    }
+  }, [jobId]);
+
   if (pending.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-2">
+      {pending.length > 0 && (
+        <div className="flex items-center justify-between rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-2">
+          <span className="text-sm text-orange-300">
+            {pending.length} pending approval{pending.length !== 1 ? "s" : ""}
+          </span>
+          <Button
+            size="sm"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+            loading={trusting}
+            onClick={handleTrustSession}
+          >
+            <ShieldCheck size={14} />
+            Approve All
+          </Button>
+        </div>
+      )}
       {pending.map((a) => (
         <div
           key={a.id}

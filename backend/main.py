@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, voice, workspace
-from backend.config import init_config, load_config
+from backend.config import MCP_PATH, VOICE_MAX_AUDIO_SIZE_MB, init_config, load_config
 from backend.persistence.database import create_engine, create_session_factory, run_migrations
 from backend.persistence.event_repo import EventRepository
 from backend.services.agent_adapter import CopilotAdapter
@@ -27,10 +27,12 @@ from backend.services.diff_service import DiffService
 from backend.services.event_bus import EventBus
 from backend.services.git_service import GitService
 from backend.services.merge_service import MergeService
+from backend.services.platform_adapter import PlatformRegistry
 from backend.services.retention_service import RetentionService
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
 from backend.services.summarization_service import SummarizationService
+from backend.services.utility_session import UtilitySessionService
 from backend.services.voice_service import VoiceService
 
 if TYPE_CHECKING:
@@ -152,15 +154,23 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
+    platform_registry = PlatformRegistry(platform_configs=config.platforms)
     merge_service = MergeService(
         git_service=git_service,
         event_bus=event_bus,
         session_factory=session_factory,
         config=config.completion,
+        platform_registry=platform_registry,
     )
+
+    # --- Utility session pool (warm cheap model for naming / summaries) ---
+    utility_session = UtilitySessionService(model=config.runtime.utility_model)
+    log.info("utility_session_starting", model=config.runtime.utility_model)
+    await utility_session.start()
+
     summarization_service = SummarizationService(
         session_factory=session_factory,
-        adapter=adapter,
+        adapter=utility_session,
     )
 
     runtime_service = RuntimeService(
@@ -172,6 +182,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         diff_service=diff_service,
         merge_service=merge_service,
         summarization_service=summarization_service,
+        platform_registry=platform_registry,
+        utility_session=utility_session,
     )
 
     # Recover orphaned jobs from a previous crash
@@ -181,18 +193,20 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.event_bus = event_bus
     app.state.sse_manager = sse_manager
     app.state.runtime_service = runtime_service
+    app.state.merge_service = merge_service
+    app.state.platform_registry = platform_registry
     app.state.approval_service = approval_service
     app.state.agent_adapter = adapter
+    app.state.utility_session = utility_session
+    app.state.session_factory = session_factory
 
     # --- Voice service ---
-    voice_service: VoiceService | None = None
-    if config.voice.enabled:
-        voice_service = VoiceService(model_name=config.voice.model)
-        # Pre-load the whisper model at startup so the first request is fast
-        log.info("voice_model_preloading", model=config.voice.model)
-        await asyncio.to_thread(voice_service._ensure_model)  # noqa: SLF001
+    voice_service = VoiceService(model_name=config.voice.model)
+    # Pre-load the whisper model at startup so the first request is fast
+    log.info("voice_model_preloading", model=config.voice.model)
+    await asyncio.to_thread(voice_service._ensure_model)  # noqa: SLF001
     app.state.voice_service = voice_service
-    app.state.voice_max_bytes = config.voice.max_audio_size_mb * 1024 * 1024
+    app.state.voice_max_bytes = VOICE_MAX_AUDIO_SIZE_MB * 1024 * 1024
 
     # --- Retention service ---
     retention_service = RetentionService(
@@ -214,24 +228,22 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.session_factory = session_factory
 
     # --- MCP server ---
-    mcp_cleanup = None
-    if config.mcp_server.enabled:
-        from backend.mcp.server import create_mcp_server
+    from backend.mcp.server import create_mcp_server
 
-        mcp_server = create_mcp_server(
-            session_factory=session_factory,
-            runtime_service=runtime_service,
-            approval_service=approval_service,
-        )
-        app.state.mcp_server = mcp_server
-        mcp_app = mcp_server.streamable_http_app()
-        app.mount(config.mcp_server.path, mcp_app)
-        # Manually start the session manager's task group (sub-app lifespan
-        # doesn't fire when mounted during the parent's lifespan).
-        mcp_ctx = mcp_server.session_manager.run()
-        await mcp_ctx.__aenter__()
-        mcp_cleanup = mcp_ctx
-        log.info("mcp_server_mounted", path=config.mcp_server.path)
+    mcp_server = create_mcp_server(
+        session_factory=session_factory,
+        runtime_service=runtime_service,
+        approval_service=approval_service,
+    )
+    app.state.mcp_server = mcp_server
+    mcp_app = mcp_server.streamable_http_app()
+    app.mount(MCP_PATH, mcp_app)
+    # Manually start the session manager's task group (sub-app lifespan
+    # doesn't fire when mounted during the parent's lifespan).
+    mcp_ctx = mcp_server.session_manager.run()
+    await mcp_ctx.__aenter__()
+    mcp_cleanup = mcp_ctx
+    log.info("mcp_server_mounted", path=MCP_PATH)
 
     async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
         async with session_factory() as session:
@@ -244,9 +256,9 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.dependency_overrides[jobs._get_session] = _session_dep
     yield
-    if mcp_cleanup is not None:
-        await mcp_cleanup.__aexit__(None, None, None)
+    await mcp_cleanup.__aexit__(None, None, None)
     retention_task.cancel()
+    await utility_session.shutdown()
     await runtime_service.shutdown()
     await sse_manager.close_all()
     app.dependency_overrides.clear()

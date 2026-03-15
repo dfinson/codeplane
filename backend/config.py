@@ -22,6 +22,12 @@ TOWER_DIR = _resolve_tower_dir()
 DEFAULT_CONFIG_PATH = TOWER_DIR / "config.yaml"
 DEFAULT_DB_PATH = TOWER_DIR / "data.db"
 
+# Hardcoded constants — not user-configurable
+VOICE_ENABLED = True
+VOICE_MAX_AUDIO_SIZE_MB = 10
+MCP_ENABLED = True
+MCP_PATH = "/mcp"
+
 DEFAULT_CONFIG_YAML = """\
 server:
   host: 127.0.0.1
@@ -32,9 +38,7 @@ runtime:
   worktrees_dirname: .tower-worktrees
 
 voice:
-  enabled: true
   model: base.en
-  max_audio_size_mb: 10
 
 retention:
   artifact_retention_days: 30
@@ -46,11 +50,6 @@ logging:
   file: ~/.tower/logs/server.log
   max_file_size_mb: 50
   backup_count: 3
-
-rate_limits:
-  max_sse_connections: 5
-
-repos_base_dir: ~/tower-repos
 
 repos: []
 """
@@ -66,14 +65,13 @@ class ServerConfig:
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".tower-worktrees"
-    permission_mode: str = "auto"  # permissive | auto | supervised
+    permission_mode: str = "permissive"  # permissive | auto | supervised
+    utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
 
 
 @dataclass
 class VoiceConfig:
-    enabled: bool = True
     model: str = "base.en"
-    max_audio_size_mb: int = 10
 
 
 @dataclass
@@ -81,6 +79,7 @@ class RetentionConfig:
     artifact_retention_days: int = 30
     max_artifact_size_mb: int = 100
     cleanup_on_startup: bool = False
+    auto_archive_days: int = 7
 
 
 @dataclass
@@ -97,17 +96,19 @@ class RateLimitConfig:
 
 
 @dataclass
-class McpServerConfig:
-    enabled: bool = True
-    path: str = "/mcp"
-
-
-@dataclass
 class CompletionConfig:
-    strategy: str = "auto_merge"  # auto_merge | pr_only
+    strategy: str = "auto_merge"  # auto_merge | pr_only | manual
     auto_push: bool = True
     cleanup_worktree: bool = True
     delete_branch_after_merge: bool = True
+
+
+@dataclass
+class PlatformConfig:
+    """Per-platform auth and repo binding configuration."""
+
+    auth: str = "cli"  # cli | token
+    repos: list[str] = field(default_factory=list)  # repo paths bound to this platform
 
 
 @dataclass
@@ -118,10 +119,9 @@ class TowerConfig:
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
-    mcp_server: McpServerConfig = field(default_factory=McpServerConfig)
     completion: CompletionConfig = field(default_factory=CompletionConfig)
+    platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
-    repos_base_dir: str = "~/tower-repos"
 
 
 def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
@@ -145,6 +145,17 @@ def load_config(path: Path | None = None) -> TowerConfig:
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
 
+    # Parse platforms section: platforms.<name>.{auth, repos}
+    platforms: dict[str, PlatformConfig] = {}
+    raw_platforms = raw.get("platforms", {})
+    if isinstance(raw_platforms, dict):
+        for pname, pdata in raw_platforms.items():
+            if isinstance(pdata, dict):
+                platforms[str(pname)] = PlatformConfig(
+                    auth=str(pdata.get("auth", "cli")),
+                    repos=[str(r) for r in pdata.get("repos", []) if r] if isinstance(pdata.get("repos"), list) else [],
+                )
+
     return TowerConfig(
         server=_parse_section(raw, ServerConfig, "server"),
         runtime=_parse_section(raw, RuntimeConfig, "runtime"),
@@ -152,10 +163,9 @@ def load_config(path: Path | None = None) -> TowerConfig:
         retention=_parse_section(raw, RetentionConfig, "retention"),
         logging=_parse_section(raw, LoggingConfig, "logging"),
         rate_limits=_parse_section(raw, RateLimitConfig, "rate_limits"),
-        mcp_server=_parse_section(raw, McpServerConfig, "mcp_server"),
         completion=_parse_section(raw, CompletionConfig, "completion"),
+        platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
-        repos_base_dir=raw.get("repos_base_dir", "~/tower-repos"),
     )
 
 
@@ -180,16 +190,16 @@ def save_config(config: TowerConfig, path: Path | None = None) -> None:
         "max_concurrent_jobs": config.runtime.max_concurrent_jobs,
         "worktrees_dirname": config.runtime.worktrees_dirname,
         "permission_mode": config.runtime.permission_mode,
+        "utility_model": config.runtime.utility_model,
     }
     existing["voice"] = {
-        "enabled": config.voice.enabled,
         "model": config.voice.model,
-        "max_audio_size_mb": config.voice.max_audio_size_mb,
     }
     existing["retention"] = {
         "artifact_retention_days": config.retention.artifact_retention_days,
         "max_artifact_size_mb": config.retention.max_artifact_size_mb,
         "cleanup_on_startup": config.retention.cleanup_on_startup,
+        "auto_archive_days": config.retention.auto_archive_days,
     }
     existing["logging"] = {
         "level": config.logging.level,
@@ -200,18 +210,15 @@ def save_config(config: TowerConfig, path: Path | None = None) -> None:
     existing["rate_limits"] = {
         "max_sse_connections": config.rate_limits.max_sse_connections,
     }
-    existing["mcp_server"] = {
-        "enabled": config.mcp_server.enabled,
-        "path": config.mcp_server.path,
-    }
     existing["completion"] = {
         "strategy": config.completion.strategy,
         "auto_push": config.completion.auto_push,
         "cleanup_worktree": config.completion.cleanup_worktree,
         "delete_branch_after_merge": config.completion.delete_branch_after_merge,
     }
-    existing["repos_base_dir"] = config.repos_base_dir
     existing["repos"] = config.repos
+    if config.platforms:
+        existing["platforms"] = {name: {"auth": pc.auth, "repos": pc.repos} for name, pc in config.platforms.items()}
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
@@ -260,44 +267,3 @@ def init_config(path: Path | None = None) -> Path:
     if not path.exists():
         path.write_text(DEFAULT_CONFIG_YAML)
     return path
-
-
-def merge_config_yaml(new_yaml: str, path: Path | None = None) -> str:
-    """Merge incoming YAML into the existing config file.
-
-    Non-destructive: incoming values override existing ones at the key level,
-    but keys not present in the incoming YAML are preserved (especially repos).
-    Returns the resulting merged YAML string.
-    """
-    if path is None:
-        path = DEFAULT_CONFIG_PATH
-
-    # Parse the incoming YAML
-    incoming = yaml.safe_load(new_yaml) or {}
-    if not isinstance(incoming, dict):
-        return new_yaml  # Not a dict — can't merge, just return as-is
-
-    # Load existing
-    existing: dict[str, Any] = {}
-    if path.exists():
-        with open(path) as f:
-            existing = yaml.safe_load(f) or {}
-
-    # Deep merge: incoming overrides existing, but missing keys in incoming are preserved
-    def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-        result = dict(base)
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = _deep_merge(result[key], value)
-            else:
-                result[key] = value
-        return result
-
-    merged = _deep_merge(existing, incoming)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.dump(merged, f, default_flow_style=False, sort_keys=False)
-
-    # Return the written content
-    return yaml.dump(merged, default_flow_style=False, sort_keys=False)

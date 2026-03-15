@@ -37,6 +37,20 @@ class StrategyKind(StrEnum):
     single_agent = "single_agent"
 
 
+class CompletionStrategy(StrEnum):
+    auto_merge = "auto_merge"
+    pr_only = "pr_only"
+    manual = "manual"
+
+
+class ResolutionStatus(StrEnum):
+    unresolved = "unresolved"
+    merged = "merged"
+    pr_created = "pr_created"
+    discarded = "discarded"
+    conflict = "conflict"
+
+
 class PermissionMode(StrEnum):
     permissive = "permissive"
     auto = "auto"
@@ -119,6 +133,7 @@ class CreateJobRequest(BaseModel):
     strategy: StrategyKind | None = None
     permission_mode: PermissionMode | None = None
     model: str | None = None
+    completion_strategy: CompletionStrategy | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -137,12 +152,37 @@ class ResolveApprovalRequest(BaseModel):
     resolution: ApprovalResolution
 
 
-class UpdateGlobalConfigRequest(BaseModel):
-    config_yaml: str
+class UpdateSettingsRequest(BaseModel):
+    """Structured settings update — only include fields to change."""
+
+    max_concurrent_jobs: int | None = Field(None, ge=1, le=10)
+    permission_mode: PermissionMode | None = None
+    voice_model: str | None = None
+    completion_strategy: CompletionStrategy | None = None
+    auto_push: bool | None = None
+    cleanup_worktree: bool | None = None
+    delete_branch_after_merge: bool | None = None
+    artifact_retention_days: int | None = Field(None, ge=1, le=365)
+    max_artifact_size_mb: int | None = Field(None, ge=1, le=10_000)
+    auto_archive_days: int | None = Field(None, ge=1, le=365)
+
+
+class SettingsResponse(CamelModel):
+    max_concurrent_jobs: int
+    permission_mode: str
+    voice_model: str
+    completion_strategy: str
+    auto_push: bool
+    cleanup_worktree: bool
+    delete_branch_after_merge: bool
+    artifact_retention_days: int
+    max_artifact_size_mb: int
+    auto_archive_days: int
 
 
 class RegisterRepoRequest(BaseModel):
     source: str
+    clone_to: str | None = None
 
 
 # --- Response Models ---
@@ -173,6 +213,11 @@ class JobResponse(CamelModel):
     completed_at: datetime | None
     pr_url: str | None = None
     merge_status: str | None = None
+    resolution: str | None = None
+    archived_at: datetime | None = None
+    completion_strategy: str | None = None
+    failure_reason: str | None = None
+    model: str | None = None
 
 
 class JobListResponse(CamelModel):
@@ -229,10 +274,6 @@ class WorkspaceListResponse(CamelModel):
     has_more: bool
 
 
-class GlobalConfigResponse(BaseModel):
-    config_yaml: str
-
-
 class TranscribeResponse(BaseModel):
     text: str
 
@@ -260,6 +301,7 @@ class RepoDetailResponse(CamelModel):
     origin_url: str | None = None
     base_branch: str | None = None
     active_job_count: int = 0
+    platform: str | None = None
 
 
 # --- SSE Payload Models ---
@@ -358,6 +400,80 @@ class MergeConflictPayload(CamelModel):
     conflict_files: list[str]
     fallback: str  # pr_created | none
     pr_url: str | None = None
+
+
+# --- Platform Models ---
+
+
+class PlatformStatusResponse(CamelModel):
+    platform: str
+    authenticated: bool
+    user: str | None = None
+    error: str | None = None
+
+
+class PlatformStatusListResponse(CamelModel):
+    items: list[PlatformStatusResponse]
+    timestamp: datetime
+
+
+class ResolveJobRequest(BaseModel):
+    action: str  # merge | create_pr | discard
+
+
+class ResolveJobResponse(CamelModel):
+    resolution: str
+    pr_url: str | None = None
+    conflict_files: list[str] | None = None
+
+
+class JobFailedPayload(CamelModel):
+    job_id: str
+    reason: str
+    timestamp: datetime
+
+
+class JobSucceededPayload(CamelModel):
+    job_id: str
+    pr_url: str | None = None
+    merge_status: str | None = None
+    resolution: str | None = None
+    model_downgraded: bool = False
+    requested_model: str | None = None
+    actual_model: str | None = None
+    timestamp: datetime
+
+
+class JobResolvedPayload(CamelModel):
+    job_id: str
+    resolution: str
+    pr_url: str | None = None
+    conflict_files: list[str] | None = None
+    timestamp: datetime
+
+
+class ModelDowngradedPayload(CamelModel):
+    job_id: str
+    requested_model: str
+    actual_model: str
+    timestamp: datetime
+
+
+class JobArchivedPayload(CamelModel):
+    job_id: str
+    timestamp: datetime
+
+
+class JobTitleUpdatedPayload(CamelModel):
+    job_id: str
+    title: str | None = None
+    branch: str | None = None
+    timestamp: datetime
+
+
+class ProgressHeadlinePayload(CamelModel):
+    job_id: str
+    headline: str
     timestamp: datetime
 
 

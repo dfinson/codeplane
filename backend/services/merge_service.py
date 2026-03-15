@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from backend.config import CompletionConfig
     from backend.services.event_bus import EventBus
     from backend.services.git_service import GitService
+    from backend.services.platform_adapter import PlatformRegistry
 
 log = structlog.get_logger()
 
@@ -58,11 +59,13 @@ class MergeService:
         event_bus: EventBus,
         session_factory: async_sessionmaker[AsyncSession],
         config: CompletionConfig,
+        platform_registry: PlatformRegistry | None = None,
     ) -> None:
         self._git = git_service
         self._event_bus = event_bus
         self._session_factory = session_factory
         self._config = config
+        self._platform_registry = platform_registry
 
     async def try_merge_back(
         self,
@@ -200,10 +203,7 @@ class MergeService:
         base_ref: str,
         prompt: str,
     ) -> MergeResult:
-        """Push branch and create a PR via gh CLI."""
-        import asyncio
-        import subprocess  # noqa: S404
-
+        """Push branch and create a PR via platform adapter."""
         cwd = worktree_path or repo_path
 
         # Push branch to origin first
@@ -215,44 +215,28 @@ class MergeService:
                 log.warning("branch_push_failed", job_id=job_id, exc_info=True)
                 # Continue — agent may have already pushed
 
-        if shutil.which("gh") is None:
-            log.info("pr_creation_skipped_no_gh", job_id=job_id)
+        if self._platform_registry is None:
+            log.info("pr_creation_skipped_no_registry", job_id=job_id)
             await self._update_merge_status(job_id, "not_merged")
-            return MergeResult(status="skipped", error="gh CLI not found")
+            return MergeResult(status="skipped", error="No platform registry")
 
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,  # noqa: S603
-                [
-                    "gh",
-                    "pr",
-                    "create",
-                    "--title",
-                    f"[Tower] {prompt[:80]}",
-                    "--body",
-                    f"Automated PR created by Tower for job `{job_id}`.",
-                    "--head",
-                    branch,
-                    "--base",
-                    base_ref,
-                    "--",
-                ],
-                capture_output=True,
-                text=True,
-                cwd=cwd,
-                timeout=60,
-            )
-            if result.returncode == 0:
-                pr_url = result.stdout.strip()
-                log.info("pr_created", job_id=job_id, pr_url=pr_url)
-                await self._update_merge_status(job_id, "pr_created", pr_url=pr_url)
-                return MergeResult(status="pr_created", strategy="pr", pr_url=pr_url)
-            log.warning("pr_creation_failed", job_id=job_id, stderr=result.stderr[:500])
-        except Exception:
-            log.warning("pr_creation_error", job_id=job_id, exc_info=True)
+        adapter = await self._platform_registry.get_adapter(repo_path)
+        pr_result = await adapter.create_pr(
+            cwd=cwd,
+            head=branch,
+            base=base_ref,
+            title=f"[Tower] {prompt[:80]}",
+            body=f"Automated PR created by Tower for job `{job_id}`.",
+        )
 
+        if pr_result.ok:
+            log.info("pr_created", job_id=job_id, pr_url=pr_result.url, platform=adapter.name)
+            await self._update_merge_status(job_id, "pr_created", pr_url=pr_result.url)
+            return MergeResult(status="pr_created", strategy="pr", pr_url=pr_result.url)
+
+        log.warning("pr_creation_failed", job_id=job_id, platform=adapter.name, error=pr_result.error)
         await self._update_merge_status(job_id, "not_merged")
-        return MergeResult(status="error", error="PR creation failed")
+        return MergeResult(status="error", error=pr_result.error or "PR creation failed")
 
     async def _post_merge_cleanup(
         self,
@@ -342,3 +326,161 @@ class MergeService:
                 },
             )
         )
+
+    # ------------------------------------------------------------------
+    # Operator-initiated resolution
+    # ------------------------------------------------------------------
+
+    async def resolve_job(
+        self,
+        job_id: str,
+        action: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str | None,
+        base_ref: str,
+        prompt: str,
+    ) -> MergeResult:
+        """Operator-initiated job resolution.
+
+        action: "merge" | "create_pr" | "discard"
+        """
+        if action == "discard":
+            return await self._discard(job_id, repo_path, worktree_path, branch)
+
+        if not branch:
+            return MergeResult(status="error", error="No branch to resolve")
+
+        if not _REF_PATTERN.match(branch) or not _REF_PATTERN.match(base_ref):
+            return MergeResult(status="error", error="Invalid branch or base_ref")
+
+        if action == "create_pr":
+            result = await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
+            if result.status == "pr_created":
+                await self._cleanup_worktree_only(job_id, repo_path, worktree_path)
+            return result
+
+        if action == "merge":
+            return await self._operator_merge(job_id, repo_path, worktree_path, branch, base_ref, prompt)
+
+        return MergeResult(status="error", error=f"Unknown action: {action}")
+
+    async def _operator_merge(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str,
+        base_ref: str,
+        prompt: str,
+    ) -> MergeResult:
+        """Operator-initiated merge: FF → merge → conflict (NO PR fallback)."""
+        from backend.services.git_service import GitError
+
+        # Step 1: Try fast-forward
+        ff_ok = False
+        try:
+            await self._git.checkout(base_ref, cwd=repo_path)
+            await self._git.merge_ff_only(branch, cwd=repo_path)
+            ff_ok = True
+        except GitError:
+            log.debug("resolve_merge_ff_failed", job_id=job_id)
+
+        if ff_ok:
+            log.info("resolve_merge_ff_succeeded", job_id=job_id, branch=branch)
+            await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
+            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
+            await self._update_merge_status(job_id, "merged")
+            return MergeResult(status="merged", strategy="ff_only")
+
+        # Step 2: Try regular merge
+        merge_ok = False
+        try:
+            await self._git.checkout(base_ref, cwd=repo_path)
+            await self._git.merge(
+                branch,
+                cwd=repo_path,
+                message=f"Merge {branch} (Tower {job_id})",
+            )
+            merge_ok = True
+        except GitError:
+            log.info("resolve_merge_conflict", job_id=job_id, branch=branch)
+
+        if merge_ok:
+            log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
+            await self._publish_merge_completed(job_id, branch, base_ref, "merge")
+            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
+            await self._update_merge_status(job_id, "merged")
+            return MergeResult(status="merged", strategy="merge")
+
+        # Step 3: Conflict — abort merge, report conflict files, do NOT create PR
+        await self._git.merge_abort(cwd=repo_path)
+        conflict_files = await self._detect_conflicts(repo_path, branch, base_ref)
+
+        # Restore main worktree to base_ref
+        try:
+            await self._git.checkout(base_ref, cwd=repo_path)
+        except Exception:
+            log.warning("checkout_base_ref_failed", job_id=job_id, exc_info=True)
+
+        await self._publish_merge_conflict(
+            job_id,
+            branch,
+            base_ref,
+            conflict_files,
+            fallback="none",
+            pr_url=None,
+        )
+        return MergeResult(status="conflict", conflict_files=conflict_files)
+
+    async def _discard(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str | None,
+    ) -> MergeResult:
+        """Discard all changes: remove worktree and delete branch."""
+        if worktree_path:
+            try:
+                await self._git.remove_worktree(repo_path, worktree_path)
+                log.info("worktree_discarded", job_id=job_id, worktree=worktree_path)
+            except Exception:
+                log.warning("worktree_discard_failed", job_id=job_id, exc_info=True)
+
+        if branch and branch not in ("main", "master"):
+            try:
+                from backend.services.git_service import GitError
+
+                with contextlib.suppress(GitError):
+                    await self._git._run_git("branch", "-D", branch, cwd=repo_path)  # noqa: SLF001
+                log.info("branch_discarded", job_id=job_id, branch=branch)
+            except Exception:
+                log.warning("branch_discard_failed", job_id=job_id, exc_info=True)
+
+        return MergeResult(status="discarded")
+
+    async def _cleanup_worktree_only(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+    ) -> None:
+        """Remove worktree without deleting the branch."""
+        if not worktree_path or worktree_path == repo_path:
+            return
+        try:
+            from pathlib import Path
+
+            wt = Path(worktree_path)
+            if not wt.exists():
+                return
+            try:
+                await self._git._run_git("worktree", "remove", str(worktree_path), "--force", cwd=repo_path)  # noqa: SLF001
+            except Exception:
+                if wt.exists():
+                    shutil.rmtree(wt)
+                await self._git._run_git("worktree", "prune", cwd=repo_path)  # noqa: SLF001
+            log.info("worktree_cleaned_after_pr", job_id=job_id, worktree=worktree_path)
+        except Exception:
+            log.warning("worktree_cleanup_after_pr_failed", job_id=job_id, exc_info=True)

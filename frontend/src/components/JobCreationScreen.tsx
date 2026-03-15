@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, Rocket, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { createJob, fetchRepos, fetchModels } from "../api/client";
-import type { PermissionMode } from "../api/types";
+import type { PermissionMode, CompletionStrategy } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
 import { Button } from "./ui/button";
@@ -24,6 +24,7 @@ export function JobCreationScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("supervised");
+  const [completionStrategy, setCompletionStrategy] = useState<CompletionStrategy>("auto_merge");
 
   useEffect(() => {
     fetchRepos()
@@ -58,6 +59,7 @@ export function JobCreationScreen() {
         branch: branch || undefined,
         permission_mode: permissionMode,
         model: model || undefined,
+        completion_strategy: completionStrategy,
       });
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
@@ -66,7 +68,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode]);
+  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, completionStrategy]);
 
   return (
     <div className="max-w-xl mx-auto">
@@ -126,6 +128,33 @@ export function JobCreationScreen() {
                   onClick={() => setPermissionMode(value)}
                   className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                     permissionMode === value
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>On Completion</Label>
+            <div className="flex gap-2">
+              {(
+                [
+                  { value: "auto_merge", label: "Auto Merge", title: "Merge changes back to the base branch automatically" },
+                  { value: "pr_only", label: "PR Only", title: "Create a pull request instead of merging directly" },
+                  { value: "manual", label: "Manual", title: "Leave changes in the worktree for manual resolution" },
+                ] as { value: CompletionStrategy; label: string; title: string }[]
+              ).map(({ value, label, title }) => (
+                <button
+                  key={value}
+                  type="button"
+                  title={title}
+                  onClick={() => setCompletionStrategy(value)}
+                  className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    completionStrategy === value
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-foreground/40"
                   }`}

@@ -33,34 +33,3 @@ class TestIsRemoteUrl:
 
     def test_relative_path_not_remote(self) -> None:
         assert GitService.is_remote_url("./repos/test") is False
-
-
-class TestDeriveCloneDir:
-    def test_https_github_url(self) -> None:
-        result = GitService.derive_clone_dir(
-            "https://github.com/org/repo.git",
-            "~/tower-repos",
-        )
-        assert result.endswith("org/repo")
-        assert ".git" not in result
-
-    def test_ssh_github_url(self) -> None:
-        result = GitService.derive_clone_dir(
-            "git@github.com:org/repo.git",
-            "~/tower-repos",
-        )
-        assert result.endswith("org/repo")
-
-    def test_simple_url(self) -> None:
-        result = GitService.derive_clone_dir(
-            "https://example.com/my-repo.git",
-            "~/tower-repos",
-        )
-        assert result.endswith("example.com/my-repo")
-
-    def test_no_git_suffix(self) -> None:
-        result = GitService.derive_clone_dir(
-            "https://github.com/org/repo",
-            "~/tower-repos",
-        )
-        assert result.endswith("org/repo")

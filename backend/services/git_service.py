@@ -58,6 +58,11 @@ class GitService:
         """Run `git diff <diff_spec>` and return raw output."""
         return await self._run_git("diff", diff_spec, cwd=cwd)
 
+    async def add_intent_to_add(self, *, cwd: str | Path) -> None:
+        """Mark untracked files as intent-to-add so they appear in diffs."""
+        with contextlib.suppress(GitError):
+            await self._run_git("add", "-N", ".", cwd=cwd)
+
     # ------------------------------------------------------------------
     # Merge-back operations
     # ------------------------------------------------------------------
@@ -406,29 +411,6 @@ class GitService:
 
         log.info("repo_cloned", url=url, target=str(target))
         return str(target)
-
-    @staticmethod
-    def derive_clone_dir(url: str, repos_base_dir: str) -> str:
-        """Derive a local directory path from a remote URL.
-
-        Example: https://github.com/org/repo.git → ~/tower-repos/org/repo
-
-        Raises GitError if the derived path would escape repos_base_dir.
-        """
-        base = Path(repos_base_dir).expanduser().resolve()
-        # Strip protocol and .git suffix
-        cleaned = re.sub(r"^(https?://|git@|ssh://)", "", url)
-        cleaned = re.sub(r"\.git$", "", cleaned)
-        # For git@host:org/repo format
-        cleaned = cleaned.replace(":", "/")
-        # Take the last two path segments (org/repo)
-        parts = cleaned.split("/")
-        rel = "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-        result = (base / rel).resolve()
-        # Prevent path traversal — result must stay within base
-        if not str(result).startswith(str(base) + "/") and result != base:
-            raise GitError(f"Derived clone path escapes repos base directory: {url}")
-        return str(result)
 
     @staticmethod
     def is_remote_url(source: str) -> bool:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
@@ -16,6 +16,8 @@ from backend.models.api_schemas import (
     JobListResponse,
     JobResponse,
     LogLinePayload,
+    ResolveJobRequest,
+    ResolveJobResponse,
     ResumeJobRequest,
     TranscriptPayload,
 )
@@ -26,6 +28,7 @@ from backend.services.git_service import GitService
 from backend.services.job_service import JobNotFoundError, JobService, RepoNotAllowedError, StateConflictError
 
 if TYPE_CHECKING:
+    from backend.services.merge_service import MergeService
     from backend.services.runtime_service import RuntimeService
 
 router = APIRouter(tags=["jobs"])
@@ -50,14 +53,21 @@ def _get_job_service(
 ) -> JobService:
     job_repo = JobRepository(session)
     git_service = GitService(config)
-    # Wire up NamingService when the adapter is available (runtime started)
-    naming_service = None
-    adapter = getattr(request.app.state, "agent_adapter", None)
-    if adapter is not None:
-        from backend.services.naming_service import NamingService
+    # Naming is now handled async (fire-and-forget after creation) — no naming_service here
+    return JobService(job_repo=job_repo, git_service=git_service, config=config)
 
-        naming_service = NamingService(adapter)
-    return JobService(job_repo=job_repo, git_service=git_service, config=config, naming_service=naming_service)
+
+def _make_job_service(session: AsyncSession) -> JobService:
+    """Create a JobService from a session (no request context needed)."""
+    config = load_config()
+    job_repo = JobRepository(session)
+    git_service = GitService(config)
+    return JobService(job_repo=job_repo, git_service=git_service, config=config)
+
+
+def _get_merge_service(request: Request) -> MergeService | None:
+    """Get MergeService from app state (may be None if not configured)."""
+    return getattr(request.app.state, "merge_service", None)
 
 
 def _job_to_response(job: object) -> JobResponse:
@@ -79,6 +89,11 @@ def _job_to_response(job: object) -> JobResponse:
         updated_at=j.updated_at,
         completed_at=j.completed_at,
         pr_url=j.pr_url,
+        merge_status=j.merge_status,
+        resolution=j.resolution,
+        completion_strategy=j.completion_strategy,
+        failure_reason=j.failure_reason,
+        model=j.model,
     )
 
 
@@ -117,6 +132,22 @@ async def create_job(
         # Re-fetch to get updated state (may have been enqueued)
         job = await svc.get_job(job.id)
 
+    # Fire-and-forget: generate title + branch via utility session
+    utility = getattr(request.app.state, "utility_session", None)
+    if utility is not None and job.title is None and body.branch is None:
+        import asyncio
+
+        asyncio.create_task(
+            _async_naming(
+                job_id=job.id,
+                prompt=body.prompt,
+                utility=utility,
+                session_factory=request.app.state.session_factory,
+                event_bus=request.app.state.event_bus,
+            ),
+            name=f"naming-{job.id}",
+        )
+
     return CreateJobResponse(
         id=job.id,
         state=job.state,
@@ -133,12 +164,18 @@ async def list_jobs(
     state: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query()] = None,
+    archived: Annotated[bool | None, Query()] = None,
 ) -> JobListResponse:
-    """List jobs with optional state filter and cursor pagination."""
+    """List jobs with optional state filter and cursor pagination.
+
+    Pass archived=true to list only archived jobs, archived=false to
+    exclude them. Default (None) returns all jobs.
+    """
     jobs, next_cursor, has_more = await svc.list_jobs(
         state=state,
         limit=limit,
         cursor=cursor,
+        archived=archived,
     )
     return JobListResponse(
         items=[_job_to_response(j) for j in jobs],
@@ -380,3 +417,176 @@ async def get_job_telemetry(job_id: str) -> dict[str, object]:
     if tel is None:
         return {"jobId": job_id, "available": False}
     return {**tel.to_dict(), "available": True}
+
+
+@router.post("/jobs/{job_id}/resolve")
+async def resolve_job(
+    job_id: str,
+    body: ResolveJobRequest,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    request: Request,
+) -> ResolveJobResponse:
+    """Resolve a succeeded job: merge, create PR, or discard."""
+    svc = _make_job_service(session)
+    try:
+        job = await svc.resolve_job(job_id, body.action)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    merge_service: MergeService | None = getattr(request.app.state, "merge_service", None)
+    if merge_service is None:
+        raise HTTPException(status_code=503, detail="Merge service not configured")
+
+    result = await merge_service.resolve_job(
+        job_id=job.id,
+        action=body.action,
+        repo_path=job.repo,
+        worktree_path=job.worktree_path,
+        branch=job.branch,
+        base_ref=job.base_ref,
+        prompt=job.prompt,
+    )
+
+    # Determine the resolution status
+    if result.status == "merged":
+        resolution = "merged"
+    elif result.status == "pr_created":
+        resolution = "pr_created"
+    elif result.status == "discarded":
+        resolution = "discarded"
+    elif result.status == "conflict":
+        resolution = "conflict"
+    else:
+        resolution = "unresolved"
+
+    # Persist resolution
+    repo = JobRepository(session)
+    await repo.update_resolution(job_id, resolution, pr_url=result.pr_url)
+    await session.commit()
+
+    # Publish event
+    event_bus = getattr(request.app.state, "event_bus", None)
+    if event_bus:
+        import uuid
+        from datetime import UTC, datetime
+
+        from backend.models.events import DomainEvent, DomainEventKind
+
+        payload: dict[str, Any] = {"resolution": resolution}
+        if result.pr_url:
+            payload["pr_url"] = result.pr_url
+        if result.conflict_files:
+            payload["conflict_files"] = result.conflict_files
+
+        await event_bus.publish(
+            DomainEvent(
+                event_id=f"evt-{uuid.uuid4().hex[:12]}",
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.job_resolved,
+                payload=payload,
+            )
+        )
+
+    return ResolveJobResponse(
+        resolution=resolution,
+        pr_url=result.pr_url,
+        conflict_files=result.conflict_files,
+    )
+
+
+@router.post("/jobs/{job_id}/archive", status_code=204)
+async def archive_job(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    request: Request,
+) -> None:
+    """Archive a completed job (hide from Kanban board)."""
+    svc = _make_job_service(session)
+    try:
+        await svc.archive_job(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StateConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+
+    # Publish event
+    event_bus = getattr(request.app.state, "event_bus", None)
+    if event_bus:
+        import uuid
+        from datetime import UTC, datetime
+
+        from backend.models.events import DomainEvent, DomainEventKind
+
+        await event_bus.publish(
+            DomainEvent(
+                event_id=f"evt-{uuid.uuid4().hex[:12]}",
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.job_archived,
+                payload={},
+            )
+        )
+
+
+@router.post("/jobs/{job_id}/unarchive", status_code=204)
+async def unarchive_job(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+) -> None:
+    """Unarchive a job (show on Kanban board again)."""
+    svc = _make_job_service(session)
+    try:
+        await svc.unarchive_job(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Async naming helper (fire-and-forget from create_job)
+# ---------------------------------------------------------------------------
+
+
+async def _async_naming(
+    *,
+    job_id: str,
+    prompt: str,
+    utility: object,
+    session_factory: object,
+    event_bus: object,
+) -> None:
+    """Generate title + branch in background, persist, and push via SSE."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from backend.models.events import DomainEvent, DomainEventKind
+    from backend.services.naming_service import NamingService
+
+    try:
+        naming = NamingService(utility)  # type: ignore[arg-type]
+        title, branch = await naming.generate(prompt)
+
+        # Persist to database
+        async with session_factory() as session:  # type: ignore[operator]
+            repo = JobRepository(session)
+            await repo.update_title_and_branch(job_id, title=title, branch=branch)
+            await session.commit()
+
+        # Push SSE event so frontend updates reactively
+        await event_bus.publish(  # type: ignore[attr-defined]
+            DomainEvent(
+                event_id=str(uuid.uuid4()),
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.job_title_updated,
+                payload={"title": title, "branch": branch},
+            )
+        )
+    except Exception:
+        import structlog
+
+        structlog.get_logger().warning("async_naming_failed", job_id=job_id, exc_info=True)
