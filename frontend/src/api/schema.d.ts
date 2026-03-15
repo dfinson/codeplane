@@ -457,6 +457,8 @@ export interface components {
             /** Branch */
             branch?: string | null;
             strategy?: components["schemas"]["StrategyKind"] | null;
+            /** Model */
+            model?: string | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {

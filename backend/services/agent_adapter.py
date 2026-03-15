@@ -89,12 +89,14 @@ class CopilotAdapter(AgentAdapterInterface):
             # at a higher level via the approval_requested domain event.
             return PermissionRequestResult(kind="approved")
 
-        session = await client.create_session(
-            {
-                "working_directory": config.workspace_path,
-                "on_permission_request": _on_permission,
-            }
-        )
+        session_opts: dict[str, object] = {
+            "working_directory": config.workspace_path,
+            "on_permission_request": _on_permission,
+        }
+        if config.model:
+            session_opts["model"] = config.model
+
+        session = await client.create_session(session_opts)
         self._sessions[session_id] = session
 
         # Register SDK callback that bridges into the async queue

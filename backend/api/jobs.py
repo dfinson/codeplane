@@ -81,6 +81,7 @@ async def create_job(
             base_ref=body.base_ref,
             branch=body.branch,
             strategy=body.strategy or "single_agent",
+            model=body.model,
         )
     except RepoNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

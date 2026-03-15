@@ -93,9 +93,10 @@ class JobTelemetry:
 
     @property
     def duration_ms(self) -> float:
-        if self.end_time and self.start_time:
-            return (self.end_time - self.start_time) * 1000
-        return 0.0
+        if not self.start_time:
+            return 0.0
+        end = self.end_time if self.end_time else time.monotonic()
+        return (end - self.start_time) * 1000
 
     @property
     def context_utilization(self) -> float:
@@ -112,6 +113,8 @@ class JobTelemetry:
             "durationMs": round(self.duration_ms),
             "inputTokens": self.input_tokens,
             "outputTokens": self.output_tokens,
+            "promptTokens": self.input_tokens,
+            "completionTokens": self.output_tokens,
             "totalTokens": self.total_tokens,
             "cacheReadTokens": self.cache_read_tokens,
             "cacheWriteTokens": self.cache_write_tokens,

@@ -40,6 +40,7 @@ class JobRepository(BaseRepository):
             completed_at=row.completed_at,  # type: ignore[arg-type]
             pr_url=row.pr_url,  # type: ignore[arg-type]
             merge_status=row.merge_status,  # type: ignore[arg-type]
+            model=row.model,  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -59,6 +60,7 @@ class JobRepository(BaseRepository):
             completed_at=job.completed_at,
             pr_url=job.pr_url,
             merge_status=job.merge_status,
+            model=job.model,
         )
         self._session.add(row)
         await self._session.flush()

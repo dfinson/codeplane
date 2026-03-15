@@ -90,6 +90,7 @@ class SessionEvent:
 class SessionConfig:
     workspace_path: str
     prompt: str
+    model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
 
@@ -117,6 +118,7 @@ class Job:
     completed_at: datetime | None = None
     pr_url: str | None = None
     merge_status: str | None = None  # not_merged | merged | conflict | pr_created
+    model: str | None = None
 
 
 @dataclass

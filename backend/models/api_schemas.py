@@ -107,6 +107,7 @@ class CreateJobRequest(BaseModel):
     base_ref: str | None = None
     branch: str | None = None
     strategy: StrategyKind | None = None
+    model: str | None = None
 
 
 class SendMessageRequest(BaseModel):

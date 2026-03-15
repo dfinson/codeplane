@@ -9,7 +9,6 @@ import { useSSE } from "../hooks/useSSE";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { LogsPanel } from "./LogsPanel";
-import { ExecutionTimeline } from "./ExecutionTimeline";
 import { ApprovalBanner } from "./ApprovalBanner";
 import { TelemetryPanel } from "./TelemetryPanel";
 import { Button } from "./ui/button";
@@ -175,8 +174,7 @@ export function JobDetailScreen() {
             <TranscriptPanel jobId={jobId} interactive={isInteractive} />
             <LogsPanel jobId={jobId} />
           </div>
-          <ExecutionTimeline jobId={jobId} />
-          <TelemetryPanel jobId={jobId} />
+          <TelemetryPanel jobId={jobId} isRunning={isInteractive} />
         </div>
       )}
 

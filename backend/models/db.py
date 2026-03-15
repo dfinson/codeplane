@@ -28,6 +28,7 @@ class JobRow(Base):
     session_id = Column(String, nullable=True)
     pr_url = Column(String, nullable=True)
     merge_status = Column(String, nullable=True)
+    model = Column(String, nullable=True)
     created_at = Column(TZDateTime, nullable=False)
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)
