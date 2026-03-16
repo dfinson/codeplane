@@ -26,6 +26,7 @@ from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
 from backend.services.git_service import GitService
 from backend.services.job_service import JobNotFoundError, JobService, RepoNotAllowedError, StateConflictError
+from backend.services.naming_service import NamingService
 
 if TYPE_CHECKING:
     from backend.services.merge_service import MergeService
@@ -53,8 +54,10 @@ def _get_job_service(
 ) -> JobService:
     job_repo = JobRepository(session)
     git_service = GitService(config)
-    # Naming is now handled async (fire-and-forget after creation) — no naming_service here
-    return JobService(job_repo=job_repo, git_service=git_service, config=config)
+    # Pass naming service so title + branch are generated before worktree creation
+    utility = getattr(request.app.state, "utility_session", None)
+    naming = NamingService(utility) if utility is not None else None
+    return JobService(job_repo=job_repo, git_service=git_service, config=config, naming_service=naming)
 
 
 def _make_job_service(session: AsyncSession) -> JobService:
@@ -131,22 +134,6 @@ async def create_job(
 
         # Re-fetch to get updated state (may have been enqueued)
         job = await svc.get_job(job.id)
-
-    # Fire-and-forget: generate title + branch via utility session
-    utility = getattr(request.app.state, "utility_session", None)
-    if utility is not None and job.title is None and body.branch is None:
-        import asyncio
-
-        asyncio.create_task(
-            _async_naming(
-                job_id=job.id,
-                prompt=body.prompt,
-                utility=utility,
-                session_factory=request.app.state.session_factory,
-                event_bus=request.app.state.event_bus,
-            ),
-            name=f"naming-{job.id}",
-        )
 
     return CreateJobResponse(
         id=job.id,
@@ -544,49 +531,3 @@ async def unarchive_job(
     except JobNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     await session.commit()
-
-
-# ---------------------------------------------------------------------------
-# Async naming helper (fire-and-forget from create_job)
-# ---------------------------------------------------------------------------
-
-
-async def _async_naming(
-    *,
-    job_id: str,
-    prompt: str,
-    utility: object,
-    session_factory: object,
-    event_bus: object,
-) -> None:
-    """Generate title + branch in background, persist, and push via SSE."""
-    import uuid
-    from datetime import UTC, datetime
-
-    from backend.models.events import DomainEvent, DomainEventKind
-    from backend.services.naming_service import NamingService
-
-    try:
-        naming = NamingService(utility)  # type: ignore[arg-type]
-        title, branch = await naming.generate(prompt)
-
-        # Persist to database
-        async with session_factory() as session:  # type: ignore[operator]
-            repo = JobRepository(session)
-            await repo.update_title_and_branch(job_id, title=title, branch=branch)
-            await session.commit()
-
-        # Push SSE event so frontend updates reactively
-        await event_bus.publish(  # type: ignore[attr-defined]
-            DomainEvent(
-                event_id=str(uuid.uuid4()),
-                job_id=job_id,
-                timestamp=datetime.now(UTC),
-                kind=DomainEventKind.job_title_updated,
-                payload={"title": title, "branch": branch},
-            )
-        )
-    except Exception:
-        import structlog
-
-        structlog.get_logger().warning("async_naming_failed", job_id=job_id, exc_info=True)
