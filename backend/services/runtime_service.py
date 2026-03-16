@@ -406,6 +406,19 @@ class RuntimeService:
                     await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
                     continue
 
+                # Trigger diff recalculation after tool completions.
+                # The SDK may not fire session.workspace_file_changed, so we
+                # piggyback on tool.execution_complete from the transcript stream.
+                # DiffService throttles to 5-second windows, so this is cheap.
+                if (
+                    session_event.kind == SessionEventKind.transcript
+                    and session_event.payload.get("role") == "tool_call"
+                    and self._diff_service is not None
+                    and worktree_path
+                    and base_ref
+                ):
+                    await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
+
                 # Capture SDK session_id on first event (strategy sets _session_id before first yield)
                 if session_id is None and hasattr(strategy, "session_id") and strategy.session_id:
                     session_id = strategy.session_id
@@ -579,7 +592,12 @@ class RuntimeService:
                     await self._event_bus.publish(domain_event)
 
             if error_reason:
-                # An error event was received during execution
+                # An error event was received during execution — finalize diff before failing
+                if self._diff_service is not None and worktree_path and base_ref:
+                    try:
+                        await self._diff_service.finalize(job_id, worktree_path, base_ref)
+                    except Exception:
+                        log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
                 await self._fail_job(job_id, error_reason)
                 return
 
@@ -620,6 +638,12 @@ class RuntimeService:
             )
         except asyncio.CancelledError:
             log.info("job_canceled_by_task", job_id=job_id)
+            # Finalize diff so changes are preserved even for canceled jobs
+            if self._diff_service is not None and worktree_path and base_ref:
+                try:
+                    await self._diff_service.finalize(job_id, worktree_path, base_ref)
+                except Exception:
+                    log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
             try:
                 await strategy.abort()
             except Exception:
@@ -644,9 +668,15 @@ class RuntimeService:
                         await session.commit()
             except Exception:
                 log.warning("job_cancel_transition_failed", job_id=job_id, exc_info=True)
-        except Exception:
+        except Exception as exc:
             log.error("job_execution_failed", job_id=job_id, exc_info=True)
-            await self._fail_job(job_id, "Execution error")
+            # Finalize diff so changes are preserved even for crashed jobs
+            if self._diff_service is not None and worktree_path and base_ref:
+                try:
+                    await self._diff_service.finalize(job_id, worktree_path, base_ref)
+                except Exception:
+                    log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
+            await self._fail_job(job_id, f"Execution error: {exc}")
         finally:
             tel.end_job(job_id)
             heartbeat_task.cancel()
@@ -1216,7 +1246,11 @@ class RuntimeService:
                 jobs, _, _ = await svc.list_jobs(state=state, limit=10000)
                 for job in jobs:
                     log.warning("recovering_orphaned_job", job_id=job.id, state=state)
-                    await svc.transition_state(job.id, JobState.failed)
+                    await svc.transition_state(
+                        job.id,
+                        JobState.failed,
+                        failure_reason="Server restarted while job was running",
+                    )
                     await self._event_bus.publish(
                         DomainEvent(
                             event_id=_make_event_id(),

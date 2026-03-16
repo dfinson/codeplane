@@ -16,7 +16,6 @@ def test_load_config_returns_defaults_when_missing(tmp_path: Path) -> None:
     assert config.server.host == "127.0.0.1"
     assert config.server.port == 8080
     assert config.runtime.max_concurrent_jobs == 2
-    assert config.voice.model == "base.en"
     assert config.repos == []
 
 
@@ -76,5 +75,4 @@ def test_init_config_roundtrips(tmp_path: Path) -> None:
     config = load_config(cfg_path)
     assert config.server.port == 8080
     assert config.runtime.worktrees_dirname == ".tower-worktrees"
-    assert config.voice.model == "base.en"
     assert config.retention.artifact_retention_days == 30

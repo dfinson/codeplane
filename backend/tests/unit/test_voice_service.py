@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from backend.services.voice_service import VoiceService
 
 
@@ -15,14 +13,10 @@ class TestVoiceServiceInit:
             svc = VoiceService()
             assert svc._model_name == "base.en"
 
-    def test_custom_model(self) -> None:
+    def test_uses_module_default_model(self) -> None:
         with patch("backend.services.voice_service.WhisperModel"):
-            svc = VoiceService(model_name="tiny.en")
-            assert svc._model_name == "tiny.en"
-
-    def test_invalid_model_raises(self) -> None:
-        with pytest.raises(ValueError, match="Invalid voice model"):
-            VoiceService(model_name="nonexistent-model")
+            svc = VoiceService()
+            assert svc._model_name == "base.en"
 
 
 class TestModelLoading:
@@ -30,7 +24,7 @@ class TestModelLoading:
     def test_loads_model_once(self, mock_whisper_cls: MagicMock) -> None:
         mock_model = MagicMock()
         mock_whisper_cls.return_value = mock_model
-        svc = VoiceService(model_name="tiny.en")
+        svc = VoiceService()
         svc._ensure_model()
         svc._ensure_model()  # Should not create a second instance
         mock_whisper_cls.assert_called_once()

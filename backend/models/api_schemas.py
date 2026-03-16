@@ -156,7 +156,6 @@ class UpdateSettingsRequest(BaseModel):
 
     max_concurrent_jobs: int | None = Field(None, ge=1, le=10)
     permission_mode: PermissionMode | None = None
-    voice_model: str | None = None
     completion_strategy: CompletionStrategy | None = None
     auto_push: bool | None = None
     cleanup_worktree: bool | None = None
@@ -169,7 +168,6 @@ class UpdateSettingsRequest(BaseModel):
 class SettingsResponse(CamelModel):
     max_concurrent_jobs: int
     permission_mode: str
-    voice_model: str
     completion_strategy: str
     auto_push: bool
     cleanup_worktree: bool

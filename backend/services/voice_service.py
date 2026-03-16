@@ -9,20 +9,7 @@ from faster_whisper import WhisperModel
 
 logger = structlog.get_logger()
 
-ALLOWED_MODELS = frozenset(
-    {
-        "tiny",
-        "tiny.en",
-        "base",
-        "base.en",
-        "small",
-        "small.en",
-        "medium",
-        "medium.en",
-        "large-v2",
-        "large-v3",
-    }
-)
+_MODEL_NAME = "base.en"
 
 
 class VoiceService:
@@ -31,10 +18,8 @@ class VoiceService:
     The model is loaded once and reused across requests.
     """
 
-    def __init__(self, model_name: str = "base.en") -> None:
-        if model_name not in ALLOWED_MODELS:
-            raise ValueError(f"Invalid voice model '{model_name}'. Allowed: {sorted(ALLOWED_MODELS)}")
-        self._model_name = model_name
+    def __init__(self) -> None:
+        self._model_name = _MODEL_NAME
         self._model: WhisperModel | None = None
 
     def _ensure_model(self) -> WhisperModel:

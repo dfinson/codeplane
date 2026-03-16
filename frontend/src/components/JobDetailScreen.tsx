@@ -14,7 +14,6 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
-const DiffViewer = lazy(() => import("./DiffViewer"));
 const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
 const ArtifactViewer = lazy(() => import("./ArtifactViewer"));
 
@@ -123,8 +122,15 @@ export function JobDetailScreen() {
     if (!jobId) return;
     setResolveLoading(action);
     try {
-      await resolveJob(jobId, action);
-      toast.success(action === "merge" || action === "smart_merge" ? "Merged" : action === "create_pr" ? "PR created" : "Discarded");
+      const res = await resolveJob(jobId, action);
+      if (res.prUrl) {
+        toast.success("PR created", {
+          description: res.prUrl,
+          action: { label: "Open", onClick: () => window.open(res.prUrl!, "_blank") },
+        });
+      } else {
+        toast.success(action === "merge" || action === "smart_merge" ? "Merged" : action === "create_pr" ? "PR created" : "Discarded");
+      }
     } catch (e) { toast.error(String(e)); }
     finally { setResolveLoading(null); }
   }, [jobId]);
@@ -393,14 +399,13 @@ export function JobDetailScreen() {
         )}
       </div>
 
-      {job && (
-        <CompleteJobDialog job={job} open={completeOpen} onClose={() => setCompleteOpen(false)} />
+      {completeOpen && job && (
+        <CompleteJobDialog job={job} open onClose={() => setCompleteOpen(false)} />
       )}
 
       <Tabs value={tab} onValueChange={setTab} className="mb-4">
         <TabsList className="overflow-x-auto">
           <TabsTrigger value="live">Live</TabsTrigger>
-          <TabsTrigger value="diff">Diff</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>
           {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
         </TabsList>
@@ -415,15 +420,9 @@ export function JobDetailScreen() {
         </div>
       )}
 
-      {tab === "diff" && (
-        <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
-          <DiffViewer jobId={jobId} />
-        </Suspense>
-      )}
-
       {tab === "workspace" && (
         <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
-          <WorkspaceBrowser jobId={jobId} />
+          <WorkspaceBrowser jobId={jobId} jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} />
         </Suspense>
       )}
 

@@ -527,7 +527,6 @@ def _register_config_tools(mcp: FastMCP) -> None:
         return SettingsResponse(
             max_concurrent_jobs=config.runtime.max_concurrent_jobs,
             permission_mode=config.runtime.permission_mode,
-            voice_model=config.voice.model,
             completion_strategy=config.completion.strategy,
             auto_push=config.completion.auto_push,
             cleanup_worktree=config.completion.cleanup_worktree,

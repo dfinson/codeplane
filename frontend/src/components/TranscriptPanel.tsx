@@ -11,10 +11,10 @@ import { useTowerStore, selectJobTranscript, selectApprovals } from "../store";
 import type { TranscriptEntry, ApprovalRequest } from "../store";
 import { sendOperatorMessage, resumeJob, pauseJob, resolveApproval } from "../api/client";
 import { MicButton } from "./VoiceButton";
-import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 // ---------------------------------------------------------------------------
 // Turn grouping
@@ -359,22 +359,26 @@ function truncateLabel(label: string, maxWords = 8): string {
 }
 
 function deriveToolGroupLabel(calls: TranscriptEntry[]): string {
+  // 1. SDK-provided intent string (deterministic, human-authored by the SDK/MCP manifest)
   const withIntent = calls.find((c) => c.toolIntent);
   if (withIntent?.toolIntent) return truncateLabel(withIntent.toolIntent);
 
+  // 2. SDK-provided display title
   const withTitle = calls.find((c) => c.toolTitle);
   if (withTitle?.toolTitle) {
-    const suffix = calls.length > 1 ? ` ×${calls.length}` : "";
-    return truncateLabel(withTitle.toolTitle + suffix);
+    const chips = chipify(calls);
+    const counts = chips.map((c) => c.count > 1 ? `${c.name} ×${c.count}` : c.name).join(", ");
+    return truncateLabel(`${withTitle.toolTitle}: ${counts}`);
   }
 
+  // 3. AI-generated summary (arrives async via tool_group_summary SSE)
   const withSummary = calls.find((c) => c.toolGroupSummary);
   if (withSummary?.toolGroupSummary) return truncateLabel(withSummary.toolGroupSummary);
 
-  const uniqueNames = [...new Set(calls.map((c) => c.toolName ?? c.content))];
-  const primary = uniqueNames[0] ?? "tool";
-  const suffix = calls.length > 1 ? ` ×${calls.length}` : "";
-  return `${primary}${suffix}`;
+  // 4. Fallback: per-tool counts from chipify, e.g. "bash ×3, read_file, write_file"
+  //    This mirrors the information the old chips showed, as a readable text label.
+  const chips = chipify(calls);
+  return chips.map((c) => c.count > 1 ? `${c.name} ×${c.count}` : c.name).join(", ");
 }
 
 /** Extract the intent string from a leading report_intent tool call, if present. */
@@ -553,6 +557,7 @@ export function TranscriptPanel({
   prompt?: string;
   promptTimestamp?: string;
 }) {
+  const isMobile = useIsMobile();
   const rawEntries = useTowerStore(selectJobTranscript(jobId));
   const allApprovals = useTowerStore(selectApprovals);
   const jobApprovals = Object.values(allApprovals).filter((a) => a.jobId === jobId);
@@ -746,17 +751,28 @@ export function TranscriptPanel({
             </div>
           )}
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-end gap-2">
             <div className="relative flex-1">
-              <Input
+              <textarea
                 placeholder={isTerminal ? "Send a message to resume this job…" : "Send instruction to agent…"}
                 value={msg}
-                onChange={(e) => setMsg(e.currentTarget.value)}
-                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+                onChange={(e) => {
+                  setMsg(e.currentTarget.value);
+                  e.currentTarget.style.height = "auto";
+                  e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 160) + "px";
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !isMobile && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
                 disabled={sending || micState !== "idle"}
-                className="pr-8"
+                rows={1}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none pr-8 overflow-y-auto"
+                style={{ maxHeight: 160 }}
               />
-              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              <div className="absolute right-2 bottom-1.5">
                 <MicButton
                   onTranscript={(t) => setMsg((prev) => (prev ? prev + " " : "") + t)}
                   onStateChange={setMicState}
@@ -769,6 +785,7 @@ export function TranscriptPanel({
               onClick={handleSend}
               disabled={sending || !msg.trim() || micState !== "idle"}
               loading={sending}
+              className="shrink-0"
             >
               <Send size={16} />
             </Button>

@@ -13,12 +13,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Spinner } from "./ui/spinner";
 
-const VOICE_MODELS = [
-  "tiny", "tiny.en", "base", "base.en",
-  "small", "small.en", "medium", "medium.en",
-  "large-v2", "large-v3",
-];
-
 const PERMISSION_MODES = [
   { value: "permissive", label: "Permissive" },
   { value: "auto", label: "Auto-approve" },
@@ -287,18 +281,6 @@ export function SettingsScreen() {
             />
           </div>
         </div>
-      </div>
-
-      {/* Voice */}
-      <div className="rounded-lg border border-border bg-card p-5">
-        <p className="text-sm font-semibold mb-4">Voice</p>
-        <SelectField
-          label="Whisper Model"
-          value={settings.voiceModel}
-          options={VOICE_MODELS.map((m) => ({ value: m, label: m }))}
-          onChange={(v) => patch({ voiceModel: v })}
-          description="Local transcription model — larger models are more accurate but slower"
-        />
       </div>
 
       {/* Retention */}

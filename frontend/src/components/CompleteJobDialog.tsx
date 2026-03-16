@@ -103,10 +103,18 @@ export function CompleteJobDialog({ job, open, onClose }: CompleteJobDialogProps
           )}
 
           {(isFailed || isCanceled) && (
-            <StatusRow
-              icon={<AlertTriangle size={16} className="text-muted-foreground" />}
-              text={`Job ${isFailed ? "failed" : "was canceled"} — archiving will remove it from the board`}
-            />
+            <>
+              <StatusRow
+                icon={<AlertTriangle size={16} className="text-muted-foreground" />}
+                text={`Job ${isFailed ? "failed" : "was canceled"} — archiving will remove it from the board`}
+              />
+              {isFailed && job.failureReason && (
+                <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3">
+                  <p className="text-xs font-medium text-red-500">Reason</p>
+                  <p className="text-sm text-red-400 mt-0.5">{job.failureReason}</p>
+                </div>
+              )}
+            </>
           )}
 
           {/* Worktree info */}

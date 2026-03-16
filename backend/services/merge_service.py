@@ -10,6 +10,7 @@ escalation strategy:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 import shutil
@@ -66,6 +67,9 @@ class MergeService:
         self._session_factory = session_factory
         self._config = config
         self._platform_registry = platform_registry
+        # Per-repo lock to prevent concurrent merges from corrupting the
+        # main worktree state (checkout / merge / stash interleaving).
+        self._repo_locks: dict[str, asyncio.Lock] = {}
 
     async def try_merge_back(
         self,
@@ -106,25 +110,134 @@ class MergeService:
         prompt: str,
     ) -> MergeResult:
         """Try fast-forward, then regular merge, then fall back to PR."""
+
+        # Auto-commit any uncommitted changes in the job's worktree so they
+        # are reachable via the branch ref during the merge.
+        commit_cwd = worktree_path or repo_path
+        try:
+            committed = await self._git.auto_commit(
+                cwd=commit_cwd,
+                message=f"Tower: agent changes for {job_id}",
+            )
+            if committed:
+                log.info("merge_auto_committed", job_id=job_id, cwd=commit_cwd)
+        except Exception:
+            log.warning("merge_auto_commit_failed", job_id=job_id, exc_info=True)
+
+        # --- Step 1: Try fast-forward via ref update (no checkout needed) ---
+        try:
+            ff_result = await self._try_ff_via_ref(job_id, repo_path, branch, base_ref)
+            if ff_result is not None:
+                return ff_result
+        except Exception:
+            log.debug("merge_ff_ref_failed", job_id=job_id, exc_info=True)
+
+        # --- Step 2: Full merge requires the main worktree. Acquire lock. ---
+        lock = self._repo_locks.setdefault(repo_path, asyncio.Lock())
+        async with lock:
+            return await self._merge_in_worktree(
+                job_id,
+                repo_path,
+                worktree_path,
+                branch,
+                base_ref,
+                prompt,
+            )
+
+    async def _try_ff_via_ref(
+        self,
+        job_id: str,
+        repo_path: str,
+        branch: str,
+        base_ref: str,
+    ) -> MergeResult | None:
+        """Attempt a fast-forward by updating the base ref directly.
+
+        Returns a MergeResult on success, or None if FF is not possible.
+        """
+        # Check if base_ref is an ancestor of branch (i.e. FF-able)
+        if not await self._git.is_ancestor(base_ref, branch, cwd=repo_path):
+            return None
+
+        branch_sha = await self._git.rev_parse(branch, cwd=repo_path)
+        await self._git.update_ref(f"refs/heads/{base_ref}", branch_sha, cwd=repo_path)
+
+        # If the working tree is on the base branch, sync it to the new HEAD
+        current = await self._git.get_current_branch(cwd=repo_path)
+        if current == base_ref:
+            await self._git._run_git("reset", "--hard", "HEAD", cwd=repo_path)  # noqa: SLF001
+
+        log.info("merge_ff_ref_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
+
+        await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
+        await self._post_merge_cleanup(job_id, repo_path, None, branch)
+        await self._update_merge_status(job_id, "merged")
+        return MergeResult(status="merged", strategy="ff_only")
+
+    async def _merge_in_worktree(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str,
+        base_ref: str,
+        prompt: str,
+    ) -> MergeResult:
+        """Merge using checkout in the main worktree (lock must be held).
+
+        Saves and restores the original branch + stash to avoid corrupting
+        any other job that may be using the main worktree.
+        """
+
+        # Remember what the main worktree was doing so we can restore it.
+        original_branch: str | None = None
+        main_stashed = False
+
+        with contextlib.suppress(Exception):
+            original_branch = await self._git.get_current_branch(cwd=repo_path)
+
+        try:
+            main_stashed = await self._git.stash(cwd=repo_path)
+        except Exception:
+            log.warning("merge_main_stash_failed", job_id=job_id, exc_info=True)
+
+        try:
+            result = await self._do_merge_steps(
+                job_id,
+                repo_path,
+                worktree_path,
+                branch,
+                base_ref,
+                prompt,
+            )
+        finally:
+            # Restore the main worktree to its original branch, then pop stash.
+            if original_branch:
+                try:
+                    await self._git.checkout(original_branch, cwd=repo_path)
+                except Exception:
+                    log.warning("merge_restore_branch_failed", job_id=job_id, exc_info=True)
+            if main_stashed:
+                try:
+                    await self._git.stash_pop(cwd=repo_path)
+                except Exception:
+                    log.warning("merge_main_stash_pop_failed", job_id=job_id, exc_info=True)
+
+        return result
+
+    async def _do_merge_steps(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str,
+        base_ref: str,
+        prompt: str,
+    ) -> MergeResult:
+        """Checkout + merge in the main worktree (caller handles stash/restore)."""
         from backend.services.git_service import GitError
 
-        # Step 1: Try fast-forward merge in the main worktree
-        ff_ok = False
-        try:
-            await self._git.checkout(base_ref, cwd=repo_path)
-            await self._git.merge_ff_only(branch, cwd=repo_path)
-            ff_ok = True
-        except GitError:
-            log.debug("merge_ff_failed_trying_merge", job_id=job_id)
-
-        if ff_ok:
-            log.info("merge_ff_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
-            await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
-            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, "merged")
-            return MergeResult(status="merged", strategy="ff_only")
-
-        # Step 2: Try regular merge
+        # Try regular merge (FF already failed via ref update path)
         merge_ok = False
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
@@ -144,17 +257,15 @@ class MergeService:
             await self._update_merge_status(job_id, "merged")
             return MergeResult(status="merged", strategy="merge")
 
-        # Step 3: Abort the failed merge and collect conflict info
+        # Merge failed — abort, collect conflict info, fall back to PR
         await self._git.merge_abort(cwd=repo_path)
-        conflict_files = await self._detect_conflicts(repo_path, branch, base_ref)
+        conflict_files = await self._get_conflict_file_list(repo_path, branch, base_ref)
 
-        # Step 4: Restore main worktree to base_ref
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
         except Exception:
             log.warning("checkout_base_ref_failed", job_id=job_id, exc_info=True)
 
-        # Step 5: Fall back to PR
         log.info("merge_falling_back_to_pr", job_id=job_id, conflict_files=conflict_files)
         pr_result = await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
 
@@ -177,8 +288,8 @@ class MergeService:
             pr_url=pr_result.pr_url,
         )
 
-    async def _detect_conflicts(self, repo_path: str, branch: str, base_ref: str) -> list[str]:
-        """Dry-run a merge to detect conflicting files without leaving state."""
+    async def _get_conflict_file_list(self, repo_path: str, branch: str, base_ref: str) -> list[str]:
+        """Attempt a merge to discover conflicting files, then abort."""
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
         except Exception:
@@ -186,8 +297,9 @@ class MergeService:
 
         try:
             await self._git.merge(branch, cwd=repo_path)
-            # If this succeeds, no conflicts — undo the merge
-            await self._git.merge_abort(cwd=repo_path)
+            # Merge succeeded — no conflicts. Reset HEAD back to undo the merge commit.
+            with contextlib.suppress(Exception):
+                await self._git._run_git("reset", "--hard", "HEAD~1", cwd=repo_path)  # noqa: SLF001
             return []
         except Exception:
             files = await self._git.get_conflict_files(cwd=repo_path)
@@ -378,63 +490,110 @@ class MergeService:
         prompt: str,
     ) -> MergeResult:
         """Operator-initiated merge: FF → merge → conflict (NO PR fallback)."""
+
+        # Auto-commit any uncommitted changes in the job's worktree
+        commit_cwd = worktree_path or repo_path
+        try:
+            committed = await self._git.auto_commit(
+                cwd=commit_cwd,
+                message=f"Tower: agent changes for {job_id}",
+            )
+            if committed:
+                log.info("resolve_auto_committed", job_id=job_id, cwd=commit_cwd)
+        except Exception:
+            log.warning("resolve_auto_commit_failed", job_id=job_id, exc_info=True)
+
+        # --- Step 1: Try fast-forward via ref update (no checkout needed) ---
+        try:
+            ff_result = await self._try_ff_via_ref(job_id, repo_path, branch, base_ref)
+            if ff_result is not None:
+                return ff_result
+        except Exception:
+            log.debug("resolve_ff_ref_failed", job_id=job_id, exc_info=True)
+
+        # --- Step 2: Full merge requires the main worktree. Acquire lock. ---
+        lock = self._repo_locks.setdefault(repo_path, asyncio.Lock())
+        async with lock:
+            return await self._operator_merge_in_worktree(
+                job_id,
+                repo_path,
+                worktree_path,
+                branch,
+                base_ref,
+            )
+
+    async def _operator_merge_in_worktree(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str,
+        base_ref: str,
+    ) -> MergeResult:
+        """Operator merge using checkout (lock must be held)."""
         from backend.services.git_service import GitError
 
-        # Step 1: Try fast-forward
-        ff_ok = False
+        original_branch: str | None = None
+        main_stashed = False
+
+        with contextlib.suppress(Exception):
+            original_branch = await self._git.get_current_branch(cwd=repo_path)
+
         try:
-            await self._git.checkout(base_ref, cwd=repo_path)
-            await self._git.merge_ff_only(branch, cwd=repo_path)
-            ff_ok = True
-        except GitError:
-            log.debug("resolve_merge_ff_failed", job_id=job_id)
-
-        if ff_ok:
-            log.info("resolve_merge_ff_succeeded", job_id=job_id, branch=branch)
-            await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
-            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, "merged")
-            return MergeResult(status="merged", strategy="ff_only")
-
-        # Step 2: Try regular merge
-        merge_ok = False
-        try:
-            await self._git.checkout(base_ref, cwd=repo_path)
-            await self._git.merge(
-                branch,
-                cwd=repo_path,
-                message=f"Merge {branch} (Tower {job_id})",
-            )
-            merge_ok = True
-        except GitError:
-            log.info("resolve_merge_conflict", job_id=job_id, branch=branch)
-
-        if merge_ok:
-            log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
-            await self._publish_merge_completed(job_id, branch, base_ref, "merge")
-            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, "merged")
-            return MergeResult(status="merged", strategy="merge")
-
-        # Step 3: Conflict — abort merge, report conflict files, do NOT create PR
-        await self._git.merge_abort(cwd=repo_path)
-        conflict_files = await self._detect_conflicts(repo_path, branch, base_ref)
-
-        # Restore main worktree to base_ref
-        try:
-            await self._git.checkout(base_ref, cwd=repo_path)
+            main_stashed = await self._git.stash(cwd=repo_path)
         except Exception:
-            log.warning("checkout_base_ref_failed", job_id=job_id, exc_info=True)
+            log.warning("resolve_main_stash_failed", job_id=job_id, exc_info=True)
 
-        await self._publish_merge_conflict(
-            job_id,
-            branch,
-            base_ref,
-            conflict_files,
-            fallback="none",
-            pr_url=None,
-        )
-        return MergeResult(status="conflict", conflict_files=conflict_files)
+        try:
+            # Try regular merge
+            merge_ok = False
+            try:
+                await self._git.checkout(base_ref, cwd=repo_path)
+                await self._git.merge(
+                    branch,
+                    cwd=repo_path,
+                    message=f"Merge {branch} (Tower {job_id})",
+                )
+                merge_ok = True
+            except GitError:
+                log.info("resolve_merge_conflict", job_id=job_id, branch=branch)
+
+            if merge_ok:
+                log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
+                await self._publish_merge_completed(job_id, branch, base_ref, "merge")
+                await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
+                await self._update_merge_status(job_id, "merged")
+                return MergeResult(status="merged", strategy="merge")
+
+            # Conflict — abort merge, report conflict files
+            await self._git.merge_abort(cwd=repo_path)
+            conflict_files = await self._get_conflict_file_list(repo_path, branch, base_ref)
+
+            try:
+                await self._git.checkout(base_ref, cwd=repo_path)
+            except Exception:
+                log.warning("checkout_base_ref_failed", job_id=job_id, exc_info=True)
+
+            await self._publish_merge_conflict(
+                job_id,
+                branch,
+                base_ref,
+                conflict_files,
+                fallback="none",
+                pr_url=None,
+            )
+            return MergeResult(status="conflict", conflict_files=conflict_files)
+        finally:
+            if original_branch:
+                try:
+                    await self._git.checkout(original_branch, cwd=repo_path)
+                except Exception:
+                    log.warning("resolve_restore_branch_failed", job_id=job_id, exc_info=True)
+            if main_stashed:
+                try:
+                    await self._git.stash_pop(cwd=repo_path)
+                except Exception:
+                    log.warning("resolve_main_stash_pop_failed", job_id=job_id, exc_info=True)
 
     async def _operator_smart_merge(
         self,

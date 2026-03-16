@@ -58,7 +58,6 @@ def _config_to_response(config: TowerConfig) -> SettingsResponse:
     return SettingsResponse(
         max_concurrent_jobs=config.runtime.max_concurrent_jobs,
         permission_mode=config.runtime.permission_mode,
-        voice_model=config.voice.model,
         completion_strategy=config.completion.strategy,
         auto_push=config.completion.auto_push,
         cleanup_worktree=config.completion.cleanup_worktree,
@@ -88,12 +87,6 @@ async def update_settings(
         config.runtime.max_concurrent_jobs = updates["max_concurrent_jobs"]
     if "permission_mode" in updates:
         config.runtime.permission_mode = updates["permission_mode"]
-    if "voice_model" in updates:
-        from backend.services.voice_service import ALLOWED_MODELS
-
-        if updates["voice_model"] not in ALLOWED_MODELS:
-            raise HTTPException(status_code=400, detail=f"Invalid voice model. Allowed: {sorted(ALLOWED_MODELS)}")
-        config.voice.model = updates["voice_model"]
     if "completion_strategy" in updates:
         config.completion.strategy = updates["completion_strategy"]
     if "auto_push" in updates:

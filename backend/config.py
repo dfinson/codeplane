@@ -37,9 +37,6 @@ runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .tower-worktrees
 
-voice:
-  model: base.en
-
 retention:
   artifact_retention_days: 30
   max_artifact_size_mb: 100
@@ -67,11 +64,6 @@ class RuntimeConfig:
     worktrees_dirname: str = ".tower-worktrees"
     permission_mode: str = "permissive"  # permissive | auto | supervised
     utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
-
-
-@dataclass
-class VoiceConfig:
-    model: str = "base.en"
 
 
 @dataclass
@@ -115,7 +107,6 @@ class PlatformConfig:
 class TowerConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
-    voice: VoiceConfig = field(default_factory=VoiceConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
@@ -159,7 +150,6 @@ def load_config(path: Path | None = None) -> TowerConfig:
     return TowerConfig(
         server=_parse_section(raw, ServerConfig, "server"),
         runtime=_parse_section(raw, RuntimeConfig, "runtime"),
-        voice=_parse_section(raw, VoiceConfig, "voice"),
         retention=_parse_section(raw, RetentionConfig, "retention"),
         logging=_parse_section(raw, LoggingConfig, "logging"),
         rate_limits=_parse_section(raw, RateLimitConfig, "rate_limits"),
@@ -191,9 +181,6 @@ def save_config(config: TowerConfig, path: Path | None = None) -> None:
         "worktrees_dirname": config.runtime.worktrees_dirname,
         "permission_mode": config.runtime.permission_mode,
         "utility_model": config.runtime.utility_model,
-    }
-    existing["voice"] = {
-        "model": config.voice.model,
     }
     existing["retention"] = {
         "artifact_retention_days": config.retention.artifact_retention_days,

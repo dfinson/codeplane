@@ -1,6 +1,7 @@
 import { memo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { GitBranch, GitMerge, GitPullRequest, Trash2, CheckCircle2, Archive, AlertTriangle, XCircle, ArrowDownCircle } from "lucide-react";
+import { toast } from "sonner";
 import { useTowerStore, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { StateBadge } from "./StateBadge";
@@ -70,7 +71,13 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       setLoading(action);
       setError(null);
       try {
-        await resolveJob(job.id, action);
+        const res = await resolveJob(job.id, action);
+        if (res.prUrl) {
+          toast.success("PR created", {
+            description: res.prUrl,
+            action: { label: "Open", onClick: () => window.open(res.prUrl!, "_blank") },
+          });
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed");
       } finally {
@@ -267,7 +274,9 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       </div>
 
     </button>
-    <CompleteJobDialog job={job} open={completeOpen} onClose={() => setCompleteOpen(false)} />
+    {completeOpen && (
+      <CompleteJobDialog job={job} open onClose={() => setCompleteOpen(false)} />
+    )}
     </>
   );
 });

@@ -484,6 +484,7 @@ class SSEManager:
                     id=j.id,
                     repo=j.repo,
                     prompt=j.prompt,
+                    title=j.title,
                     state=j.state,
                     strategy=j.strategy,
                     base_ref=j.base_ref,
@@ -498,6 +499,7 @@ class SSEManager:
                     archived_at=j.archived_at,
                     completion_strategy=j.completion_strategy,
                     failure_reason=j.failure_reason,
+                    model=j.model,
                 )
                 for j in fetched_jobs
             ]

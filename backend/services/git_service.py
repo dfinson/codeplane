@@ -100,6 +100,55 @@ class GitService:
         with contextlib.suppress(GitError):
             await self._run_git("cherry-pick", "--abort", cwd=cwd)
 
+    async def is_ancestor(self, ancestor: str, descendant: str, *, cwd: str | Path) -> bool:
+        """Return True if *ancestor* is an ancestor of *descendant*."""
+        try:
+            await self._run_git("merge-base", "--is-ancestor", ancestor, descendant, cwd=cwd)
+            return True
+        except GitError:
+            return False
+
+    async def rev_parse(self, ref: str, *, cwd: str | Path) -> str:
+        """Resolve a ref to its full commit SHA."""
+        return await self._run_git("rev-parse", ref, cwd=cwd)
+
+    async def update_ref(self, ref: str, new_value: str, *, cwd: str | Path) -> None:
+        """Update a ref (e.g. refs/heads/main) to point at *new_value*."""
+        await self._run_git("update-ref", ref, new_value, cwd=cwd)
+
+    async def add_all(self, *, cwd: str | Path) -> None:
+        """Stage all changes (including untracked files)."""
+        await self._run_git("add", "-A", cwd=cwd)
+
+    async def commit(self, message: str, *, cwd: str | Path, allow_empty: bool = False) -> None:
+        """Create a commit.  When *allow_empty* is True, commits even with no changes."""
+        args = ["commit", "-m", message]
+        if allow_empty:
+            args.append("--allow-empty")
+        await self._run_git(*args, cwd=cwd)
+
+    async def auto_commit(self, *, cwd: str | Path, message: str = "Tower: auto-commit agent changes") -> bool:
+        """Stage + commit any uncommitted changes. Returns True if a commit was created."""
+        dirty = await self._is_worktree_dirty(cwd)
+        if not dirty:
+            return False
+        await self.add_all(cwd=cwd)
+        await self.commit(message, cwd=cwd)
+        return True
+
+    async def stash(self, *, cwd: str | Path) -> bool:
+        """Stash uncommitted changes. Returns True if something was stashed."""
+        dirty = await self._is_worktree_dirty(cwd)
+        if not dirty:
+            return False
+        await self._run_git("stash", "push", "-u", "-m", "tower-merge-temp", cwd=cwd)
+        return True
+
+    async def stash_pop(self, *, cwd: str | Path) -> None:
+        """Pop the last stash entry."""
+        with contextlib.suppress(GitError):
+            await self._run_git("stash", "pop", cwd=cwd)
+
     async def push(self, branch: str, *, cwd: str | Path, force: bool = False) -> None:
         """Push a branch to origin."""
         args = ["push", "origin", branch]
@@ -187,16 +236,17 @@ class GitService:
         job_id: str,
         base_ref: str,
         branch: str | None = None,
-        use_main: bool = False,
     ) -> tuple[str, str]:
-        """Create a worktree and branch for a job.
+        """Create a secondary worktree and branch for a job.
+
+        Every job always gets its own isolated worktree — the main worktree
+        is never used for job execution.
 
         Args:
             repo_path: Absolute path to the repository root.
-            job_id: The job ID (used for secondary worktree directory naming).
+            job_id: The job ID (used for worktree directory naming).
             base_ref: The base branch or commit to create the new branch from.
             branch: Explicit branch name, or None to auto-generate.
-            use_main: If True, use the main worktree; otherwise create secondary.
 
         Returns:
             Tuple of (worktree_path, branch_name).
@@ -206,14 +256,9 @@ class GitService:
         """
         branch_name = branch or f"tower/{job_id}"
         resolved_base_ref = await self._resolve_ref(repo_path, base_ref)
-
-        if use_main and not await self._is_worktree_dirty(repo_path):
-            return await self._setup_main_worktree(repo_path, resolved_base_ref, branch_name)
-        if use_main:
-            log.info("worktree_main_dirty_using_secondary", repo=repo_path, job_id=job_id)
         return await self._setup_secondary_worktree(repo_path, job_id, resolved_base_ref, branch_name)
 
-    async def _is_worktree_dirty(self, repo_path: str) -> bool:
+    async def _is_worktree_dirty(self, repo_path: str | Path) -> bool:
         """Return True if the working tree has uncommitted changes."""
         try:
             result = await self._run_git("status", "--porcelain", cwd=repo_path)
@@ -237,23 +282,6 @@ class GitService:
                     f"Cannot resolve ref '{ref}': not found locally or as '{remote_ref}'",
                     stderr=f"unknown revision: {ref}",
                 ) from None
-
-    async def _setup_main_worktree(
-        self,
-        repo_path: str,
-        base_ref: str,
-        branch_name: str,
-    ) -> tuple[str, str]:
-        """Create a branch and check it out in the main worktree."""
-        try:
-            await self._run_git("checkout", "-B", branch_name, base_ref, cwd=repo_path)
-        except GitError as exc:
-            raise GitError(
-                f"Failed to set up main worktree branch '{branch_name}' from '{base_ref}': {exc.stderr}",
-                stderr=exc.stderr,
-            ) from exc
-        log.info("worktree_main_setup", repo=repo_path, branch=branch_name)
-        return repo_path, branch_name
 
     async def _setup_secondary_worktree(
         self,

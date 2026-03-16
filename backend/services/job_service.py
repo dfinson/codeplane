@@ -124,7 +124,6 @@ class JobService:
                 job_id=job_id,
                 base_ref=base_ref,
                 branch=branch,
-                use_main=False,
             )
         except GitError as exc:
             # Worktree creation failed — create the job in failed state
@@ -144,6 +143,7 @@ class JobService:
                 title=title,
                 permission_mode=permission_mode,
                 model=model,
+                failure_reason=f"Worktree creation failed: {exc}",
             )
             await self._job_repo.create(job)
             log.error("job_worktree_failed", job_id=job_id, error=str(exc))
