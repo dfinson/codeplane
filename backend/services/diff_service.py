@@ -90,16 +90,23 @@ class DiffService:
     ) -> list[DiffFileModel]:
         """Run git diff and parse the output into structured models.
 
-        Uses a two-dot diff (base_ref vs working tree) so uncommitted
-        changes are captured.  Untracked new files are surfaced via
-        ``git add -N`` (intent-to-add) before diffing.
+        Uses a three-dot style diff (merge-base of base_ref and HEAD vs
+        working tree) so only the branch's own changes are shown, not
+        unrelated commits added to base_ref after the branch diverged.
+        Untracked new files are surfaced via ``git add -N``
+        (intent-to-add) before diffing.
         """
         try:
             # Mark untracked files so they appear in the diff output.
             await self._git.add_intent_to_add(cwd=worktree_path)
-            # Two-dot diff: captures committed + uncommitted changes.
+            # Resolve merge-base so we only show branch-own changes,
+            # not divergence on the base branch.
+            try:
+                effective_base = await self._git.merge_base(base_ref, "HEAD", cwd=worktree_path)
+            except Exception:
+                effective_base = base_ref  # fallback to two-dot if merge-base fails
             raw = await self._git.diff(
-                base_ref,
+                effective_base,
                 cwd=worktree_path,
             )
         except Exception:

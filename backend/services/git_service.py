@@ -58,6 +58,10 @@ class GitService:
         """Run `git diff <diff_spec>` and return raw output."""
         return await self._run_git("diff", diff_spec, cwd=cwd)
 
+    async def merge_base(self, ref1: str, ref2: str, *, cwd: str | Path) -> str:
+        """Return the merge-base commit between two refs."""
+        return (await self._run_git("merge-base", ref1, ref2, cwd=cwd)).strip()
+
     async def add_intent_to_add(self, *, cwd: str | Path) -> None:
         """Mark untracked files as intent-to-add so they appear in diffs."""
         with contextlib.suppress(GitError):
