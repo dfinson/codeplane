@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 from starlette.responses import JSONResponse, StreamingResponse
 
+from backend.persistence.approval_repo import ApprovalRepository
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
 from backend.services.sse_manager import SSEConnection
@@ -53,11 +54,13 @@ async def stream_events(
                     async with session_factory() as session:
                         event_repo = EventRepository(session)
                         job_repo = JobRepository(session)
+                        approval_repo = ApprovalRepository(session)
                         await sse_manager.replay_events(
                             conn,
                             event_repo,
                             job_repo,
                             numeric_id,
+                            approval_repo=approval_repo,
                         )
                 except (ValueError, TypeError):
                     pass  # invalid Last-Event-ID, skip replay
