@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useTowerStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, fetchApprovals, resolveJob } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
@@ -28,6 +28,7 @@ export function JobDetailScreen() {
   const [resolveLoading, setResolveLoading] = useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [tab, setTab] = useState("live");
+  const [hasArtifacts, setHasArtifacts] = useState(false);
   const diffs = useTowerStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
 
@@ -73,6 +74,14 @@ export function JobDetailScreen() {
         return { approvals: updated };
       });
     }).catch(() => {});
+  }, [jobId]);
+
+  // Check whether the job has any artifacts so we can hide the tab when empty.
+  useEffect(() => {
+    if (!jobId) return;
+    fetchArtifacts(jobId)
+      .then((res) => setHasArtifacts(res.items.length > 0))
+      .catch(() => {});
   }, [jobId]);
 
   // Load diff data: on mount, when job reaches terminal state, or when diff tab selected.
@@ -393,7 +402,7 @@ export function JobDetailScreen() {
           <TabsTrigger value="live">Live</TabsTrigger>
           <TabsTrigger value="diff">Diff</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>
-          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
+          {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
         </TabsList>
       </Tabs>
 
@@ -418,7 +427,7 @@ export function JobDetailScreen() {
         </Suspense>
       )}
 
-      {tab === "artifacts" && (
+      {tab === "artifacts" && hasArtifacts && (
         <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
           <ArtifactViewer jobId={jobId} />
         </Suspense>
