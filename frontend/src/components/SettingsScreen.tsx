@@ -1,10 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
-import { Trash2, Plus, Wrench, Save } from "lucide-react";
+import { Trash2, Plus, Save } from "lucide-react";
 import { toast } from "sonner";
 import {
   fetchSettings, updateSettings,
   fetchRepos, unregisterRepo,
-  cleanupWorktrees,
 } from "../api/client";
 import type { Settings } from "../api/types";
 import { AddRepoModal } from "./AddRepoModal";
@@ -17,12 +16,6 @@ const PERMISSION_MODES = [
   { value: "permissive", label: "Permissive" },
   { value: "auto", label: "Auto-approve" },
   { value: "supervised", label: "Supervised" },
-];
-
-const COMPLETION_STRATEGIES = [
-  { value: "auto_merge", label: "Auto Merge" },
-  { value: "pr_only", label: "PR Only" },
-  { value: "manual", label: "Manual" },
 ];
 
 function SelectField({ label, value, options, onChange, description }: {
@@ -46,31 +39,6 @@ function SelectField({ label, value, options, onChange, description }: {
       </select>
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
     </div>
-  );
-}
-
-function ToggleField({ label, checked, onChange, description }: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  description?: string;
-}) {
-  return (
-    <label className="flex items-start gap-3 cursor-pointer">
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`mt-0.5 relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${checked ? "bg-primary" : "bg-muted"}`}
-      >
-        <span className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform ${checked ? "translate-x-4" : "translate-x-0"}`} />
-      </button>
-      <div className="flex flex-col">
-        <span className="text-sm font-medium leading-none">{label}</span>
-        {description && <span className="text-xs text-muted-foreground mt-0.5">{description}</span>}
-      </div>
-    </label>
   );
 }
 
@@ -151,15 +119,6 @@ export function SettingsScreen() {
       await unregisterRepo(path);
       setRepos((prev) => prev.filter((r) => r !== path));
       toast.success("Repository removed");
-    } catch (e) {
-      toast.error(String(e));
-    }
-  }, []);
-
-  const handleCleanup = useCallback(async () => {
-    try {
-      const res = await cleanupWorktrees();
-      toast.success(`Cleaned up ${res.removed} worktree(s)`);
     } catch (e) {
       toast.error(String(e));
     }
@@ -249,40 +208,6 @@ export function SettingsScreen() {
         </div>
       </div>
 
-      {/* Completion */}
-      <div className="rounded-lg border border-border bg-card p-5">
-        <p className="text-sm font-semibold mb-4">Completion</p>
-        <div className="flex flex-col gap-4">
-          <SelectField
-            label="Strategy"
-            value={settings.completionStrategy}
-            options={COMPLETION_STRATEGIES}
-            onChange={(v) => patch({ completionStrategy: v })}
-            description="What happens when a job finishes successfully"
-          />
-          <div className="flex flex-col gap-3">
-            <ToggleField
-              label="Auto-push"
-              checked={settings.autoPush}
-              onChange={(v) => patch({ autoPush: v })}
-              description="Push branch to remote after completion"
-            />
-            <ToggleField
-              label="Clean up worktree"
-              checked={settings.cleanupWorktree}
-              onChange={(v) => patch({ cleanupWorktree: v })}
-              description="Remove worktree directory after merge"
-            />
-            <ToggleField
-              label="Delete branch after merge"
-              checked={settings.deleteBranchAfterMerge}
-              onChange={(v) => patch({ deleteBranchAfterMerge: v })}
-              description="Delete the feature branch once merged"
-            />
-          </div>
-        </div>
-      </div>
-
       {/* Retention */}
       <div className="rounded-lg border border-border bg-card p-5">
         <p className="text-sm font-semibold mb-4">Retention</p>
@@ -312,14 +237,6 @@ export function SettingsScreen() {
         </div>
       </div>
 
-      {/* Maintenance */}
-      <div className="rounded-lg border border-border bg-card p-5">
-        <p className="text-sm font-semibold mb-3">Maintenance</p>
-        <Button variant="outline" size="sm" onClick={handleCleanup}>
-          <Wrench size={14} />
-          Clean Up Worktrees
-        </Button>
-      </div>
     </div>
   );
 }
