@@ -207,6 +207,13 @@ export function downloadArtifactUrl(artifactId: string): string {
   return `${BASE}/artifacts/${encodeURIComponent(artifactId)}`;
 }
 
+export async function fetchArtifactContent(artifactId: string): Promise<unknown> {
+  const url = downloadArtifactUrl(artifactId);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`artifact fetch failed: ${res.status}`);
+  return res.json();
+}
+
 // --- Workspace ---
 
 export function fetchWorkspaceFiles(
