@@ -160,7 +160,7 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
     if sse_type == "diff_update":
         return DiffUpdatePayload(
             job_id=event.job_id,
-            changed_files=event.payload.get("changedFiles", []),
+            changed_files=event.payload.get("changed_files", []),
         ).model_dump_json(by_alias=True)
 
     if sse_type == "approval_requested":
