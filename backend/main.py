@@ -338,6 +338,10 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
                 and "\x00" not in path
                 and ".." not in path
             ):
+                # Serve root-level static files (favicon, logo, etc.)
+                candidate = _FRONTEND_DIR / path.lstrip("/")
+                if candidate.is_file():
+                    return FileResponse(str(candidate))
                 return FileResponse(_index_html)
             return JSONResponse({"detail": "Not found"}, status_code=404)
 
