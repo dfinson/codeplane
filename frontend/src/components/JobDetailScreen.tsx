@@ -155,6 +155,15 @@ export function JobDetailScreen() {
   const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
   const canRetry = job.state === "failed";
   const isRunning = job.state === "running";
+  const needsResolution =
+    job.state === "succeeded" &&
+    (job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution);
+  const isResolved =
+    job.state === "succeeded" &&
+    !!job.resolution &&
+    job.resolution !== "unresolved" &&
+    job.resolution !== "conflict";
+  const canArchive = (job.state === "failed" || job.state === "canceled") && !job.archivedAt;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -177,7 +186,7 @@ export function JobDetailScreen() {
             <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
             <StateBadge state={job.state} />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {canCancel && (
               <Button
                 size="sm"
@@ -194,6 +203,80 @@ export function JobDetailScreen() {
               <Button size="sm" variant="outline" loading={actionLoading} onClick={handleRerun}>
                 <RotateCcw size={14} />
                 Retry
+              </Button>
+            )}
+            {needsResolution && hasChanges && (
+              <>
+                {job.resolution !== "conflict" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1"
+                    loading={resolveLoading === "merge"}
+                    disabled={resolveLoading !== null}
+                    onClick={() => handleResolve("merge")}
+                  >
+                    <GitMerge size={14} />
+                    Merge
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  loading={resolveLoading === "create_pr"}
+                  disabled={resolveLoading !== null}
+                  onClick={() => handleResolve("create_pr")}
+                >
+                  <GitPullRequest size={14} />
+                  Create PR
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                  loading={resolveLoading === "discard"}
+                  disabled={resolveLoading !== null}
+                  onClick={() => handleResolve("discard")}
+                >
+                  <Trash2 size={14} />
+                  Discard
+                </Button>
+              </>
+            )}
+            {needsResolution && !hasChanges && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                loading={resolveLoading === "discard"}
+                disabled={resolveLoading !== null}
+                onClick={() => handleResolve("discard")}
+              >
+                <CheckCircle2 size={14} />
+                Mark Done
+              </Button>
+            )}
+            {isResolved && !job.archivedAt && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1 text-green-600 border-green-500/40 hover:bg-green-500/10"
+                onClick={() => setCompleteOpen(true)}
+              >
+                <CheckCircle2 size={14} />
+                Complete & Archive
+              </Button>
+            )}
+            {canArchive && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                onClick={() => setCompleteOpen(true)}
+              >
+                <Archive size={14} />
+                Archive
               </Button>
             )}
           </div>
@@ -283,112 +366,16 @@ export function JobDetailScreen() {
                 </p>
               </div>
             </div>
-            {/* Resolution action buttons */}
-            {(job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution) && hasChanges && (
-              <div className="flex gap-2 mt-3 ml-6">
-                {job.resolution !== "conflict" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1"
-                    loading={resolveLoading === "merge"}
-                    disabled={resolveLoading !== null}
-                    onClick={() => handleResolve("merge")}
-                  >
-                    <GitMerge size={14} />
-                    Merge
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1"
-                  loading={resolveLoading === "create_pr"}
-                  disabled={resolveLoading !== null}
-                  onClick={() => handleResolve("create_pr")}
-                >
-                  <GitPullRequest size={14} />
-                  Create PR
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
-                  loading={resolveLoading === "discard"}
-                  disabled={resolveLoading !== null}
-                  onClick={() => handleResolve("discard")}
-                >
-                  <Trash2 size={14} />
-                  Discard
-                </Button>
-              </div>
-            )}
-            {/* No changes — just mark done */}
-            {(job.resolution === "unresolved" || !job.resolution) && !hasChanges && (
-              <div className="flex gap-2 mt-3 ml-6">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1"
-                  loading={resolveLoading === "discard"}
-                  disabled={resolveLoading !== null}
-                  onClick={() => handleResolve("discard")}
-                >
-                  <CheckCircle2 size={14} />
-                  Mark Done
-                </Button>
-              </div>
-            )}
-            {/* Complete button for resolved jobs */}
-            {job.resolution && job.resolution !== "unresolved" && job.resolution !== "conflict" && (
-              <div className="flex gap-2 mt-3 ml-6">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-1 text-green-600 border-green-500/40 hover:bg-green-500/10"
-                  onClick={() => setCompleteOpen(true)}
-                >
-                  <CheckCircle2 size={14} />
-                  Complete & Archive
-                </Button>
-              </div>
-            )}
           </div>
         )}
 
         {/* Canceled banner */}
         {job.state === "canceled" && (
           <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-start gap-2">
-                <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
-                <p className="text-sm font-medium text-amber-500">Job canceled</p>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="gap-1 text-muted-foreground"
-                onClick={() => setCompleteOpen(true)}
-              >
-                <Archive size={14} />
-                Archive
-              </Button>
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-sm font-medium text-amber-500">Job canceled</p>
             </div>
-          </div>
-        )}
-
-        {/* Failed banner — add archive button */}
-        {job.state === "failed" && !job.archivedAt && (
-          <div className="flex gap-2 mt-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="gap-1 text-muted-foreground"
-              onClick={() => setCompleteOpen(true)}
-            >
-              <Archive size={14} />
-              Archive
-            </Button>
           </div>
         )}
       </div>
