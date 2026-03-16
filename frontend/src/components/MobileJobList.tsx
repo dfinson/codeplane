@@ -11,7 +11,7 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: string): JobSummary
     .filter((j) => {
       switch (tab) {
         case "Active":
-          return j.state === "queued" || j.state === "running";
+          return !j.archivedAt && (j.state === "queued" || j.state === "running");
         case "Sign-off":
           return (
             !j.archivedAt &&

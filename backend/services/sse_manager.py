@@ -477,7 +477,7 @@ class SSEManager:
                 single = await job_repo.get(conn.job_id)
                 fetched_jobs = [single] if single else []
             else:
-                fetched_jobs = await job_repo.list(limit=10000)
+                fetched_jobs = [j for j in await job_repo.list(limit=10000) if j.archived_at is None]
 
             job_responses = [
                 JobResponse(
@@ -495,6 +495,7 @@ class SSEManager:
                     pr_url=j.pr_url,
                     merge_status=j.merge_status,
                     resolution=j.resolution,
+                    archived_at=j.archived_at,
                     completion_strategy=j.completion_strategy,
                     failure_reason=j.failure_reason,
                 )

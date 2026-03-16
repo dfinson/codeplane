@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useShallow } from "zustand/react/shallow";
 import { ArrowLeft, Search, RotateCcw } from "lucide-react";
 import { useTowerStore, selectArchivedJobs, enrichJob } from "../store";
 import type { JobSummary } from "../store";
@@ -20,7 +21,7 @@ const RESOLUTION_FILTERS = [
 
 export function HistoryScreen() {
   const navigate = useNavigate();
-  const archivedJobs = useTowerStore(selectArchivedJobs);
+  const archivedJobs = useTowerStore(useShallow(selectArchivedJobs));
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");

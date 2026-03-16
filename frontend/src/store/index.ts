@@ -515,7 +515,7 @@ function sortByUpdatedDesc(jobs: JobSummary[]): JobSummary[] {
 export const selectActiveJobs = (state: TowerState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
-      (j) => j.state === "queued" || j.state === "running",
+      (j) => !j.archivedAt && (j.state === "queued" || j.state === "running"),
     ),
   );
 

@@ -12,7 +12,7 @@ export function DashboardScreen() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetchJobs({ limit: 100 })
+    fetchJobs({ limit: 100, archived: false })
       .then((result) => {
         useTowerStore.setState((state) => {
           const updated = { ...state.jobs };
