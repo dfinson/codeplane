@@ -2,9 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
-  Eye, Pencil, Terminal, Search,
+  BookOpen, CheckCircle, XCircle,
 } from "lucide-react";
-import { fetchJobTelemetry } from "../api/client";
+import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
 import { Badge } from "./ui/badge";
 import { Progress } from "./ui/progress";
 import { Spinner } from "./ui/spinner";
@@ -76,74 +76,40 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-function formatTimestamp(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 // ---------------------------------------------------------------------------
-// Activity phases — group tool calls into meaningful activities
+// Session summary timeline — powered by agent_summary artifacts
 // ---------------------------------------------------------------------------
 
-type ActivityKind = "explore" | "edit" | "terminal" | "search" | "other";
-
-const TOOL_CATEGORIES: Record<string, ActivityKind> = {
-  read_file: "explore", list_dir: "explore", file_search: "explore",
-  replace_string_in_file: "edit", multi_replace_string_in_file: "edit",
-  create_file: "edit", edit_notebook_file: "edit",
-  grep_search: "search", semantic_search: "search",
-  run_in_terminal: "terminal", get_terminal_output: "terminal",
-};
-
-const ACTIVITY_META: Record<ActivityKind, { label: string; icon: typeof Wrench; color: string }> = {
-  explore: { label: "Read files", icon: Eye, color: "text-blue-400" },
-  edit:    { label: "Edited code", icon: Pencil, color: "text-green-400" },
-  terminal:{ label: "Ran commands", icon: Terminal, color: "text-orange-400" },
-  search:  { label: "Searched", icon: Search, color: "text-cyan-400" },
-  other:   { label: "Tools", icon: Wrench, color: "text-muted-foreground" },
-};
-
-interface ActivityPhase {
-  kind: ActivityKind;
-  count: number;
-  startSec: number;
-  endSec: number;
-  fails: number;
-  detail: string; // e.g. "12 files" or "3 edits"
+interface SummaryAccomplished {
+  what: string;
+  files_affected?: string[];
 }
 
-function buildPhases(data: TelemetryData): ActivityPhase[] {
-  const tools = (data.toolCalls ?? []).filter((t) => t.offsetSec != null);
-  if (tools.length === 0) return [];
+interface SummaryInProgress {
+  description: string;
+  file?: string;
+}
 
-  tools.sort((a, b) => (a.offsetSec ?? 0) - (b.offsetSec ?? 0));
+interface SummaryVerification {
+  tests_run: boolean;
+  tests_passed: boolean | null;
+  build_run: boolean;
+  build_passed: boolean | null;
+}
 
-  const phases: ActivityPhase[] = [];
-  let cur: ActivityPhase | null = null;
+interface SessionSummaryJson {
+  session_number?: number;
+  accomplished?: SummaryAccomplished[];
+  in_progress?: SummaryInProgress[] | null;
+  resume_instructions?: string;
+  verification_state?: SummaryVerification | null;
+}
 
-  for (const tc of tools) {
-    const kind = TOOL_CATEGORIES[tc.name] ?? "other";
-    const off = tc.offsetSec ?? 0;
-
-    // Continue current phase if same kind and within 30s gap
-    if (cur && cur.kind === kind && off - cur.endSec < 30) {
-      cur.count++;
-      cur.endSec = off;
-      if (!tc.success) cur.fails++;
-    } else {
-      cur = { kind, count: 1, startSec: off, endSec: off, fails: tc.success ? 0 : 1, detail: "" };
-      phases.push(cur);
-    }
-  }
-
-  // Build detail strings
-  for (const p of phases) {
-    const noun = p.kind === "explore" ? "file" : p.kind === "edit" ? "edit" : p.kind === "terminal" ? "command" : p.kind === "search" ? "query" : "call";
-    p.detail = `${p.count} ${noun}${p.count !== 1 ? "s" : ""}`;
-  }
-
-  return phases;
+interface SessionCheckpoint {
+  sessionNumber: number;
+  artifactId: string;
+  createdAt: string;
+  summary: SessionSummaryJson | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +163,7 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
+  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,16 +177,45 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
     return () => { cancelled = true; clearInterval(interval); };
   }, [jobId]);
 
+  // Load agent_summary artifacts and their JSON content
+  useEffect(() => {
+    let cancelled = false;
+    const loadCheckpoints = async () => {
+      try {
+        const { items } = await fetchArtifacts(jobId);
+        const summaryItems = items
+          .filter((a) => a.type === "agent_summary")
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+        const resolved = await Promise.all(
+          summaryItems.map(async (artifact) => {
+            const m = artifact.name.match(/session-(\d+)-summary/);
+            const sessionNumber = m ? parseInt(m[1] ?? "0", 10) : 0;
+            let summary: SessionSummaryJson | null = null;
+            try {
+              summary = (await fetchArtifactContent(artifact.id)) as SessionSummaryJson;
+            } catch {
+              // leave summary null — still show the checkpoint without detail
+            }
+            return { sessionNumber, artifactId: artifact.id, createdAt: artifact.createdAt, summary };
+          }),
+        );
+
+        if (!cancelled) setCheckpoints(resolved);
+      } catch {
+        // artifacts unavailable — leave checkpoints empty
+      }
+    };
+    loadCheckpoints();
+    const interval = setInterval(loadCheckpoints, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [jobId]);
+
   const headerStats = data?.available
     ? `${formatTokens(data.totalTokens ?? 0)} tokens · ${data.toolCallCount ?? 0} tools · ${formatDuration(data.durationMs ?? 0)}`
     : null;
 
   const fails = (data?.toolCalls ?? []).filter((t) => !t.success).length;
-
-  const phases = useMemo(
-    () => (data?.available ? buildPhases(data) : []),
-    [data],
-  );
 
   const toolAggs = useMemo(() => {
     const map = new Map<string, ToolAggregate>();
@@ -344,33 +340,73 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
                 </div>
               ) : null}
 
-              {/* Activity phases */}
-              {phases.length > 0 && (
+              {/* Session timeline */}
+              {checkpoints.length > 0 && (
                 <div>
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">
-                    <Clock size={12} className="text-blue-400" /> Activity
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
+                    <BookOpen size={12} className="text-blue-400" /> Session Timeline
                   </h4>
-                  <div className="space-y-1">
-                    {phases.map((phase, i) => {
-                      const meta = ACTIVITY_META[phase.kind];
-                      const Icon = meta.icon;
-                      const durSec = Math.max(1, phase.endSec - phase.startSec);
-                      const timeStr = formatTimestamp(phase.startSec);
-                      return (
-                        <div key={i} className="flex items-center gap-2 py-1 text-xs">
-                          <span className="w-10 text-right text-muted-foreground tabular-nums shrink-0">{timeStr}</span>
-                          <Icon size={12} className={cn(meta.color, "shrink-0")} />
-                          <span className="font-medium">{meta.label}</span>
-                          <span className="text-muted-foreground">{phase.detail}</span>
-                          {phase.endSec > phase.startSec && (
-                            <span className="text-muted-foreground/60 text-[11px]">({formatDuration(durSec * 1000)})</span>
-                          )}
-                          {phase.fails > 0 && (
-                            <span className="text-red-400 text-[11px]">{phase.fails} failed</span>
-                          )}
-                        </div>
-                      );
-                    })}
+                  <div className="relative pl-5">
+                    {/* Vertical rail */}
+                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
+                    <div className="space-y-4">
+                      {checkpoints.map((cp) => {
+                        const { summary } = cp;
+                        const accomplished = summary?.accomplished ?? [];
+                        const inProgress = summary?.in_progress ?? [];
+                        const ver = summary?.verification_state;
+                        const verBadge = ver
+                          ? ver.tests_passed === true
+                            ? <span className="flex items-center gap-0.5 text-green-400"><CheckCircle size={10} /> tests passed</span>
+                            : ver.tests_passed === false
+                              ? <span className="flex items-center gap-0.5 text-red-400"><XCircle size={10} /> tests failed</span>
+                              : ver.build_passed === true
+                                ? <span className="flex items-center gap-0.5 text-green-400"><CheckCircle size={10} /> build passed</span>
+                                : null
+                          : null;
+
+                        return (
+                          <div key={cp.artifactId} className="relative">
+                            {/* Dot on the rail */}
+                            <div className="absolute -left-5 top-[3px] w-3 h-3 rounded-full border-2 border-blue-400 bg-background" />
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[11px] font-semibold text-foreground">Session {cp.sessionNumber}</span>
+                                <span className="text-[10px] text-muted-foreground tabular-nums">
+                                  {new Date(cp.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                                {verBadge && <span className="text-[10px]">{verBadge}</span>}
+                              </div>
+                              {accomplished.length > 0 && (
+                                <ul className="space-y-0.5">
+                                  {accomplished.slice(0, 4).map((item, i) => (
+                                    <li key={i} className="text-xs text-muted-foreground flex gap-1.5">
+                                      <span className="text-muted-foreground/50 shrink-0">·</span>
+                                      <span>{item.what}</span>
+                                    </li>
+                                  ))}
+                                  {accomplished.length > 4 && (
+                                    <li className="text-[11px] text-muted-foreground/60 pl-3">
+                                      and {accomplished.length - 4} more
+                                    </li>
+                                  )}
+                                </ul>
+                              )}
+                              {inProgress.length > 0 && inProgress[0] && (
+                                <p className="text-[11px] text-yellow-400/80">
+                                  In progress: {inProgress[0].description}
+                                </p>
+                              )}
+                              {summary?.resume_instructions && (
+                                <p className="text-[11px] text-muted-foreground/70 italic">
+                                  Next: {summary.resume_instructions}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
