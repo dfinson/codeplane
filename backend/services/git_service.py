@@ -174,7 +174,7 @@ class GitService:
         job_id: str,
         base_ref: str,
         branch: str | None = None,
-        use_main: bool = True,
+        use_main: bool = False,
     ) -> tuple[str, str]:
         """Create a worktree and branch for a job.
 

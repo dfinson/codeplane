@@ -113,12 +113,9 @@ class JobService:
             except Exception:
                 log.warning("naming_preflight_failed", job_id=job_id, exc_info=True)
 
-        # Determine if we use main worktree or secondary
-        all_jobs = await self._job_repo.list(limit=10000)
-        active_on_repo = [j for j in all_jobs if j.repo == resolved_repo and j.state in ACTIVE_STATES]
-        use_main = len(active_on_repo) == 0
-
-        # Create worktree and branch
+        # Always use a secondary worktree so every job is fully isolated.
+        # Reusing the main worktree caused diff leakage: stale untracked
+        # files and race-condition branch switching contaminated diffs.
         from backend.services.git_service import GitError
 
         try:
@@ -127,7 +124,7 @@ class JobService:
                 job_id=job_id,
                 base_ref=base_ref,
                 branch=branch,
-                use_main=use_main,
+                use_main=False,
             )
         except GitError as exc:
             # Worktree creation failed — create the job in failed state
