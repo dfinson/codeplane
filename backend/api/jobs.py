@@ -377,7 +377,7 @@ async def get_job_diff(
     events = await event_repo.list_by_job(job_id, [DomainEventKind.diff_updated])
     if not events:
         return []
-    raw_files = events[-1].payload.get("changedFiles", [])
+    raw_files = events[-1].payload.get("changed_files", [])
     return [DiffFileModel.model_validate(f) for f in raw_files]
 
 

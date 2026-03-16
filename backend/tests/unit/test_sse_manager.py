@@ -739,14 +739,22 @@ class TestSSEManager:
         assert "timestamp" in parsed
 
     def test_diff_update_payload(self) -> None:
+        sample_file = {
+            "path": "src/main.py",
+            "status": "modified",
+            "additions": 3,
+            "deletions": 1,
+            "hunks": [],
+        }
         event = _make_event(
             kind=DomainEventKind.diff_updated,
-            payload={"changed_files": []},
+            payload={"changed_files": [sample_file]},
         )
         result = _build_sse_data(event, "diff_update")
         parsed = json.loads(result)
         assert parsed["jobId"] == "job-1"
-        assert parsed["changedFiles"] == []
+        assert len(parsed["changedFiles"]) == 1
+        assert parsed["changedFiles"][0]["path"] == "src/main.py"
 
     def test_session_heartbeat_payload(self) -> None:
         event = _make_event(
