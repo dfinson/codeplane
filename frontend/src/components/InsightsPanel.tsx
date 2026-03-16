@@ -192,6 +192,8 @@ function SortHeader({
 
 export function InsightsPanel({ jobId }: { jobId: string }) {
   const [collapsed, setCollapsed] = useState(true);
+  const [toolsCollapsed, setToolsCollapsed] = useState(false);
+  const [llmCollapsed, setLlmCollapsed] = useState(false);
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
@@ -376,78 +378,90 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
               {/* Tool breakdown table */}
               {toolAggs.length > 0 && (
                 <div>
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">
+                  <button
+                    className="flex w-full items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2 hover:text-foreground transition-colors"
+                    onClick={() => setToolsCollapsed((c) => !c)}
+                  >
+                    {toolsCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                     <Wrench size={12} className="text-yellow-400" />
                     Tool Breakdown
                     <span className="text-muted-foreground font-normal ml-1">
                       ({data.toolCallCount ?? 0} calls, {formatDuration(data.totalToolDurationMs ?? 0)})
                     </span>
-                  </h4>
-                  <div className="rounded-md border border-border overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-muted/50 text-muted-foreground">
-                          <SortHeader label="Tool" field="name" current={toolSort} onClick={toggleSort} />
-                          <SortHeader label="Count" field="count" current={toolSort} onClick={toggleSort} align="right" />
-                          <SortHeader label="Avg" field="avgMs" current={toolSort} onClick={toggleSort} align="right" />
-                          <SortHeader label="Total" field="totalMs" current={toolSort} onClick={toggleSort} align="right" />
-                          <SortHeader label="Fails" field="fails" current={toolSort} onClick={toggleSort} align="right" />
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/50">
-                        {toolAggs.map((agg) => (
-                          <tr key={agg.name} className="hover:bg-accent/30">
-                            <td className="px-2 py-1.5 font-mono">{agg.name}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{agg.count}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{formatDuration(agg.avgMs)}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(agg.totalMs)}</td>
-                            <td className={cn("px-2 py-1.5 text-right tabular-nums", agg.fails > 0 && "text-red-400")}>{agg.fails}</td>
+                  </button>
+                  {!toolsCollapsed && (
+                    <div className="rounded-md border border-border overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-muted/50 text-muted-foreground">
+                            <SortHeader label="Tool" field="name" current={toolSort} onClick={toggleSort} />
+                            <SortHeader label="Count" field="count" current={toolSort} onClick={toggleSort} align="right" />
+                            <SortHeader label="Avg" field="avgMs" current={toolSort} onClick={toggleSort} align="right" />
+                            <SortHeader label="Total" field="totalMs" current={toolSort} onClick={toggleSort} align="right" />
+                            <SortHeader label="Fails" field="fails" current={toolSort} onClick={toggleSort} align="right" />
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-border/50">
+                          {toolAggs.map((agg) => (
+                            <tr key={agg.name} className="hover:bg-accent/30">
+                              <td className="px-2 py-1.5 font-mono">{agg.name}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums">{agg.count}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{formatDuration(agg.avgMs)}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(agg.totalMs)}</td>
+                              <td className={cn("px-2 py-1.5 text-right tabular-nums", agg.fails > 0 && "text-red-400")}>{agg.fails}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* LLM calls table */}
               {llmCalls.length > 0 && (
                 <div>
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">
+                  <button
+                    className="flex w-full items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2 hover:text-foreground transition-colors"
+                    onClick={() => setLlmCollapsed((c) => !c)}
+                  >
+                    {llmCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                     <Brain size={12} className="text-violet-400" />
                     LLM Calls
                     <span className="text-muted-foreground font-normal ml-1">
                       ({data.llmCallCount ?? 0} calls, {formatDuration(data.totalLlmDurationMs ?? 0)})
                     </span>
-                  </h4>
-                  <div className="rounded-md border border-border overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-muted/50 text-muted-foreground">
-                          <th className="px-2 py-1.5 text-left font-medium">#</th>
-                          <th className="px-2 py-1.5 text-left font-medium">Model</th>
-                          <th className="px-2 py-1.5 text-right font-medium">In</th>
-                          <th className="px-2 py-1.5 text-right font-medium">Out</th>
-                          <th className="px-2 py-1.5 text-right font-medium">Cache</th>
-                          <th className="px-2 py-1.5 text-right font-medium">Duration</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/50">
-                        {llmCalls.map((lc, i) => (
-                          <tr key={i} className="hover:bg-accent/30">
-                            <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
-                            <td className="px-2 py-1.5 font-mono">{lc.model || "—"}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.inputTokens)}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.outputTokens)}</td>
-                            <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                              {lc.cacheReadTokens > 0 ? formatTokens(lc.cacheReadTokens) : "—"}
-                            </td>
-                            <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(lc.durationMs)}</td>
+                  </button>
+                  {!llmCollapsed && (
+                    <div className="rounded-md border border-border overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-muted/50 text-muted-foreground">
+                            <th className="px-2 py-1.5 text-left font-medium">#</th>
+                            <th className="px-2 py-1.5 text-left font-medium">Model</th>
+                            <th className="px-2 py-1.5 text-right font-medium">In</th>
+                            <th className="px-2 py-1.5 text-right font-medium">Out</th>
+                            <th className="px-2 py-1.5 text-right font-medium">Cache</th>
+                            <th className="px-2 py-1.5 text-right font-medium">Duration</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-border/50">
+                          {llmCalls.map((lc, i) => (
+                            <tr key={i} className="hover:bg-accent/30">
+                              <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
+                              <td className="px-2 py-1.5 font-mono">{lc.model || "—"}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.inputTokens)}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.outputTokens)}</td>
+                              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                                {lc.cacheReadTokens > 0 ? formatTokens(lc.cacheReadTokens) : "—"}
+                              </td>
+                              <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(lc.durationMs)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
             </>
