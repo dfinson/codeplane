@@ -431,7 +431,7 @@ function AgentTurn({ turn, isLast }: { turn: AgentTurnData; isLast?: boolean }) 
                 {msg.title}
               </p>
             )}
-            <AgentMarkdown content={msg.content} />
+            <AgentMarkdown content={msg.content.replace(/:$/, "")} />
             <span className="text-xs text-muted-foreground mt-1 block">
               {new Date(ts).toLocaleTimeString()}
             </span>
