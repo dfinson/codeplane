@@ -107,3 +107,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .tower-worktrees/
+
+# Tool artifacts
+.desloppify/
+scorecard.png
