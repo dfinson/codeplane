@@ -305,21 +305,9 @@ async def resume_job(
 
 
 @router.get("/models")
-async def list_models() -> list[dict[str, object]]:
-    """List available models from the Copilot SDK."""
-    try:
-        from copilot import CopilotClient
-
-        client = CopilotClient()
-        await client.start()
-        models = await client.list_models()
-        await client.stop()
-        return [m.to_dict() for m in models]
-    except Exception as exc:
-        import structlog
-
-        structlog.get_logger().warning("list_models_failed", error=str(exc))
-        return []
+async def list_models(request: Request) -> list[dict[str, object]]:
+    """Return the model list cached at server startup."""
+    return request.app.state.cached_models
 
 
 @router.get("/jobs/{job_id}/logs", response_model=list[LogLinePayload])

@@ -203,6 +203,24 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.utility_session = utility_session
     app.state.session_factory = session_factory
 
+    # --- Model list cache ---
+    # Fetch once at startup so the job-creation form renders instantly.
+    # The SDK is not hot-swapped at runtime, so a one-time cache is correct.
+    cached_models: list[dict[str, object]] = []
+    try:
+        from copilot import CopilotClient
+
+        _model_client = CopilotClient()
+        await _model_client.start()
+        try:
+            cached_models = [m.to_dict() for m in await _model_client.list_models()]
+            log.info("models_cached", count=len(cached_models))
+        finally:
+            await _model_client.stop()
+    except Exception as exc:
+        log.warning("model_cache_failed", error=str(exc))
+    app.state.cached_models = cached_models
+
     # --- Voice service ---
     voice_service = VoiceService()
     # Pre-load the whisper model at startup so the first request is fast
