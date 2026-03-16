@@ -636,8 +636,64 @@ class TestSSEManager:
         assert "event: snapshot" in frames[0]
         assert '"jobs": []' in frames[0] or '"jobs":[]' in frames[0]
 
+    @pytest.mark.asyncio
+    async def test_replay_snapshot_includes_pending_approvals(self) -> None:
+        """Snapshot sent to a reconnecting client includes pending approvals."""
+        from backend.models.domain import Approval
 
-class TestBuildSSEDataAllTypes:
+        mgr = SSEManager()
+        conn = SSEConnection(job_id="job-1")
+        mgr.register(conn)
+
+        now = datetime.now(UTC)
+        events = [
+            DomainEvent(
+                event_id=f"evt-{i}",
+                job_id="job-1",
+                timestamp=now,
+                kind=DomainEventKind.log_line_emitted,
+                payload={"seq": i},
+            )
+            for i in range(MAX_REPLAY_EVENTS + 1)
+        ]
+
+        event_repo = AsyncMock()
+        event_repo.list_after.return_value = events
+
+        job_repo = AsyncMock()
+        job_repo.get.return_value = _make_job_domain("job-1")
+
+        approval_repo = AsyncMock()
+        approval_repo.list_pending.return_value = [
+            Approval(
+                id="apr-1",
+                job_id="job-1",
+                description="Delete file?",
+                proposed_action="rm file.txt",
+                requested_at=now,
+            ),
+        ]
+
+        await mgr.replay_events(
+            conn,
+            event_repo,
+            job_repo,
+            last_event_id=0,
+            approval_repo=approval_repo,
+        )
+
+        frames: list[str] = []
+        while not conn.queue.empty():
+            frames.append(conn.queue.get_nowait())
+
+        assert "event: snapshot" in frames[0]
+        snapshot_data = json.loads(frames[0].split("data: ", 1)[1].split("\n")[0])
+        assert len(snapshot_data["pendingApprovals"]) == 1
+        assert snapshot_data["pendingApprovals"][0]["id"] == "apr-1"
+        assert snapshot_data["pendingApprovals"][0]["description"] == "Delete file?"
+        assert snapshot_data["pendingApprovals"][0]["proposedAction"] == "rm file.txt"
+        approval_repo.list_pending.assert_called_once_with(job_id="job-1")
+
     """Test _build_sse_data for every SSE event type."""
 
     def test_approval_requested_payload(self) -> None:

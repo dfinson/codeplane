@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useTowerStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, resolveJob } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, fetchApprovals, resolveJob } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
@@ -60,6 +60,18 @@ export function JobDetailScreen() {
             transcript: { ...s.transcript, [jobId]: mergedTx },
           };
         });
+    }).catch(() => {});
+  }, [jobId]);
+
+  // Load pending approvals so late-joining clients can approve/reject.
+  useEffect(() => {
+    if (!jobId) return;
+    fetchApprovals(jobId).then((approvals) => {
+      useTowerStore.setState((s) => {
+        const updated = { ...s.approvals };
+        for (const a of approvals) updated[a.id] = a;
+        return { approvals: updated };
+      });
     }).catch(() => {});
   }, [jobId]);
 
@@ -132,7 +144,7 @@ export function JobDetailScreen() {
 
   const repoName = job.repo.split("/").pop() ?? job.repo;
   const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
-  const canRerun = ["succeeded", "failed", "canceled"].includes(job.state);
+  const canRetry = job.state === "failed";
   const isRunning = job.state === "running";
 
   return (
@@ -169,10 +181,10 @@ export function JobDetailScreen() {
                 Cancel
               </Button>
             )}
-            {canRerun && (
+            {canRetry && (
               <Button size="sm" variant="outline" loading={actionLoading} onClick={handleRerun}>
                 <RotateCcw size={14} />
-                Rerun
+                Retry
               </Button>
             )}
           </div>
@@ -372,7 +384,7 @@ export function JobDetailScreen() {
         )}
       </div>
 
-      {completeOpen && job && (
+      {job && (
         <CompleteJobDialog job={job} open={completeOpen} onClose={() => setCompleteOpen(false)} />
       )}
 
