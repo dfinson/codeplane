@@ -279,6 +279,86 @@ describe("TowerStore", () => {
 
       expect(selectJobs(afterState)).toEqual(selectJobs(beforeState));
     });
+
+    it("session_resumed clears all stale badge fields", () => {
+      // Set up a job with all badge fields populated (e.g. after succeed + discard + archive + model downgrade)
+      useTowerStore.setState({
+        jobs: {
+          "job-1": makeJob({
+            state: "succeeded",
+            resolution: "discarded",
+            conflictFiles: ["src/app.ts"],
+            failureReason: "old failure",
+            archivedAt: "2025-06-01T00:00:00Z",
+            modelDowngraded: true,
+            requestedModel: "gpt-4",
+            actualModel: "gpt-3.5",
+            prUrl: "https://github.com/org/repo/pull/1",
+            mergeStatus: "not_merged",
+            completedAt: "2025-06-01T00:00:00Z",
+          }),
+        },
+      });
+
+      useTowerStore.getState().dispatchSSEEvent("session_resumed", {
+        jobId: "job-1",
+        timestamp: "2025-06-02T00:00:00Z",
+        session_number: 2,
+      });
+
+      const job = selectJobs(useTowerStore.getState())["job-1"]!;
+      expect(job.state).toBe("running");
+      expect(job.resolution).toBeNull();
+      expect(job.conflictFiles).toBeNull();
+      expect(job.failureReason).toBeNull();
+      expect(job.archivedAt).toBeNull();
+      expect(job.modelDowngraded).toBe(false);
+      expect(job.requestedModel).toBeNull();
+      expect(job.actualModel).toBeNull();
+      expect(job.prUrl).toBeNull();
+      expect(job.mergeStatus).toBeNull();
+      expect(job.completedAt).toBeNull();
+    });
+
+    it("session_resumed dedup path also clears all badge fields", () => {
+      // Pre-populate transcript with matching divider to trigger dedup path
+      useTowerStore.setState({
+        jobs: {
+          "job-1": makeJob({
+            state: "succeeded",
+            resolution: "conflict",
+            conflictFiles: ["a.ts"],
+            modelDowngraded: true,
+            requestedModel: "gpt-4",
+            actualModel: "gpt-3.5",
+          }),
+        },
+        transcript: {
+          "job-1": [
+            {
+              jobId: "job-1",
+              seq: -99,
+              timestamp: "2025-06-02T00:00:00Z",
+              role: "divider",
+              content: "Session",
+            },
+          ],
+        },
+      });
+
+      // Same timestamp triggers dedup branch
+      useTowerStore.getState().dispatchSSEEvent("session_resumed", {
+        jobId: "job-1",
+        timestamp: "2025-06-02T00:00:00Z",
+        session_number: 2,
+      });
+
+      const job = selectJobs(useTowerStore.getState())["job-1"]!;
+      expect(job.state).toBe("running");
+      expect(job.resolution).toBeNull();
+      expect(job.conflictFiles).toBeNull();
+      expect(job.modelDowngraded).toBe(false);
+    });
   });
 
   describe("selectors", () => {

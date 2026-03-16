@@ -175,6 +175,11 @@ class JobRepository(BaseRepository):
         row.completed_at = None  # type: ignore[assignment]
         row.session_id = None  # type: ignore[assignment]
         row.session_count = new_session_count  # type: ignore[assignment]
+        row.resolution = None  # type: ignore[assignment]
+        row.failure_reason = None  # type: ignore[assignment]
+        row.archived_at = None  # type: ignore[assignment]
+        row.merge_status = None  # type: ignore[assignment]
+        row.pr_url = None  # type: ignore[assignment]
         row.updated_at = datetime.now(UTC)  # type: ignore[assignment]
         await self._session.flush()
 
