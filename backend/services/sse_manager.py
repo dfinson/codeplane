@@ -13,6 +13,7 @@ import structlog
 from backend.models.api_schemas import (
     ApprovalRequestedPayload,
     ApprovalResolvedPayload,
+    ApprovalResponse,
     DiffUpdatePayload,
     JobArchivedPayload,
     JobFailedPayload,
@@ -33,6 +34,7 @@ from backend.models.api_schemas import (
 from backend.models.events import DomainEvent, DomainEventKind
 
 if TYPE_CHECKING:
+    from backend.persistence.approval_repo import ApprovalRepository
     from backend.persistence.event_repo import EventRepository
     from backend.persistence.job_repo import JobRepository
 
@@ -404,12 +406,36 @@ class SSEManager:
         )
         await conn.send(frame)
 
+    @staticmethod
+    async def _fetch_pending_approvals(
+        approval_repo: ApprovalRepository | None,
+        job_id: str | None,
+    ) -> list[ApprovalResponse]:
+        """Fetch pending approvals from the database for snapshot payloads."""
+        if approval_repo is None:
+            return []
+
+        pending = await approval_repo.list_pending(job_id=job_id)
+        return [
+            ApprovalResponse(
+                id=a.id,
+                job_id=a.job_id,
+                description=a.description,
+                proposed_action=a.proposed_action,
+                requested_at=a.requested_at,
+                resolved_at=a.resolved_at,
+                resolution=a.resolution,
+            )
+            for a in pending
+        ]
+
     async def replay_events(
         self,
         conn: SSEConnection,
         event_repo: EventRepository,
         job_repo: JobRepository,
         last_event_id: int,
+        approval_repo: ApprovalRepository | None = None,
     ) -> None:
         """Replay missed events to a reconnecting client.
 
@@ -466,9 +492,7 @@ class SSEManager:
             ]
             snapshot = SnapshotPayload(
                 jobs=job_responses,
-                # TODO: populate from ApprovalRepository once approval
-                # persistence is fully wired up (Phase 4+).
-                pending_approvals=[],
+                pending_approvals=await self._fetch_pending_approvals(approval_repo, conn.job_id),
             )
             await self.send_snapshot(conn, snapshot)
 
