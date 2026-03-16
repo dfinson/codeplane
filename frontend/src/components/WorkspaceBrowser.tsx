@@ -200,7 +200,16 @@ export default function WorkspaceBrowser({ jobId }: Props) {
               value={fileContent}
               language={guessLang(selected)}
               theme="vs-dark"
-              options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: isMobile ? 12 : 13 }}
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                fontSize: isMobile ? 12 : 13,
+                lineNumbersMinChars: isMobile ? 2 : 3,
+                glyphMargin: false,
+                lineDecorationsWidth: isMobile ? 2 : 4,
+                folding: !isMobile,
+              }}
             />
           </div>
         )

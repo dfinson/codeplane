@@ -153,6 +153,10 @@ export default function DiffViewer({ jobId }: DiffViewerProps) {
               renderSideBySide: !isMobile,
               scrollBeyondLastLine: false,
               fontSize: isMobile ? 12 : 13,
+              lineNumbersMinChars: isMobile ? 2 : 3,
+              glyphMargin: false,
+              lineDecorationsWidth: isMobile ? 2 : 4,
+              folding: !isMobile,
             }}
           />
         ) : null}
