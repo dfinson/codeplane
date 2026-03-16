@@ -364,13 +364,13 @@ export const useTowerStore = create<TowerState>((set, get) => ({
           const existing = state.transcript[jobId] ?? [];
           // Deduplicate: two SSE connections may deliver the same event
           if (existing.some((e) => e.role === "divider" && e.timestamp === divider.timestamp)) {
-            return { jobs: state.jobs[jobId] ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running" } } : state.jobs };
+            return { jobs: state.jobs[jobId] ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running", resolution: null, conflictFiles: null } } : state.jobs };
           }
           return {
             transcript: { ...state.transcript, [jobId]: [...existing, divider] },
-            // Also update job state back to running
+            // Also update job state back to running and clear any conflict state
             jobs: state.jobs[jobId]
-              ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running" } }
+              ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: "running", resolution: null, conflictFiles: null } }
               : state.jobs,
           };
         }
