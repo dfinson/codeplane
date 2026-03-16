@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.config import DEFAULT_DB_PATH, TOWER_DIR
+from backend.config import CODEPLANE_DIR, DEFAULT_DB_PATH
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -56,7 +56,7 @@ async def get_session(
 
 def run_migrations(db_path: Path | None = None) -> None:
     """Run Alembic migrations programmatically at startup."""
-    TOWER_DIR.mkdir(parents=True, exist_ok=True)
+    CODEPLANE_DIR.mkdir(parents=True, exist_ok=True)
 
     from alembic.config import Config
 

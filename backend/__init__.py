@@ -1,1 +1,1 @@
-"""Tower — A control tower for running and supervising coding agents."""
+"""CodePlane — A control plane for running and supervising coding agents."""

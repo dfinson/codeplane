@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
-from backend.config import TowerConfig, load_config
+from backend.config import CPLConfig, load_config
 from backend.models.api_schemas import (
     ContinueJobRequest,
     CreateJobRequest,
@@ -35,13 +35,13 @@ if TYPE_CHECKING:
 router = APIRouter(tags=["jobs"])
 
 
-def _get_config() -> TowerConfig:
+def _get_config() -> CPLConfig:
     return load_config()
 
 
 # The session_factory will be injected at app startup via app.state
 async def _get_session(
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
 ) -> AsyncSession:
     """Placeholder — replaced by the real dependency at startup."""
     raise NotImplementedError("Session factory not wired")  # pragma: no cover
@@ -49,7 +49,7 @@ async def _get_session(
 
 def _get_job_service(
     session: Annotated[AsyncSession, Depends(_get_session)],
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     request: Request,
 ) -> JobService:
     job_repo = JobRepository(session)

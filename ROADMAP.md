@@ -1,4 +1,4 @@
-# Tower — Implementation Roadmap
+# CodePlane — Implementation Roadmap
 
 Work is broken into phases. Each phase produces a usable increment. Later phases build on earlier ones.
 
@@ -9,8 +9,8 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 > Backend skeleton, database, domain models, dev tooling.
 
 - [x] FastAPI app factory (`backend/main.py`) with health endpoint
-- [x] CLI entry point (`tower up`, `tower init`, `tower version`) via Click
-- [x] Global config loading and validation (`~/.tower/config.yaml`)
+- [x] CLI entry point (`cpl up`, `cpl init`, `cpl version`) via Click
+- [x] Global config loading and validation (`~/.codeplane/config.yaml`)
 - [x] SQLAlchemy models and SQLite schema (`jobs`, `events`, `approvals`, `artifacts`, `diff_snapshots`)
 - [x] Alembic migration setup and initial migration
 - [x] Pydantic API schemas (`models/api_schemas.py`) — all request/response models
@@ -102,7 +102,7 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [x] DiffViewer component (Monaco DiffEditor, file list, hunk navigation)
 - [x] Workspace browser API (`GET /api/jobs/{id}/workspace`, `/workspace/file`)
 - [x] Workspace browser component (`react-arborist` file tree)
-- [x] `ArtifactService` — collection from `.tower/artifacts/`, diff snapshots, agent summaries
+- [x] `ArtifactService` — collection from `.codeplane/artifacts/`, diff snapshots, agent summaries
 - [x] Artifact list + download endpoints
 - [x] Artifact viewer component
 
@@ -145,10 +145,10 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 - [x] Retention policy — artifact cleanup, worktree cleanup, daily background task
 - [x] Settings API (`GET/PUT /api/settings/global`, `GET /api/settings/repos`, `GET /api/settings/repos/{repo_path}`)
 - [x] Settings screen (global config editor, repo config list, cleanup action)
-- [x] Dev Tunnel integration (`tower up --tunnel`)
+- [x] Dev Tunnel integration (`cpl up --tunnel`)
 - [x] Dynamic CORS for tunnel origin
 - [x] Startup warning for `0.0.0.0` binding
-- [x] `rich` terminal status display for `tower up`
+- [x] `rich` terminal status display for `cpl up`
 
 ---
 
@@ -166,21 +166,21 @@ Work is broken into phases. Each phase produces a usable increment. Later phases
 
 ## Phase 11: MCP Orchestration Server
 
-> Expose Tower's full functionality as an MCP server so external agents can use it as an orchestration layer.
+> Expose CodePlane's full functionality as an MCP server so external agents can use it as an orchestration layer.
 
 - [x] MCP server transport — Streamable HTTP on `/mcp`, mounted in FastAPI app
-- [x] MCP tool handlers for Job management (`tower_job_create`, `tower_job_list`, `tower_job_get`, `tower_job_cancel`, `tower_job_rerun`, `tower_job_message`)
-- [x] MCP tool handlers for Approvals (`tower_approval_list`, `tower_approval_resolve`)
-- [x] MCP tool handlers for Workspace & Artifacts (`tower_workspace_list`, `tower_workspace_read`, `tower_artifact_list`, `tower_artifact_get`)
-- [x] MCP tool handlers for Configuration (`tower_settings_get`, `tower_settings_update`, `tower_repo_list`, `tower_repo_get`, `tower_repo_register`, `tower_repo_remove`)
-- [x] MCP tool handlers for Observability (`tower_health`, `tower_cleanup_worktrees`)
-- [x] Server-to-client notifications via event bus subscription (`tower/job_state_changed`, `tower/approval_requested`, `tower/job_completed`, `tower/agent_message`)
+- [x] MCP tool handlers for Job management (`cpl_job_create`, `cpl_job_list`, `cpl_job_get`, `cpl_job_cancel`, `cpl_job_rerun`, `cpl_job_message`)
+- [x] MCP tool handlers for Approvals (`cpl_approval_list`, `cpl_approval_resolve`)
+- [x] MCP tool handlers for Workspace & Artifacts (`cpl_workspace_list`, `cpl_workspace_read`, `cpl_artifact_list`, `cpl_artifact_get`)
+- [x] MCP tool handlers for Configuration (`cpl_settings_get`, `cpl_settings_update`, `cpl_repo_list`, `cpl_repo_get`, `cpl_repo_register`, `cpl_repo_remove`)
+- [x] MCP tool handlers for Observability (`cpl_health`, `cpl_cleanup_worktrees`)
+- [x] Server-to-client notifications via event bus subscription (`cpl/job_state_changed`, `cpl/approval_requested`, `cpl/job_completed`, `cpl/agent_message`)
 - [x] Schema derivation from existing Pydantic models
 - [x] MCP server configuration (`mcp_server.enabled`, `mcp_server.path`)
 - [x] Dev Tunnel authentication for remote MCP connections
-- [x] AGENT_TOWER_HOME env var support for custom data directory
-- [x] `tower setup` interactive onboarding CLI (deps check, auth, devtunnel, config)
-- [x] `tower doctor` non-interactive dependency check
+- [x] CODEPLANE_HOME env var support for custom data directory
+- [x] `cpl setup` interactive onboarding CLI (deps check, auth, devtunnel, config)
+- [x] `cpl doctor` non-interactive dependency check
 - [x] WSL-aware headless auth flows for gh CLI and devtunnel
 - [x] Integration tests for MCP tool calls end-to-end
 - [x] Comprehensive unit tests (state machine, diff parser, config, approval logic)

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
-    from backend.config import TowerConfig
+    from backend.config import CPLConfig
 
 log = structlog.get_logger()
 
@@ -28,7 +28,7 @@ class GitError(Exception):
 class GitService:
     """Manages git worktrees, branches, and workspace isolation."""
 
-    def __init__(self, config: TowerConfig) -> None:
+    def __init__(self, config: CPLConfig) -> None:
         self._worktrees_dirname = config.runtime.worktrees_dirname
 
     async def _run_git(self, *args: str, cwd: str | Path) -> str:
@@ -127,7 +127,7 @@ class GitService:
             args.append("--allow-empty")
         await self._run_git(*args, cwd=cwd)
 
-    async def auto_commit(self, *, cwd: str | Path, message: str = "Tower: auto-commit agent changes") -> bool:
+    async def auto_commit(self, *, cwd: str | Path, message: str = "CodePlane: auto-commit agent changes") -> bool:
         """Stage + commit any uncommitted changes. Returns True if a commit was created."""
         dirty = await self._is_worktree_dirty(cwd)
         if not dirty:
@@ -141,7 +141,7 @@ class GitService:
         dirty = await self._is_worktree_dirty(cwd)
         if not dirty:
             return False
-        await self._run_git("stash", "push", "-u", "-m", "tower-merge-temp", cwd=cwd)
+        await self._run_git("stash", "push", "-u", "-m", "cpl-merge-temp", cwd=cwd)
         return True
 
     async def stash_pop(self, *, cwd: str | Path) -> None:
@@ -254,7 +254,7 @@ class GitService:
         Raises:
             GitError: If git operations fail.
         """
-        branch_name = branch or f"tower/{job_id}"
+        branch_name = branch or f"cpl/{job_id}"
         resolved_base_ref = await self._resolve_ref(repo_path, base_ref)
         return await self._setup_secondary_worktree(repo_path, job_id, resolved_base_ref, branch_name)
 

@@ -10,7 +10,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.config import (
-    TowerConfig,
+    CPLConfig,
     load_config,
     register_repo,
     save_config,
@@ -46,15 +46,15 @@ def _strip_url_credentials(url: str) -> str:
     return url
 
 
-def _get_config() -> TowerConfig:
+def _get_config() -> CPLConfig:
     return load_config()
 
 
-def _get_git_service(config: Annotated[TowerConfig, Depends(_get_config)]) -> GitService:
+def _get_git_service(config: Annotated[CPLConfig, Depends(_get_config)]) -> GitService:
     return GitService(config)
 
 
-def _config_to_response(config: TowerConfig) -> SettingsResponse:
+def _config_to_response(config: CPLConfig) -> SettingsResponse:
     return SettingsResponse(
         max_concurrent_jobs=config.runtime.max_concurrent_jobs,
         permission_mode=config.runtime.permission_mode,
@@ -70,7 +70,7 @@ def _config_to_response(config: TowerConfig) -> SettingsResponse:
 
 @router.get("/settings", response_model=SettingsResponse)
 async def get_settings(
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
 ) -> SettingsResponse:
     """Get current settings as structured data."""
     return _config_to_response(config)
@@ -107,7 +107,7 @@ async def update_settings(
 
 @router.get("/settings/repos", response_model=RepoListResponse)
 async def list_repos(
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
 ) -> RepoListResponse:
     """List registered repository paths."""
     return RepoListResponse(items=config.repos)
@@ -116,7 +116,7 @@ async def list_repos(
 @router.get("/settings/repos/{repo_path:path}", response_model=RepoDetailResponse)
 async def get_repo_detail(
     repo_path: str,
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     git: Annotated[GitService, Depends(_get_git_service)],
 ) -> RepoDetailResponse:
     """Get detailed config for a single registered repository."""
@@ -144,7 +144,7 @@ async def get_repo_detail(
 @router.post("/settings/repos", response_model=RegisterRepoResponse, status_code=201)
 async def register_repo_endpoint(
     body: RegisterRepoRequest,
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     git: Annotated[GitService, Depends(_get_git_service)],
 ) -> RegisterRepoResponse:
     """Register a repository (local path or remote URL)."""
@@ -184,7 +184,7 @@ async def register_repo_endpoint(
 @router.delete("/settings/repos/{repo_path:path}", status_code=204)
 async def unregister_repo_endpoint(
     repo_path: str,
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
 ) -> None:
     """Remove a repository from the allowlist."""
     try:
@@ -195,7 +195,7 @@ async def unregister_repo_endpoint(
 
 @router.post("/settings/cleanup-worktrees")
 async def cleanup_worktrees(
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     git: Annotated[GitService, Depends(_get_git_service)],
 ) -> dict[str, int]:
     """Clean up completed job worktrees for all registered repos."""

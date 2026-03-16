@@ -117,7 +117,7 @@ class MergeService:
         try:
             committed = await self._git.auto_commit(
                 cwd=commit_cwd,
-                message=f"Tower: agent changes for {job_id}",
+                message=f"CodePlane: agent changes for {job_id}",
             )
             if committed:
                 log.info("merge_auto_committed", job_id=job_id, cwd=commit_cwd)
@@ -244,7 +244,7 @@ class MergeService:
             await self._git.merge(
                 branch,
                 cwd=repo_path,
-                message=f"Merge {branch} (Tower {job_id})",
+                message=f"Merge {branch} (CodePlane {job_id})",
             )
             merge_ok = True
         except GitError:
@@ -337,8 +337,8 @@ class MergeService:
             cwd=cwd,
             head=branch,
             base=base_ref,
-            title=f"[Tower] {prompt[:80]}",
-            body=f"Automated PR created by Tower for job `{job_id}`.",
+            title=f"[CodePlane] {prompt[:80]}",
+            body=f"Automated PR created by CodePlane for job `{job_id}`.",
         )
 
         if pr_result.ok:
@@ -496,7 +496,7 @@ class MergeService:
         try:
             committed = await self._git.auto_commit(
                 cwd=commit_cwd,
-                message=f"Tower: agent changes for {job_id}",
+                message=f"CodePlane: agent changes for {job_id}",
             )
             if committed:
                 log.info("resolve_auto_committed", job_id=job_id, cwd=commit_cwd)
@@ -552,7 +552,7 @@ class MergeService:
                 await self._git.merge(
                     branch,
                     cwd=repo_path,
-                    message=f"Merge {branch} (Tower {job_id})",
+                    message=f"Merge {branch} (CodePlane {job_id})",
                 )
                 merge_ok = True
             except GitError:

@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.config import CompletionConfig, TowerConfig
+from backend.config import CompletionConfig, CPLConfig
 from backend.models.db import Base
 from backend.models.domain import Job
 from backend.models.events import DomainEvent, DomainEventKind
@@ -85,7 +85,7 @@ def _branch_with_change(repo: Path, branch: str, filename: str, content: str) ->
     _git(repo, "checkout", "main")
 
 
-def _make_job(repo: str, job_id: str = "job-1", branch: str = "tower/job-1") -> Job:
+def _make_job(repo: str, job_id: str = "job-1", branch: str = "cpl/job-1") -> Job:
     now = datetime.now(UTC)
     return Job(
         id=job_id,
@@ -116,7 +116,7 @@ def _make_service(
     defaults = dict(strategy="auto_merge", auto_push=False, cleanup_worktree=False, delete_branch_after_merge=False)
     defaults.update(overrides)
     return MergeService(
-        git_service=GitService(TowerConfig()),
+        git_service=GitService(CPLConfig()),
         event_bus=event_bus,
         session_factory=sf,
         config=CompletionConfig(**defaults),
@@ -138,7 +138,7 @@ class TestFastForwardMerge:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "new_file.py", "print('hello')\n")
+        _branch_with_change(repo, "cpl/job-1", "new_file.py", "print('hello')\n")
 
         service = _make_service(event_bus, session_factory)
         await _insert_job(session_factory, _make_job(str(repo)))
@@ -154,7 +154,7 @@ class TestFastForwardMerge:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -176,7 +176,7 @@ class TestFastForwardMerge:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "file.py", "x = 1\n")
+        _branch_with_change(repo, "cpl/job-1", "file.py", "x = 1\n")
 
         service = _make_service(event_bus, session_factory)
         await _insert_job(session_factory, _make_job(str(repo)))
@@ -185,7 +185,7 @@ class TestFastForwardMerge:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -211,7 +211,7 @@ class TestRegularMerge:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "feature.py", "def feature(): pass\n")
+        _branch_with_change(repo, "cpl/job-1", "feature.py", "def feature(): pass\n")
 
         # Diverge main with a DIFFERENT file
         (repo / "other.py").write_text("# other\n")
@@ -225,7 +225,7 @@ class TestRegularMerge:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -251,7 +251,7 @@ class TestConflictFallback:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "README.md", "# Branch\n")
+        _branch_with_change(repo, "cpl/job-1", "README.md", "# Branch\n")
 
         # Conflicting change on main
         (repo / "README.md").write_text("# Main\n")
@@ -272,7 +272,7 @@ class TestConflictFallback:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -310,7 +310,7 @@ class TestPrOnlyStrategy:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "file.py", "x = 1\n")
+        _branch_with_change(repo, "cpl/job-1", "file.py", "x = 1\n")
 
         service = _make_service(event_bus, session_factory, strategy="pr_only")
         await _insert_job(session_factory, _make_job(str(repo)))
@@ -319,7 +319,7 @@ class TestPrOnlyStrategy:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -377,7 +377,7 @@ class TestEdgeCases:
         repo = tmp_path / "repo"
         repo.mkdir()
         _init_repo(repo)
-        _branch_with_change(repo, "tower/job-1", "file.py", "x = 1\n")
+        _branch_with_change(repo, "cpl/job-1", "file.py", "x = 1\n")
 
         service = _make_service(event_bus, session_factory, delete_branch_after_merge=True)
         await _insert_job(session_factory, _make_job(str(repo)))
@@ -386,7 +386,7 @@ class TestEdgeCases:
             job_id="job-1",
             repo_path=str(repo),
             worktree_path=None,
-            branch="tower/job-1",
+            branch="cpl/job-1",
             base_ref="main",
             prompt="test",
         )
@@ -398,4 +398,4 @@ class TestEdgeCases:
             text=True,
             check=True,
         )
-        assert "tower/job-1" not in branches.stdout
+        assert "cpl/job-1" not in branches.stdout

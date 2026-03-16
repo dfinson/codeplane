@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from backend.config import (
-    TowerConfig,
+    CPLConfig,
     load_config,
     register_repo,
     save_config,
@@ -22,12 +22,12 @@ def config_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def config() -> TowerConfig:
-    return TowerConfig(repos=[])
+def config() -> CPLConfig:
+    return CPLConfig(repos=[])
 
 
 class TestSaveConfig:
-    def test_save_and_reload(self, config: TowerConfig, config_path: Path) -> None:
+    def test_save_and_reload(self, config: CPLConfig, config_path: Path) -> None:
         config.repos = ["/repos/a", "/repos/b"]
         save_config(config, config_path)
         assert config_path.exists()
@@ -36,7 +36,7 @@ class TestSaveConfig:
             raw = yaml.safe_load(f)
         assert raw["repos"] == ["/repos/a", "/repos/b"]
 
-    def test_save_creates_parent_dirs(self, config: TowerConfig, tmp_path: Path) -> None:
+    def test_save_creates_parent_dirs(self, config: CPLConfig, tmp_path: Path) -> None:
         deep_path = tmp_path / "nested" / "dir" / "config.yaml"
         save_config(config, deep_path)
         assert deep_path.exists()
@@ -45,7 +45,7 @@ class TestSaveConfig:
 class TestRegisterRepo:
     def test_register_adds_to_list(
         self,
-        config: TowerConfig,
+        config: CPLConfig,
         config_path: Path,
     ) -> None:
         result = register_repo(config, "/repos/test", config_path)
@@ -54,7 +54,7 @@ class TestRegisterRepo:
 
     def test_register_idempotent(
         self,
-        config: TowerConfig,
+        config: CPLConfig,
         config_path: Path,
     ) -> None:
         register_repo(config, "/repos/test", config_path)
@@ -64,7 +64,7 @@ class TestRegisterRepo:
 
     def test_register_persists_to_file(
         self,
-        config: TowerConfig,
+        config: CPLConfig,
         config_path: Path,
     ) -> None:
         register_repo(config, "/repos/test", config_path)
@@ -77,7 +77,7 @@ class TestRegisterRepo:
 class TestUnregisterRepo:
     def test_unregister_removes_from_list(
         self,
-        config: TowerConfig,
+        config: CPLConfig,
         config_path: Path,
     ) -> None:
         resolved = str(Path("/repos/test").resolve())
@@ -90,7 +90,7 @@ class TestUnregisterRepo:
 
     def test_unregister_nonexistent_raises(
         self,
-        config: TowerConfig,
+        config: CPLConfig,
         config_path: Path,
     ) -> None:
         with pytest.raises(ValueError, match="not in the allowlist"):
@@ -104,7 +104,7 @@ class TestLoadConfig:
         assert config.server.host == "127.0.0.1"
 
     def test_load_saved_config(self, config_path: Path) -> None:
-        cfg = TowerConfig(repos=["/repos/a"])
+        cfg = CPLConfig(repos=["/repos/a"])
         save_config(cfg, config_path)
         loaded = load_config(config_path)
         assert loaded.repos == ["/repos/a"]

@@ -37,7 +37,7 @@ class _TurnToolBuffer(TypedDict):
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.config import TowerConfig
+    from backend.config import CPLConfig
     from backend.services.agent_adapter import AgentAdapterInterface
     from backend.services.approval_service import ApprovalService
     from backend.services.diff_service import DiffService
@@ -57,8 +57,8 @@ _HEARTBEAT_WARNING_S = 90
 _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
 
-def _discover_mcp_servers(repo_path: str, config: TowerConfig) -> dict[str, MCPServerConfig]:
-    """Discover MCP servers from .vscode/mcp.json and global config, respecting .tower.yml disabled list."""
+def _discover_mcp_servers(repo_path: str, config: CPLConfig) -> dict[str, MCPServerConfig]:
+    """Discover MCP servers from .vscode/mcp.json and global config, respecting .codeplane.yml disabled list."""
     import json
     from pathlib import Path
 
@@ -67,7 +67,7 @@ def _discover_mcp_servers(repo_path: str, config: TowerConfig) -> dict[str, MCPS
     servers: dict[str, MCPServerConfig] = {}
 
     # 1. Global config: tools.mcp section
-    global_config_path = Path.home() / ".tower" / "config.yaml"
+    global_config_path = Path.home() / ".codeplane" / "config.yaml"
     if global_config_path.exists():
         try:
             with open(global_config_path) as f:
@@ -104,33 +104,33 @@ def _discover_mcp_servers(repo_path: str, config: TowerConfig) -> dict[str, MCPS
         except Exception:
             log.warning("mcp_repo_config_read_failed", path=str(mcp_json_path))
 
-    # 3. Apply .tower.yml disabled list
-    tower_yml_path = Path(repo_path) / ".tower.yml"
-    if tower_yml_path.exists():
+    # 3. Apply .codeplane.yml disabled list
+    codeplane_yml_path = Path(repo_path) / ".codeplane.yml"
+    if codeplane_yml_path.exists():
         try:
-            with open(tower_yml_path) as f:
+            with open(codeplane_yml_path) as f:
                 tower_config = yaml.safe_load(f) or {}
             disabled = tower_config.get("tools", {}).get("mcp", {}).get("disabled", [])
             if isinstance(disabled, list):
                 for name in disabled:
                     servers.pop(str(name), None)
         except Exception:
-            log.warning("tower_yml_read_failed", path=str(tower_yml_path))
+            log.warning("codeplane_yml_read_failed", path=str(codeplane_yml_path))
 
     return servers
 
 
 def _resolve_protected_paths(repo_path: str) -> list[str]:
-    """Read protected_paths from .tower.yml if present."""
+    """Read protected_paths from .codeplane.yml if present."""
     from pathlib import Path
 
     import yaml
 
-    tower_yml = Path(repo_path) / ".tower.yml"
-    if not tower_yml.exists():
+    codeplane_yml = Path(repo_path) / ".codeplane.yml"
+    if not codeplane_yml.exists():
         return []
     try:
-        with open(tower_yml) as f:
+        with open(codeplane_yml) as f:
             data = yaml.safe_load(f) or {}
         paths = data.get("protected_paths", [])
         return [str(p) for p in paths] if isinstance(paths, list) else []
@@ -139,16 +139,16 @@ def _resolve_protected_paths(repo_path: str) -> list[str]:
 
 
 def _resolve_permission_mode(repo_path: str) -> str | None:
-    """Read permission_mode from .tower.yml if present (per-repo override)."""
+    """Read permission_mode from .codeplane.yml if present (per-repo override)."""
     from pathlib import Path
 
     import yaml
 
-    tower_yml = Path(repo_path) / ".tower.yml"
-    if not tower_yml.exists():
+    codeplane_yml = Path(repo_path) / ".codeplane.yml"
+    if not codeplane_yml.exists():
         return None
     try:
-        with open(tower_yml) as f:
+        with open(codeplane_yml) as f:
             data = yaml.safe_load(f) or {}
         mode = data.get("permission_mode")
         if mode and str(mode) in ("permissive", "auto", "supervised", "readonly"):
@@ -160,12 +160,12 @@ def _resolve_permission_mode(repo_path: str) -> str | None:
 
 def _build_session_config(
     job: Job,
-    config: TowerConfig,
+    config: CPLConfig,
     permission_mode_override: str | None = None,
 ) -> SessionConfig:
     """Build a SessionConfig from a Job record and resolved config.
 
-    Permission mode priority: per-job override > .tower.yml > global config.
+    Permission mode priority: per-job override > .codeplane.yml > global config.
     """
     workspace = job.worktree_path or job.repo
     mcp_servers = _discover_mcp_servers(job.repo, config)
@@ -202,7 +202,7 @@ class RuntimeService:
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
         adapter: AgentAdapterInterface,
-        config: TowerConfig,
+        config: CPLConfig,
         approval_service: ApprovalService | None = None,
         diff_service: DiffService | None = None,
         merge_service: MergeService | None = None,
@@ -1192,8 +1192,8 @@ class RuntimeService:
             cwd=job.worktree_path,
             head=job.branch,
             base=job.base_ref,
-            title=f"[Tower] {job.prompt[:80]}",
-            body=f"Automated PR created by Tower for job `{job_id}`.",
+            title=f"[CodePlane] {job.prompt[:80]}",
+            body=f"Automated PR created by CodePlane for job `{job_id}`.",
         )
         if pr_result.ok:
             log.info("pr_created", job_id=job_id, pr_url=pr_result.url, platform=adapter.name)

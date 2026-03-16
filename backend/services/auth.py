@@ -1,7 +1,7 @@
-"""Password-based authentication for Tower.
+"""Password-based authentication for CodePlane.
 
 Implements TermBeam-style auth:
-- Password auto-generated or set via --password / TOWER_PASSWORD
+- Password auto-generated or set via --password / CODEPLANE_PASSWORD
 - httpOnly cookie sessions with 24h expiry
 - Rate-limited login endpoint (5 attempts/min/IP)
 - Localhost requests bypass auth (same-machine access is trusted)
@@ -93,7 +93,7 @@ _LOGIN_HTML = """\
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tower — Login</title>
+<title>CodePlane — Login</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -127,7 +127,7 @@ _LOGIN_HTML = """\
 </head>
 <body>
 <div class="login-card">
-  <h1>Tower</h1>
+  <h1>CodePlane</h1>
   <p class="subtitle">Enter the password printed in your terminal</p>
   <form id="login-form">
     <label for="password">Password</label>
@@ -195,7 +195,7 @@ async def handle_login(request: Request) -> Response:
         or ".devtunnels.ms" in request.headers.get("host", "")
     )
     response.set_cookie(
-        key="tower_session",
+        key="cpl_session",
         value=token,
         httponly=True,
         samesite="lax",
@@ -225,7 +225,7 @@ async def auth_middleware(request: Request, call_next: Any) -> Response:
         return await call_next(request)  # type: ignore[no-any-return]
 
     # Check session cookie
-    token = request.cookies.get("tower_session")
+    token = request.cookies.get("cpl_session")
     if _is_valid_token(token):
         return await call_next(request)  # type: ignore[no-any-return]
 

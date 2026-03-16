@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useTowerStore, selectJobLogs } from "../store";
+import { useStore, selectJobLogs } from "../store";
 
 function isTimelineEvent(msg: string, level: string): boolean {
   if (level === "error") return true;
@@ -19,7 +19,7 @@ function dotColor(level: string, msg: string): string {
 }
 
 export function ExecutionTimeline({ jobId }: { jobId: string }) {
-  const logs = useTowerStore(selectJobLogs(jobId));
+  const logs = useStore(selectJobLogs(jobId));
   const events = useMemo(
     () => logs.filter((l) => isTimelineEvent(l.message, l.level)),
     [logs],

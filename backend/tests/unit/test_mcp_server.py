@@ -20,7 +20,7 @@ def _make_job(**overrides) -> Job:
         strategy="single_agent",
         base_ref="main",
         branch="fix/bug",
-        worktree_path="/test/repo/.tower-worktrees/fix-bug",
+        worktree_path="/test/repo/.cpl-worktrees/fix-bug",
         session_id=None,
         pr_url=None,
         created_at=datetime.now(UTC),
@@ -81,12 +81,12 @@ class TestMCPServerCreation:
         assert mcp_server is not None
 
     def test_server_has_name(self, mcp_server) -> None:
-        assert mcp_server.name == "Tower"
+        assert mcp_server.name == "CodePlane"
 
 
 class TestJobTools:
     @pytest.mark.asyncio
-    async def test_tower_health(self, mcp_server, mock_session_factory) -> None:
+    async def test_cpl_health(self, mcp_server, mock_session_factory) -> None:
         """Test the health tool returns structured data."""
 
         # The health tool creates its own JobService, so we need to mock it
@@ -98,7 +98,7 @@ class TestJobTools:
 
             # Call the tool directly via the registered function
             tools = mcp_server._tool_manager._tools
-            health_fn = tools.get("tower_health")
+            health_fn = tools.get("cpl_health")
             if health_fn:
                 result = await health_fn.fn()
                 assert result["status"] == "healthy"
@@ -106,21 +106,21 @@ class TestJobTools:
                 assert result["queued_jobs"] == 1
 
     @pytest.mark.asyncio
-    async def test_tower_job_list(self, mcp_server) -> None:
+    async def test_cpl_job_list(self, mcp_server) -> None:
         with patch("backend.mcp.server.JobService") as mock_job_svc:
             mock_svc = AsyncMock()
             mock_svc.list_jobs = AsyncMock(return_value=([_make_job()], None, False))
             mock_job_svc.return_value = mock_svc
 
             tools = mcp_server._tool_manager._tools
-            list_fn = tools.get("tower_job_list")
+            list_fn = tools.get("cpl_job_list")
             if list_fn:
                 result = await list_fn.fn()
                 assert len(result["items"]) == 1
                 assert result["has_more"] is False
 
     @pytest.mark.asyncio
-    async def test_tower_job_get_not_found(self, mcp_server) -> None:
+    async def test_cpl_job_get_not_found(self, mcp_server) -> None:
         from backend.services.job_service import JobNotFoundError
 
         with patch("backend.mcp.server.JobService") as mock_job_svc:
@@ -129,7 +129,7 @@ class TestJobTools:
             mock_job_svc.return_value = mock_svc
 
             tools = mcp_server._tool_manager._tools
-            get_fn = tools.get("tower_job_get")
+            get_fn = tools.get("cpl_job_get")
             if get_fn:
                 result = await get_fn.fn(job_id="nonexistent")
                 assert "error" in result
@@ -137,22 +137,22 @@ class TestJobTools:
 
 class TestConfigTools:
     @pytest.mark.asyncio
-    async def test_tower_repo_list(self, mcp_server) -> None:
+    async def test_cpl_repo_list(self, mcp_server) -> None:
         with patch("backend.mcp.server.load_config") as mock_config:
             cfg = MagicMock()
             cfg.repos = ["/test/repo"]
             mock_config.return_value = cfg
 
             tools = mcp_server._tool_manager._tools
-            list_fn = tools.get("tower_repo_list")
+            list_fn = tools.get("cpl_repo_list")
             if list_fn:
                 result = await list_fn.fn()
                 assert result["items"] == ["/test/repo"]
 
     @pytest.mark.asyncio
-    async def test_tower_settings_get(self, mcp_server) -> None:
+    async def test_cpl_settings_get(self, mcp_server) -> None:
         tools = mcp_server._tool_manager._tools
-        get_fn = tools.get("tower_settings_get")
+        get_fn = tools.get("cpl_settings_get")
         if get_fn:
             result = await get_fn.fn()
             assert "max_concurrent_jobs" in result
@@ -161,9 +161,9 @@ class TestConfigTools:
 
 class TestApprovalTools:
     @pytest.mark.asyncio
-    async def test_tower_approval_resolve_invalid_resolution(self, mcp_server) -> None:
+    async def test_cpl_approval_resolve_invalid_resolution(self, mcp_server) -> None:
         tools = mcp_server._tool_manager._tools
-        resolve_fn = tools.get("tower_approval_resolve")
+        resolve_fn = tools.get("cpl_approval_resolve")
         if resolve_fn:
             result = await resolve_fn.fn(approval_id="a-1", resolution="maybe")
             assert "error" in result
@@ -172,17 +172,17 @@ class TestApprovalTools:
 
 class TestMessageTool:
     @pytest.mark.asyncio
-    async def test_tower_job_message_empty_content(self, mcp_server) -> None:
+    async def test_cpl_job_message_empty_content(self, mcp_server) -> None:
         tools = mcp_server._tool_manager._tools
-        msg_fn = tools.get("tower_job_message")
+        msg_fn = tools.get("cpl_job_message")
         if msg_fn:
             result = await msg_fn.fn(job_id="job-1", content="")
             assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_tower_job_message_too_long(self, mcp_server) -> None:
+    async def test_cpl_job_message_too_long(self, mcp_server) -> None:
         tools = mcp_server._tool_manager._tools
-        msg_fn = tools.get("tower_job_message")
+        msg_fn = tools.get("cpl_job_message")
         if msg_fn:
             result = await msg_fn.fn(job_id="job-1", content="x" * 10001)
             assert "error" in result

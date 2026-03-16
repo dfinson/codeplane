@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.config import TowerConfig, load_config
+from backend.config import CPLConfig, load_config
 from backend.models.api_schemas import WorkspaceEntry, WorkspaceEntryType, WorkspaceListResponse
 from backend.persistence.job_repo import JobRepository
 from backend.services.job_service import JobNotFoundError, JobService
@@ -15,7 +15,7 @@ from backend.services.job_service import JobNotFoundError, JobService
 router = APIRouter(tags=["workspace"])
 
 
-def _get_config() -> TowerConfig:
+def _get_config() -> CPLConfig:
     return load_config()
 
 
@@ -23,7 +23,7 @@ def _get_config() -> TowerConfig:
 async def list_workspace(
     request: Request,
     job_id: str,
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     path: str = "",
     cursor: str | None = Query(None),
     limit: int = Query(200, ge=1, le=200),
@@ -86,7 +86,7 @@ async def list_workspace(
 async def get_workspace_file(
     request: Request,
     job_id: str,
-    config: Annotated[TowerConfig, Depends(_get_config)],
+    config: Annotated[CPLConfig, Depends(_get_config)],
     path: str = Query(..., description="Relative path within the worktree"),
 ) -> dict[str, str]:
     """Get the contents of a single file in the job's worktree."""

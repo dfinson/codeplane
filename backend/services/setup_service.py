@@ -1,9 +1,9 @@
-"""Interactive setup and dependency checker for Tower.
+"""Interactive setup and dependency checker for CodePlane.
 
 Provides a questionnaire-based onboarding flow that:
 - Checks system dependencies (node, gh CLI, devtunnel)
 - Offers to install missing deps (auto + manual fallback)
-- Configures AGENT_TOWER_HOME (with OS-specific persistence instructions)
+- Configures CODEPLANE_HOME (with OS-specific persistence instructions)
 - Handles gh CLI auth and devtunnel login (with WSL-aware headless flow)
 """
 
@@ -210,11 +210,11 @@ def run_setup() -> None:
     """Run the interactive setup questionnaire."""
     click.echo()
     click.secho("╔══════════════════════════════════════╗", fg="cyan")
-    click.secho("║       Tower — Initial Setup          ║", fg="cyan")
+    click.secho("║       CodePlane — Initial Setup          ║", fg="cyan")
     click.secho("╚══════════════════════════════════════╝", fg="cyan")
     click.echo()
 
-    # --- Step 1: AGENT_TOWER_HOME ---
+    # --- Step 1: CODEPLANE_HOME ---
     _setup_tower_home()
 
     # --- Step 2: System dependencies ---
@@ -230,25 +230,25 @@ def run_setup() -> None:
     _setup_config()
 
     click.echo()
-    click.secho("✓ Setup complete! Run 'tower up' to start the server.", fg="green", bold=True)
+    click.secho("✓ Setup complete! Run 'cpl up' to start the server.", fg="green", bold=True)
     click.echo()
 
 
 def _setup_tower_home() -> None:
-    """Configure AGENT_TOWER_HOME directory."""
+    """Configure CODEPLANE_HOME directory."""
     click.secho("1. Data Directory", fg="cyan", bold=True)
     click.echo()
 
-    current = os.environ.get("AGENT_TOWER_HOME")
-    default = str(Path.home() / ".tower")
+    current = os.environ.get("CODEPLANE_HOME")
+    default = str(Path.home() / ".codeplane")
 
     if current:
-        click.echo(f"  AGENT_TOWER_HOME is set to: {current}")
+        click.echo(f"  CODEPLANE_HOME is set to: {current}")
         if click.confirm("  Keep this setting?", default=True):
             return
 
     click.echo(f"  Default location: {default}")
-    click.echo("  Tower stores config, database, and logs here.")
+    click.echo("  CodePlane stores config, database, and logs here.")
     click.echo()
 
     use_default = click.confirm("  Use the default location?", default=True)
@@ -265,13 +265,13 @@ def _setup_tower_home() -> None:
     if tower_dir != default:
         click.echo()
         click.secho("  To persist this across sessions:", fg="yellow")
-        instructions = _get_env_persistence_instructions("AGENT_TOWER_HOME", tower_dir)
+        instructions = _get_env_persistence_instructions("CODEPLANE_HOME", tower_dir)
         for line in instructions.split("\n"):
             click.echo(f"    {line}")
         click.echo()
 
         # Set for the current process
-        os.environ["AGENT_TOWER_HOME"] = tower_dir
+        os.environ["CODEPLANE_HOME"] = tower_dir
     else:
         Path(tower_dir).mkdir(parents=True, exist_ok=True)
         click.echo(f"  Using: {tower_dir}")
@@ -295,7 +295,7 @@ def _check_dependencies() -> None:
 
             optional = dep.name == "Dev Tunnel CLI"
             severity = "(optional)" if optional else "(required)"
-            click.echo(f"    {dep.name} is {severity} for Tower.")
+            click.echo(f"    {dep.name} is {severity} for CodePlane.")
 
             if click.confirm("    Attempt automatic installation?", default=not optional):
                 success = _try_auto_install(dep)
@@ -306,7 +306,7 @@ def _check_dependencies() -> None:
                         continue
                 _show_manual_instructions(dep)
                 if not optional:
-                    click.secho("    Please install manually and re-run 'tower setup'.", fg="yellow")
+                    click.secho("    Please install manually and re-run 'cpl setup'.", fg="yellow")
             else:
                 _show_manual_instructions(dep)
 
@@ -377,7 +377,7 @@ def _setup_devtunnel_login() -> None:
 
     if not shutil.which("devtunnel"):
         click.secho("  ⊘ Dev Tunnel CLI not installed — skipping.", fg="yellow")
-        click.echo("    (Not required unless you want remote access via 'tower up --tunnel')")
+        click.echo("    (Not required unless you want remote access via 'cpl up --tunnel')")
         click.echo()
         return
 
@@ -422,7 +422,7 @@ def _setup_devtunnel_login() -> None:
 
 
 def _setup_config() -> None:
-    """Initialize Tower config if not present."""
+    """Initialize CodePlane config if not present."""
     click.secho("5. Configuration", fg="cyan", bold=True)
     click.echo()
 
@@ -439,7 +439,7 @@ def _setup_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Non-interactive dependency check (for `tower up` pre-flight)
+# Non-interactive dependency check (for `cpl up` pre-flight)
 # ---------------------------------------------------------------------------
 
 

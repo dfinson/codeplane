@@ -11,18 +11,18 @@ from typing import TYPE_CHECKING
 import structlog
 from sqlalchemy import delete, select
 
-from backend.config import TOWER_DIR
+from backend.config import CODEPLANE_DIR
 from backend.models.db import ArtifactRow, DiffSnapshotRow, JobRow
 from backend.models.domain import TERMINAL_STATES
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.config import TowerConfig
+    from backend.config import CPLConfig
 
 log = structlog.get_logger()
 
-ARTIFACTS_DIR = TOWER_DIR / "artifacts"
+ARTIFACTS_DIR = CODEPLANE_DIR / "artifacts"
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
 
 
@@ -32,7 +32,7 @@ class RetentionService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         self._session_factory = session_factory
         self._retention_days = config.retention.artifact_retention_days

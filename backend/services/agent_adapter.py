@@ -96,7 +96,7 @@ class CopilotAdapter(AgentAdapterInterface):
 
         client = CopilotClient()
 
-        # Permission handler — bridges SDK permission requests into Tower's
+        # Permission handler — bridges SDK permission requests into CodePlane's
         # approval system based on the job's permission mode.
         async def _on_permission(request: PermissionRequest, invocation: dict[str, str]) -> PermissionRequestResult:
             from copilot import PermissionRequestResult as _Result
@@ -210,13 +210,13 @@ class CopilotAdapter(AgentAdapterInterface):
         session_opts = SdkSessionConfig(
             working_directory=config.workspace_path,
             on_permission_request=_on_permission,
-            # Tower is a headless orchestrator — there is no interactive terminal.
+            # CodePlane is a headless orchestrator — there is no interactive terminal.
             # Appending this instruction prevents the agent from entering plan mode
             # (which requires Shift+Tab to exit and has no equivalent in a web UI).
             system_message={
                 "mode": "append",
                 "content": (
-                    "You are running inside Tower, a headless non-interactive orchestration "
+                    "You are running inside CodePlane, a headless non-interactive orchestration "
                     "framework. There is no human at a terminal. Do not enter plan mode or "
                     "pause to present a plan for review. Proceed directly with task execution. "
                     "Before making tool calls, call report_intent first to declare your current intent."
@@ -228,7 +228,7 @@ class CopilotAdapter(AgentAdapterInterface):
             session_opts["model"] = config.model
             log.info("sdk_session_model_requested", model=config.model)
 
-        # Create or resume SDK session; use the SDK-assigned session_id as Tower's identifier.
+        # Create or resume SDK session; use the SDK-assigned session_id as CodePlane's identifier.
         _resume_id = config.resume_sdk_session_id
         if _resume_id:
             resume_opts = ResumeSessionConfig(
@@ -246,7 +246,7 @@ class CopilotAdapter(AgentAdapterInterface):
         else:
             session = await client.create_session(session_opts)
 
-        session_id = session.session_id  # Use SDK-assigned ID as Tower's session identifier
+        session_id = session.session_id  # Use SDK-assigned ID as CodePlane's session identifier
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
         self._sessions[session_id] = session

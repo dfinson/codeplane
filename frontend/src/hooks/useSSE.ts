@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
-import { useTowerStore } from "../store";
+import { useStore } from "../store";
 
 /** Reconnection parameters per SPEC §3.5 */
 const INITIAL_DELAY_MS = 1000;
@@ -31,7 +31,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
     let disposed = false;
 
     const { setConnectionStatus, dispatchSSEEvent } =
-      useTowerStore.getState();
+      useStore.getState();
 
     function connect() {
       if (disposed) return;
@@ -140,7 +140,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
 
   const reconnect = useCallback(() => {
     attemptRef.current = 0;
-    useTowerStore.getState().setConnectionStatus("reconnecting");
+    useStore.getState().setConnectionStatus("reconnecting");
     connectRef.current?.();
   }, []);
 

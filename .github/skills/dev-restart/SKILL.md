@@ -1,11 +1,11 @@
 ---
 name: dev-restart
-description: Use this skill when explicitly instructed to restart the Tower server to apply frontend or backend changes.
+description: Use this skill when explicitly instructed to restart the CodePlane server to apply frontend or backend changes.
 ---
 
 # `dev-restart` Skill Instructions
 
-> **⚠️ Do not use this skill unless the operator has explicitly asked you to restart the Tower server.**
+> **⚠️ Do not use this skill unless the operator has explicitly asked you to restart the CodePlane server.**
 >
 > Restarting the server pauses all active agent sessions (including other agents working on this repo), shuts down the server, rebuilds the frontend, and then restarts everything. This is disruptive. Only proceed when instructed.
 
@@ -14,7 +14,7 @@ description: Use this skill when explicitly instructed to restart the Tower serv
 Only invoke this skill when the operator says something like:
 
 - "Restart the server"
-- "Rebuild and restart Tower"
+- "Rebuild and restart CodePlane"
 - "Run the dev restart script"
 - "Deploy the changes"
 
@@ -24,7 +24,7 @@ Do **not** run this script speculatively, as part of routine testing, or as a "j
 
 ## How to run
 
-From the repository root (`/home/dave01/wsl-repos/agent-tower`):
+From the repository root (`/home/dave01/wsl-repos/codeplane`):
 
 ```bash
 python tools/dev_restart.py
@@ -34,17 +34,17 @@ python tools/dev_restart.py
 
 | Flag           | Default     | Description                                                        |
 |----------------|-------------|--------------------------------------------------------------------|
-| `--host`       | `127.0.0.1` | Tower bind host                                                    |
-| `--port`       | `8080`      | Tower port                                                         |
+| `--host`       | `127.0.0.1` | CodePlane bind host                                                    |
+| `--port`       | `8080`      | CodePlane port                                                         |
 | `--pause-wait` | `10`        | Seconds to wait after pausing agents before killing the server     |
 
 ---
 
 ## What the script does
 
-1. Collects all running and waiting-for-approval agent sessions via the Tower API.
+1. Collects all running and waiting-for-approval agent sessions via the CodePlane API.
 2. Pauses each running session and waits `--pause-wait` seconds for agents to reach a stopping point.
-3. Stops the Tower server (SIGTERM → SIGKILL if needed).
+3. Stops the CodePlane server (SIGTERM → SIGKILL if needed).
 4. Builds the frontend (`npm run build`). If the build fails the server is **not** restarted — fix the error and run again.
 5. Restarts the server in the background, waits for `/health` to return 200.
 6. Resumes all previously active sessions with a context message explaining the restart.
@@ -53,6 +53,6 @@ python tools/dev_restart.py
 
 ## What to do if it fails
 
-- **Build failure**: The server is already stopped. Fix the build error, then re-run the script (or start manually with `tower up --tunnel --password aerosonic101`).
-- **Server didn't become healthy**: Check Tower logs for startup errors.
-- **A session failed to resume**: Resume it from the Tower UI or via `POST /api/jobs/{id}/resume`.
+- **Build failure**: The server is already stopped. Fix the build error, then re-run the script (or start manually with `cpl up --tunnel --password aerosonic101`).
+- **Server didn't become healthy**: Check CodePlane logs for startup errors.
+- **A session failed to resume**: Resume it from the CodePlane UI or via `POST /api/jobs/{id}/resume`.

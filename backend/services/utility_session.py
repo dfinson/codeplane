@@ -40,7 +40,7 @@ _HOUSEKEEPING_INTERVAL_S = 30
 # System prompt injected at session creation so the model understands its role
 _UTILITY_SYSTEM_PROMPT = """\
 You are a concise utility assistant embedded in a coding task management system
-called Tower. Your sole purpose is to generate short metadata: titles, branch
+called CodePlane. Your sole purpose is to generate short metadata: titles, branch
 names, progress summaries, commit messages, and PR descriptions.
 
 Rules:

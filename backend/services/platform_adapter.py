@@ -472,7 +472,7 @@ class PlatformRegistry:
             from backend.services.git_service import GitService
 
             git = GitService.__new__(GitService)
-            git._worktrees_dirname = ".tower-worktrees"
+            git._worktrees_dirname = ".cpl-worktrees"
             try:
                 origin_url = await git.get_origin_url(repo_path)
             except Exception:

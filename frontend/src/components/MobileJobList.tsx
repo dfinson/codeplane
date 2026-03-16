@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useTowerStore, selectJobs, selectApprovals } from "../store";
+import { useStore, selectJobs, selectApprovals } from "../store";
 import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
 import { cn } from "../lib/utils";
@@ -30,8 +30,8 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: string): JobSummary
 
 export function MobileJobList() {
   const [tab, setTab] = useState<string>("Active");
-  const jobs = useTowerStore(selectJobs);
-  const approvals = useTowerStore(selectApprovals);
+  const jobs = useStore(selectJobs);
+  const approvals = useStore(selectApprovals);
   const pendingCount = Object.values(approvals).filter((a) => !a.resolvedAt).length;
 
   const filtered = useMemo(() => filterForTab(jobs, tab), [jobs, tab]);

@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.config import TowerConfig
+from backend.config import CPLConfig
 from backend.models.db import ArtifactRow, Base, JobRow
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.services.retention_service import RetentionService
@@ -31,14 +31,14 @@ async def session_factory(tmp_path: Path) -> AsyncGenerator[async_sessionmaker[A
 
 
 @pytest.fixture
-def config() -> TowerConfig:
-    cfg = TowerConfig()
+def config() -> CPLConfig:
+    cfg = CPLConfig()
     cfg.retention.artifact_retention_days = 7
     return cfg
 
 
 @pytest.fixture
-def retention_svc(session_factory: async_sessionmaker[AsyncSession], config: TowerConfig) -> RetentionService:
+def retention_svc(session_factory: async_sessionmaker[AsyncSession], config: CPLConfig) -> RetentionService:
     return RetentionService(session_factory, config)
 
 

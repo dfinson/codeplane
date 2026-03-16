@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-from backend.config import TowerConfig
+from backend.config import CPLConfig
 from backend.models.db import Base
 from backend.models.domain import (
     ACTIVE_STATES,
@@ -45,19 +45,19 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-def config(tmp_path: object) -> TowerConfig:
-    return TowerConfig(repos=["/repos/test"])
+def config(tmp_path: object) -> CPLConfig:
+    return CPLConfig(repos=["/repos/test"])
 
 
 @pytest.fixture
-def git_service(config: TowerConfig) -> GitService:
+def git_service(config: CPLConfig) -> GitService:
     return GitService(config)
 
 
 @pytest.fixture
 def job_service(
     session: AsyncSession,
-    config: TowerConfig,
+    config: CPLConfig,
     git_service: GitService,
 ) -> JobService:
     return JobService(
@@ -149,7 +149,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -168,7 +168,7 @@ class TestJobService:
         assert job.state == JobState.queued
         assert job.repo == "/repos/test"
         assert job.prompt == "Fix the bug"
-        assert job.branch == "tower/job-1"
+        assert job.branch == "cpl/job-1"
 
     @pytest.mark.asyncio
     async def test_create_job_repo_not_allowed(
@@ -192,7 +192,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -230,7 +230,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -247,7 +247,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-2"),
+                return_value=("/repos/test", "cpl/job-2"),
             ),
             patch.object(
                 job_service._git,
@@ -273,7 +273,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -300,7 +300,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -331,7 +331,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -351,7 +351,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-2"),
+                return_value=("/repos/test", "cpl/job-2"),
             ),
             patch.object(
                 job_service._git,
@@ -384,7 +384,7 @@ class TestJobService:
                     job_service._git,
                     "create_worktree",
                     new_callable=AsyncMock,
-                    return_value=("/repos/test", f"tower/job-{i}"),
+                    return_value=("/repos/test", f"cpl/job-{i}"),
                 ),
                 patch.object(
                     job_service._git,
@@ -442,7 +442,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,
@@ -471,7 +471,7 @@ class TestJobService:
                 job_service._git,
                 "create_worktree",
                 new_callable=AsyncMock,
-                return_value=("/repos/test", "tower/job-1"),
+                return_value=("/repos/test", "cpl/job-1"),
             ),
             patch.object(
                 job_service._git,

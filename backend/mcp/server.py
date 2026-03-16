@@ -1,4 +1,4 @@
-"""MCP server exposing Tower functionality as MCP tools.
+"""MCP server exposing CodePlane functionality as MCP tools.
 
 Each tool handler is thin: validate input, delegate to the existing service
 layer, and return the result — same principle as the REST route handlers.
@@ -118,15 +118,15 @@ def create_mcp_server(
     runtime_service: RuntimeService,
     approval_service: ApprovalService,
 ) -> FastMCP:
-    """Create and configure the MCP server with all Tower tools."""
+    """Create and configure the MCP server with all CodePlane tools."""
     global _session_factory, _runtime_service, _approval_service  # noqa: PLW0603
     _session_factory = session_factory
     _runtime_service = runtime_service
     _approval_service = approval_service
 
     mcp = FastMCP(
-        "Tower",
-        instructions="Tower — control tower for running and supervising coding agents.",
+        "CodePlane",
+        instructions="CodePlane — control plane for running and supervising coding agents.",
         stateless_http=True,
         streamable_http_path="/",
     )
@@ -147,8 +147,8 @@ def create_mcp_server(
 
 
 def _register_job_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_job_create", description="Create a new coding job (repo, prompt, strategy, options)")
-    async def tower_job_create(
+    @mcp.tool(name="cpl_job_create", description="Create a new coding job (repo, prompt, strategy, options)")
+    async def cpl_job_create(
         repo: str,
         prompt: str,
         base_ref: str | None = None,
@@ -190,8 +190,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
         )
         return resp.model_dump(mode="json")
 
-    @mcp.tool(name="tower_job_list", description="List jobs with optional status filter and pagination")
-    async def tower_job_list(
+    @mcp.tool(name="cpl_job_list", description="List jobs with optional status filter and pagination")
+    async def cpl_job_list(
         state: str | None = None,
         limit: int = 50,
         cursor: str | None = None,
@@ -233,8 +233,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
         )
         return resp.model_dump(mode="json")
 
-    @mcp.tool(name="tower_job_get", description="Get full detail for a single job")
-    async def tower_job_get(job_id: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_job_get", description="Get full detail for a single job")
+    async def cpl_job_get(job_id: str) -> dict[str, Any]:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
@@ -249,8 +249,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
                 return {"error": str(exc)}
         return _job_to_response(job)
 
-    @mcp.tool(name="tower_job_cancel", description="Cancel a running or queued job")
-    async def tower_job_cancel(job_id: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_job_cancel", description="Cancel a running or queued job")
+    async def cpl_job_cancel(job_id: str) -> dict[str, Any]:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
@@ -270,8 +270,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
         await runtime.cancel(job_id)
         return _job_to_response(job)
 
-    @mcp.tool(name="tower_job_rerun", description="Rerun a job with the same configuration")
-    async def tower_job_rerun(job_id: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_job_rerun", description="Rerun a job with the same configuration")
+    async def cpl_job_rerun(job_id: str) -> dict[str, Any]:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
@@ -295,8 +295,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
         )
         return resp.model_dump(mode="json")
 
-    @mcp.tool(name="tower_job_message", description="Send an operator message to a running job")
-    async def tower_job_message(job_id: str, content: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_job_message", description="Send an operator message to a running job")
+    async def cpl_job_message(job_id: str, content: str) -> dict[str, Any]:
         if not content or len(content) > 10000:
             return {"error": "Content must be between 1 and 10,000 characters"}
 
@@ -317,8 +317,8 @@ def _register_job_tools(mcp: FastMCP) -> None:
 
 
 def _register_approval_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_approval_list", description="List pending/resolved approvals for a job")
-    async def tower_approval_list(job_id: str) -> list[dict[str, Any]]:
+    @mcp.tool(name="cpl_approval_list", description="List pending/resolved approvals for a job")
+    async def cpl_approval_list(job_id: str) -> list[dict[str, Any]]:
         svc = _get_approval()
         approvals = await svc.list_for_job(job_id)
         return [
@@ -334,8 +334,8 @@ def _register_approval_tools(mcp: FastMCP) -> None:
             for a in approvals
         ]
 
-    @mcp.tool(name="tower_approval_resolve", description="Approve or reject a pending approval request")
-    async def tower_approval_resolve(approval_id: str, resolution: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_approval_resolve", description="Approve or reject a pending approval request")
+    async def cpl_approval_resolve(approval_id: str, resolution: str) -> dict[str, Any]:
         if resolution not in ("approved", "rejected"):
             return {"error": "Resolution must be 'approved' or 'rejected'"}
 
@@ -369,8 +369,8 @@ def _register_approval_tools(mcp: FastMCP) -> None:
 
 
 def _register_workspace_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_workspace_list", description="List files in a job's worktree")
-    async def tower_workspace_list(
+    @mcp.tool(name="cpl_workspace_list", description="List files in a job's worktree")
+    async def cpl_workspace_list(
         job_id: str,
         path: str = "",
         cursor: str | None = None,
@@ -433,8 +433,8 @@ def _register_workspace_tools(mcp: FastMCP) -> None:
         resp = WorkspaceListResponse(items=entries, cursor=next_cursor, has_more=has_more)
         return resp.model_dump(mode="json")
 
-    @mcp.tool(name="tower_workspace_read", description="Read a file from a job's worktree")
-    async def tower_workspace_read(job_id: str, path: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_workspace_read", description="Read a file from a job's worktree")
+    async def cpl_workspace_read(job_id: str, path: str) -> dict[str, Any]:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
@@ -469,8 +469,8 @@ def _register_workspace_tools(mcp: FastMCP) -> None:
 
 
 def _register_artifact_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_artifact_list", description="List artifacts produced by a job")
-    async def tower_artifact_list(job_id: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_artifact_list", description="List artifacts produced by a job")
+    async def cpl_artifact_list(job_id: str) -> dict[str, Any]:
         sf = _get_session_factory()
         async with sf() as session:
             svc = ArtifactService(ArtifactRepository(session))
@@ -492,8 +492,8 @@ def _register_artifact_tools(mcp: FastMCP) -> None:
         ]
         return {"items": items}
 
-    @mcp.tool(name="tower_artifact_get", description="Get artifact metadata by ID")
-    async def tower_artifact_get(artifact_id: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_artifact_get", description="Get artifact metadata by ID")
+    async def cpl_artifact_get(artifact_id: str) -> dict[str, Any]:
         sf = _get_session_factory()
         async with sf() as session:
             svc = ArtifactService(ArtifactRepository(session))
@@ -521,8 +521,8 @@ def _register_artifact_tools(mcp: FastMCP) -> None:
 
 
 def _register_config_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_settings_get", description="Get current settings as structured data")
-    async def tower_settings_get() -> dict[str, Any]:
+    @mcp.tool(name="cpl_settings_get", description="Get current settings as structured data")
+    async def cpl_settings_get() -> dict[str, Any]:
         config = load_config()
         return SettingsResponse(
             max_concurrent_jobs=config.runtime.max_concurrent_jobs,
@@ -537,7 +537,7 @@ def _register_config_tools(mcp: FastMCP) -> None:
         ).model_dump(mode="json")
 
     @mcp.tool(
-        name="tower_settings_update",
+        name="cpl_settings_update",
         description=(
             "Update settings. Fields: max_concurrent_jobs, permission_mode,"
             " voice_model, completion_strategy, auto_push, cleanup_worktree,"
@@ -545,7 +545,7 @@ def _register_config_tools(mcp: FastMCP) -> None:
             " max_artifact_size_mb, auto_archive_days"
         ),
     )
-    async def tower_settings_update(**kwargs: Any) -> dict[str, Any]:
+    async def cpl_settings_update(**kwargs: Any) -> dict[str, Any]:
         from backend.config import save_config
 
         config = load_config()
@@ -567,15 +567,15 @@ def _register_config_tools(mcp: FastMCP) -> None:
                 section = getattr(config, section_name)
                 setattr(section, attr, value)
         save_config(config)
-        return await tower_settings_get()  # type: ignore[no-any-return]
+        return await cpl_settings_get()  # type: ignore[no-any-return]
 
-    @mcp.tool(name="tower_repo_list", description="List registered repositories")
-    async def tower_repo_list() -> dict[str, Any]:
+    @mcp.tool(name="cpl_repo_list", description="List registered repositories")
+    async def cpl_repo_list() -> dict[str, Any]:
         config = load_config()
         return RepoListResponse(items=config.repos).model_dump(mode="json")
 
-    @mcp.tool(name="tower_repo_get", description="Get repo config with resolved details")
-    async def tower_repo_get(repo_path: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_repo_get", description="Get repo config with resolved details")
+    async def cpl_repo_get(repo_path: str) -> dict[str, Any]:
         config = load_config()
         resolved = str(Path(repo_path).expanduser().resolve())
         if resolved not in config.repos:
@@ -599,9 +599,9 @@ def _register_config_tools(mcp: FastMCP) -> None:
         ).model_dump(mode="json")
 
     @mcp.tool(
-        name="tower_repo_register", description="Register a repository (path or URL). If URL, clone_to is required."
+        name="cpl_repo_register", description="Register a repository (path or URL). If URL, clone_to is required."
     )
-    async def tower_repo_register(source: str, clone_to: str | None = None) -> dict[str, Any]:
+    async def cpl_repo_register(source: str, clone_to: str | None = None) -> dict[str, Any]:
         config = load_config()
         git = GitService(config)
 
@@ -625,8 +625,8 @@ def _register_config_tools(mcp: FastMCP) -> None:
         register_repo(config, resolved)
         return RegisterRepoResponse(path=resolved, source=source, cloned=False).model_dump(mode="json")
 
-    @mcp.tool(name="tower_repo_remove", description="Remove a repository from the allowlist")
-    async def tower_repo_remove(repo_path: str) -> dict[str, Any]:
+    @mcp.tool(name="cpl_repo_remove", description="Remove a repository from the allowlist")
+    async def cpl_repo_remove(repo_path: str) -> dict[str, Any]:
         config = load_config()
         try:
             unregister_repo(config, repo_path)
@@ -641,8 +641,8 @@ def _register_config_tools(mcp: FastMCP) -> None:
 
 
 def _register_observability_tools(mcp: FastMCP) -> None:
-    @mcp.tool(name="tower_health", description="Service health check")
-    async def tower_health() -> dict[str, Any]:
+    @mcp.tool(name="cpl_health", description="Service health check")
+    async def cpl_health() -> dict[str, Any]:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
@@ -662,8 +662,8 @@ def _register_observability_tools(mcp: FastMCP) -> None:
             queued_jobs=queued,
         ).model_dump(mode="json")
 
-    @mcp.tool(name="tower_cleanup_worktrees", description="Clean up worktrees for completed jobs")
-    async def tower_cleanup_worktrees() -> dict[str, Any]:
+    @mcp.tool(name="cpl_cleanup_worktrees", description="Clean up worktrees for completed jobs")
+    async def cpl_cleanup_worktrees() -> dict[str, Any]:
         config = load_config()
         git = GitService(config)
         total = 0

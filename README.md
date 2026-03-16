@@ -1,25 +1,29 @@
-<h1 align="center">Tower</h1>
+<p align="center">
+  <img src="docs/images/logo.png" alt="CodePlane" width="200" />
+</p>
+
+<h1 align="center">CodePlane</h1>
 
 <p align="center">
-  <strong>Control tower for running and supervising coding agents</strong>
+  <strong>Control plane for running and supervising coding agents</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-alpha">
   <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python ≥3.11">
   <img src="https://img.shields.io/badge/node-≥20-green" alt="Node ≥20">
-  <a href="https://github.com/dfinson/agent-tower/actions/workflows/ci.yml"><img src="https://github.com/dfinson/agent-tower/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://codecov.io/gh/dfinson/agent-tower"><img src="https://codecov.io/gh/dfinson/agent-tower/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <img src="https://img.shields.io/github/license/dfinson/agent-tower" alt="License">
+  <a href="https://github.com/dfinson/codeplane/actions/workflows/ci.yml"><img src="https://github.com/dfinson/codeplane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/dfinson/codeplane"><img src="https://codecov.io/gh/dfinson/codeplane/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <img src="https://img.shields.io/github/license/dfinson/codeplane" alt="License">
 </p>
 
 ---
 
 > **Pre-alpha** — Under active development. Not yet usable.
 
-Tower is a control tower for running and supervising coding agents.
+CodePlane is a control plane for running and supervising coding agents.
 
-Launch automated coding tasks against real repositories, watch everything the agent does in real time, and intervene when needed. Tower gives you visibility into execution progress, code changes, logs, artifacts, and agent reasoning so work can be reviewed and controlled as it happens.
+Launch automated coding tasks against real repositories, watch everything the agent does in real time, and intervene when needed. CodePlane gives you visibility into execution progress, code changes, logs, artifacts, and agent reasoning so work can be reviewed and controlled as it happens.
 
 ## Features (Planned)
 
@@ -48,7 +52,7 @@ React + TypeScript (Vite)  ──REST/SSE──▶  FastAPI (Python)
 ```bash
 # Backend
 uv sync
-uv run tower up --dev
+uv run cpl up --dev
 
 # Frontend (separate terminal)
 cd frontend

@@ -270,7 +270,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password: str | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(title="Tower", version="0.1.0", lifespan=_lifespan)
+    app = FastAPI(title="CodePlane", version="0.1.0", lifespan=_lifespan)
 
     origins: list[str] = []
     if dev:
@@ -306,7 +306,7 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
                 from backend.services.auth import _is_localhost, _is_valid_token
 
                 if not _is_localhost(request):
-                    token = request.cookies.get("tower_session")
+                    token = request.cookies.get("cpl_session")
                     if not _is_valid_token(token):
                         return JSONResponse({"detail": "Authentication required"}, status_code=401)
                 return await call_next(request)
@@ -348,7 +348,7 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
 
 @click.group()
 def cli() -> None:
-    """Tower — control tower for coding agents."""
+    """CodePlane — control plane for coding agents."""
 
 
 def _build_frontend() -> bool:
@@ -391,7 +391,7 @@ def _build_frontend() -> bool:
 @click.option("--password", default=None, help="Set auth password (auto-generated if --tunnel without --password)")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --tunnel)")
 def up(host: str | None, port: int | None, dev: bool, tunnel: bool, password: str | None, no_password: bool) -> None:
-    """Start the Tower server."""
+    """Start the CodePlane server."""
     config = load_config()
     host = host or config.server.host
     port = port or config.server.port
@@ -413,7 +413,7 @@ def up(host: str | None, port: int | None, dev: bool, tunnel: bool, password: st
     if not effective_password and not no_password:
         import os
 
-        env_pw = os.environ.get("TOWER_PASSWORD")
+        env_pw = os.environ.get("CODEPLANE_PASSWORD")
         if env_pw:
             effective_password = env_pw
 
@@ -459,7 +459,7 @@ def up(host: str | None, port: int | None, dev: bool, tunnel: bool, password: st
 def _start_tunnel(port: int) -> tuple[str | None, Any]:
     """Start a devtunnel with a stable, reusable tunnel name.
 
-    Naming convention: {username}-tower
+    Naming convention: {username}-cpl
     The tunnel is created once and reused on subsequent runs.
     If the name is taken, random padding is appended.
     """
@@ -473,7 +473,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
     try:
         # Get logged-in username
         user_result = _run(["devtunnel", "user", "show"])
-        username = "tower"
+        username = "codeplane"
         for line in user_result.stdout.splitlines():
             if "Logged in as" in line:
                 # "Logged in as dfinson using GitHub."
@@ -494,7 +494,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
             for t in data.get("tunnels", []):
                 tid = t.get("tunnelId", "")
                 existing_tunnels.append(tid.split(".")[0])
-                # Extract region from existing tunnel (e.g. "dfinson-devtower.euw")
+                # Extract region from existing tunnel (e.g. "dfinson-cpl.euw")
                 if tid.startswith(tunnel_name) and "." in tid:
                     tunnel_region = tid.split(".")[1]
         except (json.JSONDecodeError, KeyError):
@@ -591,9 +591,9 @@ def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | Non
             lines.append(f"[bold]Tunnel:[/bold] {tunnel_url}")
         if password:
             lines.append(f"[bold]Password:[/bold] {password}")
-        console.print(Panel("\n".join(lines), title="[bold cyan]Tower[/bold cyan]", border_style="cyan"))
+        console.print(Panel("\n".join(lines), title="[bold cyan]CodePlane[/bold cyan]", border_style="cyan"))
     except ImportError:
-        click.echo(f"Tower server: http://{host}:{port}")
+        click.echo(f"CodePlane server: http://{host}:{port}")
         if tunnel_url:
             click.echo(f"Tunnel: {tunnel_url}")
         if password:
@@ -615,7 +615,7 @@ def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | Non
 
 @cli.command()
 def init() -> None:
-    """Create default configuration at ~/.tower/config.yaml."""
+    """Create default configuration at ~/.codeplane/config.yaml."""
     import backend.config as _cfg
 
     if _cfg.DEFAULT_CONFIG_PATH.exists():
@@ -628,8 +628,8 @@ def init() -> None:
 
 @cli.command()
 def version() -> None:
-    """Print Tower version."""
-    click.echo("tower 0.1.0")
+    """Print CodePlane version."""
+    click.echo("cpl 0.1.0")
 
 
 @cli.command()
@@ -650,7 +650,7 @@ def doctor() -> None:
     if ok:
         click.secho("\nAll required dependencies are present.", fg="green")
     else:
-        click.secho("\nSome required dependencies are missing. Run 'tower setup' to install.", fg="red")
+        click.secho("\nSome required dependencies are missing. Run 'cpl setup' to install.", fg="red")
         raise SystemExit(1)
 
 

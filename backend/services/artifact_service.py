@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 # Default base directory for artifact files on disk
-_ARTIFACTS_BASE = Path.home() / ".tower" / "artifacts"
+_ARTIFACTS_BASE = Path.home() / ".codeplane" / "artifacts"
 
 
 class ArtifactService:
@@ -67,9 +67,9 @@ class ArtifactService:
         job_id: str,
         worktree_path: str,
     ) -> list[Artifact]:
-        """Scan .tower/artifacts/ in the worktree for custom artifacts."""
+        """Scan .codeplane/artifacts/ in the worktree for custom artifacts."""
         collected: list[Artifact] = []
-        artifacts_dir = Path(worktree_path) / ".tower" / "artifacts"
+        artifacts_dir = Path(worktree_path) / ".codeplane" / "artifacts"
         if not artifacts_dir.is_dir():
             return collected
 

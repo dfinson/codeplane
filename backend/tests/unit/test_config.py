@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from backend.config import TowerConfig, init_config, load_config
+from backend.config import CPLConfig, init_config, load_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 def test_load_config_returns_defaults_when_missing(tmp_path: Path) -> None:
     config = load_config(tmp_path / "nonexistent.yaml")
-    assert isinstance(config, TowerConfig)
+    assert isinstance(config, CPLConfig)
     assert config.server.host == "127.0.0.1"
     assert config.server.port == 8080
     assert config.runtime.max_concurrent_jobs == 2
@@ -74,5 +74,5 @@ def test_init_config_roundtrips(tmp_path: Path) -> None:
     init_config(cfg_path)
     config = load_config(cfg_path)
     assert config.server.port == 8080
-    assert config.runtime.worktrees_dirname == ".tower-worktrees"
+    assert config.runtime.worktrees_dirname == ".cpl-worktrees"
     assert config.retention.artifact_retention_days == 30

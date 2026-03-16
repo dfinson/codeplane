@@ -1,4 +1,4 @@
-# Contributing to Tower
+# Contributing to CodePlane
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@
 ```bash
 # Clone the repo
 git clone <repo-url>
-cd agent-tower
+cd codeplane
 
 # Backend
 uv sync
@@ -27,7 +27,7 @@ cd ..
 
 ```bash
 # Start backend in dev mode
-uv run tower up --dev
+uv run cpl up --dev
 
 # Start frontend dev server (separate terminal)
 cd frontend
@@ -73,7 +73,7 @@ npm run format
 ## Project Structure
 
 ```
-agent-tower/
+codeplane/
 ├── backend/                  # Python FastAPI backend
 │   ├── main.py               # App factory + CLI
 │   ├── config.py             # Configuration loading

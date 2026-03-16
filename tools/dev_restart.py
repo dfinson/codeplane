@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-dev_restart.py — Graceful Tower server restart for frontend development.
+dev_restart.py — Graceful CodePlane server restart for frontend development.
 
 Intended for use by agents working on this repository. Pauses all running
-agent sessions, rebuilds the frontend, restarts the Tower server, then
+agent sessions, rebuilds the frontend, restarts the CodePlane server, then
 resumes the sessions that were paused.
 
 Usage:
@@ -84,7 +84,7 @@ def pause_job(base_url: str, job_id: str) -> bool:
 def resume_job(base_url: str, job_id: str) -> bool:
     """Resume a failed job after server restart. Returns True on success."""
     instruction = (
-        "Resuming after a scheduled Tower server restart (frontend rebuild). "
+        "Resuming after a scheduled CodePlane server restart (frontend rebuild). "
         "Please continue exactly where you left off."
     )
     status, _ = _request("POST", f"{base_url}/api/jobs/{job_id}/resume", {"instruction": instruction})
@@ -163,9 +163,9 @@ def stop_server(port: int, graceful_timeout: int = 15) -> bool:
 
 
 def start_server(host: str, port: int) -> int:
-    """Start Tower in the background, detached from this process. Returns PID."""
+    """Start CodePlane in the background, detached from this process. Returns PID."""
     proc = subprocess.Popen(
-        ["uv", "run", "tower", "up", "--host", host, "--port", str(port)],
+        ["uv", "run", "cpl", "up", "--host", host, "--port", str(port)],
         cwd=REPO_ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -203,12 +203,12 @@ def build_frontend() -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Gracefully restart Tower for frontend development.",
+        description="Gracefully restart CodePlane for frontend development.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--host", default="127.0.0.1", help="Tower bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8080, help="Tower port (default: 8080)")
+    parser.add_argument("--host", default="127.0.0.1", help="CodePlane bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8080, help="CodePlane port (default: 8080)")
     parser.add_argument(
         "--pause-wait",
         type=int,
@@ -255,7 +255,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 3. Stop the server
     # ------------------------------------------------------------------
-    print(f"\n[3/6] Stopping Tower server on port {args.port}…")
+    print(f"\n[3/6] Stopping CodePlane server on port {args.port}…")
     stop_server(args.port)
 
     # ------------------------------------------------------------------
@@ -265,20 +265,20 @@ def main() -> None:
     if not build_frontend():
         print("\n  ✗ Frontend build failed. The server has NOT been restarted.")
         print("    Fix the build errors and run this script again.")
-        print("    (You may also restart the server manually: uv run tower up)\n")
+        print("    (You may also restart the server manually: uv run cpl up)\n")
         sys.exit(1)
     print("  ✓ Frontend build succeeded.")
 
     # ------------------------------------------------------------------
     # 5. Start the server
     # ------------------------------------------------------------------
-    print(f"\n[5/6] Starting Tower server ({args.host}:{args.port})…")
+    print(f"\n[5/6] Starting CodePlane server ({args.host}:{args.port})…")
     pid = start_server(args.host, args.port)
     print(f"  Server started (PID {pid}). Waiting for health check…")
 
     if not wait_for_health(base_url):
         print("  ✗ Server did not become healthy within 60 s.")
-        print("    Check the Tower logs for errors.")
+        print("    Check the CodePlane logs for errors.")
         sys.exit(1)
     print("  ✓ Server is healthy.")
 
@@ -294,7 +294,7 @@ def main() -> None:
     else:
         print("\n[6/6] No sessions to resume.")
 
-    print("\n✓ Done. Tower is running with the latest frontend build.\n")
+    print("\n✓ Done. CodePlane is running with the latest frontend build.\n")
 
 
 if __name__ == "__main__":

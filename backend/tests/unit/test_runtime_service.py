@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 import structlog
 
-from backend.config import TowerConfig
+from backend.config import CPLConfig
 from backend.models.db import Base
 from backend.models.domain import (
     Job,
@@ -122,8 +122,8 @@ def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 
 @pytest.fixture
-def config(tmp_path: Path) -> TowerConfig:
-    return TowerConfig(repos=[str(tmp_path)])
+def config(tmp_path: Path) -> CPLConfig:
+    return CPLConfig(repos=[str(tmp_path)])
 
 
 @pytest.fixture
@@ -141,7 +141,7 @@ def runtime(
     session_factory: async_sessionmaker[AsyncSession],
     event_bus: EventBus,
     adapter: FakeAgentAdapter,
-    config: TowerConfig,
+    config: CPLConfig,
 ) -> RuntimeService:
     return RuntimeService(
         session_factory=session_factory,
@@ -206,7 +206,7 @@ async def _create_db_job(
 
 class TestCapacityAndQueueing:
     async def test_start_job_within_capacity(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -218,7 +218,7 @@ class TestCapacityAndQueueing:
         assert runtime.running_count == 0  # completed
 
     async def test_enqueue_when_at_capacity(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """When max_concurrent_jobs is reached, new jobs get enqueued."""
         # Create a slow adapter so jobs stay in-flight
@@ -327,7 +327,7 @@ class TestJobLifecycle:
         runtime: RuntimeService,
         event_bus: EventBus,
         session_factory: async_sessionmaker[AsyncSession],
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         published: list[DomainEvent] = []
 
@@ -350,7 +350,7 @@ class TestJobLifecycle:
         assert DomainEventKind.job_succeeded in kinds
 
     async def test_cancel_running_job(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         # Use slow adapter to keep job running
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -368,7 +368,7 @@ class TestJobLifecycle:
         assert runtime.running_count == 0
 
     async def test_cancel_queued_job(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """cancel() for a non-running job is a no-op (state change is the API layer's job)."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -401,7 +401,7 @@ class TestJobLifecycle:
         await runtime.shutdown()
 
     async def test_send_message_delegates_to_strategy(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         slow_adapter = FakeAgentAdapter(delay=5.0)
         runtime._adapter = slow_adapter
@@ -431,7 +431,7 @@ class TestRecovery:
         runtime: RuntimeService,
         event_bus: EventBus,
         session_factory: async_sessionmaker[AsyncSession],
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         published: list[DomainEvent] = []
 
@@ -459,7 +459,7 @@ class TestRecovery:
         assert failed_events[0].payload["reason"] == "process_restarted"
 
     async def test_recover_restarts_queued_jobs(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         job = _make_job(repo=config.repos[0], state=JobState.queued)
         await _create_db_job(session_factory, job)
@@ -484,7 +484,7 @@ class TestRecovery:
 
 class TestShutdown:
     async def test_shutdown_cancels_all_tasks(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         slow_adapter = FakeAgentAdapter(delay=10.0)
         runtime._adapter = slow_adapter
@@ -609,11 +609,11 @@ class TestStrategyRegistry:
 
 
 class TestMCPDiscovery:
-    def test_empty_when_no_files_exist(self, config: TowerConfig) -> None:
+    def test_empty_when_no_files_exist(self, config: CPLConfig) -> None:
         result = _discover_mcp_servers("/nonexistent/repo", config)
         assert result == {}
 
-    def test_reads_vscode_mcp_json(self, tmp_path: Path, config: TowerConfig) -> None:
+    def test_reads_vscode_mcp_json(self, tmp_path: Path, config: CPLConfig) -> None:
         mcp_dir = tmp_path / ".vscode"
         mcp_dir.mkdir()
         mcp_json = {
@@ -633,7 +633,7 @@ class TestMCPDiscovery:
         assert result["myserver"].args == ["-y", "@myserver/mcp"]
         assert result["myserver"].env == {"TOKEN": "abc"}
 
-    def test_tower_yml_disables_servers(self, tmp_path: Path, config: TowerConfig) -> None:
+    def test_codeplane_yml_disables_servers(self, tmp_path: Path, config: CPLConfig) -> None:
         # Add a server via .vscode/mcp.json
         mcp_dir = tmp_path / ".vscode"
         mcp_dir.mkdir()
@@ -645,15 +645,15 @@ class TestMCPDiscovery:
         }
         (mcp_dir / "mcp.json").write_text(json.dumps(mcp_json))
 
-        # Disable 'remove' via .tower.yml
-        tower_yml = {"tools": {"mcp": {"disabled": ["remove"]}}}
-        (tmp_path / ".tower.yml").write_text(yaml.dump(tower_yml))
+        # Disable 'remove' via .codeplane.yml
+        codeplane_yml = {"tools": {"mcp": {"disabled": ["remove"]}}}
+        (tmp_path / ".codeplane.yml").write_text(yaml.dump(codeplane_yml))
 
         result = _discover_mcp_servers(str(tmp_path), config)
         assert "keep" in result
         assert "remove" not in result
 
-    def test_malformed_mcp_json_handled(self, tmp_path: Path, config: TowerConfig) -> None:
+    def test_malformed_mcp_json_handled(self, tmp_path: Path, config: CPLConfig) -> None:
         mcp_dir = tmp_path / ".vscode"
         mcp_dir.mkdir()
         (mcp_dir / "mcp.json").write_text("{invalid json")
@@ -669,19 +669,19 @@ class TestMCPDiscovery:
 
 
 class TestProtectedPaths:
-    def test_no_tower_yml(self) -> None:
+    def test_no_codeplane_yml(self) -> None:
         result = _resolve_protected_paths("/nonexistent")
         assert result == []
 
     def test_reads_protected_paths(self, tmp_path: Path) -> None:
-        tower_yml = {"protected_paths": ["src/config.py", "secrets/"]}
-        (tmp_path / ".tower.yml").write_text(yaml.dump(tower_yml))
+        codeplane_yml = {"protected_paths": ["src/config.py", "secrets/"]}
+        (tmp_path / ".codeplane.yml").write_text(yaml.dump(codeplane_yml))
 
         result = _resolve_protected_paths(str(tmp_path))
         assert result == ["src/config.py", "secrets/"]
 
     def test_malformed_yaml_returns_empty(self, tmp_path: Path) -> None:
-        (tmp_path / ".tower.yml").write_text(":::invalid:::")
+        (tmp_path / ".codeplane.yml").write_text(":::invalid:::")
         result = _resolve_protected_paths(str(tmp_path))
         assert result == []
 
@@ -692,14 +692,14 @@ class TestProtectedPaths:
 
 
 class TestBuildSessionConfig:
-    def test_uses_worktree_path_when_set(self, config: TowerConfig) -> None:
+    def test_uses_worktree_path_when_set(self, config: CPLConfig) -> None:
         job = _make_job()
         job.worktree_path = "/some/worktree"
         result = _build_session_config(job, config)
         assert result.workspace_path == "/some/worktree"
         assert result.prompt == job.prompt
 
-    def test_falls_back_to_repo(self, config: TowerConfig) -> None:
+    def test_falls_back_to_repo(self, config: CPLConfig) -> None:
         job = _make_job()
         job.worktree_path = None
         result = _build_session_config(job, config)
@@ -718,7 +718,7 @@ class TestBuildSessionConfig:
 
 class TestConcurrencyGuards:
     async def test_double_start_guard(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """_start_job should no-op if a task for the job already exists."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -739,7 +739,7 @@ class TestConcurrencyGuards:
         await runtime.shutdown()
 
     async def test_dequeue_respects_capacity(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """_dequeue_next under the lock should not exceed max_concurrent."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -766,7 +766,7 @@ class TestConcurrencyGuards:
         await runtime.shutdown()
 
     async def test_cancel_already_canceled_is_idempotent(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """CancelledError handler should not fail if job is already canceled."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -795,7 +795,7 @@ class TestConcurrencyGuards:
 
 class TestRecoveryCapacity:
     async def test_recover_respects_capacity(
-        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """recover_on_startup uses start_or_enqueue, respecting max_concurrent."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -821,7 +821,7 @@ class TestJobStateChangedEvent:
         runtime: RuntimeService,
         event_bus: EventBus,
         session_factory: async_sessionmaker[AsyncSession],
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         """_publish_state_event should use job_state_changed, not job_created."""
         published: list[DomainEvent] = []
@@ -891,7 +891,7 @@ class TestErrorEventCausesFailure:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         """A job whose adapter emits an error event should end as failed, not succeeded."""
         error_adapter = ErrorAdapter()
@@ -940,7 +940,7 @@ class TestStartOrEnqueueCapacitySafety:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
-        config: TowerConfig,
+        config: CPLConfig,
     ) -> None:
         """Multiple concurrent start_or_enqueue calls should not exceed max_concurrent."""
         slow_adapter = FakeAgentAdapter(delay=5.0)

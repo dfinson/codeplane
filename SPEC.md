@@ -1,4 +1,4 @@
-# Tower — Product Specification
+# CodePlane — Product Specification
 
 ---
 
@@ -35,7 +35,7 @@
 
 ## 1. Product Overview
 
-Tower is a control tower for running and supervising coding agents.
+CodePlane is a control plane for running and supervising coding agents.
 
 It allows an operator to launch automated coding tasks against real repositories and observe everything the agent does in real time.
 
@@ -45,7 +45,7 @@ Operators can intervene at any time by sending instructions, approving risky act
 
 The interface can be accessed locally or remotely through a Dev Tunnel, allowing jobs to be monitored and controlled from another device such as a phone.
 
-Tower turns autonomous coding agents into something observable, controllable, and safe to operate.
+CodePlane turns autonomous coding agents into something observable, controllable, and safe to operate.
 
 ### Core Capabilities
 
@@ -64,7 +64,7 @@ Tower turns autonomous coding agents into something observable, controllable, an
 
 ## 2. Technology Architecture
 
-Tower is a two-tier application.
+CodePlane is a two-tier application.
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -878,15 +878,15 @@ Queued jobs are re-evaluated against capacity and started if slots are available
 
 ## 7. Deployment Model
 
-Tower runs entirely on a single developer machine.
+CodePlane runs entirely on a single developer machine.
 
 ```
 Developer Machine
-├── Tower Backend (FastAPI on localhost:8080, serves frontend static files)
-├── SQLite database (~/.tower/data.db)
-├── Artifact storage (~/.tower/artifacts/)
-├── Global config (~/.tower/config.yaml)
-├── Application logs (~/.tower/logs/)
+├── CodePlane Backend (FastAPI on localhost:8080, serves frontend static files)
+├── SQLite database (~/.codeplane/data.db)
+├── Artifact storage (~/.codeplane/artifacts/)
+├── Global config (~/.codeplane/config.yaml)
+├── Application logs (~/.codeplane/logs/)
 ├── Local git repositories (/repos/...)
 └── Dev Tunnel (HTTPS tunnel to public URL)
 ```
@@ -907,7 +907,7 @@ Dev Tunnel exposes the local application over HTTPS, enabling remote access from
 The system is started with a single command:
 
 ```bash
-tower up
+cpl up
 ```
 
 This command:
@@ -921,7 +921,7 @@ This command:
 
 ### 7.3 CLI
 
-The `tower` CLI is a Python entry point installed via `uv`:
+The `cpl` CLI is a Python entry point installed via `uv`:
 
 ```bash
 uv pip install -e .
@@ -931,19 +931,19 @@ The entry point is defined in `pyproject.toml`:
 
 ```toml
 [project.scripts]
-tower = "backend.main:cli"
+cpl = "backend.main:cli"
 ```
 
 #### CLI Commands
 
 | Command | Description |
 |---|---|
-| `tower up` | Start the server |
-| `tower up --port 9090` | Start on a custom port |
-| `tower up --tunnel` | Start with Dev Tunnel enabled |
-| `tower up --dev` | Start in development mode (CORS allows localhost:5173) |
-| `tower init` | Create `~/.tower/config.yaml` with defaults |
-| `tower version` | Print version |
+| `cpl up` | Start the server |
+| `cpl up --port 9090` | Start on a custom port |
+| `cpl up --tunnel` | Start with Dev Tunnel enabled |
+| `cpl up --dev` | Start in development mode (CORS allows localhost:5173) |
+| `cpl init` | Create `~/.codeplane/config.yaml` with defaults |
+| `cpl version` | Print version |
 
 ---
 
@@ -963,7 +963,7 @@ When a job starts, `GitService` decides whether to use the main worktree or crea
      ```
      {repo_root}/{worktrees_dirname}/{job_id}/
      ```
-     Default `worktrees_dirname`: `.tower-worktrees`
+     Default `worktrees_dirname`: `.cpl-worktrees`
    - A new branch is created from `base_branch` and checked out in the secondary worktree
 5. A branch is created from `base_branch`:
    - If `branch` was provided in the job creation request, that name is used as-is
@@ -983,7 +983,7 @@ Example — second concurrent job gets a secondary worktree:
 
 ```
 /repos/service-a/                          ← job-104 (main worktree)
-/repos/service-a/.tower-worktrees/job-105/  ← job-105 (secondary)
+/repos/service-a/.cpl-worktrees/job-105/  ← job-105 (secondary)
 ```
 
 ### 8.2 Branch Naming
@@ -1036,7 +1036,7 @@ To prevent the agent from accidentally modifying unrelated files:
 
 ### 8.7 Pull Request Creation After Successful Job
 
-When a job completes successfully, Tower instructs the agent to create a pull request as a **post-completion step** if the GitHub CLI (`gh`) or GitHub MCP tools are available.
+When a job completes successfully, CodePlane instructs the agent to create a pull request as a **post-completion step** if the GitHub CLI (`gh`) or GitHub MCP tools are available.
 
 The flow:
 
@@ -1082,7 +1082,7 @@ Resolved jobs are auto-archived after `retention.auto_archive_days` (default: 7 
 
 ### 8.9 Repository Registration
 
-Operators manage the set of repositories Tower can work with through the web UI or by editing the global config directly.
+Operators manage the set of repositories CodePlane can work with through the web UI or by editing the global config directly.
 
 #### Adding a Local Repository
 
@@ -1098,9 +1098,9 @@ On success the path is appended to the `repos` list in the global config and per
 
 The operator provides a remote URL (HTTPS or SSH) — for example `https://github.com/org/repo.git`. The backend:
 
-1. Resolves a local clone directory under a configurable `repos_base_dir` (default: `~/tower-repos`). The directory name is derived from the URL (e.g. `org/repo`)
+1. Resolves a local clone directory under a configurable `repos_base_dir` (default: `~/codeplane-repos`). The directory name is derived from the URL (e.g. `org/repo`)
 2. Runs `git clone <url> <target_dir>` via subprocess
-3. Authentication relies entirely on the machine's existing Git credential configuration (SSH keys, credential helpers, `.netrc`, etc.). Tower never stores or prompts for credentials
+3. Authentication relies entirely on the machine's existing Git credential configuration (SSH keys, credential helpers, `.netrc`, etc.). CodePlane never stores or prompts for credentials
 4. On success the cloned path is appended to the global config `repos` list
 5. On failure (auth error, network issue, invalid URL) a descriptive error is returned — the `repos` list is not modified
 
@@ -1113,12 +1113,12 @@ Operators can remove a repository from the `repos` list. This only removes the c
 Registered repositories are stored in the global config:
 
 ```yaml
-repos_base_dir: ~/tower-repos    # clone target for remote repos
+repos_base_dir: ~/codeplane-repos    # clone target for remote repos
 
 repos:
   - /repos/service-a             # local path
   - /repos/service-b
-  - ~/tower-repos/org/repo        # previously cloned from remote
+  - ~/codeplane-repos/org/repo        # previously cloned from remote
 ```
 
 Glob patterns remain supported for static discovery, but explicitly registered repos always appear in the allowlist regardless of glob expansion.
@@ -1129,7 +1129,7 @@ Glob patterns remain supported for static discovery, but explicitly registered r
 
 ### 9.1 Overview
 
-Tower supports voice input for dictating prompts and operator messages. Audio is captured in the browser, uploaded to the local backend, and transcribed locally using `faster-whisper`. No audio data is transmitted to external services.
+CodePlane supports voice input for dictating prompts and operator messages. Audio is captured in the browser, uploaded to the local backend, and transcribed locally using `faster-whisper`. No audio data is transmitted to external services.
 
 ### 9.2 Privacy Guarantee
 
@@ -1253,13 +1253,13 @@ Configuration exists at three layers:
 
 | Layer | Location | Scope |
 |---|---|---|
-| Global | `~/.tower/config.yaml` | Machine-level runtime behavior |
-| Per-repository | `{repo_root}/.tower.yml` | Repository-specific overrides |
+| Global | `~/.codeplane/config.yaml` | Machine-level runtime behavior |
+| Per-repository | `{repo_root}/.codeplane.yml` | Repository-specific overrides |
 | Per-job | Job creation payload | Single-job overrides |
 
 ### 10.2 Global Configuration
 
-File: `~/.tower/config.yaml`
+File: `~/.codeplane/config.yaml`
 
 ```yaml
 server:
@@ -1272,7 +1272,7 @@ auth:
 
 runtime:
   max_concurrent_jobs: 2
-  worktrees_dirname: .tower-worktrees
+  worktrees_dirname: .cpl-worktrees
 
 voice:
   enabled: true
@@ -1286,14 +1286,14 @@ retention:
 
 logging:
   level: info                        # debug, info, warn, error
-  file: ~/.tower/logs/server.log
+  file: ~/.codeplane/logs/server.log
   max_file_size_mb: 50
   backup_count: 3                    # Number of rotated log files to keep
 
 rate_limits:
   max_sse_connections: 5             # Maximum concurrent SSE connections
 
-repos_base_dir: ~/tower-repos    # target directory for cloned remote repos
+repos_base_dir: ~/codeplane-repos    # target directory for cloned remote repos
 
 repos:
   - /repos/service-a
@@ -1317,10 +1317,10 @@ Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded
 
 #### 10.2.1 MCP Server Discovery
 
-Tower discovers MCP servers from two sources, merged as a union:
+CodePlane discovers MCP servers from two sources, merged as a union:
 
 1. `.vscode/mcp.json` in the repo — `"servers"` key (VS Code / Copilot convention)
-2. `tools.mcp` block in Tower's global config (`~/.tower/config.yaml`)
+2. `tools.mcp` block in CodePlane's global config (`~/.codeplane/config.yaml`)
 
 If the same server name appears in both, the repo-level `.vscode/mcp.json` takes precedence.
 
@@ -1346,7 +1346,7 @@ Example `.vscode/mcp.json` (already in the repo):
 }
 ```
 
-The per-repo `.tower.yml` can optionally disable specific discovered servers:
+The per-repo `.codeplane.yml` can optionally disable specific discovered servers:
 
 ```yaml
 tools:
@@ -1355,11 +1355,11 @@ tools:
       - postgres
 ```
 
-This keeps Tower out of the business of defining MCP servers and lets developers use the same config they already have.
+This keeps CodePlane out of the business of defining MCP servers and lets developers use the same config they already have.
 
 ### 10.3 Per-Repository Configuration
 
-File: `{repo_root}/.tower.yml`
+File: `{repo_root}/.codeplane.yml`
 
 ```yaml
 base_branch: main
@@ -1470,7 +1470,7 @@ Examples: `job-1`, `job-104`, `job-2057`
 Sequential integers are preferred over UUIDs because:
 - Branch names remain human-readable (`fix/null-pointer-in-user-service`)
 - Job IDs are easy to reference in conversation
-- There is only one instance of Tower; global uniqueness is not required
+- There is only one instance of CodePlane; global uniqueness is not required
 
 ### 12.1 States
 
@@ -1596,7 +1596,7 @@ Sections:
 
 - **Repository management** — Add repositories from local disk (browse/type path) or from a remote hub (paste URL). List of registered repos with remove action. Clone progress indicator for remote repos
 - Global config viewer/editor (YAML text editor with validation)
-- Repository config list (per-repo `.tower.yml` viewer)
+- Repository config list (per-repo `.codeplane.yml` viewer)
 - Worktree cleanup action
 - Voice model selector
 
@@ -1609,8 +1609,8 @@ Sections:
 | Section | Contents |
 |---|---|
 | **Header** | Repository name (derived from path), absolute path on disk, remote origin URL (if any) |
-| **Tool / MCP Configuration** | Table of all MCP servers available to this repo. Each row shows: server name, command, source badge (`local` — from `.vscode/mcp.json`, `global` — from global config, `disabled` — blocked by `.tower.yml`). Inherited global servers are shown with a dimmed style if not overridden |
-| **Repo Config** | Rendered view of the repo's `.tower.yml` — `base_branch`, `protected_paths`, `tools.mcp.disabled`. Shows defaults for fields not explicitly set |
+| **Tool / MCP Configuration** | Table of all MCP servers available to this repo. Each row shows: server name, command, source badge (`local` — from `.vscode/mcp.json`, `global` — from global config, `disabled` — blocked by `.codeplane.yml`). Inherited global servers are shown with a dimmed style if not overridden |
+| **Repo Config** | Rendered view of the repo's `.codeplane.yml` — `base_branch`, `protected_paths`, `tools.mcp.disabled`. Shows defaults for fields not explicitly set |
 | **Active Jobs** | List of currently active jobs targeting this repo (links to Job Detail) |
 | **Recent Jobs** | Last 10 completed/failed/canceled jobs for this repo |
 
@@ -1623,7 +1623,7 @@ For each MCP server, the view shows the resolution chain so the operator underst
 │ Server      │ Command          │ Source   │
 ├─────────────┼──────────────────┼──────────┤
 │ github      │ npx -y @model... │ local    │  ← .vscode/mcp.json (overrides global)
-│ postgres    │ uvx mcp-postgres │ disabled │  ← global, disabled by .tower.yml
+│ postgres    │ uvx mcp-postgres │ disabled │  ← global, disabled by .codeplane.yml
 │ filesystem  │ npx -y @model... │ global   │  ← inherited from global config
 └─────────────┴──────────────────┴──────────┘
 ```
@@ -1707,9 +1707,9 @@ CREATE TABLE artifacts (
 |---|---|---|
 | `diff_snapshot` | Final unified diff of all changes | `JobSucceeded` or `JobFailed` |
 | `agent_summary` | Agent's self-reported summary of work done | `JobSucceeded` |
-| `custom` | Files placed by the agent in `.tower/artifacts/` inside the worktree | `JobSucceeded` |
+| `custom` | Files placed by the agent in `.codeplane/artifacts/` inside the worktree | `JobSucceeded` |
 
-Custom artifacts are collected by scanning `{worktree_path}/.tower/artifacts/` at job completion. Each file found is registered as an artifact with `type: custom`.
+Custom artifacts are collected by scanning `{worktree_path}/.codeplane/artifacts/` at job completion. Each file found is registered as an artifact with `type: custom`.
 
 #### diff_snapshots
 
@@ -1731,7 +1731,7 @@ CREATE INDEX idx_diff_snapshots_job_id ON diff_snapshots(job_id);
 ### 16.1 Storage Layout
 
 ```
-~/.tower/
+~/.codeplane/
 ├── config.yaml
 ├── data.db            # SQLite database
 └── artifacts/
@@ -1774,7 +1774,7 @@ Artifacts and associated data accumulate over time. The retention policy prevent
 - **Cleanup on startup**: If `retention.cleanup_on_startup` is `true`, cleanup runs during startup after recovery
 
 Retention cleanup removes:
-1. Artifact files from `~/.tower/artifacts/{job_id}/`
+1. Artifact files from `~/.codeplane/artifacts/{job_id}/`
 2. Artifact metadata from the `artifacts` table
 3. Diff snapshots from the `diff_snapshots` table
 4. Secondary worktree directories for jobs in terminal states older than the retention period
@@ -1958,7 +1958,7 @@ Response (`201 Created`):
 
 ```json
 {
-  "path": "/home/user/tower-repos/org/repo",
+  "path": "/home/user/codeplane-repos/org/repo",
   "source": "https://github.com/org/repo.git",
   "cloned": true
 }
@@ -1991,7 +1991,7 @@ Response (`200 OK`):
       "command": "uvx",
       "args": ["mcp-postgres"],
       "source": "disabled",
-      "disabled_by": ".tower.yml"
+      "disabled_by": ".codeplane.yml"
     },
     {
       "name": "filesystem",
@@ -2006,7 +2006,7 @@ Response (`200 OK`):
 }
 ```
 
-`source` is one of: `local` (from `.vscode/mcp.json`), `global` (inherited from global config), `disabled` (present but blocked by `.tower.yml`).
+`source` is one of: `local` (from `.vscode/mcp.json`), `global` (inherited from global config), `disabled` (present but blocked by `.codeplane.yml`).
 
 ### 17.9 Connection Limits
 
@@ -2014,7 +2014,7 @@ SSE connections are limited to `max_sse_connections` concurrent connections (def
 
 Voice transcription uploads are limited to `max_audio_size_mb` (default: 10 MB).
 
-No per-request rate limiting is applied. Tower runs on a single developer machine accessed by one browser and optionally one phone — throttling REST requests adds complexity without value.
+No per-request rate limiting is applied. CodePlane runs on a single developer machine accessed by one browser and optionally one phone — throttling REST requests adds complexity without value.
 
 ### 17.10 Error Responses
 
@@ -2063,7 +2063,7 @@ Approval gates intercept risky operations before they execute. This ensures the 
 
 ### 18.2 Permission Modes
 
-Tower supports three permission modes that control how the SDK's permission requests are handled. Inspired by VS Code Agent Chat and Claude Code, these modes allow operators to balance safety with productivity.
+CodePlane supports three permission modes that control how the SDK's permission requests are handled. Inspired by VS Code Agent Chat and Claude Code, these modes allow operators to balance safety with productivity.
 
 | Mode | Behavior |
 |------|----------|
@@ -2089,12 +2089,12 @@ Tower supports three permission modes that control how the SDK's permission requ
 Permission mode is resolved with this priority chain (first match wins):
 
 1. **Per-job** — `permission_mode` field in `POST /api/jobs` request body
-2. **Per-repo** — `permission_mode` key in `.tower.yml`
-3. **Global** — `runtime.permission_mode` in Tower's `config.yaml`
+2. **Per-repo** — `permission_mode` key in `.codeplane.yml`
+3. **Global** — `runtime.permission_mode` in CodePlane's `config.yaml`
 
 Default: `auto`
 
-Example `.tower.yml`:
+Example `.codeplane.yml`:
 ```yaml
 permission_mode: auto
 
@@ -2112,9 +2112,9 @@ runtime:
 
 ### 18.3 Delegation to the Agent Runtime
 
-The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. Tower's permission policy then evaluates the request against the active mode to decide whether to auto-approve or route to the operator.
+The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's permission policy then evaluates the request against the active mode to decide whether to auto-approve or route to the operator.
 
-Tower's role is to:
+CodePlane's role is to:
 
 1. **Evaluate** the SDK's permission request against the active permission mode
 2. **Auto-approve** requests that the policy allows (the SDK is never blocked)
@@ -2125,7 +2125,7 @@ Tower's role is to:
 
 #### How `protected_paths` Maps to Policy
 
-The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the Tower level. In `auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
+The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the CodePlane level. In `auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
 
 ### 18.4 Approval Request Object
 
@@ -2268,7 +2268,7 @@ Every log line carries:
 
 #### Log Rotation
 
-Backend logs are written to `~/.tower/logs/server.log` using Python's `RotatingFileHandler`:
+Backend logs are written to `~/.codeplane/logs/server.log` using Python's `RotatingFileHandler`:
 
 | Parameter | Default |
 |---|---|
@@ -2280,14 +2280,14 @@ This produces files: `server.log`, `server.log.1`, `server.log.2`, `server.log.3
 
 #### Terminal Output
 
-Stdout does not show raw log lines. Instead, `tower up` renders a live status display using `rich` showing:
+Stdout does not show raw log lines. Instead, `cpl up` renders a live status display using `rich` showing:
 
 - Server URL and tunnel URL (if active)
 - Active jobs table: job ID, repo, state, elapsed time
 - Aggregate metrics: jobs running, queued, succeeded, failed
 - Last few significant events (job created, completed, failed, approval requested)
 
-This provides an at-a-glance operational view without overwhelming the terminal. Full logs remain in `~/.tower/logs/server.log`.
+This provides an at-a-glance operational view without overwhelming the terminal. Full logs remain in `~/.codeplane/logs/server.log`.
 
 ### 20.3 Failure Diagnostics
 
@@ -2317,7 +2317,7 @@ If no heartbeat is received for a running session within 90 seconds:
 
 ### 21.1 Authentication
 
-Tower has **no application-level authentication**. Access control relies on two mechanisms:
+CodePlane has **no application-level authentication**. Access control relies on two mechanisms:
 
 1. **Localhost binding**: The backend binds to `127.0.0.1` by default, making it accessible only from the local machine
 2. **Dev Tunnel identity verification**: When remote access is needed, Microsoft Dev Tunnel authenticates users via their Microsoft or GitHub identity. Only the tunnel owner can connect. The tunnel is always created with `--allow-anonymous=false`
@@ -2331,7 +2331,7 @@ This means:
 
 #### Why not application-level auth?
 
-Tower is a single-operator tool on a developer machine. Adding a token/session system would create operational overhead (managing secrets, handling rotation, config errors) without meaningfully improving security over the combination of localhost binding + Dev Tunnel identity. If the local machine is compromised, application-level auth provides no additional protection.
+CodePlane is a single-operator tool on a developer machine. Adding a token/session system would create operational overhead (managing secrets, handling rotation, config errors) without meaningfully improving security over the combination of localhost binding + Dev Tunnel identity. If the local machine is compromised, application-level auth provides no additional protection.
 
 ### 21.2 Repository Allowlist
 
@@ -2688,7 +2688,7 @@ class SingleAgentExecutor(ExecutionStrategy):
 The execution strategy is resolved during job creation:
 
 1. Per-job override: `strategy` field in the job creation request (optional)
-2. Per-repo config: `agent.strategy` in `.tower.yml` (optional)
+2. Per-repo config: `agent.strategy` in `.codeplane.yml` (optional)
 3. Default: `single_agent`
 
 The `RuntimeService` resolves the strategy name to a concrete class via a registry:
@@ -2771,7 +2771,7 @@ This section documents genuinely open questions that require further investigati
 - **MCP server config** with per-server tool filtering
 - **Agent modes**: `autopilot`, `interactive`, `plan`, `shell`
 
-**Resolved:** The approval-pause mechanism uses the SDK's blocking `on_permission_request` callback. Tower holds the pending callback and resolves it when the operator responds.
+**Resolved:** The approval-pause mechanism uses the SDK's blocking `on_permission_request` callback. CodePlane holds the pending callback and resolves it when the operator responds.
 
 **Resolved:** Session cancellation uses `session.abort()` which aborts the current message processing. The session remains valid after abort. Operator message injection uses `session.send(MessageOptions)` with `mode="immediate"` to send a follow-up message while the session is active.
 
@@ -2793,19 +2793,19 @@ This section documents genuinely open questions that require further investigati
 
 ### 25.4 Branch Cleanup and PR Integration
 
-**Resolved:** Tower offers to create a pull request after a successful job using the GitHub MCP server or `gh` CLI, whichever is available. If neither is available, the step is skipped and the branch remains on disk for manual push. Completed branches are **not** auto-deleted after merge. See Section 8.7.
+**Resolved:** CodePlane offers to create a pull request after a successful job using the GitHub MCP server or `gh` CLI, whichever is available. If neither is available, the step is skipped and the branch remains on disk for manual push. Completed branches are **not** auto-deleted after merge. See Section 8.7.
 
 ---
 
 ## 26. MCP Orchestration Server
 
-Tower exposes an **MCP (Model Context Protocol) server** that mirrors the full UI functionality, enabling external agents to use Tower as an orchestration layer. An outer agent connects to Tower's MCP server and drives job lifecycle, approval workflows, workspace inspection, and configuration — all through MCP tool calls.
+CodePlane exposes an **MCP (Model Context Protocol) server** that mirrors the full UI functionality, enabling external agents to use CodePlane as an orchestration layer. An outer agent connects to CodePlane's MCP server and drives job lifecycle, approval workflows, workspace inspection, and configuration — all through MCP tool calls.
 
 ---
 
 ### 26.1 Purpose
 
-The MCP orchestration server turns Tower from a human-operated dashboard into a programmable control plane. An orchestrating agent can:
+The MCP orchestration server turns CodePlane from a human-operated dashboard into a programmable control plane. An orchestrating agent can:
 
 - Create and monitor coding jobs across multiple repositories
 - Handle approval requests on behalf of a human or policy engine
@@ -2813,7 +2813,7 @@ The MCP orchestration server turns Tower from a human-operated dashboard into a 
 - Inject operator messages to steer running agents
 - Manage repository registration and global settings
 
-This enables hierarchical agent architectures where a planning agent delegates implementation tasks to Tower-managed coding agents and reacts to their progress in real time.
+This enables hierarchical agent architectures where a planning agent delegates implementation tasks to CodePlane-managed coding agents and reacts to their progress in real time.
 
 ---
 
@@ -2837,46 +2837,46 @@ Every REST API capability is exposed as an MCP tool. Tool names follow `tower_<r
 
 | Tool | Description | Maps to |
 |---|---|---|
-| `tower_job_create` | Create a new job (repo, prompt, strategy, options) | `POST /api/jobs` |
-| `tower_job_list` | List jobs with optional status filter and pagination | `GET /api/jobs` |
-| `tower_job_get` | Get full detail for a single job | `GET /api/jobs/{job_id}` |
-| `tower_job_cancel` | Cancel a running or queued job | `POST /api/jobs/{job_id}/cancel` |
-| `tower_job_rerun` | Rerun a job with the same configuration | `POST /api/jobs/{job_id}/rerun` |
-| `tower_job_message` | Send an operator message to a running job | `POST /api/jobs/{job_id}/messages` |
+| `cpl_job_create` | Create a new job (repo, prompt, strategy, options) | `POST /api/jobs` |
+| `cpl_job_list` | List jobs with optional status filter and pagination | `GET /api/jobs` |
+| `cpl_job_get` | Get full detail for a single job | `GET /api/jobs/{job_id}` |
+| `cpl_job_cancel` | Cancel a running or queued job | `POST /api/jobs/{job_id}/cancel` |
+| `cpl_job_rerun` | Rerun a job with the same configuration | `POST /api/jobs/{job_id}/rerun` |
+| `cpl_job_message` | Send an operator message to a running job | `POST /api/jobs/{job_id}/messages` |
 
 #### Approvals
 
 | Tool | Description | Maps to |
 |---|---|---|
-| `tower_approval_list` | List pending/resolved approvals for a job | `GET /api/jobs/{job_id}/approvals` |
-| `tower_approval_resolve` | Approve or reject a pending approval | `POST /api/approvals/{approval_id}/resolve` |
+| `cpl_approval_list` | List pending/resolved approvals for a job | `GET /api/jobs/{job_id}/approvals` |
+| `cpl_approval_resolve` | Approve or reject a pending approval | `POST /api/approvals/{approval_id}/resolve` |
 
 #### Workspace & Artifacts
 
 | Tool | Description | Maps to |
 |---|---|---|
-| `tower_workspace_list` | List files in a job's worktree | `GET /api/jobs/{job_id}/workspace` |
-| `tower_workspace_read` | Read a file from a job's worktree | `GET /api/jobs/{job_id}/workspace/file` |
-| `tower_artifact_list` | List artifacts produced by a job | `GET /api/jobs/{job_id}/artifacts` |
-| `tower_artifact_get` | Download an artifact | `GET /api/artifacts/{artifact_id}` |
+| `cpl_workspace_list` | List files in a job's worktree | `GET /api/jobs/{job_id}/workspace` |
+| `cpl_workspace_read` | Read a file from a job's worktree | `GET /api/jobs/{job_id}/workspace/file` |
+| `cpl_artifact_list` | List artifacts produced by a job | `GET /api/jobs/{job_id}/artifacts` |
+| `cpl_artifact_get` | Download an artifact | `GET /api/artifacts/{artifact_id}` |
 
 #### Configuration
 
 | Tool | Description | Maps to |
 |---|---|---|
-| `tower_settings_get` | Get global configuration | `GET /api/settings/global` |
-| `tower_settings_update` | Update global configuration | `PUT /api/settings/global` |
-| `tower_repo_list` | List registered repositories | `GET /api/settings/repos` |
-| `tower_repo_get` | Get repo config with resolved MCP servers | `GET /api/settings/repos/{repo_path}` |
-| `tower_repo_register` | Register a repository (path or URL) | `POST /api/settings/repos` |
-| `tower_repo_remove` | Remove a repository from the allowlist | `DELETE /api/settings/repos/{repo_path}` |
+| `cpl_settings_get` | Get global configuration | `GET /api/settings/global` |
+| `cpl_settings_update` | Update global configuration | `PUT /api/settings/global` |
+| `cpl_repo_list` | List registered repositories | `GET /api/settings/repos` |
+| `cpl_repo_get` | Get repo config with resolved MCP servers | `GET /api/settings/repos/{repo_path}` |
+| `cpl_repo_register` | Register a repository (path or URL) | `POST /api/settings/repos` |
+| `cpl_repo_remove` | Remove a repository from the allowlist | `DELETE /api/settings/repos/{repo_path}` |
 
 #### Observability
 
 | Tool | Description | Maps to |
 |---|---|---|
-| `tower_health` | Service health check | `GET /api/health` |
-| `tower_cleanup_worktrees` | Clean up worktrees for completed jobs | `POST /api/settings/cleanup-worktrees` |
+| `cpl_health` | Service health check | `GET /api/health` |
+| `cpl_cleanup_worktrees` | Clean up worktrees for completed jobs | `POST /api/settings/cleanup-worktrees` |
 
 ---
 
@@ -2886,10 +2886,10 @@ The MCP server pushes **notifications** to connected clients for key domain even
 
 | Notification | Trigger |
 |---|---|
-| `tower/job_state_changed` | Job transitions to a new state |
-| `tower/approval_requested` | A running job requests operator approval |
-| `tower/job_completed` | Job reaches `succeeded` or `failed` terminal state |
-| `tower/agent_message` | Agent produces a transcript message |
+| `cpl/job_state_changed` | Job transitions to a new state |
+| `cpl/approval_requested` | A running job requests operator approval |
+| `cpl/job_completed` | Job reaches `succeeded` or `failed` terminal state |
+| `cpl/agent_message` | Agent produces a transcript message |
 
 Notifications are sourced from the internal event bus — the same events that drive the SSE stream and the frontend. The orchestrating agent can subscribe to these to react without polling.
 
@@ -2907,7 +2907,7 @@ Notifications are sourced from the internal event bus — the same events that d
 ### 26.6 Configuration
 
 ```yaml
-# ~/.tower/config.yaml
+# ~/.codeplane/config.yaml
 mcp_server:
   enabled: true          # default: true
   path: /mcp             # mount path, default: /mcp

@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { AlertTriangle, CheckCircle2, ExternalLink, GitBranch, FolderOpen, Trash2 } from "lucide-react";
-import { useTowerStore } from "../store";
+import { useStore } from "../store";
 import type { JobSummary } from "../store";
 import { archiveJob } from "../api/client";
 import { Button } from "./ui/button";
@@ -39,7 +39,7 @@ export function CompleteJobDialog({ job, open, onClose }: CompleteJobDialogProps
     setError(null);
     try {
       await archiveJob(job.id);
-      useTowerStore.setState((s) => {
+      useStore.setState((s) => {
         const existing = s.jobs[job.id];
         if (!existing) return s;
         return {

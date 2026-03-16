@@ -2,7 +2,7 @@ import { memo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { GitBranch, GitMerge, GitPullRequest, Trash2, CheckCircle2, Archive, AlertTriangle, XCircle, ArrowDownCircle } from "lucide-react";
 import { toast } from "sonner";
-import { useTowerStore, selectJobDiffs } from "../store";
+import { useStore, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { StateBadge } from "./StateBadge";
 import { resolveJob } from "../api/client";
@@ -49,7 +49,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
-  const diffs = useTowerStore(selectJobDiffs(job.id));
+  const diffs = useStore(selectJobDiffs(job.id));
   const hasChanges = diffs.length > 0;
 
   const needsResolution =

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive } from "lucide-react";
 import { toast } from "sonner";
-import { useTowerStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
+import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
 import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
@@ -20,7 +20,7 @@ const ArtifactViewer = lazy(() => import("./ArtifactViewer"));
 export function JobDetailScreen() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
-  const jobs = useTowerStore(selectJobs);
+  const jobs = useStore(selectJobs);
   const job: JobSummary | undefined = jobId ? jobs[jobId] : undefined;
   const [loading, setLoading] = useState(!job);
   const [actionLoading, setActionLoading] = useState(false);
@@ -28,7 +28,7 @@ export function JobDetailScreen() {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [tab, setTab] = useState("live");
   const [hasArtifacts, setHasArtifacts] = useState(false);
-  const diffs = useTowerStore(selectJobDiffs(jobId ?? ""));
+  const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
 
   // Open a job-scoped SSE connection for full event streaming (no suppression
@@ -37,10 +37,10 @@ export function JobDetailScreen() {
 
   useEffect(() => {
     if (!jobId) { setLoading(false); return; }
-    const existing = useTowerStore.getState().jobs[jobId];
+    const existing = useStore.getState().jobs[jobId];
     if (existing) { setLoading(false); return; }
     fetchJob(jobId)
-      .then((f) => useTowerStore.setState((s) => ({ jobs: { ...s.jobs, [f.id]: enrichJob(f as JobSummary) } })))
+      .then((f) => useStore.setState((s) => ({ jobs: { ...s.jobs, [f.id]: enrichJob(f as JobSummary) } })))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [jobId]);
@@ -50,7 +50,7 @@ export function JobDetailScreen() {
   useEffect(() => {
     if (!jobId) return;
     fetchJobTranscript(jobId).then((transcript) => {
-        useTowerStore.setState((s) => {
+        useStore.setState((s) => {
           const existingTranscript = s.transcript[jobId] ?? [];
           const mergedTx = [
             ...transcript,
@@ -67,7 +67,7 @@ export function JobDetailScreen() {
   useEffect(() => {
     if (!jobId) return;
     fetchApprovals(jobId).then((approvals) => {
-      useTowerStore.setState((s) => {
+      useStore.setState((s) => {
         const updated = { ...s.approvals };
         for (const a of approvals) updated[a.id] = a;
         return { approvals: updated };
@@ -89,7 +89,7 @@ export function JobDetailScreen() {
     if (!jobId) return;
     fetchJobDiff(jobId)
       .then((files) => {
-        useTowerStore.setState((s) => ({
+        useStore.setState((s) => ({
           diffs: { ...s.diffs, [jobId]: files },
         }));
       })
@@ -101,7 +101,7 @@ export function JobDetailScreen() {
     setActionLoading(true);
     try {
       const updated = await cancelJob(jobId);
-      useTowerStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
+      useStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
       toast.success("Job canceled");
     } catch (e) { toast.error(String(e)); }
     finally { setActionLoading(false); }

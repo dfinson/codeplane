@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.config import TowerConfig
+from backend.config import CPLConfig
 from backend.models.db import Base
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.job_repo import JobRepository
@@ -53,8 +53,8 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
 
 
 @pytest.fixture
-def config() -> TowerConfig:
-    cfg = TowerConfig()
+def config() -> CPLConfig:
+    cfg = CPLConfig()
     cfg.repos = ["/test/repo"]
     return cfg
 
@@ -187,9 +187,9 @@ class TestEventBusIntegration:
 
 class TestConfigIntegration:
     def test_register_unregister_repo(self) -> None:
-        from backend.config import TowerConfig, register_repo, unregister_repo
+        from backend.config import CPLConfig, register_repo, unregister_repo
 
-        config = TowerConfig()
+        config = CPLConfig()
         assert config.repos == []
 
         register_repo(config, "/test/repo")
@@ -203,9 +203,9 @@ class TestConfigIntegration:
         assert "/test/repo" not in config.repos
 
     def test_unregister_missing_raises(self) -> None:
-        from backend.config import TowerConfig, unregister_repo
+        from backend.config import CPLConfig, unregister_repo
 
-        config = TowerConfig()
+        config = CPLConfig()
         with pytest.raises(ValueError):
             unregister_repo(config, "/nonexistent")
 
@@ -216,7 +216,7 @@ class TestConfigIntegration:
 class TestJobStateMachineIntegration:
     @pytest.mark.asyncio
     async def test_job_create_list_get(
-        self, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig
+        self, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         """Create a job and retrieve it."""
         async with session_factory() as session:
@@ -241,7 +241,7 @@ class TestJobStateMachineIntegration:
             assert fetched.prompt == "Fix bug"
 
     @pytest.mark.asyncio
-    async def test_cancel_job(self, session_factory: async_sessionmaker[AsyncSession], config: TowerConfig) -> None:
+    async def test_cancel_job(self, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig) -> None:
         async with session_factory() as session:
             from unittest.mock import AsyncMock
 

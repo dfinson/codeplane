@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
 import { toast } from "sonner";
-import { useTowerStore, selectJobDiffs } from "../store";
+import { useStore, selectJobDiffs } from "../store";
 import { fetchJobDiff, sendOperatorMessage, resumeJob } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
@@ -78,7 +78,7 @@ function computeAskState(
 }
 
 export default function DiffViewer({ jobId, jobState, resolution, archivedAt }: DiffViewerProps) {
-  const diffs = useTowerStore(selectJobDiffs(jobId));
+  const diffs = useStore(selectJobDiffs(jobId));
   const isMobile = useIsMobile();
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [original, setOriginal] = useState("");
@@ -115,7 +115,7 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt }: 
     fetchJobDiff(jobId)
       .then((files) => {
         if (files.length > 0) {
-          useTowerStore.setState((s) => ({
+          useStore.setState((s) => ({
             diffs: { ...s.diffs, [jobId]: files },
           }));
         }

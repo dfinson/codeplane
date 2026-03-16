@@ -1,8 +1,8 @@
-# Copilot Instructions for Tower
+# Copilot Instructions for CodePlane
 
 ## Project Overview
 
-Tower is a control tower for running and supervising coding agents. It has a FastAPI (Python) backend and a React + TypeScript frontend.
+CodePlane is a control plane for running and supervising coding agents. It has a FastAPI (Python) backend and a React + TypeScript frontend.
 
 ## Architecture
 

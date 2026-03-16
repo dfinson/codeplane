@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useTowerStore, selectJobLogs } from "../store";
+import { useStore, selectJobLogs } from "../store";
 import { fetchJobLogs } from "../api/client";
 import { cn } from "../lib/utils";
 
@@ -25,7 +25,7 @@ const LEVEL_DOT: Record<string, string> = {
 };
 
 export function LogsPanel({ jobId }: { jobId: string }) {
-  const allLogs = useTowerStore(selectJobLogs(jobId));
+  const allLogs = useStore(selectJobLogs(jobId));
   /** Minimum severity level shown — also drives the historical fetch */
   const [minLevel, setMinLevel] = useState<Level>("info");
   const [collapsed, setCollapsed] = useState(true);
@@ -41,7 +41,7 @@ export function LogsPanel({ jobId }: { jobId: string }) {
   // the store.  Re-runs whenever the level or jobId changes.
   useEffect(() => {
     fetchJobLogs(jobId, minLevel).then((fetched) => {
-      useTowerStore.setState((s) => {
+      useStore.setState((s) => {
         const existing = s.logs[jobId] ?? [];
         // Merge: prefer fetched rows; keep any live SSE rows not yet in fetched
         const fetchedSeqs = new Set(fetched.map((l) => l.seq));

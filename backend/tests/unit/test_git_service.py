@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from backend.config import TowerConfig
+from backend.config import CPLConfig
 from backend.services.git_service import GitService
 
 
 @pytest.fixture
-def config() -> TowerConfig:
-    return TowerConfig()
+def config() -> CPLConfig:
+    return CPLConfig()
 
 
 @pytest.fixture
-def git_service(config: TowerConfig) -> GitService:
+def git_service(config: CPLConfig) -> GitService:
     return GitService(config)
 
 

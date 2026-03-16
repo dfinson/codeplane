@@ -11,16 +11,16 @@ import yaml
 
 
 def _resolve_tower_dir() -> Path:
-    """Resolve AGENT_TOWER_HOME from env var, falling back to ~/.tower."""
-    env = os.environ.get("AGENT_TOWER_HOME")
+    """Resolve CODEPLANE_HOME from env var, falling back to ~/.codeplane."""
+    env = os.environ.get("CODEPLANE_HOME")
     if env:
         return Path(env).expanduser().resolve()
-    return Path.home() / ".tower"
+    return Path.home() / ".codeplane"
 
 
-TOWER_DIR = _resolve_tower_dir()
-DEFAULT_CONFIG_PATH = TOWER_DIR / "config.yaml"
-DEFAULT_DB_PATH = TOWER_DIR / "data.db"
+CODEPLANE_DIR = _resolve_tower_dir()
+DEFAULT_CONFIG_PATH = CODEPLANE_DIR / "config.yaml"
+DEFAULT_DB_PATH = CODEPLANE_DIR / "data.db"
 
 # Hardcoded constants — not user-configurable
 VOICE_ENABLED = True
@@ -35,7 +35,7 @@ server:
 
 runtime:
   max_concurrent_jobs: 2
-  worktrees_dirname: .tower-worktrees
+  worktrees_dirname: .cpl-worktrees
 
 retention:
   artifact_retention_days: 30
@@ -44,7 +44,7 @@ retention:
 
 logging:
   level: info
-  file: ~/.tower/logs/server.log
+  file: ~/.codeplane/logs/server.log
   max_file_size_mb: 50
   backup_count: 3
 
@@ -61,7 +61,7 @@ class ServerConfig:
 @dataclass
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
-    worktrees_dirname: str = ".tower-worktrees"
+    worktrees_dirname: str = ".cpl-worktrees"
     permission_mode: str = "permissive"  # permissive | auto | supervised
     utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
 
@@ -77,7 +77,7 @@ class RetentionConfig:
 @dataclass
 class LoggingConfig:
     level: str = "info"
-    file: str = "~/.tower/logs/server.log"
+    file: str = "~/.codeplane/logs/server.log"
     max_file_size_mb: int = 50
     backup_count: int = 3
 
@@ -104,7 +104,7 @@ class PlatformConfig:
 
 
 @dataclass
-class TowerConfig:
+class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
@@ -125,13 +125,13 @@ def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
     return cls(**{k: v for k, v in section.items() if k in valid_keys})
 
 
-def load_config(path: Path | None = None) -> TowerConfig:
-    """Load Tower configuration from a YAML file."""
+def load_config(path: Path | None = None) -> CPLConfig:
+    """Load CodePlane configuration from a YAML file."""
     if path is None:
         path = DEFAULT_CONFIG_PATH
 
     if not path.exists():
-        return TowerConfig()
+        return CPLConfig()
 
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
@@ -147,7 +147,7 @@ def load_config(path: Path | None = None) -> TowerConfig:
                     repos=[str(r) for r in pdata.get("repos", []) if r] if isinstance(pdata.get("repos"), list) else [],
                 )
 
-    return TowerConfig(
+    return CPLConfig(
         server=_parse_section(raw, ServerConfig, "server"),
         runtime=_parse_section(raw, RuntimeConfig, "runtime"),
         retention=_parse_section(raw, RetentionConfig, "retention"),
@@ -159,8 +159,8 @@ def load_config(path: Path | None = None) -> TowerConfig:
     )
 
 
-def save_config(config: TowerConfig, path: Path | None = None) -> None:
-    """Persist the current TowerConfig back to the YAML config file.
+def save_config(config: CPLConfig, path: Path | None = None) -> None:
+    """Persist the current CPLConfig back to the YAML config file.
 
     Non-destructive: loads the existing file first and merges changes in,
     preserving any keys or repos that might exist.
@@ -212,7 +212,7 @@ def save_config(config: TowerConfig, path: Path | None = None) -> None:
         yaml.dump(existing, f, default_flow_style=False, sort_keys=False)
 
 
-def register_repo(config: TowerConfig, repo_path: str, config_path: Path | None = None) -> str:
+def register_repo(config: CPLConfig, repo_path: str, config_path: Path | None = None) -> str:
     """Add a repo path to the allowlist if not already present.
 
     Returns the resolved path that was added.
@@ -224,7 +224,7 @@ def register_repo(config: TowerConfig, repo_path: str, config_path: Path | None 
     return resolved
 
 
-def unregister_repo(config: TowerConfig, repo_path: str, config_path: Path | None = None) -> str:
+def unregister_repo(config: CPLConfig, repo_path: str, config_path: Path | None = None) -> str:
     """Remove a repo path from the allowlist.
 
     Returns the resolved path that was removed.

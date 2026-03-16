@@ -104,7 +104,7 @@ export function enrichJob(job: JobSummary): JobSummary {
 // Store shape
 // ---------------------------------------------------------------------------
 
-interface TowerState {
+interface AppState {
   // Data slices
   jobs: Record<string, JobSummary>;
   approvals: Record<string, ApprovalRequest>;
@@ -121,7 +121,7 @@ interface TowerState {
   applySnapshot: (jobs: JobSummary[], approvals: ApprovalRequest[]) => void;
 }
 
-export const useTowerStore = create<TowerState>((set, get) => ({
+export const useStore = create<AppState>((set, get) => ({
   jobs: {},
   approvals: {},
   logs: {},
@@ -485,10 +485,10 @@ export const useTowerStore = create<TowerState>((set, get) => ({
 // Selectors
 // ---------------------------------------------------------------------------
 
-export const selectJobs = (state: TowerState) => state.jobs;
-export const selectConnectionStatus = (state: TowerState) =>
+export const selectJobs = (state: AppState) => state.jobs;
+export const selectConnectionStatus = (state: AppState) =>
   state.connectionStatus;
-export const selectApprovals = (state: TowerState) => state.approvals;
+export const selectApprovals = (state: AppState) => state.approvals;
 
 // Stable empty-array sentinels — MUST NOT be inline `?? []` because a new
 // array literal is a new reference on every call, causing useSyncExternalStore
@@ -497,11 +497,11 @@ const EMPTY_LOGS: LogLine[] = [];
 const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 const EMPTY_DIFFS: DiffFileModel[] = [];
 
-export const selectJobLogs = (jobId: string) => (state: TowerState) =>
+export const selectJobLogs = (jobId: string) => (state: AppState) =>
   state.logs[jobId] ?? EMPTY_LOGS;
-export const selectJobTranscript = (jobId: string) => (state: TowerState) =>
+export const selectJobTranscript = (jobId: string) => (state: AppState) =>
   state.transcript[jobId] ?? EMPTY_TRANSCRIPT;
-export const selectJobDiffs = (jobId: string) => (state: TowerState) =>
+export const selectJobDiffs = (jobId: string) => (state: AppState) =>
   state.diffs[jobId] ?? EMPTY_DIFFS;
 
 // Per-column selectors — only recompute when jobs in that column change
@@ -512,7 +512,7 @@ function sortByUpdatedDesc(jobs: JobSummary[]): JobSummary[] {
   );
 }
 
-export const selectActiveJobs = (state: TowerState): JobSummary[] =>
+export const selectActiveJobs = (state: AppState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
       (j) => !j.archivedAt && (j.state === "queued" || j.state === "running"),
@@ -524,7 +524,7 @@ export const selectActiveJobs = (state: TowerState): JobSummary[] =>
  *  - succeeded (any resolution) — not archived
  *  - canceled — not archived
  */
-export const selectSignoffJobs = (state: TowerState): JobSummary[] =>
+export const selectSignoffJobs = (state: AppState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
       (j) =>
@@ -536,11 +536,11 @@ export const selectSignoffJobs = (state: TowerState): JobSummary[] =>
   );
 
 /** @deprecated Use selectSignoffJobs instead */
-export const selectReviewJobs = (state: TowerState): JobSummary[] =>
+export const selectReviewJobs = (state: AppState): JobSummary[] =>
   selectSignoffJobs(state);
 
 /** Attention: failed jobs that haven't been archived. */
-export const selectAttentionJobs = (state: TowerState): JobSummary[] =>
+export const selectAttentionJobs = (state: AppState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter(
       (j) => !j.archivedAt && j.state === "failed",
@@ -548,15 +548,15 @@ export const selectAttentionJobs = (state: TowerState): JobSummary[] =>
   );
 
 /** @deprecated Use selectAttentionJobs instead */
-export const selectFailedJobs = (state: TowerState): JobSummary[] =>
+export const selectFailedJobs = (state: AppState): JobSummary[] =>
   selectAttentionJobs(state);
 
 /** Archived jobs loaded into the store (for the history browser). */
-export const selectArchivedJobs = (state: TowerState): JobSummary[] =>
+export const selectArchivedJobs = (state: AppState): JobSummary[] =>
   sortByUpdatedDesc(
     Object.values(state.jobs).filter((j) => !!j.archivedAt),
   );
 
 /** Count of archived jobs known to the store (badge hint). */
-export const selectArchivedCount = (state: TowerState): number =>
+export const selectArchivedCount = (state: AppState): number =>
   Object.values(state.jobs).filter((j) => !!j.archivedAt).length;

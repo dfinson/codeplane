@@ -1,1 +1,1 @@
-"""MCP orchestration server for Tower."""
+"""MCP orchestration server for CodePlane."""

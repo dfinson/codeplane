@@ -19,7 +19,7 @@ from backend.models.domain import (
 )
 
 if TYPE_CHECKING:
-    from backend.config import TowerConfig
+    from backend.config import CPLConfig
     from backend.persistence.job_repo import JobRepository
     from backend.services.git_service import GitService
     from backend.services.naming_service import NamingService
@@ -46,7 +46,7 @@ class JobService:
         self,
         job_repo: JobRepository,
         git_service: GitService,
-        config: TowerConfig,
+        config: CPLConfig,
         naming_service: NamingService | None = None,
     ) -> None:
         self._job_repo = job_repo

@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { fetchWorkspaceFiles, fetchWorkspaceFile } from "../api/client";
-import { useTowerStore, selectJobDiffs } from "../store";
+import { useStore, selectJobDiffs } from "../store";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
@@ -114,7 +114,7 @@ export default function WorkspaceBrowser({ jobId, jobState, resolution, archived
   const isMobile = useIsMobile();
   const [mdMode, setMdMode] = useState<"preview" | "raw">("preview");
   const [mode, setMode] = useState<"files" | "changes">("files");
-  const diffs = useTowerStore(selectJobDiffs(jobId));
+  const diffs = useStore(selectJobDiffs(jobId));
   const hasChanges = diffs.length > 0;
 
   useEffect(() => {

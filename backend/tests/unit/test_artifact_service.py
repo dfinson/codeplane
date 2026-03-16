@@ -72,8 +72,8 @@ class TestCollectFromWorkspace:
         orig_base = mod._ARTIFACTS_BASE
         mod._ARTIFACTS_BASE = tmp_path / "store"
         try:
-            # Create a .tower/artifacts/ directory with a file
-            artifacts_dir = tmp_path / ".tower" / "artifacts"
+            # Create a .codeplane/artifacts/ directory with a file
+            artifacts_dir = tmp_path / ".codeplane" / "artifacts"
             artifacts_dir.mkdir(parents=True)
             (artifacts_dir / "report.json").write_text('{"ok": true}')
 
@@ -91,7 +91,7 @@ class TestCollectFromWorkspace:
         orig_base = mod._ARTIFACTS_BASE
         mod._ARTIFACTS_BASE = tmp_path / "store"
         try:
-            artifacts_dir = tmp_path / ".tower" / "artifacts"
+            artifacts_dir = tmp_path / ".codeplane" / "artifacts"
             artifacts_dir.mkdir(parents=True)
             target = tmp_path / "secret.txt"
             target.write_text("secret")
@@ -109,7 +109,7 @@ class TestCollectFromWorkspace:
         orig_base = mod._ARTIFACTS_BASE
         mod._ARTIFACTS_BASE = tmp_path / "store"
         try:
-            artifacts_dir = tmp_path / ".tower" / "artifacts"
+            artifacts_dir = tmp_path / ".codeplane" / "artifacts"
             artifacts_dir.mkdir(parents=True)
             big_file = artifacts_dir / "huge.bin"
             # Write > 50 MB (just create a sparse-ish file by writing enough)

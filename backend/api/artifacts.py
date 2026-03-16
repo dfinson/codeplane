@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from backend.config import TowerConfig, load_config
+from backend.config import CPLConfig, load_config
 from backend.models.api_schemas import ArtifactListResponse, ArtifactResponse
 from backend.persistence.artifact_repo import ArtifactRepository
 from backend.services.artifact_service import ArtifactService
@@ -15,7 +15,7 @@ from backend.services.artifact_service import ArtifactService
 router = APIRouter(tags=["artifacts"])
 
 
-def _get_config() -> TowerConfig:
+def _get_config() -> CPLConfig:
     return load_config()
 
 

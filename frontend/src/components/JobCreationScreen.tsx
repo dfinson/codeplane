@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, Rocket, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { createJob, fetchRepos, fetchModels } from "../api/client";
 import type { PermissionMode } from "../api/types";
@@ -187,7 +187,7 @@ export function JobCreationScreen() {
               loading={submitting}
               onClick={handleSubmit}
             >
-              <Rocket size={16} />
+              <PlaneTakeoff size={16} />
               Create Job
             </Button>
           </div>

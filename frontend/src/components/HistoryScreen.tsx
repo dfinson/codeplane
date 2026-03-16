@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import { ArrowLeft, Search, RotateCcw } from "lucide-react";
-import { useTowerStore, selectArchivedJobs, enrichJob } from "../store";
+import { useStore, selectArchivedJobs, enrichJob } from "../store";
 import type { JobSummary } from "../store";
 import { fetchJobs, unarchiveJob } from "../api/client";
 import { StateBadge } from "./StateBadge";
@@ -21,7 +21,7 @@ const RESOLUTION_FILTERS = [
 
 export function HistoryScreen() {
   const navigate = useNavigate();
-  const archivedJobs = useTowerStore(useShallow(selectArchivedJobs));
+  const archivedJobs = useStore(useShallow(selectArchivedJobs));
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -33,7 +33,7 @@ export function HistoryScreen() {
     setLoading(true);
     fetchJobs({ state: "succeeded,failed,canceled", limit: 100, archived: true } as Parameters<typeof fetchJobs>[0])
       .then((result) => {
-        useTowerStore.setState((state) => {
+        useStore.setState((state) => {
           const updated = { ...state.jobs };
           for (const job of result.items) updated[job.id] = enrichJob(job as JobSummary);
           return { jobs: updated };
@@ -49,7 +49,7 @@ export function HistoryScreen() {
     if (!cursor) return;
     try {
       const result = await fetchJobs({ state: "succeeded,failed,canceled", limit: 50, cursor, archived: true } as Parameters<typeof fetchJobs>[0]);
-      useTowerStore.setState((state) => {
+      useStore.setState((state) => {
         const updated = { ...state.jobs };
         for (const job of result.items) updated[job.id] = enrichJob(job as JobSummary);
         return { jobs: updated };
@@ -62,7 +62,7 @@ export function HistoryScreen() {
   const handleUnarchive = useCallback(async (jobId: string) => {
     try {
       await unarchiveJob(jobId);
-      useTowerStore.setState((state) => {
+      useStore.setState((state) => {
         const existing = state.jobs[jobId];
         if (!existing) return state;
         return {

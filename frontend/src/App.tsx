@@ -2,7 +2,7 @@ import { Component, type ReactNode } from "react";
 import { Routes, Route, Link } from "react-router-dom";
 import { Settings, History } from "lucide-react";
 import { useSSE } from "./hooks/useSSE";
-import { useTowerStore, selectConnectionStatus } from "./store";
+import { useStore, selectConnectionStatus } from "./store";
 import { DashboardScreen } from "./components/DashboardScreen";
 import { JobDetailScreen } from "./components/JobDetailScreen";
 import { JobCreationScreen } from "./components/JobCreationScreen";
@@ -48,7 +48,7 @@ class ErrorBoundary extends Component<
 /* ------------------------------------------------------------------ */
 
 function ConnectionStatus() {
-  const status = useTowerStore(selectConnectionStatus);
+  const status = useStore(selectConnectionStatus);
   const color = status === "connected" ? "green" : status === "reconnecting" ? "yellow" : "red";
   return (
     <DotBadge color={color}>
@@ -67,9 +67,10 @@ export function App() {
   return (
     <div className="flex flex-col h-screen">
       <header className="flex items-center justify-between px-4 h-12 shrink-0 border-b border-border bg-card">
-        <Link to="/" className="no-underline">
+        <Link to="/" className="no-underline flex items-center gap-1.5">
+          <img src="/logo-192.png" alt="" className="h-5 w-5" />
           <span className="font-bold text-sm text-foreground tracking-tight cursor-pointer hover:opacity-80">
-            Tower
+            CodePlane
           </span>
         </Link>
 

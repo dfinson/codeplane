@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
-  useTowerStore,
+  useStore,
   selectJobs,
   selectConnectionStatus,
   selectApprovals,
@@ -27,10 +27,10 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
   };
 }
 
-describe("TowerStore", () => {
+describe("AppStore", () => {
   beforeEach(() => {
     // Reset the store before each test
-    useTowerStore.setState({
+    useStore.setState({
       jobs: {},
       approvals: {},
       logs: {},
@@ -41,8 +41,8 @@ describe("TowerStore", () => {
 
   describe("setConnectionStatus", () => {
     it("updates connection status", () => {
-      useTowerStore.getState().setConnectionStatus("connected");
-      expect(selectConnectionStatus(useTowerStore.getState())).toBe(
+      useStore.getState().setConnectionStatus("connected");
+      expect(selectConnectionStatus(useStore.getState())).toBe(
         "connected"
       );
     });
@@ -63,8 +63,8 @@ describe("TowerStore", () => {
         },
       ];
 
-      useTowerStore.getState().applySnapshot(jobs, approvals);
-      const state = useTowerStore.getState();
+      useStore.getState().applySnapshot(jobs, approvals);
+      const state = useStore.getState();
 
       expect(Object.keys(selectJobs(state))).toHaveLength(2);
       expect(Object.keys(selectApprovals(state))).toHaveLength(1);
@@ -73,33 +73,33 @@ describe("TowerStore", () => {
 
   describe("dispatchSSEEvent", () => {
     it("handles job_state_changed for existing job", () => {
-      useTowerStore.setState({
+      useStore.setState({
         jobs: { "job-1": makeJob() },
       });
 
-      useTowerStore.getState().dispatchSSEEvent("job_state_changed", {
+      useStore.getState().dispatchSSEEvent("job_state_changed", {
         jobId: "job-1",
         newState: "succeeded",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
-      expect(selectJobs(useTowerStore.getState())["job-1"]!.state).toBe(
+      expect(selectJobs(useStore.getState())["job-1"]!.state).toBe(
         "succeeded"
       );
     });
 
     it("ignores job_state_changed for unknown job", () => {
-      useTowerStore.getState().dispatchSSEEvent("job_state_changed", {
+      useStore.getState().dispatchSSEEvent("job_state_changed", {
         jobId: "job-999",
         newState: "succeeded",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
-      expect(Object.keys(selectJobs(useTowerStore.getState()))).toHaveLength(0);
+      expect(Object.keys(selectJobs(useStore.getState()))).toHaveLength(0);
     });
 
     it("handles log_line", () => {
-      useTowerStore.getState().dispatchSSEEvent("log_line", {
+      useStore.getState().dispatchSSEEvent("log_line", {
         jobId: "job-1",
         seq: 1,
         timestamp: "2025-01-01T00:00:00Z",
@@ -108,13 +108,13 @@ describe("TowerStore", () => {
         context: null,
       });
 
-      const logs = selectJobLogs("job-1")(useTowerStore.getState());
+      const logs = selectJobLogs("job-1")(useStore.getState());
       expect(logs).toHaveLength(1);
       expect(logs[0]!.message).toBe("Hello world");
     });
 
     it("appends log lines to existing logs", () => {
-      useTowerStore.getState().dispatchSSEEvent("log_line", {
+      useStore.getState().dispatchSSEEvent("log_line", {
         jobId: "job-1",
         seq: 1,
         timestamp: "2025-01-01T00:00:00Z",
@@ -122,7 +122,7 @@ describe("TowerStore", () => {
         message: "first",
         context: null,
       });
-      useTowerStore.getState().dispatchSSEEvent("log_line", {
+      useStore.getState().dispatchSSEEvent("log_line", {
         jobId: "job-1",
         seq: 2,
         timestamp: "2025-01-01T00:00:01Z",
@@ -131,11 +131,11 @@ describe("TowerStore", () => {
         context: null,
       });
 
-      expect(selectJobLogs("job-1")(useTowerStore.getState())).toHaveLength(2);
+      expect(selectJobLogs("job-1")(useStore.getState())).toHaveLength(2);
     });
 
     it("handles transcript_update", () => {
-      useTowerStore.getState().dispatchSSEEvent("transcript_update", {
+      useStore.getState().dispatchSSEEvent("transcript_update", {
         jobId: "job-1",
         seq: 1,
         timestamp: "2025-01-01T00:00:00Z",
@@ -144,14 +144,14 @@ describe("TowerStore", () => {
       });
 
       const transcript = selectJobTranscript("job-1")(
-        useTowerStore.getState()
+        useStore.getState()
       );
       expect(transcript).toHaveLength(1);
       expect(transcript[0]!.content).toBe("I fixed the bug");
     });
 
     it("handles approval_requested", () => {
-      useTowerStore.getState().dispatchSSEEvent("approval_requested", {
+      useStore.getState().dispatchSSEEvent("approval_requested", {
         approvalId: "apr-1",
         jobId: "job-1",
         description: "Delete file?",
@@ -159,21 +159,21 @@ describe("TowerStore", () => {
         timestamp: "2025-01-01T00:00:00Z",
       });
 
-      const approvals = selectApprovals(useTowerStore.getState());
+      const approvals = selectApprovals(useStore.getState());
       expect(approvals["apr-1"]).toBeDefined();
       expect(approvals["apr-1"]!.description).toBe("Delete file?");
       expect(approvals["apr-1"]!.requestedAt).toBe("2025-01-01T00:00:00Z");
     });
 
     it("approval_requested falls back to now when timestamp missing", () => {
-      useTowerStore.getState().dispatchSSEEvent("approval_requested", {
+      useStore.getState().dispatchSSEEvent("approval_requested", {
         approvalId: "apr-2",
         jobId: "job-1",
         description: "No timestamp",
         proposedAction: null,
       });
 
-      const approvals = selectApprovals(useTowerStore.getState());
+      const approvals = selectApprovals(useStore.getState());
       expect(approvals["apr-2"]).toBeDefined();
       // requestedAt should be a valid ISO string, not undefined
       expect(approvals["apr-2"]!.requestedAt).toBeDefined();
@@ -182,7 +182,7 @@ describe("TowerStore", () => {
 
     it("handles approval_resolved", () => {
       // Set up an existing approval
-      useTowerStore.setState({
+      useStore.setState({
         approvals: {
           "apr-1": {
             id: "apr-1",
@@ -196,93 +196,93 @@ describe("TowerStore", () => {
         },
       });
 
-      useTowerStore.getState().dispatchSSEEvent("approval_resolved", {
+      useStore.getState().dispatchSSEEvent("approval_resolved", {
         approvalId: "apr-1",
         resolution: "approved",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
-      const approval = selectApprovals(useTowerStore.getState())["apr-1"]!;
+      const approval = selectApprovals(useStore.getState())["apr-1"]!;
       expect(approval.resolution).toBe("approved");
       expect(approval.resolvedAt).toBe("2025-01-01T01:00:00Z");
     });
 
     it("ignores approval_resolved for unknown approval", () => {
-      useTowerStore.getState().dispatchSSEEvent("approval_resolved", {
+      useStore.getState().dispatchSSEEvent("approval_resolved", {
         approvalId: "apr-999",
         resolution: "approved",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
       expect(
-        Object.keys(selectApprovals(useTowerStore.getState()))
+        Object.keys(selectApprovals(useStore.getState()))
       ).toHaveLength(0);
     });
 
     it("handles snapshot", () => {
-      useTowerStore.getState().dispatchSSEEvent("snapshot", {
+      useStore.getState().dispatchSSEEvent("snapshot", {
         jobs: [makeJob({ id: "job-1" }), makeJob({ id: "job-2" })],
         pendingApprovals: [],
       });
 
       expect(
-        Object.keys(selectJobs(useTowerStore.getState()))
+        Object.keys(selectJobs(useStore.getState()))
       ).toHaveLength(2);
     });
 
     it("handles session_heartbeat sets connected", () => {
-      expect(selectConnectionStatus(useTowerStore.getState())).toBe(
+      expect(selectConnectionStatus(useStore.getState())).toBe(
         "disconnected"
       );
 
-      useTowerStore.getState().dispatchSSEEvent("session_heartbeat", {
+      useStore.getState().dispatchSSEEvent("session_heartbeat", {
         jobId: "job-1",
         sessionId: "sess-1",
         timestamp: "2025-01-01T00:00:00Z",
       });
 
-      expect(selectConnectionStatus(useTowerStore.getState())).toBe(
+      expect(selectConnectionStatus(useStore.getState())).toBe(
         "connected"
       );
     });
 
     it("session_heartbeat is no-op when already connected", () => {
-      useTowerStore.getState().setConnectionStatus("connected");
+      useStore.getState().setConnectionStatus("connected");
 
-      useTowerStore.getState().dispatchSSEEvent("session_heartbeat", {
+      useStore.getState().dispatchSSEEvent("session_heartbeat", {
         jobId: "job-1",
         sessionId: "sess-1",
         timestamp: "2025-01-01T00:00:00Z",
       });
 
-      expect(selectConnectionStatus(useTowerStore.getState())).toBe(
+      expect(selectConnectionStatus(useStore.getState())).toBe(
         "connected"
       );
     });
 
     it("handles diff_update without error", () => {
-      const beforeState = useTowerStore.getState();
-      useTowerStore.getState().dispatchSSEEvent("diff_update", {
+      const beforeState = useStore.getState();
+      useStore.getState().dispatchSSEEvent("diff_update", {
         jobId: "job-1",
         changedFiles: ["src/app.ts"],
       });
-      const afterState = useTowerStore.getState();
+      const afterState = useStore.getState();
 
       // diff_update is a no-op placeholder for now
       expect(selectJobs(afterState)).toEqual(selectJobs(beforeState));
     });
 
     it("ignores unknown event types", () => {
-      const beforeState = useTowerStore.getState();
-      useTowerStore.getState().dispatchSSEEvent("unknown_event", {});
-      const afterState = useTowerStore.getState();
+      const beforeState = useStore.getState();
+      useStore.getState().dispatchSSEEvent("unknown_event", {});
+      const afterState = useStore.getState();
 
       expect(selectJobs(afterState)).toEqual(selectJobs(beforeState));
     });
 
     it("session_resumed clears all stale badge fields", () => {
       // Set up a job with all badge fields populated (e.g. after succeed + discard + archive + model downgrade)
-      useTowerStore.setState({
+      useStore.setState({
         jobs: {
           "job-1": makeJob({
             state: "succeeded",
@@ -300,13 +300,13 @@ describe("TowerStore", () => {
         },
       });
 
-      useTowerStore.getState().dispatchSSEEvent("session_resumed", {
+      useStore.getState().dispatchSSEEvent("session_resumed", {
         jobId: "job-1",
         timestamp: "2025-06-02T00:00:00Z",
         session_number: 2,
       });
 
-      const job = selectJobs(useTowerStore.getState())["job-1"]!;
+      const job = selectJobs(useStore.getState())["job-1"]!;
       expect(job.state).toBe("running");
       expect(job.resolution).toBeNull();
       expect(job.conflictFiles).toBeNull();
@@ -322,7 +322,7 @@ describe("TowerStore", () => {
 
     it("session_resumed dedup path also clears all badge fields", () => {
       // Pre-populate transcript with matching divider to trigger dedup path
-      useTowerStore.setState({
+      useStore.setState({
         jobs: {
           "job-1": makeJob({
             state: "succeeded",
@@ -347,13 +347,13 @@ describe("TowerStore", () => {
       });
 
       // Same timestamp triggers dedup branch
-      useTowerStore.getState().dispatchSSEEvent("session_resumed", {
+      useStore.getState().dispatchSSEEvent("session_resumed", {
         jobId: "job-1",
         timestamp: "2025-06-02T00:00:00Z",
         session_number: 2,
       });
 
-      const job = selectJobs(useTowerStore.getState())["job-1"]!;
+      const job = selectJobs(useStore.getState())["job-1"]!;
       expect(job.state).toBe("running");
       expect(job.resolution).toBeNull();
       expect(job.conflictFiles).toBeNull();
@@ -363,12 +363,12 @@ describe("TowerStore", () => {
 
   describe("selectors", () => {
     it("selectJobLogs returns empty array for unknown job", () => {
-      expect(selectJobLogs("unknown")(useTowerStore.getState())).toEqual([]);
+      expect(selectJobLogs("unknown")(useStore.getState())).toEqual([]);
     });
 
     it("selectJobTranscript returns empty array for unknown job", () => {
       expect(
-        selectJobTranscript("unknown")(useTowerStore.getState())
+        selectJobTranscript("unknown")(useStore.getState())
       ).toEqual([]);
     });
   });

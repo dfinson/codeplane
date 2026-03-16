@@ -7,7 +7,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
-import { useTowerStore, selectJobTranscript, selectApprovals } from "../store";
+import { useStore, selectJobTranscript, selectApprovals } from "../store";
 import type { TranscriptEntry, ApprovalRequest } from "../store";
 import { sendOperatorMessage, resumeJob, pauseJob, resolveApproval } from "../api/client";
 import { MicButton } from "./VoiceButton";
@@ -558,8 +558,8 @@ export function TranscriptPanel({
   promptTimestamp?: string;
 }) {
   const isMobile = useIsMobile();
-  const rawEntries = useTowerStore(selectJobTranscript(jobId));
-  const allApprovals = useTowerStore(selectApprovals);
+  const rawEntries = useStore(selectJobTranscript(jobId));
+  const allApprovals = useStore(selectApprovals);
   const jobApprovals = Object.values(allApprovals).filter((a) => a.jobId === jobId);
 
   const entries: TranscriptEntry[] = [

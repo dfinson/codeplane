@@ -21,7 +21,7 @@ target_metadata = Base.metadata
 def _resolve_url() -> str:
     """Resolve the database URL, preferring programmatic override."""
     url = config.get_main_option("sqlalchemy.url", "")
-    if not url or url == "sqlite:///tower_data.db":
+    if not url or url == "sqlite:///codeplane_data.db":
         from backend.config import DEFAULT_DB_PATH
 
         return f"sqlite:///{DEFAULT_DB_PATH}"

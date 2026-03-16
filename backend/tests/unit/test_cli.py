@@ -20,7 +20,7 @@ def test_version_command() -> None:
 
 
 def test_init_creates_config(tmp_path: Path) -> None:
-    """tower init creates a config file when none exists."""
+    """cpl init creates a config file when none exists."""
     import backend.config as config_mod
 
     original = config_mod.DEFAULT_CONFIG_PATH
@@ -36,7 +36,7 @@ def test_init_creates_config(tmp_path: Path) -> None:
 
 
 def test_init_refuses_overwrite(tmp_path: Path) -> None:
-    """tower init does not overwrite an existing config."""
+    """cpl init does not overwrite an existing config."""
     import backend.config as config_mod
 
     original = config_mod.DEFAULT_CONFIG_PATH

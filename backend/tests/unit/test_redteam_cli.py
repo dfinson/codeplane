@@ -1,6 +1,6 @@
 """Red-team / pressure tests for CLI commands (Phase 1).
 
-Covers: invalid arguments, edge cases for tower up/init/version.
+Covers: invalid arguments, edge cases for cpl up/init/version.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class TestVersionCommand:
     def test_version_output_format(self) -> None:
         runner = CliRunner()
         result = runner.invoke(cli, ["version"])
-        assert result.output.strip() == "tower 0.1.0"
+        assert result.output.strip() == "cpl 0.1.0"
 
 
 class TestInitCommand:
@@ -131,4 +131,4 @@ class TestUnknownCommands:
         runner = CliRunner()
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "Tower" in result.output
+        assert "CodePlane" in result.output

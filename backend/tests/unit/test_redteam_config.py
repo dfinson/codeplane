@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from backend.config import TowerConfig, init_config, load_config
+from backend.config import CPLConfig, init_config, load_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,20 +24,20 @@ class TestMalformedYAML:
         f = tmp_path / "config.yaml"
         f.write_text("")
         config = load_config(f)
-        assert isinstance(config, TowerConfig)
+        assert isinstance(config, CPLConfig)
         assert config.server.host == "127.0.0.1"
 
     def test_null_content(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"
         f.write_text("null\n")
         config = load_config(f)
-        assert isinstance(config, TowerConfig)
+        assert isinstance(config, CPLConfig)
 
     def test_yaml_just_whitespace(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"
         f.write_text("   \n\n  \n")
         config = load_config(f)
-        assert isinstance(config, TowerConfig)
+        assert isinstance(config, CPLConfig)
 
     def test_invalid_yaml_syntax(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"

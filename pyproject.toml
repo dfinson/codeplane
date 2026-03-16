@@ -1,7 +1,7 @@
 [project]
-name = "tower"
+name = "codeplane"
 version = "0.1.0"
-description = "A control tower for running and supervising coding agents"
+description = "A control plane for running and supervising coding agents"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tower = "backend.main:cli"
+cpl = "backend.main:cli"
 
 [build-system]
 requires = ["hatchling"]

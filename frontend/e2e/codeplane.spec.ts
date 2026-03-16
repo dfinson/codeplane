@@ -1,8 +1,8 @@
 /**
- * End-to-end tests for Tower UI.
+ * End-to-end tests for CodePlane UI.
  *
  * These tests verify the full stack: backend + frontend running together.
- * The Playwright config starts the Tower server automatically.
+ * The Playwright config starts the CodePlane server automatically.
  */
 
 import { test, expect } from "@playwright/test";
@@ -10,8 +10,8 @@ import { test, expect } from "@playwright/test";
 test.describe("Health & Navigation", () => {
   test("loads the dashboard", async ({ page }) => {
     await page.goto("/");
-    // Should see the Tower header
-    await expect(page.locator(".app-header__title")).toContainText("Tower");
+    // Should see the CodePlane header
+    await expect(page.locator(".app-header__title")).toContainText("CodePlane");
   });
 
   test("shows connection status", async ({ page }) => {

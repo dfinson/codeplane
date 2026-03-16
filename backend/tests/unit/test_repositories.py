@@ -249,7 +249,7 @@ async def test_artifact_create_and_get(session: AsyncSession) -> None:
         type="diff_snapshot",
         mime_type="text/plain",
         size_bytes=1024,
-        disk_path="/home/test/.tower/artifacts/job-1/art-1-final.diff",
+        disk_path="/home/test/.codeplane/artifacts/job-1/art-1-final.diff",
         phase="finalization",
         created_at=now,
     )

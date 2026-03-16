@@ -1,12 +1,12 @@
 import { useCallback, useState } from "react";
 import { ShieldQuestion, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { useTowerStore, selectApprovals } from "../store";
+import { useStore, selectApprovals } from "../store";
 import { resolveApproval, trustJob } from "../api/client";
 import { Button } from "./ui/button";
 
 export function ApprovalBanner({ jobId }: { jobId: string }) {
-  const approvals = useTowerStore(selectApprovals);
+  const approvals = useStore(selectApprovals);
   const [loading, setLoading] = useState<string | null>(null);
   const [trusting, setTrusting] = useState(false);
 

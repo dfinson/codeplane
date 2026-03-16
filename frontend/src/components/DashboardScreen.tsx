@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus } from "lucide-react";
-import { useTowerStore, enrichJob } from "../store";
+import { useStore, enrichJob } from "../store";
 import type { JobSummary } from "../store";
 import { fetchJobs } from "../api/client";
 import { KanbanBoard } from "./KanbanBoard";
@@ -14,7 +14,7 @@ export function DashboardScreen() {
   useEffect(() => {
     fetchJobs({ limit: 100, archived: false })
       .then((result) => {
-        useTowerStore.setState((state) => {
+        useStore.setState((state) => {
           const updated = { ...state.jobs };
           for (const job of result.items) updated[job.id] = enrichJob(job as JobSummary);
           return { jobs: updated };
