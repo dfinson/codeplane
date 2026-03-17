@@ -138,7 +138,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       <p className="text-xs leading-snug line-clamp-2 text-foreground/70 mb-2">
         {job.state === "running" && timeline.length > 0 ? (
           <span className="italic text-primary/70">
-            {(timeline.find((e) => e.active) ?? timeline[timeline.length - 1]).headline}
+            {(timeline.find((e) => e.active) ?? timeline[timeline.length - 1])!.headline}
           </span>
         ) : job.progressHeadline ? (
           <span className="italic text-primary/70">{job.progressHeadline}</span>
