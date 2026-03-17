@@ -33,7 +33,6 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
                 repo="/test",
                 prompt="test",
                 state="running",
-                strategy="single_agent",
                 base_ref="main",
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),

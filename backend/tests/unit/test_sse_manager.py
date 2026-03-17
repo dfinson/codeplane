@@ -45,7 +45,6 @@ def _make_job_domain(job_id: str = "job-1", state: str = "running") -> Job:
         repo="/repos/test",
         prompt="Fix the bug",
         state=state,
-        strategy="single_agent",
         base_ref="main",
         branch="fix/bug",
         worktree_path="/repos/test",

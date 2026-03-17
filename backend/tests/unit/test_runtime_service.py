@@ -33,9 +33,9 @@ from backend.models.events import DomainEvent, DomainEventKind
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.services.agent_adapter import AgentAdapterInterface
 from backend.services.event_bus import EventBus
-from backend.services.execution_strategy import STRATEGY_REGISTRY, SingleAgentExecutor
 from backend.services.runtime_service import (
     RuntimeService,
+    _AgentSession,
     _build_session_config,
     _discover_mcp_servers,
     _make_event_id,
@@ -156,7 +156,6 @@ def _make_job(
     job_id: str = "job-1",
     repo: str = "/repos/test",
     state: str = JobState.queued,
-    strategy: str = "single_agent",
 ) -> Job:
     now = datetime.now(UTC)
     return Job(
@@ -164,7 +163,6 @@ def _make_job(
         repo=repo,
         prompt="Fix the bug",
         state=state,
-        strategy=strategy,
         base_ref="main",
         branch=None,
         worktree_path=None,
@@ -187,7 +185,6 @@ async def _create_db_job(
             repo=job.repo,
             prompt=job.prompt,
             state=job.state,
-            strategy=job.strategy,
             base_ref=job.base_ref,
             branch=job.branch,
             worktree_path=job.worktree_path,
@@ -400,7 +397,7 @@ class TestJobLifecycle:
 
         await runtime.shutdown()
 
-    async def test_send_message_delegates_to_strategy(
+    async def test_send_message_delegates_to_session(
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         slow_adapter = FakeAgentAdapter(delay=5.0)
@@ -550,18 +547,18 @@ class TestFakeAgentAdapter:
 
 
 # ---------------------------------------------------------------------------
-# SingleAgentExecutor
+# _AgentSession
 # ---------------------------------------------------------------------------
 
 
-class TestSingleAgentExecutor:
+class TestAgentSession:
     async def test_execute_yields_events(self) -> None:
         adapter = FakeAgentAdapter(delay=0.0)
-        executor = SingleAgentExecutor()
+        session = _AgentSession()
         config = SessionConfig(workspace_path="/tmp", prompt="test")
 
         events = []
-        async for event in executor.execute(config, adapter):
+        async for event in session.execute(config, adapter):
             events.append(event)
 
         assert len(events) == 5
@@ -569,38 +566,25 @@ class TestSingleAgentExecutor:
 
     async def test_send_message_after_execute(self) -> None:
         adapter = FakeAgentAdapter(delay=0.0)
-        executor = SingleAgentExecutor()
+        session = _AgentSession()
         config = SessionConfig(workspace_path="/tmp", prompt="test")
 
         # Must run execute first so session_id is set
-        async for _ in executor.execute(config, adapter):
+        async for _ in session.execute(config, adapter):
             pass
 
         # Should not raise
-        await executor.send_message("test message")
+        await session.send_message("test message")
 
     async def test_abort(self) -> None:
         adapter = FakeAgentAdapter(delay=0.0)
-        executor = SingleAgentExecutor()
+        session = _AgentSession()
         config = SessionConfig(workspace_path="/tmp", prompt="test")
 
-        async for _ in executor.execute(config, adapter):
+        async for _ in session.execute(config, adapter):
             break  # start but don't finish
 
-        await executor.abort()
-
-
-# ---------------------------------------------------------------------------
-# Strategy Registry
-# ---------------------------------------------------------------------------
-
-
-class TestStrategyRegistry:
-    def test_single_agent_in_registry(self) -> None:
-        from backend.models.api_schemas import StrategyKind
-
-        assert StrategyKind.single_agent in STRATEGY_REGISTRY
-        assert STRATEGY_REGISTRY[StrategyKind.single_agent] is SingleAgentExecutor
+        await session.abort()
 
 
 # ---------------------------------------------------------------------------

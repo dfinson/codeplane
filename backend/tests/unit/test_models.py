@@ -11,7 +11,6 @@ from backend.models.api_schemas import (
     HealthStatus,
     JobResponse,
     JobState,
-    StrategyKind,
 )
 from backend.models.domain import Job, MCPServerConfig, SessionConfig
 from backend.models.events import DomainEvent, DomainEventKind
@@ -33,7 +32,6 @@ def test_create_job_request_defaults() -> None:
     req = CreateJobRequest(repo="/repos/a", prompt="Fix bug")
     assert req.base_ref is None
     assert req.branch is None
-    assert req.strategy is None
 
 
 def test_job_response_round_trip() -> None:
@@ -43,7 +41,6 @@ def test_job_response_round_trip() -> None:
         repo="/repos/a",
         prompt="Fix it",
         state="running",
-        strategy=StrategyKind.single_agent,
         base_ref="main",
         worktree_path="/repos/a",
         branch="fix/it",
@@ -100,7 +97,6 @@ def test_job_domain_model() -> None:
         repo="/repos/a",
         prompt="Fix it",
         state="running",
-        strategy="single_agent",
         base_ref="main",
         branch="fix/it",
         worktree_path="/repos/a",

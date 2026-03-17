@@ -74,5 +74,5 @@ def test_init_config_roundtrips(tmp_path: Path) -> None:
     init_config(cfg_path)
     config = load_config(cfg_path)
     assert config.server.port == 8080
-    assert config.runtime.worktrees_dirname == ".cpl-worktrees"
+    assert config.runtime.worktrees_dirname == ".codeplane-worktrees"
     assert config.retention.artifact_retention_days == 30

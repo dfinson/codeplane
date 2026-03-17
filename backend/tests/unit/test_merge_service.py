@@ -92,7 +92,6 @@ def _make_job(repo: str, job_id: str = "job-1", branch: str = "cpl/job-1") -> Jo
         repo=repo,
         prompt="test prompt",
         state="running",
-        strategy="single_agent",
         base_ref="main",
         branch=branch,
         worktree_path=None,
