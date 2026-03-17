@@ -416,6 +416,93 @@ class TestJobLifecycle:
 
         await runtime.shutdown()
 
+    async def test_send_message_auto_resumes_terminal_job(
+        self,
+        runtime: RuntimeService,
+        event_bus: EventBus,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        """send_message on a job with no live session but a terminal DB state auto-resumes it."""
+        published: list[DomainEvent] = []
+
+        async def _collect(e: DomainEvent) -> None:
+            published.append(e)
+
+        event_bus.subscribe(_collect)
+
+        # Insert a succeeded job with no in-memory session
+        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        await _create_db_job(session_factory, job)
+
+        result = await runtime.send_message(job.id, "please continue")
+        assert result is True
+
+        # Give the resumed task time to run to completion
+        await asyncio.sleep(0.5)
+
+        # The auto-resume should have published a session_resumed event
+        kinds = [e.kind for e in published]
+        assert DomainEventKind.session_resumed in kinds
+
+        # The operator message should appear as a transcript entry
+        transcript_events = [e for e in published if e.kind == DomainEventKind.transcript_updated]
+        operator_msgs = [e for e in transcript_events if e.payload.get("role") == "operator"]
+        assert any("please continue" in e.payload.get("content", "") for e in operator_msgs)
+
+        await runtime.shutdown()
+
+    async def test_send_message_auto_resumes_orphaned_running_job(
+        self,
+        runtime: RuntimeService,
+        event_bus: EventBus,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        """send_message on a job in 'running' state with no live session fails it then resumes."""
+        published: list[DomainEvent] = []
+
+        async def _collect(e: DomainEvent) -> None:
+            published.append(e)
+
+        event_bus.subscribe(_collect)
+
+        # Simulate an orphaned running job (e.g. server was killed mid-run)
+        job = _make_job(repo=config.repos[0], state=JobState.running)
+        await _create_db_job(session_factory, job)
+
+        result = await runtime.send_message(job.id, "retry please")
+        assert result is True
+
+        # Give the resumed task time to run
+        await asyncio.sleep(0.5)
+
+        kinds = [e.kind for e in published]
+        # Job should have been failed first (orphaned), then session_resumed
+        assert DomainEventKind.job_failed in kinds
+        assert DomainEventKind.session_resumed in kinds
+
+        # DB should end in a terminal state (succeeded after the resumed run)
+        async with session_factory() as session:
+            from backend.persistence.job_repo import JobRepository
+
+            repo = JobRepository(session)
+            row = await repo.get(job.id)
+            assert row is not None
+            assert row.state in (JobState.succeeded, JobState.failed, JobState.canceled)
+
+        await runtime.shutdown()
+
+    async def test_send_message_returns_false_for_nonexistent_job(
+        self,
+        runtime: RuntimeService,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        """send_message returns False (not an error) for a job that doesn't exist."""
+        result = await runtime.send_message("nonexistent-job", "hello")
+        assert result is False
+
 
 # ---------------------------------------------------------------------------
 # RuntimeService — recovery on startup

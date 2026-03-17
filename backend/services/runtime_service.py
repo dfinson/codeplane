@@ -853,11 +853,14 @@ class RuntimeService:
 
         Publishes the transcript event locally for immediate UI feedback and
         suppresses the SDK echo to avoid showing the message twice.
+
+        If no live agent session exists (e.g. after a server restart or when the
+        UI has a stale job state), the job is automatically resumed with the
+        message as the instruction so the operator message is never silently lost.
         """
         agent_session = self._agent_sessions.get(job_id)
         if agent_session is None:
-            log.warning("send_message_no_session", job_id=job_id)
-            return False
+            return await self._resume_orphaned(job_id, message)
         now = datetime.now(UTC)
         await agent_session.send_message(message)
         # Publish immediately so the operator message appears in the transcript
@@ -879,6 +882,69 @@ class RuntimeService:
         )
         # Suppress the SDK echo so the same content is not published twice.
         self._echo_suppress.setdefault(job_id, set()).add(message)
+        return True
+
+    async def _resume_orphaned(self, job_id: str, message: str) -> bool:
+        """Auto-resume a job that has no live agent session.
+
+        Called by ``send_message`` when the in-memory session map has no entry
+        for the job.  This covers two cases:
+
+        * **Stale UI state** — the frontend still shows ``running`` or
+          ``waiting_for_approval`` but the agent already finished and the SSE
+          update hasn't reached the client yet.  The DB state will already be
+          terminal, so we can resume directly.
+
+        * **Orphaned non-terminal job** — the server restarted (or crashed)
+          before ``recover_on_startup`` ran, leaving the DB in ``running`` or
+          ``waiting_for_approval`` with no live task.  We fail the job first so
+          that ``resume_job`` can restart it cleanly.
+
+        Returns ``True`` if the resume was successfully initiated, ``False`` if
+        the job does not exist.
+        """
+        from backend.models.domain import TERMINAL_STATES
+        from backend.persistence.job_repo import JobRepository
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            job = await job_repo.get(job_id)
+
+        if job is None:
+            log.warning("send_message_job_not_found", job_id=job_id)
+            return False
+
+        if job.state not in TERMINAL_STATES:
+            # Orphaned non-terminal job — mark it failed so resume_job() can proceed.
+            log.warning(
+                "send_message_orphaned_non_terminal",
+                job_id=job_id,
+                state=job.state,
+            )
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                await svc.transition_state(
+                    job_id,
+                    JobState.failed,
+                    failure_reason="Orphaned: no active session (server restart?)",
+                )
+                await session.commit()
+            await self._event_bus.publish(
+                DomainEvent(
+                    event_id=_make_event_id(),
+                    job_id=job_id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.job_failed,
+                    payload={"reason": "orphaned"},
+                )
+            )
+
+        log.info("send_message_auto_resume", job_id=job_id)
+        try:
+            await self.resume_job(job_id, message)
+        except Exception:
+            log.warning("send_message_auto_resume_failed", job_id=job_id, exc_info=True)
+            return False
         return True
 
     async def pause_job(self, job_id: str) -> bool:
