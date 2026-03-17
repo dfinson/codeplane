@@ -152,7 +152,6 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         approval_service=approval_service,
         event_bus=event_bus,
     )
-    adapter = adapter_registry.default_adapter
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
     platform_registry = PlatformRegistry(platform_configs=config.platforms)
@@ -181,7 +180,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     runtime_service = RuntimeService(
         session_factory=session_factory,
         event_bus=event_bus,
-        adapter=adapter,
+        adapter_registry=adapter_registry,
         config=config,
         approval_service=approval_service,
         diff_service=diff_service,
@@ -189,7 +188,6 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         summarization_service=summarization_service,
         platform_registry=platform_registry,
         utility_session=utility_session,
-        adapter_registry=adapter_registry,
     )
 
     # Recover orphaned jobs from a previous crash
@@ -202,7 +200,6 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.merge_service = merge_service
     app.state.platform_registry = platform_registry
     app.state.approval_service = approval_service
-    app.state.agent_adapter = adapter
     app.state.adapter_registry = adapter_registry
     app.state.utility_session = utility_session
     app.state.session_factory = session_factory

@@ -35,11 +35,6 @@ class AdapterRegistry:
             self._adapters[sdk] = self._create(sdk)
         return self._adapters[sdk]
 
-    @property
-    def default_adapter(self) -> AgentAdapterInterface:
-        """Convenience: return the Copilot adapter (backward compat)."""
-        return self.get_adapter(AgentSDK.copilot)
-
     def _create(self, sdk: AgentSDK) -> AgentAdapterInterface:
         if sdk == AgentSDK.copilot:
             from backend.services.copilot_adapter import CopilotAdapter

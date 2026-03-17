@@ -32,6 +32,7 @@ from backend.models.domain import (
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.services.agent_adapter import AgentAdapterInterface
+from backend.services.adapter_registry import AdapterRegistry
 from backend.services.event_bus import EventBus
 from backend.services.runtime_service import (
     RuntimeService,
@@ -101,6 +102,17 @@ class FakeAgentAdapter(AgentAdapterInterface):
         return "{}"
 
 
+class FakeAdapterRegistry(AdapterRegistry):
+    """Test registry that returns a pre-built adapter for any SDK."""
+
+    def __init__(self, adapter: AgentAdapterInterface) -> None:
+        super().__init__()
+        self._fake = adapter
+
+    def get_adapter(self, sdk=None) -> AgentAdapterInterface:  # noqa: ANN001
+        return self._fake
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -146,7 +158,7 @@ def runtime(
     return RuntimeService(
         session_factory=session_factory,
         event_bus=event_bus,
-        adapter=adapter,
+        adapter_registry=FakeAdapterRegistry(adapter),
         config=config,
     )
 
@@ -220,7 +232,7 @@ class TestCapacityAndQueueing:
         """When max_concurrent_jobs is reached, new jobs get enqueued."""
         # Create a slow adapter so jobs stay in-flight
         slow_adapter = FakeAgentAdapter(delay=2.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         jobs = []
         for i in range(3):
@@ -351,7 +363,7 @@ class TestJobLifecycle:
     ) -> None:
         # Use slow adapter to keep job running
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -369,7 +381,7 @@ class TestJobLifecycle:
     ) -> None:
         """cancel() for a non-running job is a no-op (state change is the API layer's job)."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         # Fill capacity
         j1 = _make_job(job_id="j1", repo=config.repos[0])
@@ -401,7 +413,7 @@ class TestJobLifecycle:
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -484,7 +496,7 @@ class TestShutdown:
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:
         slow_adapter = FakeAgentAdapter(delay=10.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -706,7 +718,7 @@ class TestConcurrencyGuards:
     ) -> None:
         """_start_job should no-op if a task for the job already exists."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -727,7 +739,7 @@ class TestConcurrencyGuards:
     ) -> None:
         """_dequeue_next under the lock should not exceed max_concurrent."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         # Create 3 queued jobs
         for i in range(3):
@@ -754,7 +766,7 @@ class TestConcurrencyGuards:
     ) -> None:
         """CancelledError handler should not fail if job is already canceled."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         job = _make_job(repo=config.repos[0])
         await _create_db_job(session_factory, job)
@@ -783,7 +795,7 @@ class TestRecoveryCapacity:
     ) -> None:
         """recover_on_startup uses start_or_enqueue, respecting max_concurrent."""
         slow_adapter = FakeAgentAdapter(delay=5.0)
-        runtime._adapter = slow_adapter
+        runtime._adapter_registry._fake = slow_adapter
 
         # Create 3 queued jobs
         for i in range(3):
@@ -882,7 +894,7 @@ class TestErrorEventCausesFailure:
         runtime = RuntimeService(
             session_factory=session_factory,
             event_bus=event_bus,
-            adapter=error_adapter,
+            adapter_registry=FakeAdapterRegistry(error_adapter),
             config=config,
         )
 
@@ -931,7 +943,7 @@ class TestStartOrEnqueueCapacitySafety:
         runtime = RuntimeService(
             session_factory=session_factory,
             event_bus=event_bus,
-            adapter=slow_adapter,
+            adapter_registry=FakeAdapterRegistry(slow_adapter),
             config=config,
         )
         config.runtime.max_concurrent_jobs = 1

@@ -222,7 +222,7 @@ class RuntimeService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
-        adapter: AgentAdapterInterface,
+        adapter_registry: AdapterRegistry,
         config: CPLConfig,
         approval_service: ApprovalService | None = None,
         diff_service: DiffService | None = None,
@@ -230,11 +230,9 @@ class RuntimeService:
         summarization_service: SummarizationService | None = None,
         platform_registry: PlatformRegistry | None = None,
         utility_session: UtilitySessionService | None = None,
-        adapter_registry: AdapterRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
-        self._adapter = adapter
         self._adapter_registry = adapter_registry
         self._config = config
         self._approval_service = approval_service
@@ -264,13 +262,8 @@ class RuntimeService:
         self._echo_suppress: dict[str, set[str]] = {}
 
     def _resolve_adapter(self, sdk: str) -> AgentAdapterInterface:
-        """Resolve the adapter for a given SDK, falling back to default."""
-        if self._adapter_registry is not None:
-            try:
-                return self._adapter_registry.get_adapter(sdk)
-            except ValueError:
-                log.warning("unknown_sdk_falling_back", sdk=sdk)
-        return self._adapter
+        """Resolve the adapter for a given SDK via the registry."""
+        return self._adapter_registry.get_adapter(sdk)
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
         from backend.persistence.job_repo import JobRepository

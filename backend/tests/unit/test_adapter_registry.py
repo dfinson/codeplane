@@ -67,15 +67,6 @@ class TestAdapterRegistry:
         with pytest.raises(ValueError):
             registry.get_adapter("unknown_sdk")
 
-    def test_default_adapter_returns_copilot(self) -> None:
-        """default_adapter property returns the Copilot adapter."""
-        with patch("backend.services.copilot_adapter.CopilotAdapter") as MockCopilot:
-            mock_adapter = MagicMock(spec=AgentAdapterInterface)
-            MockCopilot.return_value = mock_adapter
-
-            registry = AdapterRegistry()
-            assert registry.default_adapter is mock_adapter
-
     def test_get_adapter_passes_services(self) -> None:
         """Approval service and event bus are passed to adapter constructors."""
         approval = MagicMock()
