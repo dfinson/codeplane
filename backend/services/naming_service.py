@@ -1,7 +1,8 @@
 """Pre-work naming service — generates intelligent job titles, branch names, and worktree names.
 
 Naming is blocking: a job cannot start without valid, conflict-free names.
-All names are LLM-generated (cheap fast model). No SQLite increment fallback.
+All names are LLM-generated (cheap fast model). No fallbacks — if the LLM
+fails to produce valid names after MAX_RETRIES attempts, NamingError is raised.
 """
 
 from __future__ import annotations
@@ -13,6 +14,10 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 
 log = structlog.get_logger()
+
+
+class NamingError(Exception):
+    """Raised when the LLM fails to produce valid names after all retries."""
 
 
 @runtime_checkable
@@ -59,7 +64,7 @@ Task description:
 """
 
 # Validates branch names: type/slug with allowed characters
-_BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|test)/[a-z0-9][a-z0-9-]{1,43}$")
+_BRANCH_RE = re.compile(r"^(feat|fix|chore|docs|test)/[a-z0-9][a-z0-9-]{0,43}$")
 _WORKTREE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$")
 
 
@@ -98,12 +103,6 @@ def _sanitize_title(raw: str) -> str | None:
     return title
 
 
-def _fallback_title(prompt: str) -> str:
-    """Create a simple title by truncating the prompt."""
-    clean = prompt.strip().replace("\n", " ")
-    return clean[:57] + "..." if len(clean) > 60 else clean
-
-
 def _extract_json(raw: str) -> dict[str, Any] | None:
     """Extract JSON object from LLM response, handling markdown fencing."""
     json_str = raw.strip()
@@ -127,6 +126,9 @@ class NamingService:
 
     Naming is blocking: validates against existing branches/worktrees and
     re-prompts the LLM on conflict until valid names are produced.
+
+    There are no fallbacks. If the LLM fails to produce valid names after
+    MAX_RETRIES attempts, NamingError is raised and job creation fails.
     """
 
     MAX_RETRIES = 3
@@ -143,6 +145,9 @@ class NamingService:
     ) -> tuple[str, str, str]:
         """Generate a title, branch name, and worktree name.
 
+        Retries the full LLM call up to MAX_RETRIES times if the response is
+        invalid or unparseable. Raises NamingError if all attempts fail.
+
         Args:
             prompt: The task description.
             existing_branches: Set of branch names that already exist (local + remote).
@@ -150,96 +155,67 @@ class NamingService:
 
         Returns:
             Tuple of (title, branch_name, worktree_name).
-
-        The function re-prompts the LLM for conflicting fields, up to MAX_RETRIES times.
         """
         branches = existing_branches or set()
         worktrees = existing_worktrees or set()
 
-        # Initial generation
-        title, branch, worktree = await self._initial_generate(prompt)
+        # Retry the full generation until the LLM produces valid output.
+        last_error: Exception = NamingError("No attempts made")
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                title, branch, worktree = await self._attempt_generate(prompt)
+            except Exception as exc:
+                log.warning("naming_attempt_failed", attempt=attempt + 1, reason=str(exc))
+                last_error = exc
+                continue
 
-        # Validate and re-prompt for conflicts
-        for _attempt in range(self.MAX_RETRIES):
-            branch_conflict = branch in branches
-            worktree_conflict = worktree in worktrees
+            # Re-prompt for any names that conflict with existing ones.
+            for _ in range(self.MAX_RETRIES):
+                branch_conflict = branch in branches
+                worktree_conflict = worktree in worktrees
+                if not branch_conflict and not worktree_conflict:
+                    break
+                if branch_conflict:
+                    new_branch = await self._regenerate_field("branch_name", branch, prompt)
+                    if new_branch and new_branch not in branches:
+                        branch = new_branch
+                        log.info("naming_branch_regenerated", new_branch=branch)
+                if worktree_conflict:
+                    new_worktree = await self._regenerate_field("worktree_name", worktree, prompt)
+                    if new_worktree and new_worktree not in worktrees:
+                        worktree = new_worktree
+                        log.info("naming_worktree_regenerated", new_worktree=worktree)
 
-            if not branch_conflict and not worktree_conflict:
-                break
-
-            if branch_conflict:
-                new_branch = await self._regenerate_field("branch_name", branch, prompt)
-                if new_branch and new_branch not in branches:
-                    branch = new_branch
-                    log.info("naming_branch_regenerated", new_branch=branch)
-
-            if worktree_conflict:
-                new_worktree = await self._regenerate_field("worktree_name", worktree, prompt)
-                if new_worktree and new_worktree not in worktrees:
-                    worktree = new_worktree
-                    log.info("naming_worktree_regenerated", new_worktree=worktree)
-
-        log.info("naming_generated", title=title, branch=branch, worktree=worktree)
-        return title, branch, worktree
-
-    async def _initial_generate(self, prompt: str) -> tuple[str, str, str]:
-        """Generate initial title, branch, and worktree from prompt."""
-        try:
-            raw = await self._backend.complete(_NAMING_PROMPT + prompt)
-            if not raw:
-                log.warning("naming_empty_response")
-                return self._fallback(prompt)
-
-            data = _extract_json(raw)
-            if data is None:
-                log.warning("naming_no_json", raw=raw[:200])
-                return self._fallback(prompt)
-
-            title = _sanitize_title(data.get("title", ""))
-            branch = _sanitize_branch(data.get("branch_name", ""))
-            worktree = _sanitize_worktree(data.get("worktree_name", ""))
-
-            # Retry title generation if LLM returned an unusable title
-            if title is None:
-                title = await self._regenerate_title(prompt)
-
-            # If branch or worktree failed validation, fall back only those fields
-            # rather than discarding the LLM-generated title.
-            if branch is None or worktree is None:
-                import hashlib
-
-                log.warning("naming_partial_failure", branch=branch, worktree=worktree)
-                h = hashlib.sha256(prompt.encode()).hexdigest()[:8]
-                if branch is None:
-                    branch = f"chore/task-{h}"
-                if worktree is None:
-                    worktree = f"task-{h}"
-
+            log.info("naming_generated", title=title, branch=branch, worktree=worktree)
             return title, branch, worktree
 
-        except Exception:
-            log.warning("naming_generation_failed", exc_info=True)
-            return self._fallback(prompt)
+        raise NamingError(
+            f"Failed to generate valid names after {self.MAX_RETRIES} attempts"
+        ) from last_error
 
-    async def _regenerate_title(self, prompt: str) -> str:
-        """Ask the LLM for a title on its own when the initial response had none."""
-        _TITLE_ONLY_PROMPT = (
-            "You are a naming assistant for a coding task manager.\n"
-            "Generate a concise title for the following task: 3-8 words, sentence case, no trailing period.\n"
-            'Respond with ONLY a JSON object: {"title": "..."}\n\n'
-            "Task description:\n"
-        )
-        try:
-            raw = await self._backend.complete(_TITLE_ONLY_PROMPT + prompt)
-            data = _extract_json(raw) if raw else None
-            if data:
-                title = _sanitize_title(data.get("title", ""))
-                if title:
-                    log.info("naming_title_regenerated", title=title)
-                    return title
-        except Exception:
-            log.warning("naming_title_regeneration_failed", exc_info=True)
-        return _fallback_title(prompt)
+    async def _attempt_generate(self, prompt: str) -> tuple[str, str, str]:
+        """Single LLM call to produce title, branch, and worktree. Raises on any invalid output."""
+        raw = await self._backend.complete(_NAMING_PROMPT + prompt)
+        if not raw:
+            raise NamingError("Empty response from LLM")
+
+        data = _extract_json(raw)
+        if data is None:
+            raise NamingError(f"No valid JSON in LLM response: {raw[:200]!r}")
+
+        title = _sanitize_title(data.get("title", ""))
+        branch = _sanitize_branch(data.get("branch_name", ""))
+        worktree = _sanitize_worktree(data.get("worktree_name", ""))
+
+        invalid = [f for f, v in [("title", title), ("branch", branch), ("worktree", worktree)] if v is None]
+        if invalid:
+            raise NamingError(
+                f"LLM returned invalid values for: {', '.join(invalid)} "
+                f"(raw title={data.get('title')!r}, branch={data.get('branch_name')!r}, "
+                f"worktree={data.get('worktree_name')!r})"
+            )
+
+        return title, branch, worktree  # type: ignore[return-value]
 
     async def _regenerate_field(self, field: str, conflicting_value: str, prompt: str) -> str | None:
         """Re-prompt the LLM for a single conflicting field."""
@@ -264,13 +240,3 @@ class NamingService:
             log.warning("naming_regenerate_failed", field=field, exc_info=True)
             return None
 
-    @staticmethod
-    def _fallback(prompt: str) -> tuple[str, str, str]:
-        """Generate deterministic fallback names from the prompt."""
-        import hashlib
-
-        h = hashlib.sha256(prompt.encode()).hexdigest()[:8]
-        title = _fallback_title(prompt)
-        branch = f"chore/task-{h}"
-        worktree = f"task-{h}"
-        return title, branch, worktree

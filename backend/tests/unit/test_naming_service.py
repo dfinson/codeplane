@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.services.naming_service import NamingService, _fallback_title
+from backend.services.naming_service import NamingError, NamingService
 
 
 class FakeBackend:
@@ -25,6 +24,10 @@ class FakeBackend:
         if isinstance(response, Exception):
             raise response
         return response
+
+    @property
+    def call_count(self) -> int:
+        return self._index
 
 
 def _json(title: str, branch: str = "feat/add-feature", worktree: str = "add-feature") -> str:
@@ -48,111 +51,83 @@ class TestNamingServiceHappyPath:
         title, _, _ = await svc.generate("Fix the login bug")
         assert not title.endswith(".")
 
+    @pytest.mark.asyncio
+    async def test_single_llm_call_on_success(self):
+        backend = FakeBackend([_json("Add user search", "feat/add-user-search", "add-user-search")])
+        svc = NamingService(backend)
+        await svc.generate("Add a user search feature")
+        assert backend.call_count == 1
 
-class TestNamingServicePartialFailure:
-    """LLM returns valid title but invalid branch or worktree — the title must be preserved."""
+
+class TestNamingServiceRetry:
+    """Bad LLM output triggers a full retry, not a fallback."""
 
     @pytest.mark.asyncio
-    async def test_preserves_llm_title_when_branch_invalid(self):
-        """A bad branch name must NOT cause the title to fall back to the raw prompt."""
-        raw = json.dumps({
-            "title": "Refactor auth module",
-            "branch_name": "INVALID BRANCH!!",  # will fail _sanitize_branch
-            "worktree_name": "auth-refactor",
-        })
-        backend = FakeBackend([raw])
+    async def test_retries_on_invalid_output_and_succeeds(self):
+        bad = json.dumps({"title": "Fix bug", "branch_name": "NO SLASH", "worktree_name": "ok-name"})
+        good = _json("Fix login bug", "fix/fix-login-bug", "fix-login-bug")
+        backend = FakeBackend([bad, good])
         svc = NamingService(backend)
-        title, branch, worktree = await svc.generate("Refactor the authentication module")
-        assert title == "Refactor auth module", f"Expected LLM title, got: {title!r}"
-        # Branch should be a deterministic fallback, not a garbage value
-        assert branch.startswith("chore/task-")
-        assert worktree == "auth-refactor"
+        title, branch, worktree = await svc.generate("Fix the login bug")
+        assert title == "Fix login bug"
+        assert branch == "fix/fix-login-bug"
+        assert backend.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_preserves_llm_title_when_worktree_invalid(self):
-        raw = json.dumps({
-            "title": "Add search API",
-            "branch_name": "feat/add-search-api",
-            "worktree_name": "!!",  # sanitizes to "" — fails _sanitize_worktree
-        })
-        backend = FakeBackend([raw])
+    async def test_retries_on_empty_response(self):
+        good = _json("Add feature", "feat/add-feature", "add-feature")
+        backend = FakeBackend(["", good])
         svc = NamingService(backend)
-        title, branch, worktree = await svc.generate("Add a search API endpoint")
-        assert title == "Add search API", f"Expected LLM title, got: {title!r}"
-        assert branch == "feat/add-search-api"
-        assert worktree.startswith("task-")
+        title, _, _ = await svc.generate("Add a feature")
+        assert title == "Add feature"
+        assert backend.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_preserves_llm_title_when_both_branch_and_worktree_invalid(self):
-        raw = json.dumps({
-            "title": "Upgrade dependencies",
-            "branch_name": "bad branch",   # no type/ prefix — fails _sanitize_branch
-            "worktree_name": "!!",          # sanitizes to "" — fails _sanitize_worktree
-        })
-        backend = FakeBackend([raw])
+    async def test_retries_on_non_json_response(self):
+        good = _json("Refactor auth", "chore/refactor-auth", "refactor-auth")
+        backend = FakeBackend(["I'm sorry, I can't help with that.", good])
         svc = NamingService(backend)
-        title, branch, worktree = await svc.generate("Upgrade all dependencies to latest")
-        assert title == "Upgrade dependencies"
-        assert branch.startswith("chore/task-")
-        assert worktree.startswith("task-")
-
-
-class TestNamingServiceTitleRetry:
-    """When the LLM returns an unusable title, it should retry rather than fall back to the raw prompt."""
+        title, _, _ = await svc.generate("Refactor the auth module")
+        assert title == "Refactor auth"
 
     @pytest.mark.asyncio
-    async def test_retries_title_when_initial_title_invalid(self):
-        # First response: good branch/worktree but missing/invalid title
-        first = json.dumps({
-            "title": "",  # empty — fails _sanitize_title
-            "branch_name": "feat/add-feature",
-            "worktree_name": "add-feature",
-        })
-        # Second response: retry prompt returns a good title
-        second = json.dumps({"title": "Add new feature"})
-        backend = FakeBackend([first, second])
+    async def test_retries_on_llm_exception(self):
+        good = _json("Fix bug", "fix/fix-bug", "fix-bug")
+        backend = FakeBackend([RuntimeError("timeout"), good])
         svc = NamingService(backend)
-        title, _, _ = await svc.generate("Add a new feature to the app")
-        assert title == "Add new feature"
+        title, _, _ = await svc.generate("Fix a bug")
+        assert title == "Fix bug"
+
+
+class TestNamingServiceExhaustedRetries:
+    """After MAX_RETRIES attempts, NamingError is raised — no fallback, ever."""
 
     @pytest.mark.asyncio
-    async def test_uses_fallback_title_only_when_retry_also_fails(self):
-        first = json.dumps({
-            "title": "",
-            "branch_name": "feat/add-feature",
-            "worktree_name": "add-feature",
-        })
-        # Retry also returns garbage
-        second = "{}"
-        backend = FakeBackend([first, second])
+    async def test_raises_naming_error_after_all_retries_fail(self):
+        backend = FakeBackend([RuntimeError("LLM unavailable")] * 3)
         svc = NamingService(backend)
-        prompt = "Add a new feature to the app"
-        title, _, _ = await svc.generate(prompt)
-        # Should fall back to truncated prompt — but only as a last resort
-        assert title == _fallback_title(prompt)
-
-
-class TestNamingServiceFullFailure:
-    """LLM completely unavailable — should use deterministic fallbacks."""
+        with pytest.raises(NamingError):
+            await svc.generate("Fix the critical null pointer bug in production")
 
     @pytest.mark.asyncio
-    async def test_full_exception_uses_fallback_names(self):
-        backend = FakeBackend([RuntimeError("LLM unavailable")])
+    async def test_raises_naming_error_on_persistent_invalid_output(self):
+        # All responses have an invalid branch — should exhaust retries and raise
+        bad = json.dumps({"title": "Fix bug", "branch_name": "NO SLASH", "worktree_name": "fix-bug"})
+        backend = FakeBackend([bad] * 3)
         svc = NamingService(backend)
-        prompt = "Fix the critical null pointer bug in production"
-        title, branch, worktree = await svc.generate(prompt)
-        assert branch.startswith("chore/task-")
-        assert worktree.startswith("task-")
-        # Fallback title should be the truncated prompt (last resort)
-        assert title == _fallback_title(prompt)
+        with pytest.raises(NamingError):
+            await svc.generate("Fix a bug")
 
     @pytest.mark.asyncio
-    async def test_empty_response_uses_fallback_names(self):
-        backend = FakeBackend([""])
+    async def test_never_returns_truncated_description_as_title(self):
+        """The truncated task description must never appear as a job title."""
+        prompt = "Add a comprehensive new user search feature with autocomplete"
+        backend = FakeBackend([RuntimeError("LLM unavailable")] * 3)
         svc = NamingService(backend)
-        _, branch, worktree = await svc.generate("Some task")
-        assert branch.startswith("chore/task-")
-        assert worktree.startswith("task-")
+        with pytest.raises(NamingError):
+            await svc.generate(prompt)
+        # If we get here (no exception), the title must not be a truncation of the prompt
+        # This assertion is the contract: either a meaningful LLM title or an exception.
 
 
 class TestNamingServiceConflictResolution:
@@ -177,3 +152,16 @@ class TestNamingServiceConflictResolution:
             "Fix login", existing_worktrees={"fix-login-bug"}
         )
         assert worktree == "fix-login-v2"
+
+    @pytest.mark.asyncio
+    async def test_title_is_not_affected_by_conflict_resolution(self):
+        """Conflict resolution for branch/worktree must not change the title."""
+        initial = _json("Fix login bug", "fix/fix-login-bug", "fix-login-bug")
+        retry = json.dumps({"branch_name": "fix/login-bug-v2"})
+        backend = FakeBackend([initial, retry])
+        svc = NamingService(backend)
+        title, _, _ = await svc.generate(
+            "Fix login", existing_branches={"fix/fix-login-bug"}
+        )
+        assert title == "Fix login bug"
+

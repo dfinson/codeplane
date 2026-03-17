@@ -110,6 +110,8 @@ class JobService:
         worktree_name: str | None = None
 
         if self._naming is not None:
+            from backend.services.naming_service import NamingError
+
             try:
                 # Gather existing branches and worktrees for conflict detection
                 existing_branches = await self._git.list_branches(resolved_repo)
@@ -129,15 +131,28 @@ class JobService:
                     branch=branch,
                     worktree_name=worktree_name,
                 )
-            except Exception:
-                log.warning("naming_preflight_failed", job_id=job_id, exc_info=True)
-
-        # Fallback worktree_name if naming didn't produce one
-        if worktree_name is None:
-            import hashlib
-
-            h = hashlib.sha256(prompt.encode()).hexdigest()[:8]
-            worktree_name = f"task-{h}"
+            except NamingError as exc:
+                job = Job(
+                    id=job_id,
+                    repo=resolved_repo,
+                    prompt=prompt,
+                    state=JobState.failed,
+                    base_ref=base_ref,
+                    branch=None,
+                    worktree_path=None,
+                    session_id=None,
+                    created_at=now,
+                    updated_at=now,
+                    completed_at=now,
+                    title=None,
+                    worktree_name=None,
+                    permission_mode=permission_mode,
+                    model=model,
+                    failure_reason=f"Naming failed: {exc}",
+                )
+                await self._job_repo.create(job)
+                log.error("job_naming_failed", job_id=job_id, error=str(exc))
+                return job
 
         # Create worktree using worktree_name as the directory name
         from backend.services.git_service import GitError
