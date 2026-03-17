@@ -402,7 +402,7 @@ export function JobDetailScreen() {
       </div>
 
       {completeOpen && job && (
-        <CompleteJobDialog job={job} open onClose={() => setCompleteOpen(false)} />
+        <CompleteJobDialog job={job} open onClose={() => setCompleteOpen(false)} onArchived={() => navigate("/")} />
       )}
 
       <Tabs value={tab} onValueChange={setTab} className="mb-4">

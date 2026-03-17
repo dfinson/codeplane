@@ -18,9 +18,10 @@ interface CompleteJobDialogProps {
   job: JobSummary;
   open: boolean;
   onClose: () => void;
+  onArchived?: () => void;
 }
 
-export function CompleteJobDialog({ job, open, onClose }: CompleteJobDialogProps) {
+export function CompleteJobDialog({ job, open, onClose, onArchived }: CompleteJobDialogProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,12 +48,13 @@ export function CompleteJobDialog({ job, open, onClose }: CompleteJobDialogProps
         };
       });
       onClose();
+      onArchived?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to archive job");
     } finally {
       setLoading(false);
     }
-  }, [job.id, onClose]);
+  }, [job.id, onClose, onArchived]);
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
