@@ -16,6 +16,7 @@ interface DiffViewerProps {
   jobState?: string;
   resolution?: string | null;
   archivedAt?: string | null;
+  onAskSent?: () => void;
 }
 
 const STATUS_ICON: Record<string, LucideIcon> = {
@@ -78,7 +79,7 @@ function computeAskState(
   return { canAsk: true, reason: null };
 }
 
-export default function DiffViewer({ jobId, jobState, resolution, archivedAt }: DiffViewerProps) {
+export default function DiffViewer({ jobId, jobState, resolution, archivedAt, onAskSent }: DiffViewerProps) {
   const diffs = useStore(selectJobDiffs(jobId));
   const isMobile = useIsMobile();
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -181,12 +182,13 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt }: 
       toast.success("Question sent to agent");
       setAskMsg("");
       setCheckedFiles(new Set());
+      onAskSent?.();
     } catch (e) {
       toast.error(String(e));
     } finally {
       setAskSending(false);
     }
-  }, [jobId, askMsg, checkedFiles, diffs, isTerminal]);
+  }, [jobId, askMsg, checkedFiles, diffs, isTerminal, onAskSent]);
 
   const totalAdditions = diffs.reduce((sum, f) => sum + (f.additions ?? 0), 0);
   const totalDeletions = diffs.reduce((sum, f) => sum + (f.deletions ?? 0), 0);

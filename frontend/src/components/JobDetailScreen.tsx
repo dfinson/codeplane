@@ -518,7 +518,7 @@ export function JobDetailScreen() {
 
       {tab === "diff" && (
         <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
-          <DiffViewer jobId={jobId} jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} />
+          <DiffViewer jobId={jobId} jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} onAskSent={() => setTab("live")} />
         </Suspense>
       )}
 
