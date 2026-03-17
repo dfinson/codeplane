@@ -28,36 +28,37 @@ class Completable(Protocol):
 
 
 _NAMING_PROMPT = """\
-You are a naming assistant for a coding task manager. Given a task description,
-generate a concise title, a conventional git branch name, and a short worktree name.
+You are a naming assistant for a coding task manager. Given a task description, \
+output exactly one JSON object with three fields.
 
-Rules:
-- **title**: 3-8 words, sentence case, no trailing period. Captures the essence of the task.
-- **branch_name**: lowercase, kebab-case, prefixed with a conventional type:
-  - `feat/` for new features or additions
-  - `fix/` for bug fixes
-  - `chore/` for maintenance, upgrades, refactoring
-  - `docs/` for documentation changes
-  - `test/` for test additions/fixes
-  - Maximum 50 characters total. Use only `a-z`, `0-9`, `-`, `/`.
-- **worktree_name**: lowercase, kebab-case, 3-30 characters, descriptive slug.
-  - Use only `a-z`, `0-9`, `-`. No slashes.
-  - Example: "auth-refactor", "fix-login-bug", "add-search-api"
+Field rules:
+- "title": 3-8 words, sentence case, no trailing period. Example: "Add user search feature"
+- "branch_name": must start with one of these prefixes followed by a slash, then a kebab-case slug.
+  Prefixes: feat/ fix/ chore/ docs/ test/
+  Slug: only lowercase a-z, digits 0-9, and hyphens. No underscores, no spaces.
+  Total length 50 characters max.
+  Good examples: "feat/add-user-search", "fix/null-pointer-login", "chore/upgrade-deps"
+  Bad examples: "add-user-search" (missing prefix), "feat/Add User Search" (uppercase/spaces)
+- "worktree_name": kebab-case slug only, no prefix, no slashes. 3-30 characters.
+  Only lowercase a-z, digits 0-9, and hyphens.
+  Good examples: "add-user-search", "fix-login-bug", "upgrade-deps"
 
-Respond with ONLY a JSON object, no markdown fencing, no explanation:
-{"title": "...", "branch_name": "...", "worktree_name": "..."}
+Output format — respond with ONLY this JSON, no markdown, no explanation:
+{"title": "Fix null pointer in login", "branch_name": "fix/null-pointer-login", "worktree_name": "null-pointer-login"}
 
 Task description:
 """
 
 _RENAME_PROMPT = """\
-The following {field} is already taken: "{conflicting_value}"
+The {field} "{conflicting_value}" is already in use. Generate a different one that \
+still describes the task below.
 
-Generate a NEW unique {field} that is different but still describes this task.
-Follow the same rules as before.
+Rules for {field}:
+- If "branch_name": prefix/kebab-slug (e.g. feat/add-search-v2). Only a-z, 0-9, hyphens, one slash. Max 50 chars.
+- If "worktree_name": kebab-slug only, no slash (e.g. add-search-v2). Only a-z, 0-9, hyphens. 3-30 chars.
 
-Respond with ONLY a JSON object with the field that needs to change:
-{{"{field}": "..."}}
+Respond with ONLY a JSON object containing just the changed field:
+{{"branch_name": "feat/add-search-v2"}} or {{"worktree_name": "add-search-v2"}}
 
 Task description:
 {prompt}
