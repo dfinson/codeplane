@@ -533,16 +533,20 @@ class CopilotAdapter(AgentAdapterInterface):
                                     result_text = str(parts)
                             if not result_text and data.partial_output:
                                 result_text = data.partial_output
+                        from backend.services.tool_formatters import format_tool_display
+
+                        tool_args_str = buffered.get("tool_args")
                         event_payload = {
                             "role": "tool_call",
                             "content": tool_name,
                             "tool_name": tool_name,
-                            "tool_args": buffered.get("tool_args"),
+                            "tool_args": tool_args_str,
                             "tool_result": result_text,
                             "tool_success": bool(data.success) if data and data.success is not None else True,
                             "turn_id": buffered.get("turn_id") or (data.turn_id if data else None),
                             "tool_intent": buffered.get("tool_intent"),
                             "tool_title": buffered.get("tool_title"),
+                            "tool_display": format_tool_display(tool_name, tool_args_str),
                         }
                 else:
                     event_payload = payload if isinstance(payload, dict) else {}

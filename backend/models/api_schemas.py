@@ -320,6 +320,7 @@ class TranscriptPayload(CamelModel):
     tool_success: bool | None = None  # role=tool_call: whether execution succeeded
     tool_intent: str | None = None  # role=tool_call: SDK-provided intent string
     tool_title: str | None = None  # role=tool_call: SDK-provided display title
+    tool_display: str | None = None  # role=tool_call: deterministic per-tool label
 
 
 class ToolGroupSummaryPayload(CamelModel):

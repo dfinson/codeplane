@@ -224,16 +224,17 @@ function prettifyJson(raw: string | undefined): string {
 }
 
 /** Group sequential identical tool names into counted chips. */
-function chipify(calls: TranscriptEntry[]): { name: string; count: number; entries: TranscriptEntry[] }[] {
-  const chips: { name: string; count: number; entries: TranscriptEntry[] }[] = [];
+function chipify(calls: TranscriptEntry[]): { name: string; display: string; count: number; entries: TranscriptEntry[] }[] {
+  const chips: { name: string; display: string; count: number; entries: TranscriptEntry[] }[] = [];
   for (const tc of calls) {
     const name = tc.toolName ?? tc.content;
+    const display = tc.toolDisplay ?? name;
     const last = chips[chips.length - 1];
     if (last && last.name === name) {
       last.count++;
       last.entries.push(tc);
     } else {
-      chips.push({ name, count: 1, entries: [tc] });
+      chips.push({ name, display, count: 1, entries: [tc] });
     }
   }
   return chips;
@@ -264,7 +265,7 @@ function ToolChips({ calls }: { calls: TranscriptEntry[] }) {
                   : "text-muted-foreground bg-muted/20",
               )}
             >
-              <span>{chip.name}</span>
+              <span>{chip.display}</span>
               {chip.count > 1 && (
                 <span className="text-[10px] opacity-60">×{chip.count}</span>
               )}
@@ -371,12 +372,17 @@ function deriveToolGroupLabel(calls: TranscriptEntry[]): string {
     return truncateLabel(`${withTitle.toolTitle}: ${counts}`);
   }
 
-  // 3. AI-generated summary (arrives async via tool_group_summary SSE)
-  const withSummary = calls.find((c) => c.toolGroupSummary);
-  if (withSummary?.toolGroupSummary) return truncateLabel(withSummary.toolGroupSummary);
+  // 3. Deterministic per-tool display labels
+  const withDisplay = calls.filter((c) => c.toolDisplay);
+  if (withDisplay.length > 0) {
+    // Show up to 3 unique display labels
+    const unique = [...new Set(withDisplay.map((c) => c.toolDisplay!))];
+    const shown = unique.slice(0, 3).join(", ");
+    const suffix = unique.length > 3 ? "…" : "";
+    return truncateLabel(`${shown}${suffix}`);
+  }
 
-  // 4. Fallback: per-tool counts from chipify, e.g. "bash ×3, read_file, write_file"
-  //    This mirrors the information the old chips showed, as a readable text label.
+  // 4. Fallback: per-tool counts from chipify
   const chips = chipify(calls);
   return chips.map((c) => c.count > 1 ? `${c.name} ×${c.count}` : c.name).join(", ");
 }
@@ -441,9 +447,7 @@ function AgentTurn({ turn, isLast }: { turn: AgentTurnData; isLast?: boolean }) 
       <div className="flex-1 min-w-0 space-y-0.5">
         {turn.reasoning && <ReasoningBlock entry={turn.reasoning} />}
         {turn.toolCalls.length > 0 && (
-          extractReportIntent(turn.toolCalls) !== null
-            ? <ToolGroupSection calls={turn.toolCalls} />
-            : <ToolChips calls={turn.toolCalls} />
+          <ToolGroupSection calls={turn.toolCalls} />
         )}
         {msg && (
           <div className="bg-muted rounded-xl rounded-tl-sm px-3 py-2 text-sm leading-relaxed">

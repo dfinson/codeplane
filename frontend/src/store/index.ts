@@ -80,6 +80,7 @@ export interface TranscriptEntry {
   toolSuccess?: boolean; // tool_call: success flag
   toolIntent?: string;   // tool_call: SDK-provided intent string (deterministic label)
   toolTitle?: string;    // tool_call: SDK-provided display title
+  toolDisplay?: string;  // tool_call: deterministic per-tool label (e.g. "$ ls -la", "Read src/main.py")
   // AI-generated group summary — patched in asynchronously via tool_group_summary SSE
   toolGroupSummary?: string;
 }
@@ -205,6 +206,7 @@ export const useStore = create<AppState>((set, get) => ({
             toolSuccess: payload.toolSuccess as boolean | undefined,
             toolIntent: payload.toolIntent as string | undefined,
             toolTitle: payload.toolTitle as string | undefined,
+            toolDisplay: payload.toolDisplay as string | undefined,
           };
           const existing = state.transcript[jobId] ?? [];
           // Deduplicate: two SSE connections (global + job-scoped) may deliver
