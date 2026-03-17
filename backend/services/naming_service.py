@@ -195,19 +195,51 @@ class NamingService:
                 log.warning("naming_no_json", raw=raw[:200])
                 return self._fallback(prompt)
 
-            title = _sanitize_title(data.get("title", "")) or _fallback_title(prompt)
+            title = _sanitize_title(data.get("title", ""))
             branch = _sanitize_branch(data.get("branch_name", ""))
             worktree = _sanitize_worktree(data.get("worktree_name", ""))
 
+            # Retry title generation if LLM returned an unusable title
+            if title is None:
+                title = await self._regenerate_title(prompt)
+
+            # If branch or worktree failed validation, fall back only those fields
+            # rather than discarding the LLM-generated title.
             if branch is None or worktree is None:
+                import hashlib
+
                 log.warning("naming_partial_failure", branch=branch, worktree=worktree)
-                return self._fallback(prompt)
+                h = hashlib.sha256(prompt.encode()).hexdigest()[:8]
+                if branch is None:
+                    branch = f"chore/task-{h}"
+                if worktree is None:
+                    worktree = f"task-{h}"
 
             return title, branch, worktree
 
         except Exception:
             log.warning("naming_generation_failed", exc_info=True)
             return self._fallback(prompt)
+
+    async def _regenerate_title(self, prompt: str) -> str:
+        """Ask the LLM for a title on its own when the initial response had none."""
+        _TITLE_ONLY_PROMPT = (
+            "You are a naming assistant for a coding task manager.\n"
+            "Generate a concise title for the following task: 3-8 words, sentence case, no trailing period.\n"
+            'Respond with ONLY a JSON object: {"title": "..."}\n\n'
+            "Task description:\n"
+        )
+        try:
+            raw = await self._backend.complete(_TITLE_ONLY_PROMPT + prompt)
+            data = _extract_json(raw) if raw else None
+            if data:
+                title = _sanitize_title(data.get("title", ""))
+                if title:
+                    log.info("naming_title_regenerated", title=title)
+                    return title
+        except Exception:
+            log.warning("naming_title_regeneration_failed", exc_info=True)
+        return _fallback_title(prompt)
 
     async def _regenerate_field(self, field: str, conflicting_value: str, prompt: str) -> str | None:
         """Re-prompt the LLM for a single conflicting field."""
