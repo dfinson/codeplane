@@ -57,8 +57,9 @@ CodePlane turns autonomous coding agents into something observable, controllable
 | Operator intervention | Send messages, cancel, or rerun jobs at any time |
 | Workspace isolation | Every job gets its own isolated worktree under `.codeplane-worktrees/` |
 | Remote access | Dev Tunnel exposes the UI over HTTPS for phone/remote control |
-| Voice input | Speak prompts and operator instructions into the browser |
+| Voice input | Speak prompts, operator instructions, and terminal commands into the browser |
 | Artifact inspection | Browse files, diffs, and produced outputs from every job |
+| Integrated terminal | PTY-backed terminal sessions with optional AI agent assistance |
 
 ---
 
@@ -180,7 +181,9 @@ App
 │   │   ├── DiffViewer
 │   │   ├── WorkspaceBrowser
 │   │   ├── ArtifactViewer
-│   │   └── ExecutionTimeline
+│   │   ├── ExecutionTimeline
+│   │   └── TerminalPanel (inline pane, job-scoped)
+│   │       └── AssistPanel (optional sidecar)
 │   ├── JobCreationScreen
 │   │   ├── RepoSelector
 │   │   ├── PromptInput
@@ -197,6 +200,9 @@ App
 │       │   └── RepoJobList
 │       ├── GlobalConfigEditor
 │       └── RepoConfigList
+├── TerminalDrawer (global, persists across navigation)
+│   ├── TerminalPanel (per tab)
+│   └── AssistPanel (optional sidecar)
 └── SSEProvider (global)
 ```
 
@@ -650,6 +656,8 @@ class UpdateSettingsRequest(BaseModel):
     artifact_retention_days: int | None = Field(None, ge=1, le=365)
     max_artifact_size_mb: int | None = Field(None, ge=1, le=10_000)
     auto_archive_days: int | None = Field(None, ge=1, le=365)
+    terminal_assist_sdk: str | None = None           # copilot | claude
+    terminal_assist_model: str | None = None         # model override; null = SDK default
 
 class SettingsResponse(CamelModel):
     max_concurrent_jobs: int
@@ -660,6 +668,8 @@ class SettingsResponse(CamelModel):
     artifact_retention_days: int
     max_artifact_size_mb: int
     auto_archive_days: int
+    terminal_assist_sdk: str
+    terminal_assist_model: str | None
 
 
 # --- Voice ---
@@ -1291,12 +1301,13 @@ async function recordAndTranscribe(): Promise<string> {
 
 ### 9.5 Voice Input Contexts
 
-Voice input is available in two contexts:
+Voice input is available in three contexts:
 
 | Context | Description |
 |---|---|
 | Job creation prompt | Dictate the initial task prompt |
 | Operator message | Dictate a mid-run instruction to send to the agent |
+| Terminal session | Dictate a command (pasted into the terminal) or an assist message (inserted into the assist chat input). See §14.6.3 |
 
 ### 9.6 Transcription Engine
 
@@ -1369,7 +1380,7 @@ Configuration exists at three layers:
 File: `~/.codeplane/config.yaml`
 
 ```yaml
-server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: auto             # auto | read_only | approval_required\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n  default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: auto_merge              # auto_merge | pr_only | manual\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
+server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: auto             # auto | read_only | approval_required\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n  default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job\n\nterminal:\n  assist:\n    sdk: copilot                    # copilot | claude — SDK for terminal agent assistance\n    model: null                     # model override; null = use SDK default\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: auto_merge              # auto_merge | pr_only | manual\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 
@@ -1651,8 +1662,9 @@ Sections:
 | **Logs Panel** | Raw log output with level filtering (debug/info/warn/error). Virtualized list |
 | **Diff Viewer** | Per-file diffs with syntax highlighting, additions/deletions counts, and hunk navigation |
 | **Workspace Browser** | File tree of the worktree. Click a file to view its contents |
-| **Artifact Viewer** | List of collected artifacts with type badges and download links |
+| **Artifact Viewer** | List of collected artifacts with type badges and download links. Always visible as a tab; shows an empty state when no artifacts are collected yet |
 | **Execution Timeline** | Chronological list of key events grouped by phase |
+| **Terminal Pane** | Inline xterm.js terminal scoped to the job's worktree. Only shown when the job has a worktree. See §14.6 |
 
 #### Concurrent Approval Notifications
 
@@ -1681,6 +1693,12 @@ Sections:
 - Repository config list (per-repo `.codeplane.yml` viewer)
 - Worktree cleanup action
 - Voice model selector
+- **Terminal Assistance** — Default SDK and model for agent assistance in terminal sessions (see §14.6.2)
+
+| Field | Type | Notes |
+|---|---|---|
+| Assistance SDK | Dropdown (`copilot` / `claude`) | Which SDK powers the terminal assist agent |
+| Default Model | Dropdown + "Auto" option | Model used for assist; filtered to models compatible with selected SDK. "Auto" uses the SDK's default model |
 
 ### 14.5 Repository Detail View
 
@@ -1709,6 +1727,78 @@ For each MCP server, the view shows the resolution chain so the operator underst
 │ filesystem  │ npx -y @model... │ global   │  ← inherited from global config
 └─────────────┴──────────────────┴──────────┘
 ```
+
+### 14.6 Terminal Sessions
+
+CodePlane provides integrated terminal sessions backed by backend PTY processes connected via WebSocket. There are two distinct contexts with different scoping rules.
+
+#### 14.6.1 Global Terminal (Drawer)
+
+The global terminal is a persistent bottom drawer rendered at the `App` level (outside `<Routes>`), so it survives page navigation. It supports:
+
+- **Multiple session tabs** — each tab is an independent PTY session
+- **Resize via drag** — drag handle at the top edge; min 150px, max 70% of viewport
+- **Maximize / minimize** — toolbar buttons to expand or collapse
+- **Keyboard shortcut** — `Ctrl+`` `` ` toggles the drawer open/closed
+- **Create / close sessions** — `+` button creates a new session; `×` closes one
+
+Global terminal sessions have no `jobId`. They default their `cwd` to the user's home directory (or the first registered repository).
+
+Job-scoped terminal sessions (those created from the Job Detail screen) do **not** appear in the global drawer tab bar. The drawer filters its session list to exclude any session with a non-null `jobId`.
+
+#### 14.6.2 Per-Job Terminal (Inline Pane)
+
+When a job has a worktree, the Job Detail screen shows a "Terminal" tab alongside Live, Files, Changes, and Artifacts. Clicking this tab creates a terminal session scoped to the job's worktree directory.
+
+Per-job terminals:
+
+- Render **inline** within the Job Detail tab content area (not as a drawer)
+- Are scoped to the job's `worktreePath` as `cwd`
+- Carry a `jobId` in their session metadata
+- Do **not** open or interact with the global terminal drawer
+- Are stored in the global Zustand store for WebSocket lifecycle management, but are filtered out of the drawer's tab list
+
+#### 14.6.3 Agent Assistance
+
+Both global and per-job terminal sessions can optionally activate an **Agent Assist** sidecar — a lightweight conversational AI agent scoped to the terminal's working directory.
+
+**Activation**: A robot icon (🤖) in the terminal toolbar toggles the assist panel. When activated, the terminal area splits horizontally:
+
+```
+┌──────────────────────────────────────────────┐
+│ [Tab1] [Tab2] [+]              [🎤] [🤖] [−]│  ← toolbar: voice, assist toggle, minimize
+├────────────────────────┬─────────────────────┤
+│                        │  Agent Assist       │
+│   Terminal (xterm)     │  ┌───────────────┐  │
+│   $ ls -la             │  │ Chat history   │  │
+│   $ npm test           │  │ (streaming)    │  │
+│                        │  ├───────────────┤  │
+│                        │  │ Ask... [🎤][↵]│  │
+└────────────────────────┴─────────────────────┘
+```
+
+**Agent Assist behavior**:
+
+- The assist agent is a **separate, lightweight agent instance** — not a full job agent. It does not create worktrees, branches, or jobs.
+- Scoped to the terminal session's `cwd` for file context.
+- Has **read access** to the terminal's scrollback buffer, which is sent as context with each assist message.
+- Responses stream as markdown via SSE.
+- The agent uses the SDK and model configured in global settings under `terminal.assist` (see §10.2). Per-job terminals inherit the same configuration.
+- Assist chat history is ephemeral — cleared when the terminal session is closed.
+
+**Voice input in assist**: The assist chat input includes a microphone button (🎤) that uses the same voice transcription flow as job creation (§9). Transcribed text is inserted into the assist input field.
+
+**Voice input in terminal toolbar**: A microphone button in the terminal toolbar (outside the assist panel) transcribes speech and pastes the result directly into the terminal as typed input.
+
+#### 14.6.4 Terminal Session Lifecycle
+
+| Event | Behavior |
+|---|---|
+| Session created | Backend spawns a PTY process, returns session ID. Frontend connects via WebSocket |
+| Session closed (tab ×) | Frontend sends `DELETE /api/terminal/sessions/{id}`, backend kills PTY |
+| Page navigation (global) | Drawer persists — sessions remain connected |
+| Page navigation (per-job) | Session remains in store; reconnects if user returns to job |
+| Server restart | All PTY sessions are lost; frontend shows "disconnected" state |
 
 ---
 
@@ -2136,7 +2226,77 @@ Returns all registered SDKs, their installation/configuration status, and which 
 
 `status` is one of: `ready` (installed and configured), `not_installed` (SDK package missing), `not_configured` (package installed but credentials missing).
 
-### 17.10 Connection Limits
+### 17.10 Terminal Sessions
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/terminal/sessions` | Create a new PTY session |
+| `DELETE` | `/api/terminal/sessions/{id}` | Kill a PTY session and clean up |
+| `GET` | `/api/terminal/sessions/{id}/ws` | WebSocket connection for terminal I/O |
+| `POST` | `/api/terminal/sessions/{id}/assist` | Send a message to the session's assist agent |
+| `GET` | `/api/terminal/sessions/{id}/assist/stream` | SSE stream of assist agent responses |
+
+#### `POST /api/terminal/sessions` — Create Session
+
+Request body:
+
+```json
+{
+  "cwd": "/repos/service-a",
+  "jobId": null
+}
+```
+
+`cwd` defaults to the first registered repository when `null`. `jobId` is set when creating a job-scoped terminal.
+
+Response (`201 Created`):
+
+```json
+{
+  "id": "term-abc123",
+  "cwd": "/repos/service-a",
+  "jobId": null
+}
+```
+
+#### `POST /api/terminal/sessions/{id}/assist` — Assist Message
+
+Request body:
+
+```json
+{
+  "message": "How do I fix the failing test in auth_test.py?",
+  "includeScrollback": true
+}
+```
+
+When `includeScrollback` is `true`, the backend reads the last N lines (default 200) from the PTY scrollback buffer and includes them as context for the assist agent.
+
+Response (`200 OK`):
+
+```json
+{
+  "assistMessageId": "assist-msg-42"
+}
+```
+
+The actual response content streams via the SSE endpoint.
+
+#### `GET /api/terminal/sessions/{id}/assist/stream` — Assist Response Stream
+
+SSE endpoint that streams assist agent responses. Each event contains a chunk of the agent's markdown response:
+
+```
+event: assist_chunk
+data: {"assistMessageId": "assist-msg-42", "content": "The test is failing because...", "done": false}
+
+event: assist_chunk
+data: {"assistMessageId": "assist-msg-42", "content": "", "done": true}
+```
+
+The assist agent uses the SDK and model configured in `terminal.assist` from global settings (§10.2). If no configuration is set, it falls back to `runtime.default_sdk` with that SDK's default model.
+
+### 17.12 Connection Limits
 
 SSE connections are limited to `max_sse_connections` concurrent connections (default: 5).
 
@@ -2144,7 +2304,7 @@ Voice transcription uploads are limited to `max_audio_size_mb` (default: 10 MB).
 
 No per-request rate limiting is applied. CodePlane runs on a single developer machine accessed by one browser and optionally one phone — throttling REST requests adds complexity without value.
 
-### 17.11 Error Responses
+### 17.13 Error Responses
 
 All errors return a consistent envelope:
 

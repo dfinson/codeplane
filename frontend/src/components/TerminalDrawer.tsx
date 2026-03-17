@@ -42,7 +42,7 @@ export function TerminalDrawer() {
   const dragging = useRef(false);
   const [maximized, setMaximized] = useState(false);
 
-  const sessionList = Object.values(terminalSessions);
+  const sessionList = Object.values(terminalSessions).filter((s) => !s.jobId);
 
   // Handle drag-to-resize
   const onDragStart = useCallback(
