@@ -128,6 +128,7 @@ class CreateJobRequest(BaseModel):
     branch: str | None = None
     permission_mode: PermissionMode | None = None
     model: str | None = None
+    sdk: str | None = None
 
 
 class SendMessageRequest(BaseModel):
@@ -184,6 +185,7 @@ class CreateJobResponse(CamelModel):
     title: str | None = None
     branch: str | None = None
     worktree_path: str | None = None
+    sdk: str = "copilot"
     created_at: datetime
 
 
@@ -206,6 +208,7 @@ class JobResponse(CamelModel):
     archived_at: datetime | None = None
     failure_reason: str | None = None
     model: str | None = None
+    sdk: str = "copilot"
     worktree_name: str | None = None
 
 
@@ -482,3 +485,15 @@ class ProgressHeadlinePayload(CamelModel):
 class SnapshotPayload(CamelModel):
     jobs: list[JobResponse]
     pending_approvals: list[ApprovalResponse]
+
+
+class SDKInfoResponse(CamelModel):
+    id: str
+    name: str
+    enabled: bool
+    status: str  # ready | not_installed | not_configured
+
+
+class SDKListResponse(CamelModel):
+    default: str
+    sdks: list[SDKInfoResponse]

@@ -2,8 +2,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels } from "../api/client";
-import type { PermissionMode } from "../api/types";
+import { createJob, fetchRepos, fetchModels, fetchSDKs } from "../api/client";
+import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
 import { Button } from "./ui/button";
@@ -24,6 +24,9 @@ export function JobCreationScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("approval_required");
+  const [sdk, setSdk] = useState<string>("copilot");
+  const [sdks, setSdks] = useState<SDKInfo[]>([]);
+  const [defaultSdk, setDefaultSdk] = useState<string>("copilot");
 
   useEffect(() => {
     fetchRepos()
@@ -45,6 +48,13 @@ export function JobCreationScreen() {
         );
       })
       .catch(() => {});
+    fetchSDKs()
+      .then((r) => {
+        setSdks(r.sdks);
+        setDefaultSdk(r.default);
+        setSdk(r.default);
+      })
+      .catch(() => {});
   }, []);
 
   const handleSubmit = useCallback(async () => {
@@ -58,6 +68,7 @@ export function JobCreationScreen() {
         branch: branch || undefined,
         permission_mode: permissionMode,
         model: model || undefined,
+        sdk: sdk !== defaultSdk ? sdk : undefined,
       });
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
@@ -66,7 +77,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode]);
+  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, sdk, defaultSdk]);
 
   return (
     <div className="max-w-xl mx-auto">
@@ -149,6 +160,17 @@ export function JobCreationScreen() {
 
           {showAdvanced && (
             <div className="flex flex-col gap-3">
+              {sdks.filter((s) => s.enabled).length > 1 && (
+                <Combobox
+                  label="Agent SDK"
+                  placeholder="Select SDK…"
+                  items={sdks
+                    .filter((s) => s.enabled)
+                    .map((s) => ({ value: s.id, label: s.name }))}
+                  value={sdk}
+                  onChange={(v) => setSdk(v ?? defaultSdk)}
+                />
+              )}
               {models.length > 0 && (
                 <Combobox
                   label="Model"

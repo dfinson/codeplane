@@ -741,6 +741,8 @@ export interface components {
             completion_strategy?: components["schemas"]["CompletionStrategy"] | null;
             /** Model */
             model?: string | null;
+            /** Sdk */
+            sdk?: string | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {
@@ -883,6 +885,8 @@ export interface components {
             archivedAt?: string | null;
             /** Completionstrategy */
             completionStrategy?: string | null;
+            /** Sdk */
+            sdk?: string;
         };
         /**
          * LogLevel

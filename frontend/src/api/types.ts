@@ -138,3 +138,17 @@ export interface WorkspaceListResponse {
   cursor: string | null;
   hasMore: boolean;
 }
+
+// --- SDK types ---
+
+export interface SDKInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  status: "ready" | "not_installed" | "not_configured";
+}
+
+export interface SDKListResponse {
+  default: string;
+  sdks: SDKInfo[];
+}

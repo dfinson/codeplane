@@ -44,6 +44,7 @@ export interface JobSummary {
   modelDowngraded?: boolean;
   requestedModel?: string | null;
   actualModel?: string | null;
+  sdk?: string;
 }
 
 export interface ApprovalRequest {

@@ -36,6 +36,7 @@ class JobRow(Base):
     sdk_session_id = Column(String, nullable=True)
     model = Column(String, nullable=True)
     failure_reason = Column(String, nullable=True)
+    sdk = Column(String, nullable=False, default="copilot")
     created_at = Column(TZDateTime, nullable=False)
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)

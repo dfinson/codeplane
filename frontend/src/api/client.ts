@@ -15,6 +15,7 @@ import type {
   Job,
   JobListResponse,
   RepoListResponse,
+  SDKListResponse,
   Settings,
   WorkspaceListResponse,
 } from "./types";
@@ -111,6 +112,10 @@ export function rerunJob(jobId: string): Promise<CreateJobResponse> {
 
 export function fetchModels(): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
   return request("/models");
+}
+
+export function fetchSDKs(): Promise<SDKListResponse> {
+  return request("/sdks");
 }
 
 export function fetchJobTelemetry(jobId: string): Promise<{

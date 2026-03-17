@@ -48,6 +48,7 @@ class JobRepository(BaseRepository):
             resolution=row.resolution,  # type: ignore[arg-type]
             archived_at=row.archived_at,  # type: ignore[arg-type]
             failure_reason=row.failure_reason,  # type: ignore[arg-type]
+            sdk=row.sdk or "copilot",  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -74,6 +75,7 @@ class JobRepository(BaseRepository):
             model=job.model,
             resolution=job.resolution,
             archived_at=job.archived_at,
+            sdk=job.sdk,
         )
         self._session.add(row)
         await self._session.flush()

@@ -116,6 +116,7 @@ async def create_job(
             branch=body.branch,
             permission_mode=body.permission_mode or "auto",
             model=body.model,
+            sdk=body.sdk,
         )
     except RepoNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -140,6 +141,7 @@ async def create_job(
         title=job.title,
         branch=job.branch,
         worktree_path=job.worktree_path,
+        sdk=job.sdk,
         created_at=job.created_at,
     )
 
@@ -232,6 +234,7 @@ async def rerun_job(
         title=job.title,
         branch=job.branch,
         worktree_path=job.worktree_path,
+        sdk=job.sdk,
         created_at=job.created_at,
     )
 
@@ -281,6 +284,7 @@ async def continue_job(
         state=job.state,
         branch=job.branch,
         worktree_path=job.worktree_path,
+        sdk=job.sdk,
         created_at=job.created_at,
     )
 

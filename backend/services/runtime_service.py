@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.config import CPLConfig
+    from backend.services.adapter_registry import AdapterRegistry
     from backend.services.agent_adapter import AgentAdapterInterface
     from backend.services.approval_service import ApprovalService
     from backend.services.diff_service import DiffService
@@ -207,6 +208,7 @@ def _build_session_config(
         prompt=job.prompt,
         job_id=job.id,
         model=job.model,
+        sdk=job.sdk,
         mcp_servers=mcp_servers,
         protected_paths=protected_paths,
         permission_mode=mode,
@@ -228,10 +230,12 @@ class RuntimeService:
         summarization_service: SummarizationService | None = None,
         platform_registry: PlatformRegistry | None = None,
         utility_session: UtilitySessionService | None = None,
+        adapter_registry: AdapterRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
         self._adapter = adapter
+        self._adapter_registry = adapter_registry
         self._config = config
         self._approval_service = approval_service
         self._diff_service = diff_service
@@ -258,6 +262,15 @@ class RuntimeService:
         self._headline_last_text: dict[str, str] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
+
+    def _resolve_adapter(self, sdk: str) -> AgentAdapterInterface:
+        """Resolve the adapter for a given SDK, falling back to default."""
+        if self._adapter_registry is not None:
+            try:
+                return self._adapter_registry.get_adapter(sdk)
+            except ValueError:
+                log.warning("unknown_sdk_falling_back", sdk=sdk)
+        return self._adapter
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
         from backend.persistence.job_repo import JobRepository
@@ -399,7 +412,7 @@ class RuntimeService:
         session_id: str | None = None
         error_reason: str | None = None
         try:
-            async for session_event in agent_session.execute(config, self._adapter):
+            async for session_event in agent_session.execute(config, self._resolve_adapter(config.sdk)):
                 self._last_activity[job_id] = time.monotonic()
 
                 # Intercept file_changed events and route through DiffService

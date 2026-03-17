@@ -76,6 +76,11 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
             {job.branch ?? repoName}
           </span>
         </div>
+        {job.sdk && job.sdk !== "copilot" && (
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0">
+            {job.sdk}
+          </span>
+        )}
         {job.worktreeName && (
           <span className="text-[10px] text-muted-foreground/70 font-mono truncate shrink-0" title={`Worktree: ${job.worktreeName}`}>
             {job.worktreeName}

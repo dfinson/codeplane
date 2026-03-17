@@ -36,6 +36,7 @@ server:
 runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .codeplane-worktrees
+  default_sdk: copilot
 
 retention:
   artifact_retention_days: 30
@@ -64,6 +65,7 @@ class RuntimeConfig:
     worktrees_dirname: str = ".codeplane-worktrees"
     permission_mode: str = "auto"  # auto | read_only | approval_required
     utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
+    default_sdk: str = "copilot"  # copilot | claude
 
 
 @dataclass
@@ -181,6 +183,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
         "worktrees_dirname": config.runtime.worktrees_dirname,
         "permission_mode": config.runtime.permission_mode,
         "utility_model": config.runtime.utility_model,
+        "default_sdk": config.runtime.default_sdk,
     }
     existing["retention"] = {
         "artifact_retention_days": config.retention.artifact_retention_days,

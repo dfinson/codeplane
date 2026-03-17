@@ -121,6 +121,7 @@ class SessionConfig:
     workspace_path: str
     prompt: str
     job_id: str = ""
+    sdk: str = "copilot"
     model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
@@ -161,6 +162,7 @@ class Job:
     session_count: int = 1
     sdk_session_id: str | None = None
     model: str | None = None
+    sdk: str = "copilot"
     failure_reason: str | None = None
 
 

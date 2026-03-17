@@ -208,6 +208,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
                 state=job.state,
                 branch=job.branch,
                 worktree_path=job.worktree_path,
+                sdk=job.sdk,
                 created_at=job.created_at,
             ).model_dump(mode="json")
 
@@ -295,6 +296,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
                 state=job.state,
                 branch=job.branch,
                 worktree_path=job.worktree_path,
+                sdk=job.sdk,
                 created_at=job.created_at,
             ).model_dump(mode="json")
 

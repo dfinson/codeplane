@@ -23,6 +23,8 @@ from backend.models.api_schemas import (
     RegisterRepoResponse,
     RepoDetailResponse,
     RepoListResponse,
+    SDKInfoResponse,
+    SDKListResponse,
     SettingsResponse,
     UpdateSettingsRequest,
 )
@@ -277,3 +279,55 @@ async def get_platform_status(
             for s in statuses
         ]
     )
+
+
+# --- SDK status ---
+
+
+def _check_sdk_status(sdk_id: str) -> str:
+    """Check whether a given SDK is usable (CLI/package installed, credentials present)."""
+    if sdk_id == "copilot":
+        try:
+            import copilot  # noqa: F401
+            return "ready"
+        except ImportError:
+            return "not_installed"
+    if sdk_id == "claude":
+        import os
+        try:
+            import claude_agent_sdk  # noqa: F401
+        except ImportError:
+            return "not_installed"
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return "not_configured"
+        return "ready"
+    return "not_installed"
+
+
+_SDK_DISPLAY_NAMES: dict[str, str] = {
+    "copilot": "GitHub Copilot",
+    "claude": "Claude Agent SDK",
+}
+
+
+@router.get("/sdks", response_model=SDKListResponse)
+async def list_sdks() -> SDKListResponse:
+    """List available agent SDKs and their status."""
+    from backend.services.agent_adapter import AgentSDK
+
+    config = _get_config()
+    default_sdk = config.runtime.default_sdk
+
+    items: list[SDKInfoResponse] = []
+    for sdk in AgentSDK:
+        status = _check_sdk_status(sdk.value)
+        items.append(
+            SDKInfoResponse(
+                id=sdk.value,
+                name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
+                enabled=status == "ready",
+                status=status,
+            )
+        )
+
+    return SDKListResponse(default=default_sdk, sdks=items)

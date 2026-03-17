@@ -21,7 +21,7 @@ from backend.api import approvals, artifacts, events, health, jobs, settings, vo
 from backend.config import MCP_PATH, VOICE_MAX_AUDIO_SIZE_MB, init_config, load_config
 from backend.persistence.database import create_engine, create_session_factory, run_migrations
 from backend.persistence.event_repo import EventRepository
-from backend.services.agent_adapter import CopilotAdapter
+from backend.services.adapter_registry import AdapterRegistry
 from backend.services.approval_service import ApprovalService
 from backend.services.diff_service import DiffService
 from backend.services.event_bus import EventBus
@@ -148,10 +148,11 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # --- Runtime service ---
     config = load_config()
     approval_service = ApprovalService(session_factory=session_factory)
-    adapter = CopilotAdapter(
+    adapter_registry = AdapterRegistry(
         approval_service=approval_service,
         event_bus=event_bus,
     )
+    adapter = adapter_registry.default_adapter
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
     platform_registry = PlatformRegistry(platform_configs=config.platforms)
@@ -188,6 +189,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         summarization_service=summarization_service,
         platform_registry=platform_registry,
         utility_session=utility_session,
+        adapter_registry=adapter_registry,
     )
 
     # Recover orphaned jobs from a previous crash
@@ -201,6 +203,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.platform_registry = platform_registry
     app.state.approval_service = approval_service
     app.state.agent_adapter = adapter
+    app.state.adapter_registry = adapter_registry
     app.state.utility_session = utility_session
     app.state.session_factory = session_factory
 
