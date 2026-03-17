@@ -32,6 +32,15 @@ CodePlane is a control plane for running and supervising coding agents. It has a
 - Import types from `src/api/types.ts` (friendly aliases), never from `schema.d.ts` directly.
 - Large lists (logs, transcripts) must use virtualized rendering (`@tanstack/react-virtual`).
 
+### Python / Environment
+
+- **Always use `uv`** for every Python interaction. This project uses `uv` as its package manager and virtual-environment tool.
+- Activate the venv with `source .venv/bin/activate` or, preferably, run commands through `uv run` so the venv is used automatically.
+- Install dependencies: `uv sync` (not `pip install`).
+- Add new dependencies: `uv add <package>` (not `pip install` or editing `pyproject.toml` by hand).
+- Run Python scripts/tools: `uv run python …`, `uv run pytest …`, etc.
+- **Never use bare `pip`, `pip install`, `python -m pip`, or `python -m venv`**. Always go through `uv`.
+
 ### General
 
 - Read `SPEC.md` for detailed requirements before implementing any feature.

@@ -516,7 +516,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
                     username = parts[idx]
                 break
 
-        tunnel_name = f"{username}-devtower"
+        tunnel_name = f"{username}-codeplane"
 
         # Check if tunnel already exists
         list_result = _run(["devtunnel", "list", "--json"])
@@ -547,7 +547,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
             )
             if create_result.returncode != 0:
                 # Name might be taken by another user — add random padding
-                tunnel_name = f"{username}-devtower-{secrets.token_hex(2)}"
+                tunnel_name = f"{username}-codeplane-{secrets.token_hex(2)}"
                 _run(
                     [
                         "devtunnel",

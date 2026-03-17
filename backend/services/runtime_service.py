@@ -947,11 +947,15 @@ class RuntimeService:
                 # Check if snapshot already stored for this session
                 existing = await artifact_svc.get_latest_session_snapshot(job_id)
                 if existing is not None:
-                    import re as _re
+                    try:
+                        import json as _json_check
+                        from pathlib import Path as _PathCheck
 
-                    m = _re.search(r"session-(\d+)-snapshot", existing.name)
-                    if m and int(m.group(1)) >= job.session_count:
-                        return  # already captured this session
+                        _snap = _json_check.loads(_PathCheck(existing.disk_path).read_text(encoding="utf-8"))
+                        if _snap.get("session_number", 0) >= job.session_count:
+                            return  # already captured this session
+                    except Exception:
+                        pass  # can't parse previous snapshot — overwrite it
 
                 # Build snapshot from events
                 transcript_events = await event_repo.list_by_job(job_id, kinds=[DomainEventKind.transcript_updated])
@@ -998,6 +1002,7 @@ class RuntimeService:
                             {
                                 "role": "tool_call",
                                 "tool_name": ev.payload.get("tool_name", "tool"),
+                                "tool_display": ev.payload.get("tool_display", ""),
                                 "tool_intent": ev.payload.get("tool_intent", ""),
                                 "tool_success": ev.payload.get("tool_success", True),
                                 "timestamp": ev.payload.get("timestamp", ""),
@@ -1016,7 +1021,8 @@ class RuntimeService:
                     indent=2,
                 )
 
-                await artifact_svc.store_session_snapshot(job_id, job.session_count, snapshot)
+                slug = (job.worktree_name or job.title or "").strip()
+                await artifact_svc.store_session_snapshot(job_id, job.session_count, snapshot, slug=slug)
                 await session.commit()
 
             log.info("session_snapshot_stored", job_id=job_id, session=job.session_count, turns=len(turns))
@@ -1110,9 +1116,9 @@ class RuntimeService:
                             for i, t in enumerate(_turns, 1):
                                 role = t.get("role", "")
                                 if role == "tool_call":
-                                    intent = t.get("tool_intent") or t.get("tool_name", "tool")
+                                    display = t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
                                     ok = "\u2713" if t.get("tool_success", True) else "\u2717"
-                                    _parts.append(f"[{i}] TOOL {ok}: {intent}")
+                                    _parts.append(f"[{i}] TOOL {ok}: {display}")
                                 else:
                                     _parts.append(f"[{i}] {role.upper()}: {t.get('content', '')}")
                             transcript_text = "\n---\n".join(_parts) or "(no transcript)"

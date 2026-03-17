@@ -155,14 +155,29 @@ class ArtifactService:
 
         return max(summaries, key=_session_num)
 
-    async def store_session_snapshot(self, job_id: str, session_number: int, snapshot_json: str) -> Artifact:
+    async def store_session_snapshot(
+        self,
+        job_id: str,
+        session_number: int,
+        snapshot_json: str,
+        *,
+        slug: str = "",
+    ) -> Artifact:
         """Persist a raw session snapshot (deduped transcript + changed files).
 
         This is cheap (no LLM) and stored at session end. The actual
         LLM-based summary is generated on-demand during cold resumes.
         """
+        import re as _re
+
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        name = f"session-{session_number}-snapshot.json"
+        # Build a human-friendly name: session-{slug}-snapshot.json
+        # Fallback to session number if no slug is available.
+        tag = slug.strip() if slug else ""
+        tag = _re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:30]
+        if not tag:
+            tag = str(session_number)
+        name = f"session-{tag}-snapshot.json"
 
         disk_dir = _ARTIFACTS_BASE / job_id
         disk_dir.mkdir(parents=True, exist_ok=True)
@@ -190,13 +205,8 @@ class ArtifactService:
         if not snapshots:
             return None
 
-        def _session_num(a: Artifact) -> int:
-            import re
-
-            m = re.search(r"session-(\d+)-snapshot", a.name)
-            return int(m.group(1)) if m else 0
-
-        return max(snapshots, key=_session_num)
+        # Sort by creation time — names are no longer guaranteed to contain a numeric session ID.
+        return max(snapshots, key=lambda a: a.created_at)
 
 
 def _guess_mime(filename: str) -> str:
