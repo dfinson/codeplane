@@ -36,6 +36,7 @@ dependencies = [
     # Telemetry
     "opentelemetry-api>=1.20,<2",
     "opentelemetry-sdk>=1.20,<2",
+    "claude-code-sdk>=0.0.25",
 ]
 
 [project.scripts]
