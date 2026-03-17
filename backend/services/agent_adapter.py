@@ -18,6 +18,37 @@ class AgentSDK(StrEnum):
     claude = "claude"
 
 
+# Model prefixes accepted by each SDK.  An empty tuple means "any model".
+_SDK_MODEL_PREFIXES: dict[AgentSDK, tuple[str, ...]] = {
+    AgentSDK.copilot: (),  # Copilot proxies to multiple providers — any model
+    AgentSDK.claude: ("claude-",),  # Claude SDK only supports Anthropic models
+}
+
+
+class SDKModelMismatchError(ValueError):
+    """Raised when a model is incompatible with the selected SDK."""
+
+
+def validate_sdk_model(sdk: str, model: str | None) -> None:
+    """Raise SDKModelMismatchError if *model* is incompatible with *sdk*.
+
+    No-op when model is None/empty (SDK will use its default).
+    """
+    if not model:
+        return
+    try:
+        sdk_enum = AgentSDK(sdk)
+    except ValueError:
+        raise SDKModelMismatchError(f"Unknown SDK: {sdk!r}") from None
+    prefixes = _SDK_MODEL_PREFIXES.get(sdk_enum, ())
+    if prefixes and not model.startswith(prefixes):
+        allowed = ", ".join(f"{p}*" for p in prefixes)
+        raise SDKModelMismatchError(
+            f"Model {model!r} is not compatible with the {sdk} SDK. "
+            f"Accepted model prefixes: {allowed}"
+        )
+
+
 class AgentAdapterInterface(ABC):
     """Wraps the agent runtime behind a generic interface."""
 

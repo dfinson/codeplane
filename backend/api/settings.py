@@ -295,7 +295,7 @@ def _check_sdk_status(sdk_id: str) -> str:
     if sdk_id == "claude":
         import os
         try:
-            import claude_agent_sdk  # noqa: F401
+            import claude_code_sdk  # noqa: F401
         except ImportError:
             return "not_installed"
         if not os.environ.get("ANTHROPIC_API_KEY"):

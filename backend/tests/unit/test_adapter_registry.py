@@ -247,3 +247,41 @@ class TestClaudeAdapterToolSummary:
         from backend.services.claude_adapter import _summarize_tool_input
         result = _summarize_tool_input("CustomTool", {"key": "value"})
         assert "key" in result
+
+
+class TestSDKModelValidation:
+    """Test SDK-model compatibility validation."""
+
+    def test_copilot_accepts_any_model(self) -> None:
+        from backend.services.agent_adapter import validate_sdk_model
+        validate_sdk_model("copilot", "gpt-4o")
+        validate_sdk_model("copilot", "claude-sonnet-4-20250514")
+        validate_sdk_model("copilot", "o1-preview")
+
+    def test_claude_accepts_claude_models(self) -> None:
+        from backend.services.agent_adapter import validate_sdk_model
+        validate_sdk_model("claude", "claude-sonnet-4-20250514")
+        validate_sdk_model("claude", "claude-3-opus-20240229")
+        validate_sdk_model("claude", "claude-3-haiku-20240307")
+
+    def test_claude_rejects_non_claude_models(self) -> None:
+        from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
+        with pytest.raises(SDKModelMismatchError, match="not compatible with the claude SDK"):
+            validate_sdk_model("claude", "gpt-4o")
+        with pytest.raises(SDKModelMismatchError, match="not compatible with the claude SDK"):
+            validate_sdk_model("claude", "o1-preview")
+
+    def test_none_model_always_ok(self) -> None:
+        from backend.services.agent_adapter import validate_sdk_model
+        validate_sdk_model("copilot", None)
+        validate_sdk_model("claude", None)
+
+    def test_empty_model_always_ok(self) -> None:
+        from backend.services.agent_adapter import validate_sdk_model
+        validate_sdk_model("copilot", "")
+        validate_sdk_model("claude", "")
+
+    def test_unknown_sdk_raises(self) -> None:
+        from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
+        with pytest.raises(SDKModelMismatchError, match="Unknown SDK"):
+            validate_sdk_model("unknown", "gpt-4o")

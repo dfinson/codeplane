@@ -130,6 +130,19 @@ class CreateJobRequest(BaseModel):
     model: str | None = None
     sdk: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_sdk(cls, values: Any) -> Any:
+        sdk = values.get("sdk")
+        if sdk is not None:
+            from backend.services.agent_adapter import AgentSDK
+            try:
+                AgentSDK(sdk)
+            except ValueError:
+                valid = ", ".join(e.value for e in AgentSDK)
+                raise ValueError(f"Unknown SDK {sdk!r}. Valid options: {valid}") from None
+        return values
+
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=10_000)

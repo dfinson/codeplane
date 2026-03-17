@@ -17,6 +17,7 @@ from backend.models.domain import (
     JobState,
     validate_state_transition,
 )
+from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
 
 if TYPE_CHECKING:
     from backend.config import CPLConfig
@@ -98,6 +99,9 @@ class JobService:
         resolved_repo = self.validate_repo(repo)
 
         resolved_sdk = sdk or self._config.runtime.default_sdk
+
+        # Validate SDK-model compatibility upfront
+        validate_sdk_model(resolved_sdk, model)
 
         # Determine base_ref
         if base_ref is None:

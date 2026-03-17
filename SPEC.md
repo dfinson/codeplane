@@ -76,14 +76,14 @@ CodePlane is a two-tier application.
 ┌────────────────────▼─────────────────────────────┐
 │             FastAPI Backend (Python)             │
 │  REST API · SSE stream · Job orchestration       │
-│  Git workspace mgmt · Agent adapter              │
+│  Git workspace mgmt · Agent adapter registry    │
 │  Approval routing · Persistence coordinator     │
 └──────┬──────────────┬──────────────┬─────────────┘
        │              │              │
-  ┌────▼────┐   ┌─────▼─────┐  ┌───▼────┐
-  │ SQLite  │   │ Git repos │  │Copilot │
-  │   DB    │   │/worktrees │  │  SDK   │
-  └─────────┘   └───────────┘  └────────┘
+  ┌────▼────┐   ┌─────▼─────┐  ┌───▼───────┐
+  │ SQLite  │   │ Git repos │  │Agent SDKs │
+  │   DB    │   │/worktrees │  │(pluggable)│
+  └─────────┘   └───────────┘  └───────────┘
 ```
 
 | Tier | Technology |
@@ -91,7 +91,7 @@ CodePlane is a two-tier application.
 | Frontend | React 18, TypeScript, Vite |
 | Backend | Python 3.11+, FastAPI, Uvicorn |
 | Persistence | SQLite (via SQLAlchemy) |
-| Agent runtime | Python Copilot SDK (v1), wrapped behind generic adapter interface |
+| Agent runtime | Pluggable SDK adapters behind `AgentAdapterInterface`; ships with Copilot SDK and Claude Agent SDK |
 | Workspace isolation | Git worktrees |
 | Voice transcription | faster-whisper |
 | Remote access | Dev Tunnel (HTTPS) |
@@ -359,12 +359,18 @@ No orchestration logic, no direct database access, and no git operations belong 
 
 ### 4.4 Agent Adapter
 
-The agent runtime is wrapped behind an interface so the system is not tightly coupled to any specific SDK.
+The agent runtime is wrapped behind an interface so the system is not tightly coupled to any specific SDK. Multiple SDKs are supported simultaneously via the `AdapterRegistry`.
 
 ```python
 from abc import ABC, abstractmethod
 from typing import AsyncIterator
 from dataclasses import dataclass
+from enum import StrEnum
+
+class AgentSDK(StrEnum):
+    """Supported agent SDK backends."""
+    copilot = "copilot"
+    claude = "claude"
 
 @dataclass
 class SessionConfig:
@@ -373,6 +379,7 @@ class SessionConfig:
     mcp_servers: dict[str, MCPServerConfig]  # discovered from repo config files
     protected_paths: list[str]               # from per-repo config; used by permission policy
     permission_mode: PermissionMode = "auto" # auto | read_only | approval_required
+    sdk: str = "copilot"                     # which SDK adapter to use
 
 @dataclass
 class MCPServerConfig:
@@ -412,9 +419,24 @@ class AgentAdapterInterface(ABC):
         """Abort the current message processing. Session remains valid."""
 ```
 
-The production implementation (`CopilotAdapter`) wraps the Python Copilot SDK (`pip install github-copilot-sdk`, import as `from copilot import CopilotClient`). A `FakeAgentAdapter` is used in tests.
+#### Adapter Registry
 
-#### SDK Method Mapping
+`AdapterRegistry` is a lazy-caching factory that creates and returns the appropriate adapter for a given `AgentSDK` value. Adapters are instantiated on first `get_adapter()` call and reused for subsequent requests with the same SDK.
+
+```python
+class AdapterRegistry:
+    def get_adapter(self, sdk: AgentSDK | str) -> AgentAdapterInterface: ...
+    @property
+    def default_adapter(self) -> AgentAdapterInterface: ...
+```
+
+`RuntimeService` calls `registry.get_adapter(job.sdk)` before starting each job, so different jobs can use different SDKs concurrently.
+
+#### Copilot Adapter
+
+The `CopilotAdapter` wraps the Python Copilot SDK (`pip install github-copilot-sdk`, import as `from copilot import CopilotClient`). A `FakeAgentAdapter` is used in tests.
+
+##### Copilot SDK Method Mapping
 
 | Adapter method | SDK method | Notes |
 |---|---|---|
@@ -423,7 +445,7 @@ The production implementation (`CopilotAdapter`) wraps the Python Copilot SDK (`
 | `send_message()` | `session.send(MessageOptions)` | Uses `mode="immediate"` for mid-session injection |
 | `abort_session()` | `session.abort()` | Aborts current message; session stays alive |
 
-#### Callback-to-Iterator Bridge
+##### Callback-to-Iterator Bridge
 
 The Copilot SDK uses a callback-based API: `SessionHooks` (`on_pre_tool_use`, `on_post_tool_use`, `on_session_start`, etc.) and `on_permission_request` are registered at session creation. The adapter bridges these into the `AsyncIterator[SessionEvent]` pattern by:
 
@@ -433,6 +455,48 @@ The Copilot SDK uses a callback-based API: `SessionHooks` (`on_pre_tool_use`, `o
 4. On subprocess crash, the SDK raises `ProcessExitedError` on pending futures; the adapter catches this and emits an error `SessionEvent`
 
 This keeps the rest of the system (strategies, runtime service, event bus) decoupled from SDK callback mechanics.
+
+#### Claude Adapter
+
+The `ClaudeAdapter` wraps the Claude Agent SDK (`pip install claude-code-sdk`, import as `import claude_code_sdk`). The SDK internally spawns the Claude Code CLI as a subprocess and provides a native async iterator API.
+
+##### Claude SDK Method Mapping
+
+| Adapter method | SDK method / pattern | Notes |
+|---|---|---|
+| `create_session()` | `ClaudeSDKClient(options)` | Creates a client; session state is managed by the client |
+| `stream_events()` | `async for message in client.query()` | Native async iterator — no callback bridge needed |
+| `send_message()` | `client.query(prompt)` | Starts a new conversational turn |
+| `abort_session()` | `client.interrupt()` + `client.disconnect()` | Interrupts current turn, then disconnects |
+
+##### Permission Mode Mapping
+
+| CodePlane mode | Claude SDK mode | Behavior |
+|---|---|---|
+| `auto` | `bypassPermissions` | All tools auto-approved |
+| `read_only` | `plan` | Only read-only tools allowed; `can_use_tool` callback denies writes |
+| `approval_required` | `default` | `can_use_tool` callback routes to `ApprovalService` |
+
+##### Message Iterator Pattern
+
+Unlike Copilot's callback bridge, the Claude SDK yields messages natively as an async iterator. The adapter consumes messages in a background task that translates them into `SessionEvent` items:
+
+- `AssistantMessage` with `TextBlock` → `SessionEvent(transcript, {role: "agent", content: text})`
+- `ToolUseBlock` → log event (tool started) + start time tracking
+- `ToolResultBlock` → `SessionEvent(transcript, {role: "tool_call", ...})` + telemetry
+- `ResultMessage` → telemetry recording + `SessionEvent(done/error, ...)`
+- `SystemMessage` → log event only
+
+#### SDK-Model Compatibility
+
+Each SDK only supports models from its provider ecosystem. Validation is performed at job creation time before any resources are allocated:
+
+| SDK | Accepted model prefixes | Examples |
+|---|---|---|
+| `copilot` | _(any)_ | `gpt-4o`, `claude-sonnet-4-20250514`, `o1-preview` |
+| `claude` | `claude-` | `claude-sonnet-4-20250514`, `claude-3-opus-20240229` |
+
+If the user requests a model incompatible with the selected SDK (e.g., `gpt-4o` with `claude`), the API returns `400 Bad Request` with a descriptive error message. When no model is specified, the SDK uses its own default.
 
 ### 4.5 Session Config Resolution
 
@@ -876,6 +940,7 @@ The `RuntimeService` manages all active job tasks.
 - Enforces `max_concurrent_jobs` from global config
 - Enqueues jobs if at capacity (state: `queued`)
 - Starts queued jobs when capacity opens
+- Resolves the appropriate adapter per-job via `AdapterRegistry.get_adapter(job.sdk)`
 - Provides a `cancel(job_id)` method that cancels the asyncio task and calls `adapter.abort_session()`
 
 ### 6.3 Operator Message Injection
@@ -1304,7 +1369,7 @@ Configuration exists at three layers:
 File: `~/.codeplane/config.yaml`
 
 ```yaml
-server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: auto             # auto | read_only | approval_required\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: auto_merge              # auto_merge | pr_only | manual\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
+server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: auto             # auto | read_only | approval_required\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n  default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: auto_merge              # auto_merge | pr_only | manual\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 
@@ -1381,7 +1446,9 @@ Provided in the job creation request body:
 {
   "repo": "/repos/service-a",
   "prompt": "Fix the null pointer exception in UserService.java",
-  "base_ref": "main"
+  "base_ref": "main",
+  "sdk": "claude",
+  "model": "claude-sonnet-4-20250514"
 }
 ```
 
@@ -1390,6 +1457,8 @@ Provided in the job creation request body:
 | `repo` | Yes | Path to repository (must be in allowlist) |
 | `prompt` | Yes | Task description for the agent |
 | `base_ref` | No | Override base branch/commit |
+| `sdk` | No | Override SDK for this job (`copilot`, `claude`); defaults to `runtime.default_sdk` |
+| `model` | No | Override model for this job; must be compatible with the selected SDK (see §4.4) |
 
 ---
 
@@ -1669,6 +1738,7 @@ CREATE TABLE jobs (
     session_count INTEGER NOT NULL DEFAULT 1,
     sdk_session_id TEXT,
     model TEXT,
+    sdk TEXT NOT NULL DEFAULT 'copilot',
     failure_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -1869,9 +1939,13 @@ POST /api/jobs
 {
   "repo": "/repos/service-a",
   "prompt": "Fix the null pointer in UserService",
-  "base_ref": "main"
+  "base_ref": "main",
+  "sdk": "claude",
+  "model": "claude-sonnet-4-20250514"
 }
 ```
+
+The `sdk` field selects the agent SDK adapter (default: `runtime.default_sdk` from config). The `model` field overrides the LLM model; it must be compatible with the selected SDK (see §4.4). Incompatible combinations return `400 Bad Request`.
 
 #### Create Job — Response
 
@@ -1882,6 +1956,7 @@ POST /api/jobs
   "state": "running",
   "branch": "fix/null-pointer-in-userservice",
   "worktreePath": "/repos/service-a",
+  "sdk": "claude",
   "createdAt": "2025-01-01T12:00:00Z"
 }
 ```
@@ -2031,7 +2106,37 @@ Response (`200 OK`):
 
 `source` is one of: `local` (from `.vscode/mcp.json`), `global` (inherited from global config), `disabled` (present but blocked by `.codeplane.yml`).
 
-### 17.9 Connection Limits
+### 17.9 SDKs
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/sdks` | List available agent SDKs and their status |
+
+Returns all registered SDKs, their installation/configuration status, and which is the default:
+
+```json
+{
+  "default": "copilot",
+  "sdks": [
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot",
+      "enabled": true,
+      "status": "ready"
+    },
+    {
+      "id": "claude",
+      "name": "Claude Agent SDK",
+      "enabled": true,
+      "status": "ready"
+    }
+  ]
+}
+```
+
+`status` is one of: `ready` (installed and configured), `not_installed` (SDK package missing), `not_configured` (package installed but credentials missing).
+
+### 17.10 Connection Limits
 
 SSE connections are limited to `max_sse_connections` concurrent connections (default: 5).
 
@@ -2039,7 +2144,7 @@ Voice transcription uploads are limited to `max_audio_size_mb` (default: 10 MB).
 
 No per-request rate limiting is applied. CodePlane runs on a single developer machine accessed by one browser and optionally one phone — throttling REST requests adds complexity without value.
 
-### 17.10 Error Responses
+### 17.11 Error Responses
 
 All errors return a consistent envelope:
 

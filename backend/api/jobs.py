@@ -25,6 +25,7 @@ from backend.models.events import DomainEventKind
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
 from backend.services.git_service import GitService
+from backend.services.agent_adapter import SDKModelMismatchError
 from backend.services.job_service import JobNotFoundError, JobService, RepoNotAllowedError, StateConflictError
 from backend.services.naming_service import NamingService
 
@@ -119,6 +120,8 @@ async def create_job(
             sdk=body.sdk,
         )
     except RepoNotAllowedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SDKModelMismatchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Commit so the job row is visible to RuntimeService (separate session)
