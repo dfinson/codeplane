@@ -4,5 +4,20 @@
       "path": "."
     }
   ],
-  "settings": {}
+  "settings": {
+    "files.watcherExclude": {
+      "**/.git/objects/**": true,
+      "**/.git/subtree-cache/**": true,
+      "**/frontend/node_modules/**": true,
+      "**/frontend/dist/**": true,
+      "**/frontend/coverage/**": true,
+      "**/frontend/test-results/**": true
+    },
+    "search.exclude": {
+      "**/frontend/node_modules": true,
+      "**/frontend/dist": true,
+      "**/frontend/coverage": true,
+      "**/frontend/test-results": true
+    }
+  }
 }
