@@ -70,6 +70,7 @@ class ApprovalResolution(StrEnum):
 class ArtifactType(StrEnum):
     diff_snapshot = "diff_snapshot"
     agent_summary = "agent_summary"
+    session_snapshot = "session_snapshot"
     custom = "custom"
 
 
@@ -473,6 +474,7 @@ class JobTitleUpdatedPayload(CamelModel):
 class ProgressHeadlinePayload(CamelModel):
     job_id: str
     headline: str
+    headline_past: str
     timestamp: datetime
 
 

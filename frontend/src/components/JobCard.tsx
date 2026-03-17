@@ -50,6 +50,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const [error, setError] = useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const diffs = useStore(selectJobDiffs(job.id));
+  const timeline = useStore((s) => s.timelines[job.id] ?? []);
   const hasChanges = diffs.length > 0;
 
   const needsResolution =
@@ -130,7 +131,15 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       </div>
 
       <p className="text-xs leading-snug line-clamp-2 text-foreground/70 mb-2">
-        {job.progressHeadline ? (
+        {job.state === "running" && timeline.length > 0 ? (
+          <span className="flex flex-col gap-0.5">
+            {timeline.slice(-4).map((entry, i) => (
+              <span key={i} className={entry.active ? "italic text-primary/70" : "text-muted-foreground/60 line-through decoration-muted-foreground/20"}>
+                {entry.active ? entry.headline : entry.headlinePast}
+              </span>
+            ))}
+          </span>
+        ) : job.progressHeadline ? (
           <span className="italic text-primary/70">{job.progressHeadline}</span>
         ) : (
           job.prompt

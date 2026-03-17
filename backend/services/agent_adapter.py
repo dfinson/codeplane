@@ -354,11 +354,15 @@ class CopilotAdapter(AgentAdapterInterface):
                     # Capture human-readable intent/title fields from the SDK if present
                     tool_intent: str = getattr(data, "intention", None) or ""
                     tool_title: str = getattr(data, "tool_title", None) or ""
+                    # Also extract description from arguments (SDK provides it for bash etc.)
+                    tool_description: str = ""
+                    if isinstance(data.arguments, dict):
+                        tool_description = str(data.arguments.get("description", ""))
                     self._tool_call_buffer[tool_id] = {
                         "tool_name": t_name_display,
                         "tool_args": args_str or "",
                         "turn_id": str(data.turn_id) if hasattr(data, "turn_id") and data.turn_id else "",
-                        "tool_intent": tool_intent,
+                        "tool_intent": tool_intent or tool_description,
                         "tool_title": tool_title,
                     }
                 elif kind_str == "tool.execution_complete":
@@ -471,7 +475,8 @@ class CopilotAdapter(AgentAdapterInterface):
                 "session.error": SessionEventKind.error,
                 "assistant.message": SessionEventKind.transcript,
                 "user.message": SessionEventKind.transcript,
-                "assistant.reasoning": SessionEventKind.transcript,
+                # assistant.reasoning is intentionally NOT mapped — it duplicates
+                # the reasoning_text already embedded in assistant.message.
                 "tool.execution_complete": SessionEventKind.transcript,
                 "session.workspace_file_changed": SessionEventKind.file_changed,
             }
@@ -482,9 +487,15 @@ class CopilotAdapter(AgentAdapterInterface):
                 event_payload: dict[str, object] = {}
                 if kind == SessionEventKind.transcript:
                     if kind_str == "assistant.message":
+                        content = (data.content or "") if data else ""
+                        # SDK emits empty assistant.message events for tool-dispatch
+                        # turns (content is just whitespace). Skip these — the tool
+                        # calls themselves are separate transcript events.
+                        if not content.strip():
+                            return
                         event_payload = {
                             "role": "agent",
-                            "content": (data.content or "") if data else "",
+                            "content": content,
                             "title": data.title if data else None,
                             "turn_id": data.turn_id if data else None,
                         }
@@ -499,15 +510,16 @@ class CopilotAdapter(AgentAdapterInterface):
                             "role": "operator",
                             "content": content,
                         }
-                    elif kind_str == "assistant.reasoning":
-                        event_payload = {
-                            "role": "reasoning",
-                            "content": (data.reasoning_text or "") if data else "",
-                            "turn_id": (data.reasoning_id or data.turn_id or None) if data else None,
-                        }
                     elif kind_str == "tool.execution_complete":
                         tool_id = (data.tool_call_id or "") if data else ""
                         buffered = self._tool_call_buffer.pop(tool_id, {})
+                        tool_name = buffered.get(
+                            "tool_name",
+                            (data.tool_name or data.mcp_tool_name or "tool") if data else "tool",
+                        )
+                        # Drop SDK-internal tools (e.g. report_intent) from transcript
+                        if tool_name in ("report_intent",):
+                            return
                         result_text = ""
                         if data:
                             result_obj = data.result
@@ -521,10 +533,6 @@ class CopilotAdapter(AgentAdapterInterface):
                                     result_text = str(parts)
                             if not result_text and data.partial_output:
                                 result_text = data.partial_output
-                        tool_name = buffered.get(
-                            "tool_name",
-                            (data.tool_name or data.mcp_tool_name or "tool") if data else "tool",
-                        )
                         event_payload = {
                             "role": "tool_call",
                             "content": tool_name,

@@ -262,6 +262,7 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
         return ProgressHeadlinePayload(
             job_id=event.job_id,
             headline=event.payload.get("headline", ""),
+            headline_past=event.payload.get("headline_past", event.payload.get("headline", "")),
             timestamp=event.timestamp,
         ).model_dump_json(by_alias=True)
 

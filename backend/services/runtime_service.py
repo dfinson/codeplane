@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -49,18 +49,6 @@ class _AgentSession:
     async def abort(self) -> None:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
-
-
-class _ToolCallEntry(TypedDict):
-    tool_name: str
-    tool_args: str
-    tool_intent: str
-    tool_title: str
-
-
-class _TurnToolBuffer(TypedDict):
-    turn_id: str
-    tool_calls: list[_ToolCallEntry]
 
 
 if TYPE_CHECKING:
@@ -259,14 +247,14 @@ class RuntimeService:
         self._shutting_down = False
         # Transcript buffer for headline generation (last N agent turns per job)
         self._headline_transcript: dict[str, list[str]] = {}
+        # Tool intent buffer for headline generation (last N intents per job)
+        self._headline_tool_intents: dict[str, list[str]] = {}
         # Last snapshot used for headline generation (fallback when buffer is empty)
         self._headline_last_snapshot: dict[str, list[str]] = {}
         # Last generated headline per job (avoid exact repeats)
         self._headline_last_text: dict[str, str] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
-        # Per-job state for detecting agent turn boundaries and triggering AI tool summaries
-        self._turn_tool_buffer: dict[str, _TurnToolBuffer] = {}
 
     def _make_job_service(self, session: AsyncSession) -> JobService:
         from backend.persistence.job_repo import JobRepository
@@ -376,6 +364,7 @@ class RuntimeService:
         # Start progress headline generation (periodically summarises what the agent is doing)
         if self._utility_session is not None:
             self._headline_transcript[job_id] = []
+            self._headline_tool_intents[job_id] = []
             self._headline_last_snapshot[job_id] = []
             self._headline_last_text[job_id] = ""
             headline_task = asyncio.create_task(
@@ -558,50 +547,22 @@ class RuntimeService:
                         content = domain_event.payload.get("content", "")
                         if role == "agent" and content and job_id in self._headline_transcript:
                             buf = self._headline_transcript[job_id]
-                            buf.append(content)
-                            # Keep only last 5 agent messages
-                            if len(buf) > 5:
-                                self._headline_transcript[job_id] = buf[-5:]
+                            buf.append(content[:200])
+                            # Keep only last 3 assistant messages
+                            if len(buf) > 3:
+                                self._headline_transcript[job_id] = buf[-3:]
+                        # Also collect tool intents for headline generation
+                        if role == "tool_call" and job_id in self._headline_tool_intents:
+                            intent = str(domain_event.payload.get("tool_intent") or "")
+                            if intent:
+                                ibuf = self._headline_tool_intents[job_id]
+                                ibuf.append(intent[:80])
+                                if len(ibuf) > 10:
+                                    self._headline_tool_intents[job_id] = ibuf[-10:]
 
                         # Track tool calls by turn to trigger AI summaries at turn boundaries
                         if self._utility_session is not None and role == "tool_call":
-                            turn_id = str(domain_event.payload.get("turn_id") or "")
-                            tool_intent = str(domain_event.payload.get("tool_intent") or "")
-                            tool_title = str(domain_event.payload.get("tool_title") or "")
-                            tool_name = str(domain_event.payload.get("tool_name") or "tool")
-                            tool_args = str(domain_event.payload.get("tool_args") or "")
-                            state = self._turn_tool_buffer.get(job_id)
-
-                            # Flush previous turn if turn_id changed
-                            if state and state["turn_id"] != turn_id and state["tool_calls"]:
-                                asyncio.create_task(
-                                    self._summarize_tool_group(job_id, state["turn_id"], state["tool_calls"]),
-                                    name=f"tool-summary-{job_id}-{state['turn_id'][:8]}",
-                                )
-
-                            if not state or state["turn_id"] != turn_id:
-                                self._turn_tool_buffer[job_id] = {"turn_id": turn_id, "tool_calls": []}
-                                state = self._turn_tool_buffer[job_id]
-
-                            state["tool_calls"].append(
-                                {
-                                    "tool_name": tool_name,
-                                    "tool_args": tool_args[:100],
-                                    "tool_intent": tool_intent,
-                                    "tool_title": tool_title,
-                                }
-                            )
-
-                        # When an agent message closes a turn, flush the tool buffer for that turn
-                        if self._utility_session is not None and role == "agent":
-                            turn_id = str(domain_event.payload.get("turn_id") or "")
-                            state = self._turn_tool_buffer.get(job_id)
-                            if state and state["turn_id"] == turn_id and state["tool_calls"]:
-                                asyncio.create_task(
-                                    self._summarize_tool_group(job_id, state["turn_id"], state["tool_calls"]),
-                                    name=f"tool-summary-{job_id}-{state['turn_id'][:8]}",
-                                )
-                                self._turn_tool_buffer.pop(job_id, None)
+                            pass  # Tool display is now handled deterministically by the frontend
 
                     await self._event_bus.publish(domain_event)
 
@@ -699,9 +660,9 @@ class RuntimeService:
             if headline_t is not None:
                 headline_t.cancel()
             self._headline_transcript.pop(job_id, None)
+            self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)
             self._headline_last_text.pop(job_id, None)
-            self._turn_tool_buffer.pop(job_id, None)
             self._tasks.pop(job_id, None)
             self._agent_sessions.pop(job_id, None)
             self._last_activity.pop(job_id, None)
@@ -713,12 +674,11 @@ class RuntimeService:
                 self._approval_service.cleanup_job(job_id)
             if self._diff_service is not None:
                 self._diff_service.cleanup(job_id)
-            # Fire background summarization for completed/failed sessions
-            if self._summarization_service is not None:
-                asyncio.create_task(
-                    self._summarize_session_background(job_id),
-                    name=f"summarize-{job_id}",
-                )
+            # Store cheap session snapshot for future cold resumes
+            asyncio.create_task(
+                self._summarize_session_background(job_id),
+                name=f"snapshot-{job_id}",
+            )
             # Check if any queued jobs can now start
             await self._dequeue_next()
 
@@ -763,64 +723,15 @@ class RuntimeService:
         except asyncio.CancelledError:
             pass
 
-    async def _summarize_tool_group(self, job_id: str, turn_id: str, tool_calls: list[_ToolCallEntry]) -> None:
-        """Generate a short AI label for a tool group and publish it as an SSE event.
-
-        Only fires when no SDK intention string is available on all tool calls.
-        If every call has an SDK-provided intent, the UI uses that directly.
-        """
-        if all(tc.get("tool_intent") for tc in tool_calls):
-            return
-
-        lines = []
-        for tc in tool_calls:
-            args_snippet = tc["tool_args"].strip()[:80]
-            lines.append(f"{tc['tool_name']}: {args_snippet}" if args_snippet else tc["tool_name"])
-
-        prompt = (
-            "Given these tool calls from a coding agent turn, write a single VERY SHORT label "
-            'in the format "<tool>: <what it did>" — maximum 7 words total, lowercase, no period. '
-            "If multiple different tools appear, pick the most significant one. "
-            "Respond with ONLY the label.\n\n" + "\n".join(lines)
-        )
-
-        try:
-            raw = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
-            summary = raw.strip().strip('"').strip(".")
-            if summary and len(summary) > 3:
-                await self._event_bus.publish(
-                    DomainEvent(
-                        event_id=_make_event_id(),
-                        job_id=job_id,
-                        timestamp=datetime.now(UTC),
-                        kind=DomainEventKind.tool_group_summary,
-                        payload={"turn_id": turn_id, "summary": summary},
-                    )
-                )
-                # Also emit as a log line so it appears in the ExecutionTimeline
-                await self._event_bus.publish(
-                    DomainEvent(
-                        event_id=_make_event_id(),
-                        job_id=job_id,
-                        timestamp=datetime.now(UTC),
-                        kind=DomainEventKind.log_line_emitted,
-                        payload={
-                            "level": "info",
-                            "message": f"Completed: {summary}",
-                            "context": {"source": "tool_summary"},
-                        },
-                    )
-                )
-        except Exception:
-            log.debug("tool_group_summary_failed", job_id=job_id, turn_id=turn_id, exc_info=True)
-
     async def _headline_loop(self, job_id: str) -> None:
-        """Periodically generate a one-line progress headline from recent transcript."""
+        """Periodically generate a 3-5 word progress headline from recent activity."""
         headline_prompt = (
-            "Given the following recent agent messages from a coding session, "
-            "write a single short sentence (max 12 words) describing what the agent "
-            "is currently doing. Use present continuous tense. No period at the end. "
-            "Respond with ONLY the headline, nothing else.\n\nMessages:\n"
+            "Given the agent's recent messages and tool intents from a coding session, "
+            "write a 3-5 word label describing what the agent is currently doing. "
+            "Also provide the past tense version.\n"
+            "Respond as JSON only: {\"present\": \"...\", \"past\": \"...\"}\n"
+            "No articles. No period. Example: {\"present\": \"Fixing auth middleware\", "
+            "\"past\": \"Fixed auth middleware\"}\n\nMessages:\n"
         )
         initial_delay_s = 8
         interval_s = 15
@@ -829,27 +740,58 @@ class RuntimeService:
             first = True
             while True:
                 buf = self._headline_transcript.get(job_id)
+                intents_buf = self._headline_tool_intents.get(job_id)
+
+                recent_msgs: list[str] = []
+                recent_intents: list[str] = []
 
                 if buf:
-                    # Fresh messages available — snapshot them
-                    recent = list(buf)
+                    recent_msgs = list(buf)
                     buf.clear()
-                    self._headline_last_snapshot[job_id] = recent
-                else:
-                    # No new messages — reuse last snapshot as fallback
-                    recent = self._headline_last_snapshot.get(job_id, [])
+                if intents_buf:
+                    recent_intents = list(intents_buf)
+                    intents_buf.clear()
 
-                if not recent:
+                if recent_msgs or recent_intents:
+                    self._headline_last_snapshot[job_id] = recent_msgs or self._headline_last_snapshot.get(job_id, [])
+                else:
+                    recent_msgs = self._headline_last_snapshot.get(job_id, [])
+
+                if not recent_msgs and not recent_intents:
                     if not first:
                         await asyncio.sleep(interval_s)
                     first = False
                     continue
 
-                prompt = headline_prompt + "\n---\n".join(msg[:300] for msg in recent)
+                parts = []
+                for msg in recent_msgs:
+                    parts.append(msg[:200])
+                if recent_intents:
+                    parts.append("Tool intents: " + ", ".join(recent_intents))
+
+                prompt = headline_prompt + "\n---\n".join(parts)
 
                 try:
-                    headline = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
-                    headline = headline.strip().strip('"').strip(".")
+                    raw = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
+                    raw = raw.strip()
+                    # Parse JSON response
+                    import json as _json
+                    import re as _re
+
+                    # Strip markdown fences if present
+                    if raw.startswith("```"):
+                        raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                        raw = _re.sub(r"\n?```$", "", raw)
+                        raw = raw.strip()
+
+                    try:
+                        parsed = _json.loads(raw)
+                        headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
+                        headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
+                    except (ValueError, AttributeError):
+                        headline = raw.strip().strip('"').strip(".")
+                        headline_past = headline
+
                     last = self._headline_last_text.get(job_id, "")
                     if headline and len(headline) > 3 and headline != last:
                         self._headline_last_text[job_id] = headline
@@ -859,20 +801,9 @@ class RuntimeService:
                                 job_id=job_id,
                                 timestamp=datetime.now(UTC),
                                 kind=DomainEventKind.progress_headline,
-                                payload={"headline": headline},
-                            )
-                        )
-                        # Also emit as a log line so it appears in the ExecutionTimeline
-                        await self._event_bus.publish(
-                            DomainEvent(
-                                event_id=_make_event_id(),
-                                job_id=job_id,
-                                timestamp=datetime.now(UTC),
-                                kind=DomainEventKind.log_line_emitted,
                                 payload={
-                                    "level": "info",
-                                    "message": f"Progress: {headline}",
-                                    "context": {"source": "headline"},
+                                    "headline": headline,
+                                    "headline_past": headline_past,
                                 },
                             )
                         )
@@ -988,9 +919,11 @@ class RuntimeService:
             log.error("fail_job_transition_failed", job_id=job_id, exc_info=True)
 
     async def _summarize_session_background(self, job_id: str) -> None:
-        """Fire-and-forget background task: summarize completed/failed session."""
-        if self._summarization_service is None:
-            return
+        """Store a raw session snapshot (cheap, no LLM) for future cold resumes.
+
+        LLM-based summarization is deferred to resume_job() and only fires
+        when the SDK session is no longer available for native reconnection.
+        """
         try:
             async with self._session_factory() as session:
                 from backend.persistence.job_repo import JobRepository
@@ -999,24 +932,88 @@ class RuntimeService:
                 job = await job_repo.get(job_id)
             if job is None:
                 return
-            # Skip if this specific session was already summarized (e.g. rapid retry)
-            from backend.persistence.artifact_repo import ArtifactRepository
-            from backend.services.artifact_service import ArtifactService
 
             async with self._session_factory() as session:
-                artifact_svc = ArtifactService(ArtifactRepository(session))
-                existing = await artifact_svc.get_latest_session_summary(job_id)
-                if existing is not None:
-                    # Check if the existing summary is for the current session
-                    import re
+                from backend.persistence.artifact_repo import ArtifactRepository
+                from backend.persistence.event_repo import EventRepository
+                from backend.services.artifact_service import ArtifactService
 
-                    m = re.search(r"session-(\d+)-summary", existing.name)
-                    existing_session = int(m.group(1)) if m else 0
-                    if existing_session >= job.session_count:
-                        return  # already summarized this session
-            await self._summarization_service.summarize_and_store(job_id, job.session_count, job.prompt)
+                event_repo = EventRepository(session)
+                artifact_svc = ArtifactService(ArtifactRepository(session))
+
+                # Check if snapshot already stored for this session
+                existing = await artifact_svc.get_latest_session_snapshot(job_id)
+                if existing is not None:
+                    import re as _re
+
+                    m = _re.search(r"session-(\d+)-snapshot", existing.name)
+                    if m and int(m.group(1)) >= job.session_count:
+                        return  # already captured this session
+
+                # Build snapshot from events
+                transcript_events = await event_repo.list_by_job(
+                    job_id, kinds=[DomainEventKind.transcript_updated]
+                )
+                diff_events = await event_repo.list_by_job(
+                    job_id, kinds=[DomainEventKind.diff_updated]
+                )
+
+                from backend.services.summarization_service import _extract_changed_files
+
+                changed_files = _extract_changed_files(diff_events)
+
+                # Build cleaned turns — keep assistant content + tool metadata, drop noise
+                turns: list[dict[str, object]] = []
+                seen: set[str] = set()
+                for ev in transcript_events:
+                    role = ev.payload.get("role", "")
+                    content = str(ev.payload.get("content") or "").strip()
+
+                    if role == "agent" or role == "assistant":
+                        if not content:
+                            continue
+                        key = content[:500]
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        turns.append({
+                            "role": "assistant",
+                            "content": content[:2000],
+                            "timestamp": ev.payload.get("timestamp", ""),
+                        })
+                    elif role in ("operator", "user"):
+                        if not content:
+                            continue
+                        turns.append({
+                            "role": "operator",
+                            "content": content[:2000],
+                            "timestamp": ev.payload.get("timestamp", ""),
+                        })
+                    elif role == "tool_call":
+                        # Keep metadata only — drop raw tool_result bodies
+                        turns.append({
+                            "role": "tool_call",
+                            "tool_name": ev.payload.get("tool_name", "tool"),
+                            "tool_intent": ev.payload.get("tool_intent", ""),
+                            "tool_success": ev.payload.get("tool_success", True),
+                            "timestamp": ev.payload.get("timestamp", ""),
+                        })
+
+                import json
+
+                snapshot = json.dumps({
+                    "original_task": job.prompt,
+                    "session_number": job.session_count,
+                    "transcript_turns": turns,
+                    "changed_files": changed_files,
+                }, indent=2)
+
+                await artifact_svc.store_session_snapshot(job_id, job.session_count, snapshot)
+                await session.commit()
+
+            log.info("session_snapshot_stored", job_id=job_id, session=job.session_count, turns=len(turns))
         except Exception:
-            log.warning("summarize_session_background_failed", job_id=job_id, exc_info=True)
+            log.warning("session_snapshot_failed", job_id=job_id, exc_info=True)
 
     async def _persist_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
         """Persist the Copilot SDK session ID so resume_job() can reconnect to it later."""
@@ -1075,6 +1072,8 @@ class RuntimeService:
                 resume_sdk_session_id: str | None = job.sdk_session_id
             else:
                 # Fallback path: summarization-based context injection.
+                # First try to generate from stored snapshot (cheap); fall back to
+                # full event-based summarization if no snapshot exists.
                 log.info("resume_via_summarization", job_id=job_id)
                 from backend.persistence.artifact_repo import ArtifactRepository
                 from backend.persistence.event_repo import EventRepository
@@ -1090,11 +1089,46 @@ class RuntimeService:
                 changed_files = _extract_changed_files(diff_events)
 
                 if summary_artifact is None and self._summarization_service is not None:
-                    try:
-                        await self._summarization_service.summarize_and_store(job_id, job.session_count, job.prompt)
-                        summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
-                    except Exception:
-                        log.warning("inline_summarization_failed", job_id=job_id, exc_info=True)
+                    # No cached summary — try to generate from session snapshot
+                    snapshot_artifact = await artifact_svc.get_latest_session_snapshot(job_id)
+                    if snapshot_artifact is not None:
+                        try:
+                            import json as _json
+
+                            snapshot_text = Path(snapshot_artifact.disk_path).read_text(encoding="utf-8")
+                            snapshot_data = _json.loads(snapshot_text)
+                            _turns = snapshot_data.get("transcript_turns", [])
+                            _parts: list[str] = []
+                            for i, t in enumerate(_turns, 1):
+                                role = t.get("role", "")
+                                if role == "tool_call":
+                                    intent = t.get("tool_intent") or t.get("tool_name", "tool")
+                                    ok = "\u2713" if t.get("tool_success", True) else "\u2717"
+                                    _parts.append(f"[{i}] TOOL {ok}: {intent}")
+                                else:
+                                    _parts.append(f"[{i}] {role.upper()}: {t.get('content', '')}")
+                            transcript_text = "\n---\n".join(_parts) or "(no transcript)"
+                            snapshot_changed = snapshot_data.get("changed_files", [])
+                            if snapshot_changed:
+                                changed_files = snapshot_changed
+                            await self._summarization_service.summarize_and_store(
+                                job_id, job.session_count, job.prompt,
+                                pre_built_transcript=transcript_text,
+                                pre_built_changed_files=changed_files,
+                            )
+                            summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
+                        except Exception:
+                            log.warning("snapshot_summarization_failed", job_id=job_id, exc_info=True)
+
+                    if summary_artifact is None:
+                        # Final fallback — generate from raw events
+                        try:
+                            await self._summarization_service.summarize_and_store(
+                                job_id, job.session_count, job.prompt
+                            )
+                            summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
+                        except Exception:
+                            log.warning("inline_summarization_failed", job_id=job_id, exc_info=True)
 
                 summary_text: str | None = None
                 if summary_artifact is not None:

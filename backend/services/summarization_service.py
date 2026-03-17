@@ -137,8 +137,16 @@ class SummarizationService:
         job_id: str,
         session_number: int,
         original_task: str,
+        *,
+        pre_built_transcript: str | None = None,
+        pre_built_changed_files: list[str] | None = None,
     ) -> str:
-        """Generate a JSON session summary, store it as an artifact, and return the JSON string."""
+        """Generate a JSON session summary, store it as an artifact, and return the JSON string.
+
+        If *pre_built_transcript* / *pre_built_changed_files* are provided
+        (e.g. from a stored session snapshot), they are used directly instead
+        of re-reading from the event store.
+        """
         from backend.persistence.artifact_repo import ArtifactRepository
         from backend.persistence.event_repo import EventRepository
         from backend.services.artifact_service import ArtifactService
@@ -148,21 +156,27 @@ class SummarizationService:
             artifact_repo = ArtifactRepository(session)
 
             # --- Fetch and clean transcript ---
-            transcript_events = await event_repo.list_by_job(
-                job_id,
-                kinds=[DomainEventKind.transcript_updated],
-            )
-            cleaned_turns = _clean_transcript(transcript_events)
+            if pre_built_transcript is not None:
+                transcript_text = pre_built_transcript
+            else:
+                transcript_events = await event_repo.list_by_job(
+                    job_id,
+                    kinds=[DomainEventKind.transcript_updated],
+                )
+                cleaned_turns = _clean_transcript(transcript_events)
+                transcript_text = _format_transcript(cleaned_turns)
 
             # --- Fetch changed file paths ---
-            diff_events = await event_repo.list_by_job(
-                job_id,
-                kinds=[DomainEventKind.diff_updated],
-            )
-            changed_files = _extract_changed_files(diff_events)
+            if pre_built_changed_files is not None:
+                changed_files = pre_built_changed_files
+            else:
+                diff_events = await event_repo.list_by_job(
+                    job_id,
+                    kinds=[DomainEventKind.diff_updated],
+                )
+                changed_files = _extract_changed_files(diff_events)
 
             # --- Build prompt ---
-            transcript_text = _format_transcript(cleaned_turns)
             changed_files_text = "\n".join(sorted(changed_files)) if changed_files else "None recorded"
             prompt = _SYSTEM_PROMPT.format(
                 transcript=transcript_text,

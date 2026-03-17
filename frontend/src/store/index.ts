@@ -84,6 +84,13 @@ export interface TranscriptEntry {
   toolGroupSummary?: string;
 }
 
+export interface TimelineEntry {
+  headline: string;
+  headlinePast: string;
+  timestamp: string;
+  active: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -110,6 +117,7 @@ interface AppState {
   logs: Record<string, LogLine[]>; // keyed by jobId
   transcript: Record<string, TranscriptEntry[]>; // keyed by jobId
   diffs: Record<string, DiffFileModel[]>; // keyed by jobId
+  timelines: Record<string, TimelineEntry[]>; // keyed by jobId
 
   // UI state
   connectionStatus: ConnectionStatus;
@@ -126,6 +134,7 @@ export const useStore = create<AppState>((set, get) => ({
   logs: {},
   transcript: {},
   diffs: {},
+  timelines: {},
   connectionStatus: "reconnecting",
 
   setConnectionStatus: (status) => set({ connectionStatus: status }),
@@ -433,7 +442,23 @@ export const useStore = create<AppState>((set, get) => ({
         case "progress_headline": {
           const jobId = payload.jobId as string;
           const headline = payload.headline as string;
+          const headlinePast = (payload.headlinePast as string) || headline;
+          const timestamp = (payload.timestamp as string) || new Date().toISOString();
           const existing = state.jobs[jobId];
+
+          // Accumulate timeline entry
+          const prevTimeline = state.timelines[jobId] ?? [];
+          // Mark all previous entries as inactive
+          const deactivated = prevTimeline.map((e) =>
+            e.active ? { ...e, active: false } : e,
+          );
+          const newTimeline = [
+            ...deactivated,
+            { headline, headlinePast, timestamp, active: true },
+          ];
+          // Cap to last 50 entries
+          const cappedTimeline = newTimeline.length > 50 ? newTimeline.slice(-50) : newTimeline;
+
           if (existing) {
             return {
               jobs: {
@@ -443,9 +468,12 @@ export const useStore = create<AppState>((set, get) => ({
                   progressHeadline: headline,
                 },
               },
+              timelines: { ...state.timelines, [jobId]: cappedTimeline },
             };
           }
-          return null;
+          return {
+            timelines: { ...state.timelines, [jobId]: cappedTimeline },
+          };
         }
 
         case "model_downgraded": {
@@ -502,6 +530,10 @@ export const selectJobTranscript = (jobId: string) => (state: AppState) =>
   state.transcript[jobId] ?? EMPTY_TRANSCRIPT;
 export const selectJobDiffs = (jobId: string) => (state: AppState) =>
   state.diffs[jobId] ?? EMPTY_DIFFS;
+
+const EMPTY_TIMELINE: TimelineEntry[] = [];
+export const selectJobTimeline = (jobId: string) => (state: AppState) =>
+  state.timelines[jobId] ?? EMPTY_TIMELINE;
 
 // Per-column selectors — only recompute when jobs in that column change
 function sortByUpdatedDesc(jobs: JobSummary[]): JobSummary[] {
