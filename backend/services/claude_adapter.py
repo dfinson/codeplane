@@ -197,7 +197,7 @@ class ClaudeAdapter(AgentAdapterInterface):
 
     async def _consume_messages(self, session_id: str, client: object) -> None:
         """Consume messages from the ClaudeSDKClient and translate to SessionEvents."""
-        from claude_agent_sdk import (
+        from claude_code_sdk import (
             AssistantMessage,
             ResultMessage,
             SystemMessage,
@@ -245,15 +245,15 @@ class ClaudeAdapter(AgentAdapterInterface):
         seq: list[int],
     ) -> None:
         """Translate an AssistantMessage's content blocks into SessionEvents."""
+        from claude_code_sdk import TextBlock, ToolResultBlock, ToolUseBlock
+
         content_blocks = getattr(message, "content", []) or []
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
 
         for block in content_blocks:
-            block_type = getattr(block, "type", "")
-
-            if block_type == "text":
-                text = getattr(block, "text", "") or ""
+            if isinstance(block, TextBlock):
+                text = block.text or ""
                 if not text.strip():
                     continue
                 self._enqueue(
@@ -264,10 +264,10 @@ class ClaudeAdapter(AgentAdapterInterface):
                     ),
                 )
 
-            elif block_type == "tool_use":
+            elif isinstance(block, ToolUseBlock):
                 self._process_tool_use_block(session_id, block, model, seq, job_id)
 
-            elif block_type == "tool_result":
+            elif isinstance(block, ToolResultBlock):
                 self._process_tool_result_block(session_id, block, seq, job_id)
 
     def _process_tool_use_block(
@@ -376,35 +376,35 @@ class ClaudeAdapter(AgentAdapterInterface):
         """Handle the final ResultMessage — extract cost/usage and emit done."""
         job_id = self._session_to_job.get(session_id)
         result_text = getattr(message, "result", "") or ""
-        cost_usd = getattr(message, "cost_usd", 0.0) or 0.0
+        total_cost_usd = getattr(message, "total_cost_usd", 0.0) or 0.0
         usage = getattr(message, "usage", {}) or {}
-        duration_s = getattr(message, "duration_s", 0.0) or 0.0
-        subtype = getattr(message, "subtype", "success") or "success"
-        is_error = subtype not in ("success",)
+        duration_ms = getattr(message, "duration_ms", 0) or 0
+        is_error = getattr(message, "is_error", False)
 
         input_tokens = usage.get("input_tokens", 0) if isinstance(usage, dict) else 0
         output_tokens = usage.get("output_tokens", 0) if isinstance(usage, dict) else 0
         cache_read = usage.get("cache_read_input_tokens", 0) if isinstance(usage, dict) else 0
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
-        # Telemetry
+        # Telemetry — note: model is not on ResultMessage, so we pass empty string.
+        # Model info is available on AssistantMessage instead.
         if job_id:
             from backend.services.telemetry import collector as tel
 
             tel.record_llm_usage(
                 job_id,
-                model=getattr(message, "model", "") or "",
+                model="",
                 input_tokens=int(input_tokens),
                 output_tokens=int(output_tokens),
                 cache_read_tokens=int(cache_read),
                 cache_write_tokens=int(cache_write),
-                cost=float(cost_usd),
-                duration_ms=float(duration_s) * 1000,
+                cost=float(total_cost_usd),
+                duration_ms=float(duration_ms),
             )
 
         self._enqueue_log(
             session_id,
-            f"Session complete (cost=${cost_usd:.4f}, {input_tokens}+{output_tokens} tokens)",
+            f"Session complete (cost=${total_cost_usd:.4f}, {input_tokens}+{output_tokens} tokens)",
             "info",
             seq,
         )
@@ -414,7 +414,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                 session_id,
                 SessionEvent(
                     kind=SessionEventKind.error,
-                    payload={"message": f"Claude session ended: {subtype}", "result": result_text},
+                    payload={"message": "Claude session ended with error", "result": result_text},
                 ),
             )
         else:
@@ -428,7 +428,7 @@ class ClaudeAdapter(AgentAdapterInterface):
     # ------------------------------------------------------------------
 
     async def create_session(self, config: SessionConfig) -> str:
-        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+        from claude_code_sdk import ClaudeCodeOptions, ClaudeSDKClient
 
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
@@ -438,21 +438,16 @@ class ClaudeAdapter(AgentAdapterInterface):
             self._session_to_job[session_id] = config.job_id
 
         # Build options
-        options = ClaudeAgentOptions(
+        options = ClaudeCodeOptions(
             cwd=config.workspace_path,
             model=config.model,
             permission_mode=_PERMISSION_MODE_MAP.get(config.permission_mode, "default"),
             can_use_tool=self._build_can_use_tool(config, session_id),
-            system_prompt={
-                "type": "preset",
-                "preset": "claude_code",
-                "append": (
-                    "You are running inside CodePlane, a headless non-interactive orchestration "
-                    "framework. There is no human at a terminal. Do not enter plan mode or "
-                    "pause to present a plan for review. Proceed directly with task execution."
-                ),
-            },
-            setting_sources=["project"],
+            append_system_prompt=(
+                "You are running inside CodePlane, a headless non-interactive orchestration "
+                "framework. There is no human at a terminal. Do not enter plan mode or "
+                "pause to present a plan for review. Proceed directly with task execution."
+            ),
         )
 
         # MCP servers from CodePlane config
@@ -544,27 +539,27 @@ class ClaudeAdapter(AgentAdapterInterface):
 
     async def complete(self, prompt: str) -> str:
         """Single-turn completion using the Claude Agent SDK."""
-        from claude_agent_sdk import (
+        from claude_code_sdk import (
             AssistantMessage,
-            ClaudeAgentOptions,
+            ClaudeCodeOptions,
             ResultMessage,
+            TextBlock,
             query,
         )
 
-        options = ClaudeAgentOptions(
+        options = ClaudeCodeOptions(
             max_turns=1,
             permission_mode="bypassPermissions",
-            tools={"type": "preset", "preset": "claude_code"},
             allowed_tools=["Read", "Glob", "Grep"],
         )
 
         collected: list[str] = []
         try:
-            async for message in query(prompt, options):
+            async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in getattr(message, "content", []) or []:
-                        if getattr(block, "type", "") == "text":
-                            text = getattr(block, "text", "")
+                        if isinstance(block, TextBlock):
+                            text = block.text
                             if text:
                                 collected.append(text)
                 elif isinstance(message, ResultMessage):
