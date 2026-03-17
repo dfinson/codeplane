@@ -737,10 +737,7 @@ export interface components {
             base_ref?: string | null;
             /** Branch */
             branch?: string | null;
-            strategy?: components["schemas"]["StrategyKind"] | null;
             permission_mode?: components["schemas"]["PermissionMode"] | null;
-            /** Model */
-            model?: string | null;
             completion_strategy?: components["schemas"]["CompletionStrategy"] | null;
         };
         /** CreateJobResponse */
@@ -855,7 +852,6 @@ export interface components {
             title?: string | null;
             /** State */
             state: string;
-            strategy: components["schemas"]["StrategyKind"];
             /** Baseref */
             baseRef: string;
             /** Worktreepath */
@@ -986,11 +982,6 @@ export interface components {
              */
             timestamp: string;
         };
-        /**
-         * StrategyKind
-         * @enum {string}
-         */
-        StrategyKind: "single_agent";
         /** TranscribeResponse */
         TranscribeResponse: {
             /** Text */

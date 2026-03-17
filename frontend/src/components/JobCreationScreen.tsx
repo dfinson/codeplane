@@ -23,7 +23,7 @@ export function JobCreationScreen() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("supervised");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("approval_required");
 
   useEffect(() => {
     fetchRepos()
@@ -114,9 +114,9 @@ export function JobCreationScreen() {
             <div className="flex gap-2">
               {(
                 [
-                  { value: "auto", label: "Auto", title: "Approve all operations silently" },
-                  { value: "supervised", label: "Supervised", title: "Block on writes and URL fetches only — shell and reads auto-approved" },
-                  { value: "readonly", label: "Read-only", title: "Deny writes and shell commands" },
+                  { value: "auto", label: "Auto", title: "Approve all operations within the worktree silently" },
+                  { value: "approval_required", label: "Supervised", title: "Require approval for writes, shell commands, and URL fetches" },
+                  { value: "read_only", label: "Read-only", title: "Deny all writes and mutations" },
                 ] as { value: PermissionMode; label: string; title: string }[]
               ).map(({ value, label, title }) => (
                 <button

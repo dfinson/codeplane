@@ -115,11 +115,18 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-1 mb-1">
-        <GitBranch size={12} className="text-muted-foreground shrink-0" />
-        <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo}>
-          {job.branch ?? repoName}
-        </span>
+      <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-1 min-w-0">
+          <GitBranch size={12} className="text-muted-foreground shrink-0" />
+          <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo}>
+            {job.branch ?? repoName}
+          </span>
+        </div>
+        {job.worktreeName && (
+          <span className="text-[10px] text-muted-foreground/70 font-mono truncate shrink-0" title={`Worktree: ${job.worktreeName}`}>
+            {job.worktreeName}
+          </span>
+        )}
       </div>
 
       <p className="text-xs leading-snug line-clamp-2 text-foreground/70 mb-2">

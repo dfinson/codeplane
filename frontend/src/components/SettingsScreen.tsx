@@ -13,9 +13,9 @@ import { Label } from "./ui/label";
 import { Spinner } from "./ui/spinner";
 
 const PERMISSION_MODES = [
-  { value: "permissive", label: "Permissive" },
-  { value: "auto", label: "Auto-approve" },
-  { value: "supervised", label: "Supervised" },
+  { value: "auto", label: "Auto" },
+  { value: "approval_required", label: "Approval Required" },
+  { value: "read_only", label: "Read-only" },
 ];
 
 function SelectField({ label, value, options, onChange, description }: {
@@ -50,15 +50,44 @@ function NumberField({ label, value, onChange, min, max, description }: {
   max?: number;
   description?: string;
 }) {
+  const [raw, setRaw] = useState(String(value));
+
+  useEffect(() => {
+    setRaw(String(value));
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const str = e.target.value.replace(/[^0-9]/g, "");
+    setRaw(str);
+    if (str !== "") {
+      const num = parseInt(str, 10);
+      if (!isNaN(num)) {
+        onChange(num);
+      }
+    }
+  };
+
+  const handleBlur = () => {
+    if (raw === "" || isNaN(parseInt(raw, 10))) {
+      setRaw(String(value));
+      return;
+    }
+    const num = parseInt(raw, 10);
+    const clamped = Math.max(min ?? 0, Math.min(max ?? Infinity, num));
+    setRaw(String(clamped));
+    onChange(clamped);
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
       <Label>{label}</Label>
       <Input
-        type="number"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        min={min}
-        max={max}
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={raw}
+        onChange={handleChange}
+        onBlur={handleBlur}
         className="w-32"
       />
       {description && <p className="text-xs text-muted-foreground">{description}</p>}

@@ -298,7 +298,7 @@ export function JobDetailScreen() {
             ["Repo", repoName],
             ["Branch", job.branch ?? "—"],
             ["Base", job.baseRef],
-            ["Strategy", job.strategy],
+            ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
             ["Created", new Date(job.createdAt).toLocaleString()],
             ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
           ].map(([label, value]) => (

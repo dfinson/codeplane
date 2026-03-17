@@ -26,7 +26,6 @@ export interface JobSummary {
   prompt: string;
   title?: string | null;
   state: string;
-  strategy: string;
   baseRef: string;
   worktreePath: string | null;
   branch: string | null;
@@ -36,8 +35,8 @@ export interface JobSummary {
   prUrl?: string | null;
   resolution?: string | null;
   archivedAt?: string | null;
-  completionStrategy?: string | null;
   mergeStatus?: string | null;
+  worktreeName?: string | null;
   conflictFiles?: string[] | null;
   failureReason?: string | null;
   progressHeadline?: string | null;

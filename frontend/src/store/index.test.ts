@@ -15,7 +15,6 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     repo: "/repos/test",
     prompt: "Fix the bug",
     state: "running",
-    strategy: "single_agent",
     baseRef: "main",
     worktreePath: "/repos/test",
     branch: "fix/bug",

@@ -21,7 +21,6 @@ export type CompletionStrategy = components["schemas"]["CompletionStrategy"];
 export interface Settings {
   maxConcurrentJobs: number;
   permissionMode: string;
-  completionStrategy: string;
   autoPush: boolean;
   cleanupWorktree: boolean;
   deleteBranchAfterMerge: boolean;
