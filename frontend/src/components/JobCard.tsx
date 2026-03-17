@@ -53,8 +53,6 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       <div className="flex justify-between items-start gap-2 mb-1.5">
         {job.title ? (
           <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.title}>{job.title}</span>
-        ) : (job.state === "queued" || job.state === "running") && (Date.now() - new Date(job.createdAt).getTime() < 30_000) ? (
-          <span className="h-4 w-36 bg-muted animate-pulse rounded shrink-0" />
         ) : (
           <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.id}>{job.id}</span>
         )}

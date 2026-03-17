@@ -250,8 +250,6 @@ export function JobDetailScreen() {
           <div className="flex items-center gap-2">
             {job.title ? (
               <span className="text-lg font-bold text-foreground">{job.title}</span>
-            ) : (job.state === "queued" || job.state === "running") && (Date.now() - new Date(job.createdAt).getTime() < 30_000) ? (
-              <span className="h-6 w-48 bg-muted animate-pulse rounded" />
             ) : (
               <span className="text-lg font-bold text-foreground">{job.id}</span>
             )}

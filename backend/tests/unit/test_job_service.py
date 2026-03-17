@@ -164,7 +164,8 @@ class TestJobService:
             )
             await session.commit()
 
-        assert job.id == "job-1"
+        assert job.id != ""
+        assert not job.id.startswith("job-")  # no more sequential job-N IDs
         assert job.state == JobState.queued
         assert job.repo == "/repos/test"
         assert job.prompt == "Fix the bug"
@@ -201,11 +202,11 @@ class TestJobService:
                 return_value="main",
             ),
         ):
-            await job_service.create_job(repo="/repos/test", prompt="Fix it")
+            created = await job_service.create_job(repo="/repos/test", prompt="Fix it")
             await session.commit()
 
-        job = await job_service.get_job("job-1")
-        assert job.id == "job-1"
+        job = await job_service.get_job(created.id)
+        assert job.id == created.id
 
     @pytest.mark.asyncio
     async def test_get_job_not_found(self, job_service: JobService) -> None:
@@ -282,10 +283,10 @@ class TestJobService:
                 return_value="main",
             ),
         ):
-            await job_service.create_job(repo="/repos/test", prompt="Fix it")
+            created = await job_service.create_job(repo="/repos/test", prompt="Fix it")
             await session.commit()
 
-        job = await job_service.cancel_job("job-1")
+        job = await job_service.cancel_job(created.id)
         assert job.state == JobState.canceled
         assert job.completed_at is not None
 
@@ -309,16 +310,16 @@ class TestJobService:
                 return_value="main",
             ),
         ):
-            await job_service.create_job(repo="/repos/test", prompt="Fix it")
+            created = await job_service.create_job(repo="/repos/test", prompt="Fix it")
             await session.commit()
 
         # First cancel succeeds
-        await job_service.cancel_job("job-1")
+        await job_service.cancel_job(created.id)
         await session.commit()
 
         # Second cancel fails
         with pytest.raises(StateConflictError):
-            await job_service.cancel_job("job-1")
+            await job_service.cancel_job(created.id)
 
     @pytest.mark.asyncio
     async def test_rerun_creates_new_job(
@@ -363,7 +364,8 @@ class TestJobService:
             new_job = await job_service.rerun_job(original.id)
             await session.commit()
 
-        assert new_job.id == "job-2"
+        assert new_job.id != original.id  # distinct jobs get distinct IDs
+        assert not new_job.id.startswith("job-")
         assert new_job.prompt == original.prompt
         assert new_job.repo == original.repo
 
@@ -373,18 +375,21 @@ class TestJobService:
             await job_service.rerun_job("job-999")
 
     @pytest.mark.asyncio
-    async def test_sequential_job_ids(
+    async def test_job_ids_derived_from_naming(
         self,
         job_service: JobService,
         session: AsyncSession,
     ) -> None:
-        for i in range(1, 4):
+        """Job IDs must come from worktree naming, never from sequential counters."""
+        prompts = ["Task one", "Task two", "Task three"]
+        ids: list[str] = []
+        for i, prompt in enumerate(prompts, start=1):
             with (
                 patch.object(
                     job_service._git,
                     "create_worktree",
                     new_callable=AsyncMock,
-                    return_value=("/repos/test", f"cpl/job-{i}"),
+                    return_value=("/repos/test", f"cpl/task-{i}"),
                 ),
                 patch.object(
                     job_service._git,
@@ -395,10 +400,12 @@ class TestJobService:
             ):
                 job = await job_service.create_job(
                     repo="/repos/test",
-                    prompt=f"Task {i}",
+                    prompt=prompt,
                 )
                 await session.commit()
-                assert job.id == f"job-{i}"
+            assert not job.id.startswith("job-"), f"Expected no 'job-N' ID, got: {job.id}"
+            assert job.id not in ids, "Duplicate job ID"
+            ids.append(job.id)
 
     @pytest.mark.asyncio
     async def test_worktree_failure_creates_failed_job(
@@ -451,12 +458,12 @@ class TestJobService:
                 return_value="main",
             ),
         ):
-            await job_service.create_job(repo="/repos/test", prompt="Fix it")
+            created = await job_service.create_job(repo="/repos/test", prompt="Fix it")
             await session.commit()
 
         # Phase 4: jobs start as queued, must transition through running first
-        await job_service.transition_state("job-1", JobState.running)
-        job = await job_service.transition_state("job-1", JobState.succeeded)
+        await job_service.transition_state(created.id, JobState.running)
+        job = await job_service.transition_state(created.id, JobState.succeeded)
         assert job.state == JobState.succeeded
         assert job.completed_at is not None
 
@@ -480,8 +487,8 @@ class TestJobService:
                 return_value="main",
             ),
         ):
-            await job_service.create_job(repo="/repos/test", prompt="Fix it")
+            created = await job_service.create_job(repo="/repos/test", prompt="Fix it")
             await session.commit()
 
         with pytest.raises(InvalidStateTransitionError):
-            await job_service.transition_state("job-1", JobState.queued)
+            await job_service.transition_state(created.id, JobState.queued)

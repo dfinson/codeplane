@@ -87,9 +87,10 @@ class JobService:
     ) -> Job:
         """Create a new job, set up workspace, and persist it.
 
+        The job ID is the LLM-generated worktree name (e.g. "fix-login-bug").
         Naming is blocking: the LLM generates title, branch, and worktree name
-        before the worktree is created. If naming fails, deterministic fallbacks
-        are used.
+        before the worktree is created. If naming fails, NamingError is raised
+        and a failed job record is persisted with a hash-based ID.
 
         Returns the created Job domain object.
         Raises RepoNotAllowedError if the repo is not in the allowlist.
@@ -102,10 +103,8 @@ class JobService:
 
         now = datetime.now(UTC)
 
-        # Generate job ID atomically via the database
-        job_id = await self._job_repo.next_id()
-
-        # Blocking naming: generate title, branch, worktree_name via LLM
+        # Blocking naming: generate title, branch, worktree_name via LLM.
+        # The worktree_name becomes the job ID.
         title: str | None = None
         worktree_name: str | None = None
 
@@ -113,25 +112,23 @@ class JobService:
             from backend.services.naming_service import NamingError
 
             try:
-                # Gather existing branches and worktrees for conflict detection
+                # Gather existing branches, worktrees, and job IDs for conflict detection
                 existing_branches = await self._git.list_branches(resolved_repo)
                 existing_worktrees = await self._git.list_worktree_names(resolved_repo)
+                existing_job_ids = await self._job_repo.list_ids()
 
                 title, generated_branch, worktree_name = await self._naming.generate(
                     prompt,
                     existing_branches=existing_branches,
-                    existing_worktrees=existing_worktrees,
+                    existing_worktrees=existing_worktrees | existing_job_ids,
                 )
                 if branch is None and generated_branch:
                     branch = generated_branch
-                log.info(
-                    "naming_preflight_complete",
-                    job_id=job_id,
-                    title=title,
-                    branch=branch,
-                    worktree_name=worktree_name,
-                )
             except NamingError as exc:
+                import hashlib
+
+                h = hashlib.sha256(f"{prompt}{now.isoformat()}".encode()).hexdigest()[:12]
+                job_id = f"naming-failed-{h}"
                 job = Job(
                     id=job_id,
                     repo=resolved_repo,
@@ -154,13 +151,36 @@ class JobService:
                 log.error("job_naming_failed", job_id=job_id, error=str(exc))
                 return job
 
+        # When no naming service is configured (e.g. tests without LLM), use a hash.
+        # Check existing IDs to avoid collisions on reruns of the same prompt.
+        if worktree_name is None:
+            import hashlib
+
+            base_hash = hashlib.sha256(prompt.encode()).hexdigest()[:8]
+            candidate = f"task-{base_hash}"
+            existing_ids = await self._job_repo.list_ids()
+            counter = 0
+            while candidate in existing_ids:
+                counter += 1
+                candidate = f"task-{base_hash}-{counter}"
+            worktree_name = candidate
+
+        job_id = worktree_name
+        log.info(
+            "naming_preflight_complete",
+            job_id=job_id,
+            title=title,
+            branch=branch,
+            worktree_name=worktree_name,
+        )
+
         # Create worktree using worktree_name as the directory name
         from backend.services.git_service import GitError
 
         try:
             worktree_path, branch_name = await self._git.create_worktree(
                 repo_path=resolved_repo,
-                job_id=worktree_name,  # Use worktree_name as directory name
+                job_id=worktree_name,  # job ID equals the worktree directory name
                 base_ref=base_ref,
                 branch=branch,
             )
