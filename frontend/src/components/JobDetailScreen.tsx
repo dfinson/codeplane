@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
@@ -62,6 +62,31 @@ export function JobDetailScreen() {
             transcript: { ...s.transcript, [jobId]: mergedTx },
           };
         });
+    }).catch(() => {});
+  }, [jobId]);
+
+  // Hydrate activity timeline from the persisted event store. This ensures the
+  // timeline is populated when navigating to a completed or resumed job, not
+  // just during live streaming.
+  useEffect(() => {
+    if (!jobId) return;
+    fetchJobTimeline(jobId).then((fetched) => {
+      if (fetched.length === 0) return;
+      useStore.setState((s) => {
+        const live = s.timelines[jobId] ?? [];
+        // Merge historical entries with any live entries already in the store.
+        // Live entries take precedence for the same timestamp (they may carry
+        // active:true state set by the progress_headline SSE handler).
+        const liveByTs = new Map(live.map((e) => [e.timestamp, e]));
+        const merged = fetched.map((e) => liveByTs.get(e.timestamp) ?? e);
+        // Append any live entries not covered by the historical fetch.
+        const fetchedTs = new Set(fetched.map((e) => e.timestamp));
+        const extraLive = live.filter((e) => !fetchedTs.has(e.timestamp));
+        const full = [...merged, ...extraLive].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+        );
+        return { timelines: { ...s.timelines, [jobId]: full } };
+      });
     }).catch(() => {});
   }, [jobId]);
 

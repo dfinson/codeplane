@@ -321,6 +321,7 @@ class TranscriptPayload(CamelModel):
     tool_intent: str | None = None  # role=tool_call: SDK-provided intent string
     tool_title: str | None = None  # role=tool_call: SDK-provided display title
     tool_display: str | None = None  # role=tool_call: deterministic per-tool label
+    tool_group_summary: str | None = None  # AI-generated summary for the tool group turn
 
 
 class ToolGroupSummaryPayload(CamelModel):

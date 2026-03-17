@@ -86,6 +86,19 @@ export function fetchJobTranscript(jobId: string, limit = 2000): Promise<import(
   return request(`/jobs/${encodeURIComponent(jobId)}/transcript?limit=${limit}`);
 }
 
+export function fetchJobTimeline(jobId: string, limit = 200): Promise<import("../store").TimelineEntry[]> {
+  return request<Array<{ headline: string; headlinePast: string; timestamp: string }>>(
+    `/jobs/${encodeURIComponent(jobId)}/timeline?limit=${limit}`,
+  ).then((entries) =>
+    entries.map((e) => ({
+      headline: e.headline,
+      headlinePast: e.headlinePast,
+      timestamp: e.timestamp,
+      active: false, // historical entries are never active; live SSE manages active state
+    })),
+  );
+}
+
 export function fetchJobDiff(jobId: string): Promise<DiffFileModel[]> {
   return request(`/jobs/${encodeURIComponent(jobId)}/diff`);
 }

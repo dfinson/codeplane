@@ -16,9 +16,11 @@ from backend.models.api_schemas import (
     JobListResponse,
     JobResponse,
     LogLinePayload,
+    ProgressHeadlinePayload,
     ResolveJobRequest,
     ResolveJobResponse,
     ResumeJobRequest,
+    ToolGroupSummaryPayload,
     TranscriptPayload,
 )
 from backend.models.events import DomainEventKind
@@ -391,6 +393,16 @@ async def get_job_transcript(
     """Return historical transcript entries for a job from the event store."""
     event_repo = EventRepository(session)
     events = await event_repo.list_by_job(job_id, [DomainEventKind.transcript_updated], limit=limit)
+
+    # Build a turn_id → summary map from stored tool_group_summary events so
+    # that restored transcripts include AI-generated group labels.
+    summary_events = await event_repo.list_by_job(job_id, [DomainEventKind.tool_group_summary], limit=5000)
+    group_summary_by_turn: dict[str, str] = {
+        ev.payload["turn_id"]: ev.payload["summary"]
+        for ev in summary_events
+        if ev.payload.get("turn_id") and ev.payload.get("summary")
+    }
+
     return [
         TranscriptPayload(
             job_id=event.job_id,
@@ -404,6 +416,30 @@ async def get_job_transcript(
             tool_args=event.payload.get("tool_args"),
             tool_result=event.payload.get("tool_result"),
             tool_success=event.payload.get("tool_success"),
+            tool_intent=event.payload.get("tool_intent"),
+            tool_title=event.payload.get("tool_title"),
+            tool_display=event.payload.get("tool_display"),
+            tool_group_summary=group_summary_by_turn.get(event.payload.get("turn_id") or ""),
+        )
+        for event in events
+    ]
+
+
+@router.get("/jobs/{job_id}/timeline", response_model=list[ProgressHeadlinePayload])
+async def get_job_timeline(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> list[ProgressHeadlinePayload]:
+    """Return historical progress_headline events for a job from the event store."""
+    event_repo = EventRepository(session)
+    events = await event_repo.list_by_job(job_id, [DomainEventKind.progress_headline], limit=limit)
+    return [
+        ProgressHeadlinePayload(
+            job_id=event.job_id,
+            headline=event.payload.get("headline", ""),
+            headline_past=event.payload.get("headline_past", ""),
+            timestamp=event.timestamp,
         )
         for event in events
     ]
