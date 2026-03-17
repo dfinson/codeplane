@@ -106,7 +106,7 @@ export interface ResolveJobResponse {
 
 // --- Artifact types ---
 
-export type ArtifactType = "diff_snapshot" | "agent_summary" | "custom";
+export type ArtifactType = "diff_snapshot" | "agent_summary" | "session_snapshot" | "custom";
 
 export interface ArtifactResponse {
   id: string;

@@ -340,12 +340,16 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
                 </div>
               ) : null}
 
-              {/* Session timeline */}
-              {checkpoints.length > 0 && (
-                <div>
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
-                    <BookOpen size={12} className="text-blue-400" /> Session Timeline
-                  </h4>
+              {/* Session summary */}
+              <div>
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
+                  <BookOpen size={12} className="text-blue-400" /> Summary
+                </h4>
+                {checkpoints.length === 0 ? (
+                  <p className="text-xs text-muted-foreground/60 italic py-1">
+                    Session summaries are generated after each session ends. Nothing stored yet.
+                  </p>
+                ) : (
                   <div className="relative pl-5">
                     {/* Vertical rail */}
                     <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
@@ -408,8 +412,8 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
                       })}
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               {/* Tool breakdown table */}
               {toolAggs.length > 0 && (
