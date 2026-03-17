@@ -50,15 +50,15 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       className="w-full text-left rounded-lg border border-border bg-background p-3 cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent"
       onClick={() => navigate(`/jobs/${job.id}`)}
     >
-      <div className="flex justify-between items-center mb-1.5">
+      <div className="flex justify-between items-start gap-2 mb-1.5">
         {job.title ? (
-          <span className="text-sm font-semibold text-primary truncate" title={job.title}>{job.title}</span>
+          <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.title}>{job.title}</span>
         ) : (job.state === "queued" || job.state === "running") && (Date.now() - new Date(job.createdAt).getTime() < 30_000) ? (
           <span className="h-4 w-36 bg-muted animate-pulse rounded shrink-0" />
         ) : (
-          <span className="text-sm font-semibold text-primary truncate" title={job.id}>{job.id}</span>
+          <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.id}>{job.id}</span>
         )}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
           {job.resolution && <ResolutionBadge resolution={job.resolution} />}
           <StateBadge state={job.state} />
         </div>
@@ -66,7 +66,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       <div className="flex items-center gap-1 mb-1">
         <BookOpen size={11} className="text-muted-foreground/60 shrink-0" />
-        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo}>{job.repo}</span>
+        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo}>{repoName}</span>
       </div>
 
       <div className="flex items-center gap-2 mb-1">
@@ -76,11 +76,6 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
             {job.branch ?? repoName}
           </span>
         </div>
-        {job.worktreeName && (
-          <span className="text-[10px] text-muted-foreground/70 font-mono truncate shrink-0" title={`Worktree: ${job.worktreeName}`}>
-            {job.worktreeName}
-          </span>
-        )}
       </div>
 
       <p className="text-xs leading-snug line-clamp-2 text-foreground/70 mb-2">

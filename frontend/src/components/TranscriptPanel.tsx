@@ -149,7 +149,7 @@ const AgentMarkdown = memo(function AgentMarkdown({ content }: { content: string
         code: ({ className, children }) => {
           const isBlock = className?.startsWith("language-");
           return isBlock ? (
-            <pre className="bg-background border border-border rounded-md p-3 my-2 overflow-x-auto text-xs font-mono">
+            <pre className="bg-background border border-border rounded-md p-3 my-2 overflow-x-auto max-w-full text-xs font-mono">
               <code>{children}</code>
             </pre>
           ) : (
@@ -240,8 +240,10 @@ function chipify(calls: TranscriptEntry[]): { name: string; display: string; cou
   return chips;
 }
 
-function ToolChips({ calls }: { calls: TranscriptEntry[] }) {
-  const [expanded, setExpanded] = useState<TranscriptEntry | null>(null);
+function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand?: boolean }) {
+  const [expanded, setExpanded] = useState<TranscriptEntry | null>(() =>
+    autoExpand ? (calls[0] ?? null) : null
+  );
   const chips = chipify(calls);
   const anyFailed = calls.some((c) => c.toolSuccess === false);
 
@@ -412,20 +414,20 @@ function ToolGroupSection({ calls }: { calls: TranscriptEntry[] }) {
     )}>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors"
+        className="w-full flex items-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors"
       >
-        <Wrench size={11} className={cn("shrink-0", anyFailed ? "text-red-400" : "text-blue-400/70")} />
-        <span className={cn("font-medium truncate", anyFailed ? "text-red-400" : "text-muted-foreground")}>
+        <Wrench size={11} className={cn("shrink-0 mt-0.5", anyFailed ? "text-red-400" : "text-blue-400/70")} />
+        <span className={cn("font-medium break-words min-w-0", anyFailed ? "text-red-400" : "text-muted-foreground")}>
           {label}
         </span>
         <ChevronDown
           size={11}
-          className={cn("ml-auto shrink-0 transition-transform text-muted-foreground", open && "rotate-180")}
+          className={cn("ml-auto shrink-0 transition-transform text-muted-foreground mt-0.5", open && "rotate-180")}
         />
       </button>
       {open && (
         <div className="px-2 pb-2 pt-1.5 border-t border-border/50">
-          <ToolChips calls={calls} />
+          <ToolChips calls={calls} autoExpand={calls.length === 1} />
         </div>
       )}
     </div>
@@ -671,7 +673,7 @@ export function TranscriptPanel({
       <div className="relative flex-1 min-h-0">
       <div
         ref={viewportRef}
-        className="h-full overflow-y-auto overscroll-contain"
+        className="h-full overflow-y-auto overflow-x-hidden overscroll-contain"
         onScroll={handleScroll}
       >
         {displayItems.length === 0 ? (
@@ -701,7 +703,7 @@ export function TranscriptPanel({
                       <User size={14} />
                     </div>
                     <div className="max-w-[80%] rounded-xl rounded-tr-sm px-3 py-2 text-sm leading-relaxed bg-blue-900/30">
-                      <div className="whitespace-pre-wrap">{item.entry.content}</div>
+                      <div className="whitespace-pre-wrap break-words">{item.entry.content}</div>
                       <span className="text-xs text-muted-foreground mt-1 block">
                         {new Date(item.entry.timestamp).toLocaleTimeString()}
                       </span>

@@ -292,7 +292,7 @@ export function JobDetailScreen() {
 
         <div className="flex items-center gap-1.5 mb-3">
           <BookOpen size={13} className="text-muted-foreground/70 shrink-0" />
-          <span className="text-sm text-muted-foreground font-mono">{job.repo}</span>
+          <span className="text-sm text-muted-foreground font-mono">{job.repo.split("/").pop() ?? job.repo}</span>
         </div>
 
         {job.progressHeadline && (job.state === "running" || job.state === "queued") && (
