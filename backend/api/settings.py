@@ -285,7 +285,9 @@ async def get_platform_status(
 
 
 def _check_sdk_status(sdk_id: str) -> str:
-    """Check whether a given SDK is usable (CLI/package installed, credentials present)."""
+    """Check whether a given SDK is usable (CLI binary installed and reachable)."""
+    import shutil
+
     if sdk_id == "copilot":
         try:
             import copilot  # noqa: F401
@@ -293,13 +295,15 @@ def _check_sdk_status(sdk_id: str) -> str:
         except ImportError:
             return "not_installed"
     if sdk_id == "claude":
-        import os
         try:
             import claude_code_sdk  # noqa: F401
         except ImportError:
             return "not_installed"
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return "not_configured"
+        # The SDK spawns the `claude` CLI as a subprocess.
+        # Auth is handled by the CLI itself (API key, Bedrock, Vertex, etc.)
+        # so we only check that the binary exists on PATH.
+        if shutil.which("claude") is None:
+            return "not_installed"
         return "ready"
     return "not_installed"
 
