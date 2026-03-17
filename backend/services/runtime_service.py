@@ -258,6 +258,8 @@ class RuntimeService:
         self._headline_last_snapshot: dict[str, list[str]] = {}
         # Last generated headline per job (avoid exact repeats)
         self._headline_last_text: dict[str, str] = {}
+        # Full milestone history per job (for retroactive collapsing)
+        self._headline_history: dict[str, list[str]] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
 
@@ -376,6 +378,7 @@ class RuntimeService:
             self._headline_tool_intents[job_id] = []
             self._headline_last_snapshot[job_id] = []
             self._headline_last_text[job_id] = ""
+            self._headline_history[job_id] = []
             headline_task = asyncio.create_task(
                 self._headline_loop(job_id),
                 name=f"headline-{job_id}",
@@ -672,6 +675,7 @@ class RuntimeService:
             self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)
             self._headline_last_text.pop(job_id, None)
+            self._headline_history.pop(job_id, None)
             self._tasks.pop(job_id, None)
             self._agent_sessions.pop(job_id, None)
             self._last_activity.pop(job_id, None)
@@ -733,7 +737,16 @@ class RuntimeService:
             pass
 
     async def _headline_loop(self, job_id: str) -> None:
-        """Periodically generate a 3-5 word progress headline from recent activity."""
+        """Periodically assess agent activity and emit milestone headlines.
+
+        Only emits when the agent has transitioned to a meaningfully different
+        phase of work.  The LLM sees the full milestone history and can
+        retroactively collapse recent entries that turned out to be part of
+        the same phase.
+        """
+        import json as _json
+        import re as _re
+
         initial_delay_s = 8
         interval_s = 15
         try:
@@ -754,7 +767,9 @@ class RuntimeService:
                     intents_buf.clear()
 
                 if recent_msgs or recent_intents:
-                    self._headline_last_snapshot[job_id] = recent_msgs or self._headline_last_snapshot.get(job_id, [])
+                    self._headline_last_snapshot[job_id] = (
+                        recent_msgs or self._headline_last_snapshot.get(job_id, [])
+                    )
                 else:
                     recent_msgs = self._headline_last_snapshot.get(job_id, [])
 
@@ -770,34 +785,39 @@ class RuntimeService:
                 if recent_intents:
                     parts.append("Tool intents: " + ", ".join(recent_intents))
 
-                last_headline = self._headline_last_text.get(job_id, "")
-                previous_context = (
-                    f'The current timeline entry (already shown) is: "{last_headline}"\n\n' if last_headline else ""
-                )
+                history = self._headline_history.get(job_id, [])
+                history_block = ""
+                if history:
+                    numbered = "\n".join(f"  {i + 1}. {h}" for i, h in enumerate(history))
+                    history_block = f"Milestone history so far:\n{numbered}\n\n"
 
                 prompt = (
-                    "You are summarising a coding agent's activity for a progress timeline. "
-                    "Each timeline entry is shown in present tense while active, then flipped to "
-                    "past tense when superseded — so never repeat the same activity.\n\n"
-                    + previous_context
+                    "You are maintaining a milestone timeline for a coding agent. "
+                    "Milestones mark distinct PHASES of work — not incremental progress. "
+                    "Good milestones: 'Setting up project', 'Implementing auth API', 'Writing tests'. "
+                    "Bad milestones: 'Reading file X', 'Editing line 42', 'Running search'. "
+                    "The timeline should read like a high-level summary of what the agent accomplished, "
+                    "not a log of individual actions.\n\n"
+                    + history_block
                     + "Recent agent activity:\n"
                     + "\n---\n".join(parts)
-                    + "\n\nDecide whether the agent has moved on to a meaningfully different "
-                    "task or phase since the current entry. Minor continuation of the same work "
-                    "(e.g. still editing the same file, still running the same kind of search) "
-                    "does NOT warrant a new entry — return defer instead.\n\n"
-                    "If a new entry IS warranted, write a concise 3-5 word label (no articles, "
-                    "no period) describing what the agent is doing NOW, plus its past-tense form.\n\n"
-                    "Respond with JSON only — one of:\n"
-                    '  {"defer": true}\n'
-                    '  {"present": "Refactoring auth service", "past": "Refactored auth service"}'
+                    + "\n\nRespond with JSON only — exactly one of:\n\n"
+                    '1. No meaningful phase change: {"defer": true}\n'
+                    '2. New milestone: {"present": "Implementing auth API", "past": "Implemented auth API"}\n'
+                    "3. Recent milestones were actually the same phase — consolidate the last N "
+                    "into one: {\"replace_last\": 2, \"present\": \"Implementing auth system\", "
+                    '"past": "Implemented auth system"}\n\n'
+                    "RULES:\n"
+                    "- STRONGLY prefer defer. Only emit when the agent has clearly moved to a "
+                    "different area of the codebase or a different kind of task.\n"
+                    "- Use replace_last to merge entries that say essentially the same thing "
+                    "(e.g. 'Updating auth routes' and 'Fixing auth middleware' → 'Implementing auth system').\n"
+                    "- Labels: 3-6 words, no articles, no period, present tense for 'present', past tense for 'past'."
                 )
 
                 try:
                     raw = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
                     raw = raw.strip()
-                    import json as _json
-                    import re as _re
 
                     # Strip markdown fences if present
                     if raw.startswith("```"):
@@ -815,9 +835,20 @@ class RuntimeService:
                     else:
                         headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
                         headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
+                        replace_last = int(parsed.get("replace_last", 0))
 
+                        last_headline = self._headline_last_text.get(job_id, "")
                         if headline and len(headline) > 3 and headline != last_headline:
+                            # Clamp replace_last to actual history length
+                            replace_last = max(0, min(replace_last, len(history)))
+
+                            # Update in-memory history
+                            if replace_last > 0:
+                                self._headline_history[job_id] = history[:-replace_last] + [headline]
+                            else:
+                                self._headline_history.setdefault(job_id, []).append(headline)
                             self._headline_last_text[job_id] = headline
+
                             await self._event_bus.publish(
                                 DomainEvent(
                                     event_id=_make_event_id(),
@@ -827,6 +858,7 @@ class RuntimeService:
                                     payload={
                                         "headline": headline,
                                         "headline_past": headline_past,
+                                        "replaces_count": replace_last,
                                     },
                                 )
                             )

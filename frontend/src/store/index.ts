@@ -167,7 +167,8 @@ export const useStore = create<AppState>((set, get) => ({
   terminalSessions: {},
   activeTerminalTab: null,
 
-  setConnectionStatus: (status) => set({ connectionStatus: status }),
+  setConnectionStatus: (status) =>
+    get().connectionStatus !== status && set({ connectionStatus: status }),
 
   applySnapshot: (jobs, approvals) =>
     set({
@@ -475,20 +476,21 @@ export const useStore = create<AppState>((set, get) => ({
           const headline = payload.headline as string;
           const headlinePast = (payload.headlinePast as string) || headline;
           const timestamp = (payload.timestamp as string) || new Date().toISOString();
+          const replacesCount = (payload.replacesCount as number) || 0;
           const existing = state.jobs[jobId];
 
           // Accumulate timeline entry
           const prevTimeline = state.timelines[jobId] ?? [];
-          // Mark all previous entries as inactive
-          const deactivated = prevTimeline.map((e) =>
+          // If collapsing, remove the last N entries first
+          const base = replacesCount > 0 ? prevTimeline.slice(0, -replacesCount) : prevTimeline;
+          // Mark all remaining previous entries as inactive
+          const deactivated = base.map((e) =>
             e.active ? { ...e, active: false } : e,
           );
           const newTimeline = [
             ...deactivated,
             { headline, headlinePast, timestamp, active: true },
           ];
-          // Cap to last 50 entries
-          const cappedTimeline = newTimeline.length > 50 ? newTimeline.slice(-50) : newTimeline;
 
           if (existing) {
             return {
@@ -499,11 +501,11 @@ export const useStore = create<AppState>((set, get) => ({
                   progressHeadline: headline,
                 },
               },
-              timelines: { ...state.timelines, [jobId]: cappedTimeline },
+              timelines: { ...state.timelines, [jobId]: newTimeline },
             };
           }
           return {
-            timelines: { ...state.timelines, [jobId]: cappedTimeline },
+            timelines: { ...state.timelines, [jobId]: newTimeline },
           };
         }
 

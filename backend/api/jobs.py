@@ -437,18 +437,29 @@ async def get_job_timeline(
     session: Annotated[AsyncSession, Depends(_get_session)],
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ) -> list[ProgressHeadlinePayload]:
-    """Return historical progress_headline events for a job from the event store."""
+    """Return historical progress_headline milestones for a job.
+
+    Events with ``replaces_count > 0`` retroactively collapse earlier entries,
+    so the returned list is the final milestone timeline, not raw events.
+    """
     event_repo = EventRepository(session)
     events = await event_repo.list_by_job(job_id, [DomainEventKind.progress_headline], limit=limit)
-    return [
-        ProgressHeadlinePayload(
-            job_id=event.job_id,
-            headline=event.payload.get("headline", ""),
-            headline_past=event.payload.get("headline_past", ""),
-            timestamp=event.timestamp,
+
+    # Replay events to reconstruct the collapsed milestone list
+    milestones: list[ProgressHeadlinePayload] = []
+    for event in events:
+        replaces = event.payload.get("replaces_count", 0)
+        if replaces > 0:
+            milestones = milestones[:-replaces] if replaces < len(milestones) else []
+        milestones.append(
+            ProgressHeadlinePayload(
+                job_id=event.job_id,
+                headline=event.payload.get("headline", ""),
+                headline_past=event.payload.get("headline_past", ""),
+                timestamp=event.timestamp,
+            )
         )
-        for event in events
-    ]
+    return milestones
 
 
 @router.get("/jobs/{job_id}/telemetry")

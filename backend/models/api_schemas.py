@@ -494,6 +494,7 @@ class ProgressHeadlinePayload(CamelModel):
     headline: str
     headline_past: str
     timestamp: datetime
+    replaces_count: int = 0
 
 
 class SnapshotPayload(CamelModel):

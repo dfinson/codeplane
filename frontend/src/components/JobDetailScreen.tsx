@@ -507,7 +507,7 @@ export function JobDetailScreen() {
             <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
           <ExecutionTimeline jobId={jobId} />
-          <InsightsPanel jobId={jobId} />
+          <InsightsPanel jobId={jobId} isRunning={isRunning} />
         </div>
       )}
 

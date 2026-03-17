@@ -1,32 +1,50 @@
-import { useEffect, useRef } from "react";
-import { Activity } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Activity, ChevronDown, ChevronRight } from "lucide-react";
 import { useStore, selectJobTimeline } from "../store";
 
 export function ExecutionTimeline({ jobId }: { jobId: string }) {
   const timeline = useStore(selectJobTimeline(jobId));
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
-  // Auto-scroll to newest entry when timeline grows
+  // Auto-scroll to newest entry when timeline grows (only when expanded)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [timeline.length]);
+    if (!collapsed) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [timeline.length, collapsed]);
+
+  // Nothing to show
+  if (timeline.length === 0) return null;
+
+  // Find the current (active) or most recent entry
+  const current = [...timeline].reverse().find((e) => e.active) ?? timeline[timeline.length - 1];
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
-        <Activity size={13} className="text-muted-foreground" />
+      <button
+        className="flex items-center gap-2 px-4 py-2.5 w-full text-left border-b border-border hover:bg-accent/50 transition-colors"
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        {collapsed ? (
+          <ChevronRight size={13} className="text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+        )}
+        <Activity size={13} className="text-muted-foreground shrink-0" />
         <span className="text-sm font-semibold text-muted-foreground">Activity</span>
-        {timeline.length > 0 && (
-          <span className="ml-auto text-[11px] text-muted-foreground/50 tabular-nums">
-            {timeline.length} event{timeline.length !== 1 ? "s" : ""}
+        {collapsed && current && (
+          <span className="text-xs text-muted-foreground/70 truncate ml-1">
+            — {current.active ? current.headline : current.headlinePast}
           </span>
         )}
-      </div>
+        <span className="ml-auto text-[11px] text-muted-foreground/50 tabular-nums shrink-0">
+          {timeline.length} milestone{timeline.length !== 1 ? "s" : ""}
+        </span>
+      </button>
 
-      <div className="max-h-[260px] overflow-y-auto">
-        {timeline.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-8">No activity yet</p>
-        ) : (
+      {!collapsed && (
+        <div className="max-h-[260px] overflow-y-auto">
           <div className="px-4 py-3 relative pl-10">
             {/* Vertical rail */}
             <div className="absolute left-[24px] top-3 bottom-3 w-px bg-border" />
@@ -54,8 +72,8 @@ export function ExecutionTimeline({ jobId }: { jobId: string }) {
             </div>
             <div ref={bottomRef} />
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -267,6 +267,7 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             headline=event.payload.get("headline", ""),
             headline_past=event.payload.get("headline_past", event.payload.get("headline", "")),
             timestamp=event.timestamp,
+            replaces_count=event.payload.get("replaces_count", 0),
         ).model_dump_json(by_alias=True)
 
     if sse_type == "model_downgraded":

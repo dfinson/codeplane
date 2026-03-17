@@ -156,7 +156,7 @@ function SortHeader({
 // Main component — single flat view, no tabs
 // ---------------------------------------------------------------------------
 
-export function InsightsPanel({ jobId }: { jobId: string }) {
+export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
   const [collapsed, setCollapsed] = useState(true);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const [llmCollapsed, setLlmCollapsed] = useState(false);
@@ -165,19 +165,16 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
   const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
 
+  // Fetch telemetry once on mount and again when the job stops running
   useEffect(() => {
     let cancelled = false;
-    const load = () => {
-      fetchJobTelemetry(jobId)
-        .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
-        .catch(() => { if (!cancelled) { setData({ available: false }); setLoading(false); } });
-    };
-    load();
-    const interval = setInterval(load, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [jobId]);
+    fetchJobTelemetry(jobId)
+      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setData({ available: false }); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [jobId, isRunning]);
 
-  // Load agent_summary artifacts and their JSON content
+  // Load agent_summary artifacts once on mount and when job stops
   useEffect(() => {
     let cancelled = false;
     const loadCheckpoints = async () => {
@@ -207,9 +204,8 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
       }
     };
     loadCheckpoints();
-    const interval = setInterval(loadCheckpoints, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [jobId]);
+    return () => { cancelled = true; };
+  }, [jobId, isRunning]);
 
   const headerStats = data?.available
     ? `${formatTokens(data.totalTokens ?? 0)} tokens · ${data.toolCallCount ?? 0} tools · ${formatDuration(data.durationMs ?? 0)}`
@@ -340,16 +336,12 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
                 </div>
               ) : null}
 
-              {/* Session summary */}
+              {/* Session summary — only shown when summaries exist */}
+              {checkpoints.length > 0 && (
               <div>
                 <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
                   <BookOpen size={12} className="text-blue-400" /> Summary
                 </h4>
-                {checkpoints.length === 0 ? (
-                  <p className="text-xs text-muted-foreground/60 italic py-1">
-                    Session summaries are generated after each session ends. Nothing stored yet.
-                  </p>
-                ) : (
                   <div className="relative pl-5">
                     {/* Vertical rail */}
                     <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
@@ -412,8 +404,8 @@ export function InsightsPanel({ jobId }: { jobId: string }) {
                       })}
                     </div>
                   </div>
-                )}
               </div>
+              )}
 
               {/* Tool breakdown table */}
               {toolAggs.length > 0 && (

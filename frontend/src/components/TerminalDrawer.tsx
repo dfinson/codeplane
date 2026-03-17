@@ -10,6 +10,7 @@ import { useCallback, useRef, useState } from "react";
 import { Plus, X, Minus, Maximize2, TerminalSquare } from "lucide-react";
 import { TerminalPanel } from "./TerminalPanel";
 import { useStore } from "../store";
+import { useShallow } from "zustand/react/shallow";
 
 const MIN_HEIGHT = 150;
 const DEFAULT_HEIGHT = 300;
@@ -26,7 +27,7 @@ export function TerminalDrawer() {
     removeTerminalSession,
     setTerminalDrawerHeight,
     createTerminalSession,
-  } = useStore((s) => ({
+  } = useStore(useShallow((s) => ({
     terminalDrawerOpen: s.terminalDrawerOpen,
     terminalSessions: s.terminalSessions,
     activeTerminalTab: s.activeTerminalTab,
@@ -36,7 +37,7 @@ export function TerminalDrawer() {
     removeTerminalSession: s.removeTerminalSession,
     setTerminalDrawerHeight: s.setTerminalDrawerHeight,
     createTerminalSession: s.createTerminalSession,
-  }));
+  })));
 
   const dragging = useRef(false);
   const [maximized, setMaximized] = useState(false);

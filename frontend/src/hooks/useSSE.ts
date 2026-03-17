@@ -110,11 +110,11 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         attemptRef.current += 1;
 
         if (attemptRef.current > MAX_ATTEMPTS) {
-          setConnectionStatus("disconnected");
+          setTimeout(() => setConnectionStatus("disconnected"), 0);
           return;
         }
 
-        setConnectionStatus("reconnecting");
+        setTimeout(() => setConnectionStatus("reconnecting"), 0);
 
         if (reconnectTimer) clearTimeout(reconnectTimer);
         const delay = Math.min(
