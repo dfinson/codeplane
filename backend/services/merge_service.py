@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.config import CompletionConfig
+    from backend.services.diff_service import DiffService
     from backend.services.event_bus import EventBus
     from backend.services.git_service import GitService
     from backend.services.platform_adapter import PlatformRegistry
@@ -61,12 +62,14 @@ class MergeService:
         session_factory: async_sessionmaker[AsyncSession],
         config: CompletionConfig,
         platform_registry: PlatformRegistry | None = None,
+        diff_service: DiffService | None = None,
     ) -> None:
         self._git = git_service
         self._event_bus = event_bus
         self._session_factory = session_factory
         self._config = config
         self._platform_registry = platform_registry
+        self._diff_service = diff_service
         # Per-repo lock to prevent concurrent merges from corrupting the
         # main worktree state (checkout / merge / stash interleaving).
         self._repo_locks: dict[str, asyncio.Lock] = {}
@@ -457,6 +460,11 @@ class MergeService:
 
         action: "merge" | "smart_merge" | "create_pr" | "discard"
         """
+        # Capture a final diff snapshot before any resolution that removes the
+        # worktree.  This guarantees that archived jobs always have a viewable
+        # diff even after the branch and worktree have been deleted.
+        await self._preserve_diff_snapshot(job_id, worktree_path, base_ref)
+
         if action == "discard":
             return await self._discard(job_id, repo_path, worktree_path, branch)
 
@@ -479,6 +487,28 @@ class MergeService:
             return await self._operator_smart_merge(job_id, repo_path, worktree_path, branch, base_ref)
 
         return MergeResult(status="error", error=f"Unknown action: {action}")
+
+    async def _preserve_diff_snapshot(
+        self,
+        job_id: str,
+        worktree_path: str | None,
+        base_ref: str,
+    ) -> None:
+        """Publish a final diff_updated event before the worktree is removed.
+
+        This ensures that archived jobs retain a viewable diff snapshot even
+        after the branch has been deleted and the worktree cleaned up.
+        The event is published regardless of whether an earlier snapshot
+        already exists — the diff endpoint reads the *last* event, so this
+        becomes the canonical preserved diff for the job.
+        """
+        if self._diff_service is None or not worktree_path or not base_ref:
+            return
+        try:
+            await self._diff_service.finalize(job_id, worktree_path, base_ref)
+            log.info("diff_snapshot_preserved", job_id=job_id, worktree=worktree_path)
+        except Exception:
+            log.warning("diff_snapshot_failed", job_id=job_id, exc_info=True)
 
     async def _operator_merge(
         self,

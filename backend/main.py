@@ -161,6 +161,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config.completion,
         platform_registry=platform_registry,
+        diff_service=diff_service,
     )
 
     # --- Utility session pool (warm cheap model for naming / summaries) ---
