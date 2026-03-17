@@ -87,7 +87,7 @@ async def update_settings(
     if "max_concurrent_jobs" in updates:
         config.runtime.max_concurrent_jobs = updates["max_concurrent_jobs"]
     if "permission_mode" in updates:
-        config.runtime.permission_mode = updates["permission_mode"]
+        config.runtime.permission_mode = str(updates["permission_mode"])
     if "auto_push" in updates:
         config.completion.auto_push = updates["auto_push"]
     if "cleanup_worktree" in updates:

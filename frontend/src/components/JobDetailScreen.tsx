@@ -34,7 +34,7 @@ export function JobDetailScreen() {
   const [tab, setTab] = useState("live");
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
-  const hasWorktree = !!job?.worktreePath;
+  const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
 
   // Job-scoped terminal session
   const [jobTerminalSessionId, setJobTerminalSessionId] = useState<string | null>(null);

@@ -193,7 +193,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     existing["runtime"] = {
         "max_concurrent_jobs": config.runtime.max_concurrent_jobs,
         "worktrees_dirname": config.runtime.worktrees_dirname,
-        "permission_mode": config.runtime.permission_mode,
+        "permission_mode": str(config.runtime.permission_mode),
         "utility_model": config.runtime.utility_model,
         "default_sdk": config.runtime.default_sdk,
     }

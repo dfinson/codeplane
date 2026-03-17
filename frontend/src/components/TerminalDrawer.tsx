@@ -6,7 +6,7 @@
  * collapse/expand.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, X, Minus, Maximize2, TerminalSquare } from "lucide-react";
 import { TerminalPanel } from "./TerminalPanel";
 import { useStore } from "../store";
@@ -43,6 +43,13 @@ export function TerminalDrawer() {
   const [maximized, setMaximized] = useState(false);
 
   const sessionList = Object.values(terminalSessions).filter((s) => !s.jobId);
+
+  // Auto-create a session when the drawer opens with no global sessions
+  useEffect(() => {
+    if (terminalDrawerOpen && sessionList.length === 0) {
+      createTerminalSession();
+    }
+  }, [terminalDrawerOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle drag-to-resize
   const onDragStart = useCallback(
