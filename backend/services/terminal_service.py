@@ -11,9 +11,11 @@ cleaned up when the associated job's worktree is removed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
 import os
 import pty
+import re
 import secrets
 import shutil
 import signal
@@ -32,7 +34,6 @@ log = structlog.get_logger()
 
 # ANSI sequences stripped from scrollback before replay to avoid garbled output
 # on reconnect (borrowed from TermBeam's sanitizeForReplay).
-import re
 
 # OSC color query/response sequences cause echo loops on replay
 _OSC_COLOR_RE = re.compile(r"\x1b\](?:4;\d+|10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -93,7 +94,13 @@ class PtySession:
 class TerminalService:
     """Manages PTY sessions and their lifecycle."""
 
-    def __init__(self, *, max_sessions: int = 5, default_shell: str | None = None, scrollback_size_kb: int = 500) -> None:
+    def __init__(
+        self,
+        *,
+        max_sessions: int = 5,
+        default_shell: str | None = None,
+        scrollback_size_kb: int = 500,
+    ) -> None:
         self._sessions: dict[str, PtySession] = {}
         self._max_sessions = max_sessions
         self._default_shell = default_shell or _detect_shell()
@@ -199,7 +206,7 @@ class TerminalService:
     def get_session(self, session_id: str) -> PtySession | None:
         return self._sessions.get(session_id)
 
-    def list_sessions(self) -> list[dict[str, object]]:
+    def list_sessions(self) -> list[dict[str, int | str | None]]:
         """Return summary info for all active sessions."""
         result = []
         for s in self._sessions.values():
@@ -318,22 +325,16 @@ class TerminalService:
 
             msg = json.dumps({"type": "exit", "code": exit_code})
             for ws in list(session.clients):
-                try:
+                with contextlib.suppress(Exception):
                     await ws.send_text(msg)
-                except Exception:
-                    pass
 
         # Clean up
         self._sessions.pop(session_id, None)
         if self._loop:
-            try:
+            with contextlib.suppress(Exception):
                 self._loop.remove_reader(session.master_fd)
-            except Exception:
-                pass
-        try:
+        with contextlib.suppress(OSError):
             os.close(session.master_fd)
-        except OSError:
-            pass
 
     async def _cleanup_session(self, session: PtySession) -> None:
         """Kill the process and close FDs for a session."""
@@ -343,10 +344,8 @@ class TerminalService:
 
         # Remove reader
         if self._loop:
-            try:
+            with contextlib.suppress(Exception):
                 self._loop.remove_reader(session.master_fd)
-            except Exception:
-                pass
 
         # Kill the process
         try:
@@ -356,20 +355,16 @@ class TerminalService:
             pass
 
         # Close FD
-        try:
+        with contextlib.suppress(OSError):
             os.close(session.master_fd)
-        except OSError:
-            pass
 
         # Notify clients
         import json
 
         msg = json.dumps({"type": "exit", "code": -1})
         for ws in list(session.clients):
-            try:
+            with contextlib.suppress(Exception):
                 await ws.send_text(msg)
-            except Exception:
-                pass
         session.clients.clear()
 
         log.info("terminal_session_cleaned_up", session_id=session.id, pid=session.process.pid)

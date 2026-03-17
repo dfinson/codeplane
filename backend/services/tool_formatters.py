@@ -6,6 +6,7 @@ arguments and (optionally) its result, avoiding LLM calls entirely.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -362,9 +363,7 @@ def format_tool_display(
     if tool_result is not None:
         hint_fn = _RESULT_HINTS.get(lookup_name)
         if hint_fn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 label = f"{label} {hint_fn(tool_result, tool_success)}"
-            except Exception:
-                pass
 
     return label

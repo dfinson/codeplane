@@ -137,9 +137,7 @@ class TestNamingServiceConflictResolution:
         retry = json.dumps({"branch_name": "fix/login-bug-v2"})
         backend = FakeBackend([initial, retry])
         svc = NamingService(backend)
-        _, branch, _ = await svc.generate(
-            "Fix login", existing_branches={"fix/fix-login-bug"}
-        )
+        _, branch, _ = await svc.generate("Fix login", existing_branches={"fix/fix-login-bug"})
         assert branch == "fix/login-bug-v2"
 
     @pytest.mark.asyncio
@@ -148,9 +146,7 @@ class TestNamingServiceConflictResolution:
         retry = json.dumps({"worktree_name": "fix-login-v2"})
         backend = FakeBackend([initial, retry])
         svc = NamingService(backend)
-        _, _, worktree = await svc.generate(
-            "Fix login", existing_worktrees={"fix-login-bug"}
-        )
+        _, _, worktree = await svc.generate("Fix login", existing_worktrees={"fix-login-bug"})
         assert worktree == "fix-login-v2"
 
     @pytest.mark.asyncio
@@ -160,8 +156,5 @@ class TestNamingServiceConflictResolution:
         retry = json.dumps({"branch_name": "fix/login-bug-v2"})
         backend = FakeBackend([initial, retry])
         svc = NamingService(backend)
-        title, _, _ = await svc.generate(
-            "Fix login", existing_branches={"fix/fix-login-bug"}
-        )
+        title, _, _ = await svc.generate("Fix login", existing_branches={"fix/fix-login-bug"})
         assert title == "Fix login bug"
-

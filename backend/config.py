@@ -215,7 +215,12 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
         "cleanup_worktree": config.completion.cleanup_worktree,
         "delete_branch_after_merge": config.completion.delete_branch_after_merge,
     }
-    if config.terminal.enabled is not True or config.terminal.max_sessions != 5 or config.terminal.default_shell is not None or config.terminal.scrollback_size_kb != 500:
+    if (
+        config.terminal.enabled is not True
+        or config.terminal.max_sessions != 5
+        or config.terminal.default_shell is not None
+        or config.terminal.scrollback_size_kb != 500
+    ):
         existing["terminal"] = {
             "enabled": config.terminal.enabled,
             "max_sessions": config.terminal.max_sessions,

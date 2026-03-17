@@ -548,7 +548,8 @@ class CopilotAdapter(AgentAdapterInterface):
                             "tool_intent": buffered.get("tool_intent"),
                             "tool_title": buffered.get("tool_title"),
                             "tool_display": format_tool_display(
-                                tool_name, tool_args_str,
+                                tool_name,
+                                tool_args_str,
                                 tool_result=result_text or None,
                                 tool_success=success,
                             ),

@@ -9,11 +9,13 @@ Implements TermBeam-style auth:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import secrets
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request  # noqa: TC002
@@ -29,6 +31,12 @@ _session_tokens: set[str] = set()
 
 # The password hash (set during startup)
 _password_hash: str | None = None
+
+# Load logo as base64 for the login page
+_logo_path = Path(__file__).resolve().parent.parent.parent / "docs" / "images" / "logo.png"
+_logo_b64 = ""
+if _logo_path.is_file():
+    _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
 
 
 def set_password(password: str) -> None:
@@ -87,7 +95,7 @@ def _is_localhost(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
-_LOGIN_HTML = """\
+_LOGIN_HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -106,6 +114,7 @@ _LOGIN_HTML = """\
     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
     padding: 32px; width: 360px; max-width: 90vw;
   }
+  .logo { display: block; margin: 0 auto 12px; width: 80px; height: 80px; }
   h1 { font-size: 20px; font-weight: 600; margin-bottom: 8px; text-align: center; }
   .subtitle { color: #8b949e; font-size: 13px; text-align: center; margin-bottom: 24px; }
   label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
@@ -127,6 +136,7 @@ _LOGIN_HTML = """\
 </head>
 <body>
 <div class="login-card">
+  <img class="logo" src="data:image/png;base64,{logo_b64}" alt="CodePlane" />
   <h1>CodePlane</h1>
   <p class="subtitle">Enter the password printed in your terminal</p>
   <form id="login-form">
@@ -167,6 +177,8 @@ _LOGIN_HTML = """\
 </body>
 </html>
 """
+
+_LOGIN_HTML = _LOGIN_HTML_TEMPLATE.replace("{logo_b64}", _logo_b64)
 
 
 async def handle_login(request: Request) -> Response:

@@ -20,7 +20,6 @@ from backend.models.api_schemas import (
     ResolveJobRequest,
     ResolveJobResponse,
     ResumeJobRequest,
-    ToolGroupSummaryPayload,
     TranscriptPayload,
 )
 from backend.models.events import DomainEventKind
@@ -483,16 +482,13 @@ async def resolve_job(
 
         # Retrieve conflict files from the latest merge_conflict event
         event_repo = EventRepository(session)
-        conflict_events = await event_repo.list_by_job(
-            job_id, kinds=[DomainEventKind.merge_conflict]
-        )
+        conflict_events = await event_repo.list_by_job(job_id, kinds=[DomainEventKind.merge_conflict])
         conflict_files: list[str] = []
         if conflict_events:
             conflict_files = conflict_events[-1].payload.get("conflict_files", [])
 
         files_detail = (
-            f"\nThe following files have conflicts:\n"
-            + "\n".join(f"  - {f}" for f in conflict_files)
+            "\nThe following files have conflicts:\n" + "\n".join(f"  - {f}" for f in conflict_files)
             if conflict_files
             else ""
         )
@@ -547,7 +543,7 @@ async def resolve_job(
         import uuid
         from datetime import UTC, datetime
 
-        from backend.models.events import DomainEvent, DomainEventKind
+        from backend.models.events import DomainEvent
 
         payload: dict[str, Any] = {"resolution": resolution}
         if result.pr_url:
@@ -594,7 +590,7 @@ async def archive_job(
         import uuid
         from datetime import UTC, datetime
 
-        from backend.models.events import DomainEvent, DomainEventKind
+        from backend.models.events import DomainEvent
 
         await event_bus.publish(
             DomainEvent(

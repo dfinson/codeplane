@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -123,15 +123,8 @@ async def delete_session(session_id: str) -> None:
 @router.post("/ask", response_model=AskResponse)
 async def ask_ai(req: AskRequest) -> AskResponse:
     """Translate natural language to a shell command using the utility model."""
-    from fastapi import Request
-    from starlette.requests import Request as StarletteRequest
-
     # Access utility session from app state (set in main.py)
-    # This is a placeholder — actual wiring happens via dependency injection
     try:
-        from backend.services.utility_session import UtilitySessionService
-
-        # We'll get utility_session from the global ref set during init
         if _ask_utility_session is None:
             return AskResponse(command="", explanation="AI assistant not available")
 
@@ -141,7 +134,7 @@ Respond with ONLY valid JSON: {{"command": "...", "explanation": "..."}}
 The explanation should be one short sentence describing what the command does.
 
 Terminal context (recent output):
-{req.context or '(none)'}
+{req.context or "(none)"}
 
 User request: {req.prompt}"""
 
@@ -156,7 +149,7 @@ User request: {req.prompt}"""
         return AskResponse(command="", explanation=f"Error: {exc}")
 
 
-_ask_utility_session = None
+_ask_utility_session: Any = None
 
 
 def set_utility_session(session: object) -> None:

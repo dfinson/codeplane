@@ -190,9 +190,7 @@ class NamingService:
             log.info("naming_generated", title=title, branch=branch, worktree=worktree)
             return title, branch, worktree
 
-        raise NamingError(
-            f"Failed to generate valid names after {self.MAX_RETRIES} attempts"
-        ) from last_error
+        raise NamingError(f"Failed to generate valid names after {self.MAX_RETRIES} attempts") from last_error
 
     async def _attempt_generate(self, prompt: str) -> tuple[str, str, str]:
         """Single LLM call to produce title, branch, and worktree. Raises on any invalid output."""
@@ -240,4 +238,3 @@ class NamingService:
         except Exception:
             log.warning("naming_regenerate_failed", field=field, exc_info=True)
             return None
-

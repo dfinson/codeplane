@@ -766,9 +766,7 @@ class RuntimeService:
 
                 last_headline = self._headline_last_text.get(job_id, "")
                 previous_context = (
-                    f'The current timeline entry (already shown) is: "{last_headline}"\n\n'
-                    if last_headline
-                    else ""
+                    f'The current timeline entry (already shown) is: "{last_headline}"\n\n' if last_headline else ""
                 )
 
                 prompt = (
@@ -1198,7 +1196,9 @@ class RuntimeService:
                             for i, t in enumerate(_turns, 1):
                                 role = t.get("role", "")
                                 if role == "tool_call":
-                                    display = t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
+                                    display = (
+                                        t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
+                                    )
                                     ok = "\u2713" if t.get("tool_success", True) else "\u2717"
                                     _parts.append(f"[{i}] TOOL {ok}: {display}")
                                 else:

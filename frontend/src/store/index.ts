@@ -557,6 +557,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   removeTerminalSession: (id) =>
     set((s) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { [id]: _removed, ...rest } = s.terminalSessions;
       // Delete the session on the backend (fire-and-forget)
       fetch(`/api/terminal/sessions/${id}`, { method: "DELETE" }).catch(() => {});
