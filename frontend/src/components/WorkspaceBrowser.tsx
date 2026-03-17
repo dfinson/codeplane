@@ -1,16 +1,13 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from "react";
-import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown, ArrowLeft, GitBranch, FolderTree } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { fetchWorkspaceFiles, fetchWorkspaceFile } from "../api/client";
-import { useStore, selectJobDiffs } from "../store";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
-
-const DiffViewer = lazy(() => import("./DiffViewer"));
 
 interface TreeEntry {
   path: string;
@@ -100,12 +97,9 @@ function isMarkdown(path: string): boolean {
 
 interface Props {
   jobId: string;
-  jobState?: string;
-  resolution?: string | null;
-  archivedAt?: string | null;
 }
 
-export default function WorkspaceBrowser({ jobId, jobState, resolution, archivedAt }: Props) {
+export default function WorkspaceBrowser({ jobId }: Props) {
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string | null>(null);
@@ -113,9 +107,6 @@ export default function WorkspaceBrowser({ jobId, jobState, resolution, archived
   const [fileLoading, setFileLoading] = useState(false);
   const isMobile = useIsMobile();
   const [mdMode, setMdMode] = useState<"preview" | "raw">("preview");
-  const [mode, setMode] = useState<"files" | "changes">("files");
-  const diffs = useStore(selectJobDiffs(jobId));
-  const hasChanges = diffs.length > 0;
 
   useEffect(() => {
     fetchWorkspaceFiles(jobId)
@@ -138,42 +129,10 @@ export default function WorkspaceBrowser({ jobId, jobState, resolution, archived
     }
   }, [jobId]);
 
-  if (loading && mode === "files") return <div className="flex justify-center py-10"><Spinner /></div>;
+  if (loading) return <div className="flex justify-center py-10"><Spinner /></div>;
 
   const showMdToggle = selected != null && isMarkdown(selected) && fileContent != null && !fileLoading;
   const mobileShowFile = isMobile && selected != null;
-
-  const modeToggle = (
-    <div className="flex items-center gap-1 p-1 rounded-lg bg-muted/50 border border-border">
-      <button
-        type="button"
-        onClick={() => setMode("files")}
-        className={cn(
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-          mode === "files" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <FolderTree size={13} />
-        Files
-      </button>
-      <button
-        type="button"
-        onClick={() => setMode("changes")}
-        className={cn(
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
-          mode === "changes" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <GitBranch size={13} />
-        Changes
-        {hasChanges && (
-          <span className="ml-0.5 px-1.5 py-0.5 text-[10px] rounded-full bg-primary/15 text-primary font-semibold">
-            {diffs.length}
-          </span>
-        )}
-      </button>
-    </div>
-  );
 
   const treePanel = (
     <div className={cn(
@@ -264,41 +223,18 @@ export default function WorkspaceBrowser({ jobId, jobState, resolution, archived
     </div>
   );
 
-  if (mode === "changes") {
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          {modeToggle}
-        </div>
-        <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
-          <DiffViewer jobId={jobId} jobState={jobState} resolution={resolution} archivedAt={archivedAt} />
-        </Suspense>
-      </div>
-    );
-  }
-
   if (isMobile) {
     return (
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          {modeToggle}
-        </div>
-        <div className="flex flex-col h-[60vh] min-h-[300px]">
-          {mobileShowFile ? filePanel : treePanel}
-        </div>
+      <div className="flex flex-col h-[60vh] min-h-[300px]">
+        {mobileShowFile ? filePanel : treePanel}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        {modeToggle}
-      </div>
-      <div className="flex flex-row gap-3 h-[60vh] min-h-[300px] max-h-[600px]">
-        {treePanel}
-        {filePanel}
-      </div>
+    <div className="flex flex-row gap-3 h-[60vh] min-h-[300px] max-h-[600px]">
+      {treePanel}
+      {filePanel}
     </div>
   );
 }

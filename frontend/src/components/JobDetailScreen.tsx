@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive } from "lucide-react";
+import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
@@ -15,6 +15,7 @@ import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
+const DiffViewer = lazy(() => import("./DiffViewer"));
 const ArtifactViewer = lazy(() => import("./ArtifactViewer"));
 
 export function JobDetailScreen() {
@@ -406,7 +407,8 @@ export function JobDetailScreen() {
       <Tabs value={tab} onValueChange={setTab} className="mb-4">
         <TabsList className="overflow-x-auto">
           <TabsTrigger value="live">Live</TabsTrigger>
-          <TabsTrigger value="workspace">Workspace</TabsTrigger>
+          <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
+          <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
           {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
         </TabsList>
       </Tabs>
@@ -420,9 +422,15 @@ export function JobDetailScreen() {
         </div>
       )}
 
-      {tab === "workspace" && (
+      {tab === "files" && (
         <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
-          <WorkspaceBrowser jobId={jobId} jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} />
+          <WorkspaceBrowser jobId={jobId} />
+        </Suspense>
+      )}
+
+      {tab === "diff" && (
+        <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
+          <DiffViewer jobId={jobId} jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} />
         </Suspense>
       )}
 
