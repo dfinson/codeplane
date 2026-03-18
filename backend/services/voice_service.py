@@ -24,9 +24,9 @@ class VoiceService:
 
     def _ensure_model(self) -> WhisperModel:
         if self._model is None:
-            logger.info("voice_model_loading", model=self._model_name)
+            logger.debug("voice_model_loading", model=self._model_name)
             self._model = WhisperModel(self._model_name, device="cpu", compute_type="int8")
-            logger.info("voice_model_loaded", model=self._model_name)
+            logger.debug("voice_model_loaded", model=self._model_name)
         return self._model
 
     def transcribe(self, audio_bytes: bytes) -> str:

@@ -96,7 +96,7 @@ class UtilitySessionService:
             try:
                 await ws.connect()
                 self._sessions.append(ws)
-                log.info("utility_session_ready", index=i, model=self._model)
+                log.debug("utility_session_ready", index=i, model=self._model)
             except Exception:
                 log.warning("utility_session_start_failed", index=i, exc_info=True)
         self._started = True
@@ -153,7 +153,7 @@ class UtilitySessionService:
             await ws.close()
         self._sessions.clear()
         self._started = False
-        log.info("utility_session_pool_shutdown")
+        log.debug("utility_session_pool_shutdown")
 
     # ------------------------------------------------------------------
     # Job-aware proactive scaling
@@ -180,7 +180,7 @@ class UtilitySessionService:
                 try:
                     await ws.connect()
                     self._sessions.append(ws)
-                    log.info(
+                    log.debug(
                         "utility_pool_scaled_up",
                         new_size=len(self._sessions),
                         target=target,
@@ -206,7 +206,7 @@ class UtilitySessionService:
                     try:
                         await ws.connect()
                         self._sessions.append(ws)
-                        log.info(
+                        log.debug(
                             "utility_pool_scaled_up",
                             new_size=len(self._sessions),
                             pending=self._pending,
@@ -245,7 +245,7 @@ class UtilitySessionService:
                     survivors.append(ws)
             if to_close:
                 self._sessions = survivors
-                log.info("utility_pool_scaled_down", closed=len(to_close), new_size=len(self._sessions))
+                log.debug("utility_pool_scaled_down", closed=len(to_close), new_size=len(self._sessions))
         for ws in to_close:
             await ws.close()
 

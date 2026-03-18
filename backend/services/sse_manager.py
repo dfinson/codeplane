@@ -326,14 +326,14 @@ class SSEManager:
     def register(self, conn: SSEConnection) -> None:
         """Register a new SSE connection."""
         self._connections.append(conn)
-        log.info("sse_connection_opened", job_id=conn.job_id, total=len(self._connections))
+        log.debug("sse_connection_opened", job_id=conn.job_id, total=len(self._connections))
 
     def unregister(self, conn: SSEConnection) -> None:
         """Remove a connection."""
         conn.close()
         with contextlib.suppress(ValueError):
             self._connections.remove(conn)
-        log.info("sse_connection_closed", job_id=conn.job_id, total=len(self._connections))
+        log.debug("sse_connection_closed", job_id=conn.job_id, total=len(self._connections))
 
     def set_active_job_count(self, count: int) -> None:
         """Update the active job count for selective streaming decisions."""
