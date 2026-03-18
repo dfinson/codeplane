@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings } from "../api/client";
+import { createJob, fetchRepos, fetchModels, fetchSDKs } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
@@ -10,23 +10,19 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
-import { Textarea } from "./ui/textarea";
 import { Combobox } from "./ui/combobox";
 
-const FALLBACK_VERIFY_PROMPT =
-  "Before this task is complete: identify and run this project's test suite, " +
-  "linter, and type checker. If anything fails, fix it and re-run until " +
-  "everything passes. Assume that any failure is caused by your changes — " +
-  "do not dismiss failures as pre-existing or flaky. Also check that you " +
-  "haven't made unrelated changes outside the scope of the original task; " +
-  "revert any that you find. Report what you ran and the results.";
-
-const FALLBACK_SELF_REVIEW_PROMPT =
-  "Review the changes you just made. Look at the full diff. Check for: " +
-  "missed edge cases, incomplete implementations, leftover debug code, " +
-  "broken imports, dead code, backwards-compatibility shims or fallback " +
-  "paths that may no longer be needed, and inconsistencies with the " +
-  "surrounding codebase. If you find issues, fix them.";
+function slugifyPrompt(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .split(/\s+/)
+    .slice(0, 6)
+    .join("-")
+    .replace(/-+/g, "-")
+    .slice(0, 50);
+}
 
 export function JobCreationScreen() {
   const navigate = useNavigate();
@@ -35,6 +31,7 @@ export function JobCreationScreen() {
   const [prompt, setPrompt] = useState("");
   const [baseRef, setBaseRef] = useState("");
   const [branch, setBranch] = useState("");
+  const [branchEdited, setBranchEdited] = useState(false);
   const [model, setModel] = useState<string | null>(null);
   const [models, setModels] = useState<{ value: string; label: string }[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -46,11 +43,7 @@ export function JobCreationScreen() {
   const [defaultSdk, setDefaultSdk] = useState<string>("copilot");
   const [verify, setVerify] = useState(false);
   const [selfReview, setSelfReview] = useState(false);
-  const [maxTurns, setMaxTurns] = useState<string>("");
-  const [verifyPrompt, setVerifyPrompt] = useState("");
-  const [selfReviewPrompt, setSelfReviewPrompt] = useState("");
-  const [defaultVerifyPrompt, setDefaultVerifyPrompt] = useState(FALLBACK_VERIFY_PROMPT);
-  const [defaultSelfReviewPrompt, setDefaultSelfReviewPrompt] = useState(FALLBACK_SELF_REVIEW_PROMPT);
+  const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchRepos()
@@ -79,13 +72,18 @@ export function JobCreationScreen() {
         setSdk(r.default);
       })
       .catch(() => {});
-    fetchSettings()
-      .then((s) => {
-        if (s.verifyPrompt) setDefaultVerifyPrompt(s.verifyPrompt);
-        if (s.selfReviewPrompt) setDefaultSelfReviewPrompt(s.selfReviewPrompt);
-      })
-      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (branchEdited) return;
+    if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
+    branchDebounceRef.current = setTimeout(() => {
+      setBranch(prompt.trim() ? slugifyPrompt(prompt) : "");
+    }, 1500);
+    return () => {
+      if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
+    };
+  }, [prompt, branchEdited]);
 
   const handleSubmit = useCallback(async () => {
     if (!repo || !prompt.trim()) return;
@@ -101,9 +99,6 @@ export function JobCreationScreen() {
         sdk: sdk !== defaultSdk ? sdk : undefined,
         verify: verify ?? undefined,
         self_review: selfReview ?? undefined,
-        max_turns: maxTurns ? parseInt(maxTurns, 10) || undefined : undefined,
-        verify_prompt: verifyPrompt || undefined,
-        self_review_prompt: selfReviewPrompt || undefined,
       });
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
@@ -112,7 +107,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, sdk, defaultSdk, verify, selfReview, maxTurns, verifyPrompt, selfReviewPrompt]);
+  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, sdk, defaultSdk, verify, selfReview]);
 
   return (
     <div className="max-w-xl mx-auto">
@@ -182,6 +177,17 @@ export function JobCreationScreen() {
             </div>
           </div>
 
+          {models.length > 0 && (
+            <Combobox
+              label="Model"
+              placeholder="Default (auto)"
+              items={models}
+              value={model}
+              onChange={setModel}
+              clearable
+            />
+          )}
+
           <hr className="border-border" />
 
           <button
@@ -206,16 +212,6 @@ export function JobCreationScreen() {
                   onChange={(v) => setSdk(v ?? defaultSdk)}
                 />
               )}
-              {models.length > 0 && (
-                <Combobox
-                  label="Model"
-                  placeholder="Default (auto)"
-                  items={models}
-                  value={model}
-                  onChange={setModel}
-                  clearable
-                />
-              )}
               <div className="flex flex-col gap-1.5">
                 <Label>Base Reference</Label>
                 <Input
@@ -229,7 +225,10 @@ export function JobCreationScreen() {
                 <Input
                   placeholder="Auto-generated if empty"
                   value={branch}
-                  onChange={(e) => setBranch(e.currentTarget.value)}
+                  onChange={(e) => {
+                    setBranch(e.currentTarget.value);
+                    setBranchEdited(e.currentTarget.value !== "");
+                  }}
                 />
               </div>
 
@@ -240,10 +239,7 @@ export function JobCreationScreen() {
                 <span className="text-sm">Verify (run tests/lint after completion)</span>
                 <Switch
                   checked={verify}
-                  onCheckedChange={(checked) => {
-                    setVerify(checked);
-                    if (checked && !verifyPrompt) setVerifyPrompt(defaultVerifyPrompt);
-                  }}
+                  onCheckedChange={setVerify}
                 />
               </label>
 
@@ -251,51 +247,9 @@ export function JobCreationScreen() {
                 <span className="text-sm">Self-review (review diff for issues)</span>
                 <Switch
                   checked={selfReview}
-                  onCheckedChange={(checked) => {
-                    setSelfReview(checked);
-                    if (checked && !selfReviewPrompt) setSelfReviewPrompt(defaultSelfReviewPrompt);
-                  }}
+                  onCheckedChange={setSelfReview}
                 />
               </label>
-
-              {(verify || selfReview) && (
-                <div className="flex flex-col gap-1.5">
-                  <Label>Max Verify Turns</Label>
-                  <Input
-                    type="number"
-                    placeholder="Default (from settings)"
-                    value={maxTurns}
-                    onChange={(e) => setMaxTurns(e.target.value)}
-                    min={1}
-                    max={10}
-                    className="w-32"
-                  />
-                </div>
-              )}
-
-              {verify && (
-                <div className="flex flex-col gap-1.5">
-                  <Label>Verify Prompt</Label>
-                  <Textarea
-                    placeholder={defaultVerifyPrompt}
-                    value={verifyPrompt}
-                    onChange={(e) => setVerifyPrompt(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-              )}
-
-              {selfReview && (
-                <div className="flex flex-col gap-1.5">
-                  <Label>Self-Review Prompt</Label>
-                  <Textarea
-                    placeholder={defaultSelfReviewPrompt}
-                    value={selfReviewPrompt}
-                    onChange={(e) => setSelfReviewPrompt(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-              )}
             </div>
           )}
 
