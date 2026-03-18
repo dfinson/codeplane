@@ -4,6 +4,7 @@ import { GitBranch, AlertTriangle, XCircle, ArrowDownCircle, BookOpen, CheckCirc
 import { useStore, selectJobTimeline } from "../store";
 import type { JobSummary } from "../store";
 import { StateBadge } from "./StateBadge";
+import { SdkBadge } from "./SdkBadge";
 
 function elapsed(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime();
@@ -74,11 +75,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
             {job.branch ?? repoName}
           </span>
         </div>
-        {job.sdk && job.sdk !== "copilot" && (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shrink-0">
-            {job.sdk}
-          </span>
-        )}
+        <SdkBadge sdk={job.sdk} size="sm" />
       </div>
 
       {(job.state === "running" && timeline.length > 0) || job.progressHeadline ? (

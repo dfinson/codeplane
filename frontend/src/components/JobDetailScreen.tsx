@@ -7,6 +7,7 @@ import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
 import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
 import { StateBadge } from "./StateBadge";
+import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
 import { ExecutionTimeline } from "./ExecutionTimeline";
@@ -261,6 +262,7 @@ export function JobDetailScreen() {
             )}
             <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
             <StateBadge state={job.state} />
+            <SdkBadge sdk={job.sdk} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canCancel && (
@@ -387,7 +389,6 @@ export function JobDetailScreen() {
             ["Branch", job.branch ?? "—"],
             ["Base", job.baseRef],
             ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
-            ...(job.sdk && job.sdk !== "copilot" ? [["SDK", job.sdk]] : []),
             ["Created", new Date(job.createdAt).toLocaleString()],
             ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
           ].map(([label, value]) => (
