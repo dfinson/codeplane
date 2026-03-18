@@ -45,8 +45,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, (body as { detail?: string }).detail ?? res.statusText);
+    const body = await res.json().catch(() => null);
+    let detail: string;
+    if (body == null) {
+      detail = res.statusText || `HTTP ${res.status}`;
+    } else if (typeof body.detail === "string") {
+      detail = body.detail;
+    } else if (Array.isArray(body.detail)) {
+      // FastAPI 422 validation errors: [{loc, msg, type}, ...]
+      detail = body.detail
+        .map((e: { loc?: string[]; msg?: string }) =>
+          [e.loc?.slice(1).join("."), e.msg].filter(Boolean).join(": "),
+        )
+        .join("; ");
+    } else {
+      detail = res.statusText || `HTTP ${res.status}`;
+    }
+    throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -356,8 +371,11 @@ export async function transcribeAudio(audio: Blob): Promise<string> {
     body: form,
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, (body as { detail?: string }).detail ?? res.statusText);
+    const body = await res.json().catch(() => null);
+    const detail = body != null && typeof body.detail === "string"
+      ? body.detail
+      : res.statusText || `HTTP ${res.status}`;
+    throw new ApiError(res.status, detail);
   }
   const data = (await res.json()) as { text: string };
   return data.text;
