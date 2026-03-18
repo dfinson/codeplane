@@ -494,18 +494,147 @@ def up(host: str | None, port: int | None, dev: bool, tunnel: bool, password: st
 
     tunnel_origin: str | None = None
     tunnel_proc = None
+    tunnel_watchdog: _TunnelWatchdog | None = None
 
     if tunnel:
         tunnel_origin, tunnel_proc = _start_tunnel(port)
 
     app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
 
+    if tunnel and tunnel_origin and tunnel_proc:
+        tunnel_watchdog = _TunnelWatchdog(
+            tunnel_url=tunnel_origin,
+            tunnel_name=tunnel_origin.split("//")[1].rsplit(f"-{port}.", 1)[0],
+            port=port,
+            proc=tunnel_proc,
+        )
+        tunnel_watchdog.start()
+
     try:
         _print_startup_banner(host, port, dev, tunnel_origin, effective_password)
         uvicorn.run(app, host=host, port=port)
     finally:
+        if tunnel_watchdog is not None:
+            tunnel_watchdog.stop()
         if tunnel_proc is not None:
             tunnel_proc.terminate()
+        # Also terminate the watchdog's proc if it was swapped during a restart
+        if tunnel_watchdog is not None and tunnel_watchdog.proc is not tunnel_proc:
+            tunnel_watchdog.proc.terminate()
+
+
+# ---------------------------------------------------------------------------
+# Tunnel watchdog — restart devtunnel host when the relay drops
+# ---------------------------------------------------------------------------
+
+class _TunnelWatchdog:
+    """Background thread that pings the tunnel URL and restarts devtunnel host
+    when the relay connection goes stale.
+
+    The devtunnel host process sometimes loses its WebSocket connection to the
+    Azure relay but doesn't exit.  This watchdog detects the failure via HTTP
+    health checks and kills/restarts the process automatically.
+    """
+
+    _CHECK_INTERVAL = 10  # seconds between health checks
+    _FAIL_THRESHOLD = 2   # consecutive failures before restart
+    _HTTP_TIMEOUT = 5     # seconds per health check request
+
+    def __init__(self, *, tunnel_url: str, tunnel_name: str, port: int, proc: Any) -> None:
+        self.tunnel_url = tunnel_url
+        self.tunnel_name = tunnel_name
+        self.port = port
+        self.proc = proc
+        self._stop_event = __import__("threading").Event()
+        self._thread: __import__("threading").Thread | None = None
+
+    def start(self) -> None:
+        import threading
+
+        self._thread = threading.Thread(target=self._run, daemon=True, name="tunnel-watchdog")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def _health_ok(self) -> bool:
+        """Return True if the tunnel is forwarding traffic."""
+        import urllib.error
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(
+                f"{self.tunnel_url}/api/health",
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=self._HTTP_TIMEOUT) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    def _restart_host(self) -> None:
+        """Kill the current devtunnel host and start a fresh one."""
+        import subprocess
+
+        log.warning("tunnel_watchdog_restarting", tunnel=self.tunnel_name)
+
+        # Kill the old process
+        import contextlib
+
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self.proc.kill()
+
+        # Start a new host process
+        proc = subprocess.Popen(
+            ["devtunnel", "host", self.tunnel_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+        # Wait for readiness
+        if proc.stdout:
+            for line in proc.stdout:
+                if "Connect via" in line or "Hosting port" in line:
+                    break
+
+        self.proc = proc
+        log.info("tunnel_watchdog_restarted", tunnel=self.tunnel_name)
+
+    def _run(self) -> None:
+        # Give the tunnel a grace period to fully initialize
+        if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
+            return
+
+        consecutive_failures = 0
+
+        while not self._stop_event.is_set():
+            if self._health_ok():
+                if consecutive_failures > 0:
+                    log.info("tunnel_watchdog_recovered", failures=consecutive_failures)
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+                log.warning(
+                    "tunnel_watchdog_check_failed",
+                    consecutive=consecutive_failures,
+                    threshold=self._FAIL_THRESHOLD,
+                )
+                if consecutive_failures >= self._FAIL_THRESHOLD:
+                    self._restart_host()
+                    consecutive_failures = 0
+                    # Extra grace period after restart
+                    if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
+                        return
+
+            if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
+                return
 
 
 def _start_tunnel(port: int) -> tuple[str | None, Any]:
@@ -603,8 +732,7 @@ def _start_tunnel(port: int) -> tuple[str | None, Any]:
             text=True,
         )
 
-        # Construct the stable URL from the tunnel name — don't parse
-        # the host output which uses a random connection ID.
+        # Construct the stable URL from the tunnel name
         tunnel_url = f"https://{tunnel_name}-{port}.{tunnel_region}.devtunnels.ms"
 
         # Wait for the tunnel to actually be ready (check stdout for "Connect via")
