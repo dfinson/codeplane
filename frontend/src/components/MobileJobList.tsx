@@ -3,23 +3,29 @@ import { useStore, selectJobs, selectApprovals } from "../store";
 import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
 import { cn } from "../lib/utils";
+import { KANBAN_COLUMNS } from "../constants/kanban";
+import type { KanbanColumn } from "../constants/kanban";
 
-const TABS = ["Active", "Sign-off", "Attention"] as const;
+const TABS = [
+  KANBAN_COLUMNS.IN_PROGRESS,
+  KANBAN_COLUMNS.NEEDS_REVIEW,
+  KANBAN_COLUMNS.NEEDS_ATTENTION,
+] as const;
 
-function filterForTab(jobs: Record<string, JobSummary>, tab: string): JobSummary[] {
+function filterForTab(jobs: Record<string, JobSummary>, tab: KanbanColumn): JobSummary[] {
   return Object.values(jobs)
     .filter((j) => {
       switch (tab) {
-        case "Active":
+        case KANBAN_COLUMNS.IN_PROGRESS:
           return !j.archivedAt && (j.state === "queued" || j.state === "running");
-        case "Sign-off":
+        case KANBAN_COLUMNS.NEEDS_REVIEW:
           return (
             !j.archivedAt &&
             (j.state === "waiting_for_approval" ||
               j.state === "succeeded" ||
               j.state === "canceled")
           );
-        case "Attention":
+        case KANBAN_COLUMNS.NEEDS_ATTENTION:
           return !j.archivedAt && j.state === "failed";
         default:
           return false;
@@ -29,7 +35,7 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: string): JobSummary
 }
 
 export function MobileJobList() {
-  const [tab, setTab] = useState<string>("Active");
+  const [tab, setTab] = useState<KanbanColumn>(KANBAN_COLUMNS.IN_PROGRESS);
   const jobs = useStore(selectJobs);
   const approvals = useStore(selectApprovals);
   const pendingCount = Object.values(approvals).filter((a) => !a.resolvedAt).length;
@@ -40,7 +46,10 @@ export function MobileJobList() {
     <div className="sm:hidden">
       <div className="flex rounded-lg bg-muted p-1 mb-4 gap-0.5">
         {TABS.map((t) => {
-          const label = t === "Sign-off" && pendingCount > 0 ? `Sign-off (${pendingCount})` : t;
+          const label =
+            t === KANBAN_COLUMNS.NEEDS_REVIEW && pendingCount > 0
+              ? `${KANBAN_COLUMNS.NEEDS_REVIEW} (${pendingCount})`
+              : t;
           return (
             <button
               key={t}
