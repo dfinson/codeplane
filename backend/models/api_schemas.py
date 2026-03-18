@@ -144,6 +144,7 @@ class CreateJobRequest(BaseModel):
         sdk = values.get("sdk")
         if sdk is not None:
             from backend.services.agent_adapter import AgentSDK
+
             try:
                 AgentSDK(sdk)
             except ValueError:

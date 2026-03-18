@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -178,7 +178,7 @@ class ArtifactService:
     async def upsert_session_log(
         self,
         job_id: str,
-        session_data: dict,
+        session_data: dict[str, Any],
         *,
         slug: str = "",
     ) -> Artifact:
@@ -252,7 +252,7 @@ class ArtifactService:
             key=lambda a: a.created_at,
         )
 
-        sessions: list[dict] = []
+        sessions: list[dict[str, Any]] = []
         original_task = session_data.get("original_task", "")
         merged_files: set[str] = set()
 

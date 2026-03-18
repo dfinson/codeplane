@@ -434,8 +434,13 @@ def _build_frontend() -> bool:
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --tunnel)")
 @click.option("--skip-preflight", is_flag=True, help="Skip preflight checks")
 def up(
-    host: str | None, port: int | None, dev: bool, tunnel: bool,
-    password: str | None, no_password: bool, skip_preflight: bool,
+    host: str | None,
+    port: int | None,
+    dev: bool,
+    tunnel: bool,
+    password: str | None,
+    no_password: bool,
+    skip_preflight: bool,
 ) -> None:
     """Start the CodePlane server."""
     config = load_config()
@@ -557,8 +562,8 @@ class _TunnelWatchdog:
         self.tunnel_name = tunnel_name
         self.port = port
         self.proc = proc
-        self._stop_event = __import__("threading").Event()
-        self._thread: __import__("threading").Thread | None = None
+        self._stop_event: Any = __import__("threading").Event()
+        self._thread: Any = None
 
     def start(self) -> None:
         import threading
@@ -582,7 +587,7 @@ class _TunnelWatchdog:
                 method="GET",
             )
             with urllib.request.urlopen(req, timeout=self._HTTP_TIMEOUT) as resp:
-                return resp.status == 200
+                return bool(resp.status == 200)
         except Exception:
             return False
 

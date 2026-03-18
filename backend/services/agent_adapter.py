@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 class AgentSDK(StrEnum):
     """Supported agent SDK backends."""
+
     copilot = "copilot"
     claude = "claude"
 
@@ -44,8 +45,7 @@ def validate_sdk_model(sdk: str, model: str | None) -> None:
     if prefixes and not model.startswith(prefixes):
         allowed = ", ".join(f"{p}*" for p in prefixes)
         raise SDKModelMismatchError(
-            f"Model {model!r} is not compatible with the {sdk} SDK. "
-            f"Accepted model prefixes: {allowed}"
+            f"Model {model!r} is not compatible with the {sdk} SDK. Accepted model prefixes: {allowed}"
         )
 
 

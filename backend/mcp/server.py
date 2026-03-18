@@ -42,9 +42,9 @@ from backend.models.api_schemas import (
 )
 from backend.persistence.artifact_repo import ArtifactRepository
 from backend.persistence.job_repo import JobRepository
+from backend.services.agent_adapter import SDKModelMismatchError
 from backend.services.artifact_service import ArtifactService
 from backend.services.git_service import GitError, GitService
-from backend.services.agent_adapter import SDKModelMismatchError
 from backend.services.job_service import (
     JobNotFoundError,
     JobService,

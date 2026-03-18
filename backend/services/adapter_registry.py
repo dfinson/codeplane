@@ -38,12 +38,14 @@ class AdapterRegistry:
     def _create(self, sdk: AgentSDK) -> AgentAdapterInterface:
         if sdk == AgentSDK.copilot:
             from backend.services.copilot_adapter import CopilotAdapter
+
             return CopilotAdapter(
                 approval_service=self._approval_service,
                 event_bus=self._event_bus,
             )
         if sdk == AgentSDK.claude:
             from backend.services.claude_adapter import ClaudeAdapter
+
             return ClaudeAdapter(
                 approval_service=self._approval_service,
                 event_bus=self._event_bus,

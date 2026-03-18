@@ -17,7 +17,7 @@ from backend.models.domain import (
     JobState,
     validate_state_transition,
 )
-from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
+from backend.services.agent_adapter import validate_sdk_model
 
 if TYPE_CHECKING:
     from backend.config import CPLConfig

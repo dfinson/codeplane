@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,12 +10,9 @@ import pytest
 from backend.models.domain import (
     PermissionMode,
     SessionConfig,
-    SessionEvent,
-    SessionEventKind,
 )
-from backend.services.agent_adapter import AgentAdapterInterface, AgentSDK
 from backend.services.adapter_registry import AdapterRegistry
-
+from backend.services.agent_adapter import AgentAdapterInterface, AgentSDK
 
 # ---------------------------------------------------------------------------
 # AdapterRegistry tests
@@ -28,38 +24,38 @@ class TestAdapterRegistry:
 
     def test_get_adapter_copilot_returns_interface(self) -> None:
         """Registry creates an adapter that implements the interface."""
-        with patch("backend.services.copilot_adapter.CopilotAdapter") as MockCopilot:
+        with patch("backend.services.copilot_adapter.CopilotAdapter") as mock_copilot:
             mock_adapter = MagicMock(spec=AgentAdapterInterface)
-            MockCopilot.return_value = mock_adapter
+            mock_copilot.return_value = mock_adapter
 
             registry = AdapterRegistry()
             adapter = registry.get_adapter(AgentSDK.copilot)
             assert adapter is mock_adapter
-            MockCopilot.assert_called_once()
+            mock_copilot.assert_called_once()
 
     def test_get_adapter_claude_returns_interface(self) -> None:
         """Registry creates Claude adapter."""
-        with patch("backend.services.claude_adapter.ClaudeAdapter") as MockClaude:
+        with patch("backend.services.claude_adapter.ClaudeAdapter") as mock_claude:
             mock_adapter = MagicMock(spec=AgentAdapterInterface)
-            MockClaude.return_value = mock_adapter
+            mock_claude.return_value = mock_adapter
 
             registry = AdapterRegistry()
             adapter = registry.get_adapter(AgentSDK.claude)
             assert adapter is mock_adapter
-            MockClaude.assert_called_once()
+            mock_claude.assert_called_once()
 
     def test_get_adapter_caches(self) -> None:
         """Second call for same SDK returns cached instance."""
-        with patch("backend.services.copilot_adapter.CopilotAdapter") as MockCopilot:
+        with patch("backend.services.copilot_adapter.CopilotAdapter") as mock_copilot:
             mock_adapter = MagicMock(spec=AgentAdapterInterface)
-            MockCopilot.return_value = mock_adapter
+            mock_copilot.return_value = mock_adapter
 
             registry = AdapterRegistry()
             first = registry.get_adapter("copilot")
             second = registry.get_adapter("copilot")
             assert first is second
             # Should only be constructed once
-            MockCopilot.assert_called_once()
+            mock_copilot.assert_called_once()
 
     def test_get_adapter_unknown_raises(self) -> None:
         """Unknown SDK raises ValueError."""
@@ -72,20 +68,20 @@ class TestAdapterRegistry:
         approval = MagicMock()
         bus = MagicMock()
 
-        with patch("backend.services.claude_adapter.ClaudeAdapter") as MockClaude:
-            MockClaude.return_value = MagicMock()
+        with patch("backend.services.claude_adapter.ClaudeAdapter") as mock_claude:
+            mock_claude.return_value = MagicMock()
             registry = AdapterRegistry(approval_service=approval, event_bus=bus)
             registry.get_adapter(AgentSDK.claude)
 
-            MockClaude.assert_called_once_with(
+            mock_claude.assert_called_once_with(
                 approval_service=approval,
                 event_bus=bus,
             )
 
     def test_string_sdk_accepted(self) -> None:
         """get_adapter accepts a plain string and converts to AgentSDK."""
-        with patch("backend.services.copilot_adapter.CopilotAdapter") as MockCopilot:
-            MockCopilot.return_value = MagicMock()
+        with patch("backend.services.copilot_adapter.CopilotAdapter") as mock_copilot:
+            mock_copilot.return_value = MagicMock()
             registry = AdapterRegistry()
             adapter = registry.get_adapter("copilot")
             assert adapter is not None
@@ -121,6 +117,7 @@ class TestClaudeAdapterPermissions:
     @pytest.fixture
     def adapter(self):
         from backend.services.claude_adapter import ClaudeAdapter
+
         return ClaudeAdapter()
 
     @pytest.mark.asyncio
@@ -233,21 +230,25 @@ class TestClaudeAdapterToolSummary:
 
     def test_bash_summary(self) -> None:
         from backend.services.claude_adapter import _summarize_tool_input
+
         result = _summarize_tool_input("Bash", {"command": "make test"})
         assert result == "make test"
 
     def test_edit_summary(self) -> None:
         from backend.services.claude_adapter import _summarize_tool_input
+
         result = _summarize_tool_input("Edit", {"file_path": "src/main.py"})
         assert result == "src/main.py"
 
     def test_web_fetch_summary(self) -> None:
         from backend.services.claude_adapter import _summarize_tool_input
+
         result = _summarize_tool_input("WebFetch", {"url": "https://example.com"})
         assert result == "https://example.com"
 
     def test_fallback_summary(self) -> None:
         from backend.services.claude_adapter import _summarize_tool_input
+
         result = _summarize_tool_input("CustomTool", {"key": "value"})
         assert "key" in result
 
@@ -257,18 +258,21 @@ class TestSDKModelValidation:
 
     def test_copilot_accepts_any_model(self) -> None:
         from backend.services.agent_adapter import validate_sdk_model
+
         validate_sdk_model("copilot", "gpt-4o")
         validate_sdk_model("copilot", "claude-sonnet-4-20250514")
         validate_sdk_model("copilot", "o1-preview")
 
     def test_claude_accepts_claude_models(self) -> None:
         from backend.services.agent_adapter import validate_sdk_model
+
         validate_sdk_model("claude", "claude-sonnet-4-20250514")
         validate_sdk_model("claude", "claude-3-opus-20240229")
         validate_sdk_model("claude", "claude-3-haiku-20240307")
 
     def test_claude_rejects_non_claude_models(self) -> None:
         from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
+
         with pytest.raises(SDKModelMismatchError, match="not compatible with the claude SDK"):
             validate_sdk_model("claude", "gpt-4o")
         with pytest.raises(SDKModelMismatchError, match="not compatible with the claude SDK"):
@@ -276,15 +280,18 @@ class TestSDKModelValidation:
 
     def test_none_model_always_ok(self) -> None:
         from backend.services.agent_adapter import validate_sdk_model
+
         validate_sdk_model("copilot", None)
         validate_sdk_model("claude", None)
 
     def test_empty_model_always_ok(self) -> None:
         from backend.services.agent_adapter import validate_sdk_model
+
         validate_sdk_model("copilot", "")
         validate_sdk_model("claude", "")
 
     def test_unknown_sdk_raises(self) -> None:
         from backend.services.agent_adapter import SDKModelMismatchError, validate_sdk_model
+
         with pytest.raises(SDKModelMismatchError, match="Unknown SDK"):
             validate_sdk_model("unknown", "gpt-4o")

@@ -306,6 +306,7 @@ def _check_sdk_status(sdk_id: str) -> str:
     if sdk_id == "copilot":
         try:
             import copilot  # noqa: F401
+
             return "ready"
         except ImportError:
             return "not_installed"

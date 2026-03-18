@@ -770,9 +770,7 @@ class RuntimeService:
         new_session_id: str | None = None
 
         try:
-            async for event in followup_session.execute(
-                followup_config, self._resolve_adapter(base_config.sdk)
-            ):
+            async for event in followup_session.execute(followup_config, self._resolve_adapter(base_config.sdk)):
                 self._last_activity[job_id] = time.monotonic()
 
                 # Diff recalculation on file changes
@@ -1013,9 +1011,7 @@ class RuntimeService:
                     intents_buf.clear()
 
                 if recent_msgs or recent_intents:
-                    self._headline_last_snapshot[job_id] = (
-                        recent_msgs or self._headline_last_snapshot.get(job_id, [])
-                    )
+                    self._headline_last_snapshot[job_id] = recent_msgs or self._headline_last_snapshot.get(job_id, [])
                 else:
                     recent_msgs = self._headline_last_snapshot.get(job_id, [])
 
@@ -1053,7 +1049,7 @@ class RuntimeService:
                     '"summary": "Adding JWT token validation to /login and /refresh endpoints. '
                     'Wiring up middleware to reject expired tokens."}\n'
                     "3. Recent milestones were actually the same phase — consolidate the last N "
-                    "into one: {\"replace_last\": 2, \"present\": \"Implementing auth system\", "
+                    'into one: {"replace_last": 2, "present": "Implementing auth system", '
                     '"past": "Implemented auth system", '
                     '"summary": "Built login/refresh endpoints with JWT validation and expiry middleware."}\n\n'
                     "RULES:\n"
@@ -1149,11 +1145,7 @@ class RuntimeService:
                 milestones = self._headline_history.get(job_id, [])
                 milestone_block = ""
                 if milestones:
-                    milestone_block = (
-                        "Completed milestones:\n"
-                        + "\n".join(f"  - {m}" for m in milestones)
-                        + "\n\n"
-                    )
+                    milestone_block = "Completed milestones:\n" + "\n".join(f"  - {m}" for m in milestones) + "\n\n"
 
                 prev_steps = self._plan_last_steps.get(job_id, [])
                 prev_block = ""
@@ -1178,7 +1170,7 @@ class RuntimeService:
                     "future work as 'pending'.\n"
                     "- Steps should cover the full task arc — from what's been done to what remains.\n"
                     "- Be concrete: mention actual components, endpoints, files when possible.\n"
-                    "- If you can't determine a plan from the activity, respond: {\"steps\": []}\n"
+                    '- If you can\'t determine a plan from the activity, respond: {"steps": []}\n'
                 )
 
                 try:
@@ -1188,6 +1180,7 @@ class RuntimeService:
                     # Strip markdown fences
                     if raw.startswith("```"):
                         import re as _re
+
                         raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
                         raw = _re.sub(r"\n?```$", "", raw)
                         raw = raw.strip()

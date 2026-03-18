@@ -31,8 +31,8 @@ from backend.models.domain import (
 )
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.persistence.database import _set_sqlite_pragmas
-from backend.services.agent_adapter import AgentAdapterInterface
 from backend.services.adapter_registry import AdapterRegistry
+from backend.services.agent_adapter import AgentAdapterInterface
 from backend.services.event_bus import EventBus
 from backend.services.runtime_service import (
     RuntimeService,

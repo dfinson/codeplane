@@ -95,8 +95,7 @@ DEPENDENCIES: list[Dependency] = [
         required=True,
         install_instructions={
             "linux": (
-                "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - "
-                "&& sudo apt-get install -y nodejs"
+                "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && sudo apt-get install -y nodejs"
             ),
             "darwin": "brew install node",
             "windows": "Download installer from https://nodejs.org/",
@@ -229,7 +228,7 @@ def _check_port(port: int) -> tuple[bool, str]:
 def _check_sdk_copilot() -> tuple[bool, str]:
     """Check if the Copilot SDK is importable. Returns (ok, detail)."""
     try:
-        import copilot  # type: ignore[import-untyped]
+        import copilot  # noqa: F401
 
         ver = getattr(copilot, "__version__", "installed")
         return True, f"github-copilot-sdk {ver}"
@@ -240,7 +239,7 @@ def _check_sdk_copilot() -> tuple[bool, str]:
 def _check_sdk_claude() -> tuple[bool, str]:
     """Check if Claude SDK is importable and API key is set. Returns (ok, detail)."""
     try:
-        import claude_code_sdk  # type: ignore[import-untyped]  # noqa: F401
+        import claude_code_sdk  # noqa: F401
 
         if os.environ.get("ANTHROPIC_API_KEY"):
             return True, "claude-code-sdk installed, API key set"
@@ -356,9 +355,7 @@ def run_checks(*, port: int | None = None) -> list[CheckResult]:
                 )
             )
     else:
-        results.append(
-            CheckResult("GitHub CLI auth", CheckStatus.skipped, "gh not installed", category="auth")
-        )
+        results.append(CheckResult("GitHub CLI auth", CheckStatus.skipped, "gh not installed", category="auth"))
 
     if shutil.which("devtunnel"):
         ok, detail = _check_devtunnel_login()
@@ -375,9 +372,7 @@ def run_checks(*, port: int | None = None) -> list[CheckResult]:
                 )
             )
     else:
-        results.append(
-            CheckResult("Dev Tunnel auth", CheckStatus.skipped, "not installed", category="auth")
-        )
+        results.append(CheckResult("Dev Tunnel auth", CheckStatus.skipped, "not installed", category="auth"))
 
     # --- Agent SDK ---
     ok, detail = _check_sdk_copilot()
@@ -410,9 +405,7 @@ def run_checks(*, port: int | None = None) -> list[CheckResult]:
 
     # --- Environment ---
     if DEFAULT_CONFIG_PATH.exists():
-        results.append(
-            CheckResult("Config", CheckStatus.passed, str(DEFAULT_CONFIG_PATH), category="env")
-        )
+        results.append(CheckResult("Config", CheckStatus.passed, str(DEFAULT_CONFIG_PATH), category="env"))
     else:
         results.append(
             CheckResult(

@@ -15,7 +15,7 @@ import json
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -111,7 +111,7 @@ class ClaudeAdapter(AgentAdapterInterface):
     # Permission callback builder
     # ------------------------------------------------------------------
 
-    def _build_can_use_tool(self, config: SessionConfig, session_id: str):  # noqa: ANN202
+    def _build_can_use_tool(self, config: SessionConfig, session_id: str) -> Any:  # noqa: ANN401
         """Build the ``can_use_tool`` callback for the Claude SDK.
 
         Returns a coroutine that the SDK calls before each tool execution.
@@ -122,18 +122,14 @@ class ClaudeAdapter(AgentAdapterInterface):
 
         async def _can_use_tool(
             tool_name: str,
-            input_data: dict,
+            input_data: dict[str, Any],
             context: object,
         ) -> PermissionResultAllow | PermissionResultDeny:
             mode = config.permission_mode
             job_id = self._session_to_job.get(session_id)
 
             # Check trust
-            if (
-                self._approval_service is not None
-                and job_id
-                and self._approval_service.is_trusted(job_id)
-            ):
+            if self._approval_service is not None and job_id and self._approval_service.is_trusted(job_id):
                 return PermissionResultAllow()
 
             # AUTO — approve everything
@@ -282,7 +278,6 @@ class ClaudeAdapter(AgentAdapterInterface):
         """Handle a ToolUseBlock — emit tool start log + record start time."""
         tool_name = getattr(block, "name", "") or "tool"
         tool_id = getattr(block, "id", "") or str(uuid.uuid4())
-        tool_input = getattr(block, "input", {}) or {}
 
         # Record start time for duration calculation
         self._tool_start_times[tool_id] = time.monotonic()
@@ -442,7 +437,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         options = ClaudeCodeOptions(
             cwd=config.workspace_path,
             model=config.model,
-            permission_mode=_PERMISSION_MODE_MAP.get(config.permission_mode, "default"),
+            permission_mode=_PERMISSION_MODE_MAP.get(config.permission_mode, "default"),  # type: ignore[arg-type]
             can_use_tool=self._build_can_use_tool(config, session_id),
             append_system_prompt=(
                 "You are running inside CodePlane, a headless non-interactive orchestration "
@@ -453,9 +448,9 @@ class ClaudeAdapter(AgentAdapterInterface):
 
         # MCP servers from CodePlane config
         if config.mcp_servers:
-            mcp_config: dict[str, dict] = {}
+            mcp_config: dict[str, dict[str, Any]] = {}
             for name, srv in config.mcp_servers.items():
-                entry: dict = {
+                entry: dict[str, Any] = {
                     "type": "stdio",
                     "command": srv.command,
                     "args": srv.args,
@@ -463,7 +458,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                 if srv.env:
                     entry["env"] = srv.env
                 mcp_config[name] = entry
-            options.mcp_servers = mcp_config
+            options.mcp_servers = mcp_config  # type: ignore[assignment]
 
         # Resume support
         if config.resume_sdk_session_id:
@@ -580,7 +575,7 @@ class ClaudeAdapter(AgentAdapterInterface):
 # ---------------------------------------------------------------------------
 
 
-async def _prompt_to_stream(prompt: str):
+async def _prompt_to_stream(prompt: str) -> Any:  # noqa: ANN401
     """Wrap a string prompt as an async iterable for Claude SDK streaming mode."""
     yield {
         "type": "user",
@@ -590,18 +585,18 @@ async def _prompt_to_stream(prompt: str):
     }
 
 
-def _summarize_tool_input(tool_name: str, input_data: dict) -> str:
+def _summarize_tool_input(tool_name: str, input_data: dict[str, Any]) -> str:
     """Build a short human-readable summary of a tool call for approval display."""
     if tool_name == "Bash":
-        return input_data.get("command", "")[:200]
+        return str(input_data.get("command", ""))[:200]
     if tool_name in ("Edit", "Write"):
-        return input_data.get("file_path", "") or input_data.get("path", "")
+        return str(input_data.get("file_path", "") or input_data.get("path", ""))
     if tool_name == "Read":
-        return input_data.get("file_path", "") or input_data.get("path", "")
+        return str(input_data.get("file_path", "") or input_data.get("path", ""))
     if tool_name == "WebFetch":
-        return input_data.get("url", "")[:200]
+        return str(input_data.get("url", ""))[:200]
     if tool_name == "WebSearch":
-        return input_data.get("query", "")[:200]
+        return str(input_data.get("query", ""))[:200]
     # Fallback: first 120 chars of JSON
     try:
         return json.dumps(input_data, default=str)[:120]
