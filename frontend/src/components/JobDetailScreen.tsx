@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { InsightsPanel } from "./InsightsPanel";
@@ -36,6 +36,18 @@ export function JobDetailScreen() {
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
   const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
+  const [hasArtifacts, setHasArtifacts] = useState(false);
+
+  useEffect(() => {
+    if (!jobId) return;
+    fetchArtifacts(jobId)
+      .then((res) => setHasArtifacts(res.items.length > 0))
+      .catch(() => {});
+  }, [jobId, job?.state]);
+
+  useEffect(() => {
+    if (!hasArtifacts && tab === "artifacts") setTab("live");
+  }, [hasArtifacts, tab]);
 
   // Job-scoped terminal session
   const [jobTerminalSessionId, setJobTerminalSessionId] = useState<string | null>(null);
@@ -489,7 +501,7 @@ export function JobDetailScreen() {
           <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
           <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
           {hasWorktree && <TabsTrigger value="terminal"><TerminalSquare size={13} className="mr-1.5" />Terminal</TabsTrigger>}
-          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
+          {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
         </TabsList>
       </Tabs>
 

@@ -1619,7 +1619,7 @@ class RuntimeService:
                             {
                                 "role": "assistant",
                                 "content": content[:2000],
-                                "timestamp": ev.payload.get("timestamp", ""),
+                                "timestamp": ev.payload.get("timestamp") or ev.timestamp.isoformat(),
                             }
                         )
                     elif role in ("operator", "user"):
@@ -1629,7 +1629,7 @@ class RuntimeService:
                             {
                                 "role": "operator",
                                 "content": content[:2000],
-                                "timestamp": ev.payload.get("timestamp", ""),
+                                "timestamp": ev.payload.get("timestamp") or ev.timestamp.isoformat(),
                             }
                         )
                     elif role == "tool_call":
@@ -1641,7 +1641,7 @@ class RuntimeService:
                                 "tool_display": ev.payload.get("tool_display", ""),
                                 "tool_intent": ev.payload.get("tool_intent", ""),
                                 "tool_success": ev.payload.get("tool_success", True),
-                                "timestamp": ev.payload.get("timestamp", ""),
+                                "timestamp": ev.payload.get("timestamp") or ev.timestamp.isoformat(),
                             }
                         )
 
@@ -1659,6 +1659,12 @@ class RuntimeService:
 
                 slug = (job.worktree_name or job.title or "").strip()
                 await artifact_svc.store_session_snapshot(job_id, job.session_count, snapshot, slug=slug)
+
+                if job.worktree_path:
+                    collected = await artifact_svc.collect_from_workspace(job_id, job.worktree_path)
+                    if collected:
+                        log.info("workspace_artifacts_collected", job_id=job_id, count=len(collected))
+
                 await session.commit()
 
             log.info("session_log_stored", job_id=job_id, session=job.session_count, turns=len(turns))
