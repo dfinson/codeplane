@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock, Check } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
 import { toast } from "sonner";
@@ -61,6 +61,53 @@ function fileSpanRef(file: DiffFileModel): string {
     return start === end ? `L${start}` : `L${start}-L${end}`;
   });
   return `${file.path}:${spans.join(",")}`;
+}
+
+/**
+ * Displays a file path truncated from the left by path segment when it overflows.
+ * Always shows the full path if it fits; otherwise drops leading segments and
+ * prepends "…/" until it fits (or only the filename remains).
+ */
+function TruncatedPath({ path }: { path: string }) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const [displayPath, setDisplayPath] = useState(path);
+
+  const computeTruncation = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const segments = path.split("/");
+
+    for (let start = 0; start < segments.length; start++) {
+      const candidate =
+        start === 0 ? path : "\u2026/" + segments.slice(start).join("/");
+      // Probe the width by temporarily setting textContent
+      el.textContent = candidate;
+      if (el.scrollWidth <= el.offsetWidth + 1 || start === segments.length - 1) {
+        setDisplayPath(candidate);
+        return;
+      }
+    }
+  }, [path]);
+
+  useLayoutEffect(() => {
+    computeTruncation();
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(computeTruncation);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [computeTruncation]);
+
+  return (
+    <span
+      ref={containerRef}
+      className="text-xs flex-1 min-w-0 overflow-hidden whitespace-nowrap text-foreground"
+      title={path}
+    >
+      {displayPath}
+    </span>
+  );
 }
 
 /** Determine if the diff is "active" (agent can be asked) vs historical/resolved. */
@@ -252,9 +299,7 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
                     className="flex items-center gap-2 flex-1 min-w-0 text-left"
                   >
                     <Icon size={14} className={cn("shrink-0", STATUS_ICON_CLASS[file.status])} />
-                    <span className="text-xs truncate flex-1 text-foreground" title={file.path}>
-                      {isMobile ? (file.path.split("/").pop() ?? file.path) : file.path}
-                    </span>
+                    <TruncatedPath path={file.path} />
                     <span className={cn("text-xs border rounded px-1 hidden sm:inline", STATUS_BADGE[file.status])}>
                       +{file.additions} -{file.deletions}
                     </span>
