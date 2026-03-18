@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -705,14 +706,17 @@ class RuntimeService:
             await self._fail_job(job_id, f"Execution error: {exc}")
         finally:
             tel.end_job(job_id)
-            heartbeat_task.cancel()
+            with suppress(RuntimeError):
+                heartbeat_task.cancel()
             self._heartbeat_tasks.pop(job_id, None)
             headline_t = self._headline_tasks.pop(job_id, None)
             if headline_t is not None:
-                headline_t.cancel()
+                with suppress(RuntimeError):
+                    headline_t.cancel()
             plan_t = self._plan_tasks.pop(job_id, None)
             if plan_t is not None:
-                plan_t.cancel()
+                with suppress(RuntimeError):
+                    plan_t.cancel()
             self._headline_transcript.pop(job_id, None)
             self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)
@@ -732,10 +736,11 @@ class RuntimeService:
             if self._diff_service is not None:
                 self._diff_service.cleanup(job_id)
             # Store cheap session snapshot for future cold resumes
-            asyncio.create_task(
-                self._summarize_session_background(job_id),
-                name=f"snapshot-{job_id}",
-            )
+            with suppress(RuntimeError):
+                asyncio.create_task(
+                    self._summarize_session_background(job_id),
+                    name=f"snapshot-{job_id}",
+                )
             # Check if any queued jobs can now start
             await self._dequeue_next()
 

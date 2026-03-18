@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +17,6 @@ from backend.services.summarization_service import (
     _extract_json,
     _format_transcript,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -485,7 +483,7 @@ class TestSummarizeAndStore:
             patch("backend.persistence.artifact_repo.ArtifactRepository"),
             patch("backend.services.artifact_service.ArtifactService", return_value=mock_artifact_svc),
         ):
-            result = await svc.summarize_and_store(
+            await svc.summarize_and_store(
                 job_id="job-1",
                 session_number=1,
                 original_task="Fix the bug",

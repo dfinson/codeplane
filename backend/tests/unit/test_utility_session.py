@@ -9,12 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.services.utility_session import (
-    DEFAULT_UTILITY_MODEL,
     _SCALE_DOWN_IDLE_S,
+    DEFAULT_UTILITY_MODEL,
     UtilitySessionService,
     _WarmSession,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -55,11 +54,11 @@ class TestUtilitySessionLifecycle:
     @pytest.mark.asyncio
     async def test_start_creates_sessions(self) -> None:
         svc = UtilitySessionService(pool_size=2)
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             mock_ws = _mock_warm_session()
-            MockWS.return_value = mock_ws
+            mock_ws_cls.return_value = mock_ws
             await svc.start()
-            assert MockWS.call_count == 2
+            assert mock_ws_cls.call_count == 2
             assert mock_ws.connect.await_count == 2
         # Clean up housekeeping task
         await svc.shutdown()
@@ -67,12 +66,12 @@ class TestUtilitySessionLifecycle:
     @pytest.mark.asyncio
     async def test_start_is_idempotent(self) -> None:
         svc = UtilitySessionService(pool_size=1)
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
-            MockWS.return_value = _mock_warm_session()
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
+            mock_ws_cls.return_value = _mock_warm_session()
             await svc.start()
-            first_count = MockWS.call_count
+            first_count = mock_ws_cls.call_count
             await svc.start()  # second call — should be a no-op
-            assert MockWS.call_count == first_count
+            assert mock_ws_cls.call_count == first_count
         await svc.shutdown()
 
     @pytest.mark.asyncio
@@ -97,10 +96,10 @@ class TestUtilitySessionLifecycle:
     @pytest.mark.asyncio
     async def test_start_with_all_failures_creates_empty_pool(self) -> None:
         svc = UtilitySessionService(pool_size=2)
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
             ws.connect = AsyncMock(side_effect=RuntimeError("boom"))
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             await svc.start()
             assert len(svc._sessions) == 0
         await svc.shutdown()
@@ -108,9 +107,9 @@ class TestUtilitySessionLifecycle:
     @pytest.mark.asyncio
     async def test_shutdown_closes_all_and_resets(self) -> None:
         svc = UtilitySessionService(pool_size=1)
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             await svc.start()
             assert svc._started is True
 
@@ -122,8 +121,8 @@ class TestUtilitySessionLifecycle:
     @pytest.mark.asyncio
     async def test_shutdown_cancels_housekeeping_task(self) -> None:
         svc = UtilitySessionService(pool_size=1)
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
-            MockWS.return_value = _mock_warm_session()
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
+            mock_ws_cls.return_value = _mock_warm_session()
             await svc.start()
             assert svc._housekeeping_task is not None
 
@@ -181,10 +180,10 @@ class TestUtilitySessionComplete:
         svc._sessions = []
         svc._started = True
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
             ws.complete = AsyncMock(return_value="cold result")
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             result = await svc.complete("prompt")
             ws.connect.assert_awaited_once()
             assert result == "cold result"
@@ -195,10 +194,10 @@ class TestUtilitySessionComplete:
         svc._sessions = []
         svc._started = True
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
             ws.connect = AsyncMock(side_effect=RuntimeError("nope"))
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             result = await svc.complete("prompt")
             assert result == ""
 
@@ -266,9 +265,9 @@ class TestUtilitySessionAutoscaling:
         svc._started = True
         svc._pending = 2  # more pending than sessions → triggers scale-up
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             new_ws = _mock_warm_session(index=1)
-            MockWS.return_value = new_ws
+            mock_ws_cls.return_value = new_ws
             await svc._maybe_scale_up()
             assert len(svc._sessions) == 2
 
@@ -291,10 +290,10 @@ class TestUtilitySessionAutoscaling:
         svc._started = True
         svc._pending = 3
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
             ws.connect = AsyncMock(side_effect=RuntimeError("fail"))
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             await svc._maybe_scale_up()
             # Should not grow because connect failed
             assert len(svc._sessions) == 1
@@ -362,8 +361,8 @@ class TestUtilitySessionJobNotifications:
         svc._sessions = [ws0]
         svc._started = True
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
-            MockWS.return_value = _mock_warm_session(index=1)
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
+            mock_ws_cls.return_value = _mock_warm_session(index=1)
             await svc.notify_job_started()
             assert svc._active_jobs == 1
 
@@ -374,8 +373,8 @@ class TestUtilitySessionJobNotifications:
         svc._started = True
         svc._active_jobs = 0
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
-            MockWS.return_value = _mock_warm_session(index=1)
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
+            mock_ws_cls.return_value = _mock_warm_session(index=1)
             # Simulate 3 jobs starting
             await svc.notify_job_started()
             await svc.notify_job_started()
@@ -404,8 +403,8 @@ class TestUtilitySessionJobNotifications:
         svc._started = True
         svc._active_jobs = 5  # wants 5 but max is 2
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
-            MockWS.return_value = _mock_warm_session()
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
+            mock_ws_cls.return_value = _mock_warm_session()
             await svc._scale_to_target()
             assert len(svc._sessions) == 2
 
@@ -427,10 +426,10 @@ class TestUtilitySessionJobNotifications:
         svc._started = True
         svc._active_jobs = 3
 
-        with patch("backend.services.utility_session._WarmSession") as MockWS:
+        with patch("backend.services.utility_session._WarmSession") as mock_ws_cls:
             ws = _mock_warm_session()
             ws.connect = AsyncMock(side_effect=RuntimeError("fail"))
-            MockWS.return_value = ws
+            mock_ws_cls.return_value = ws
             await svc._scale_to_target()
             # Should stop trying after first failure
             assert len(svc._sessions) == 1

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.models.api_schemas import CamelModel
 
@@ -38,12 +38,11 @@ def _svc() -> TerminalService:
 
 
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     shell: str | None = None
     cwd: str | None = None
     job_id: str | None = Field(None, alias="jobId")
-
-    class Config:
-        populate_by_name = True
 
 
 class CreateSessionResponse(CamelModel):

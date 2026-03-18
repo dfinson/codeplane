@@ -2,9 +2,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Mock fetch globally BEFORE importing the client module so the module-level
-// BASE constant resolves against our mocked fetch.
+// Mock fetch for tests while preserving the original for Vitest internals.
 // ---------------------------------------------------------------------------
+const originalFetch = globalThis.fetch;
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -66,11 +66,15 @@ function noContentResponse() {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+  // Re-stub fetch for each test
+  globalThis.fetch = mockFetch;
   mockFetch.mockReset();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Restore real fetch so Vitest worker communication is not broken
+  globalThis.fetch = originalFetch;
 });
 
 // ---- ApiError -------------------------------------------------------------

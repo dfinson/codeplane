@@ -1,0 +1,262 @@
+"""Fixtures for API integration tests.
+
+Provides a fully-wired FastAPI test app backed by an in-memory SQLite
+database and mock services where needed.  Routes, dependency overrides,
+and ``app.state`` are configured exactly as the real lifespan does, but
+without starting real subprocesses, loading ML models, or touching disk.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator, Callable, Coroutine
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event as sa_event
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from backend.config import CPLConfig
+from backend.models.db import Base, JobRow
+from backend.persistence.database import _set_sqlite_pragmas
+from backend.services.approval_service import ApprovalService
+from backend.services.event_bus import EventBus
+from backend.services.git_service import GitService
+from backend.services.merge_service import MergeService
+from backend.services.runtime_service import RuntimeService
+from backend.services.sse_manager import SSEManager
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def engine() -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    sa_event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+async def session_factory(
+    engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+# ---------------------------------------------------------------------------
+# Real lightweight services
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def event_bus() -> EventBus:
+    return EventBus()
+
+
+@pytest.fixture
+def sse_manager() -> SSEManager:
+    return SSEManager()
+
+
+@pytest.fixture
+def approval_service(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> ApprovalService:
+    return ApprovalService(session_factory=session_factory)
+
+
+# ---------------------------------------------------------------------------
+# Mock services (expensive / side-effecting)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_git_service() -> AsyncMock:
+    svc = AsyncMock(spec=GitService)
+    svc.validate_repo.return_value = True
+    svc.get_default_branch.return_value = "main"
+    svc.create_worktree.return_value = ("/tmp/test-worktree", "fix/test-branch")
+    svc.cleanup_worktrees.return_value = 0
+    svc.get_origin_url.return_value = "https://github.com/test/repo.git"
+    svc.clone_repo.return_value = "/tmp/cloned"
+    return svc
+
+
+@pytest.fixture
+def mock_runtime_service() -> AsyncMock:
+    svc = AsyncMock(spec=RuntimeService)
+    svc.start_or_enqueue.return_value = None
+    svc.cancel.return_value = None
+    svc.pause_job.return_value = True
+    svc.send_message.return_value = True
+    return svc
+
+
+@pytest.fixture
+def mock_merge_service() -> AsyncMock:
+    return AsyncMock(spec=MergeService)
+
+
+@pytest.fixture
+def mock_voice_service() -> Mock:
+    svc = Mock()
+    svc.transcribe.return_value = "hello world"
+    return svc
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+
+def _test_config() -> CPLConfig:
+    return CPLConfig(repos=["/test/repo"])
+
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def app(
+    session_factory: async_sessionmaker[AsyncSession],
+    event_bus: EventBus,
+    sse_manager: SSEManager,
+    approval_service: ApprovalService,
+    mock_runtime_service: AsyncMock,
+    mock_merge_service: AsyncMock,
+    mock_git_service: AsyncMock,
+    mock_voice_service: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> FastAPI:
+    from backend.api import (
+        approvals,
+        artifacts,
+        events,
+        health,
+        jobs,
+        settings,
+        terminal,
+        voice,
+        workspace,
+    )
+
+    application = FastAPI(title="CodePlane", version="0.1.0")
+
+    # -- routers (same order as create_app) --------------------------------
+    application.include_router(health.router, prefix="/api")
+    application.include_router(jobs.router, prefix="/api")
+    application.include_router(events.router, prefix="/api")
+    application.include_router(approvals.router, prefix="/api")
+    application.include_router(artifacts.router, prefix="/api")
+    application.include_router(workspace.router, prefix="/api")
+    application.include_router(voice.router, prefix="/api")
+    application.include_router(settings.router, prefix="/api")
+    application.include_router(terminal.router)  # already has /api/terminal prefix
+
+    # -- app.state ---------------------------------------------------------
+    application.state.session_factory = session_factory
+    application.state.event_bus = event_bus
+    application.state.sse_manager = sse_manager
+    application.state.approval_service = approval_service
+    application.state.runtime_service = mock_runtime_service
+    application.state.merge_service = mock_merge_service
+    application.state.utility_session = AsyncMock()
+    application.state.platform_registry = Mock()
+    application.state.voice_service = mock_voice_service
+    application.state.cached_models = []
+    application.state.voice_max_bytes = 10 * 1024 * 1024
+
+    # -- session dependency override (mirrors _lifespan) -------------------
+    async def _session_dep() -> AsyncGenerator[AsyncSession, None]:
+        async with session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    application.dependency_overrides[jobs._get_session] = _session_dep
+
+    # -- config overrides --------------------------------------------------
+    monkeypatch.setattr("backend.config.load_config", _test_config)
+    monkeypatch.setattr("backend.api.jobs._get_config", _test_config)
+    monkeypatch.setattr("backend.api.settings._get_config", _test_config)
+    monkeypatch.setattr("backend.api.workspace._get_config", _test_config)
+    monkeypatch.setattr("backend.api.artifacts._get_config", _test_config)
+
+    # -- settings router git-service override ------------------------------
+    application.dependency_overrides[settings._get_git_service] = (
+        lambda: mock_git_service
+    )
+
+    # -- terminal module-level service -------------------------------------
+    terminal.set_terminal_service(Mock())
+
+    return application
+
+
+# ---------------------------------------------------------------------------
+# HTTP client
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+# ---------------------------------------------------------------------------
+# Data helpers
+# ---------------------------------------------------------------------------
+
+SeedJobFn = Callable[..., Coroutine[Any, Any, str]]
+
+
+@pytest.fixture
+def seed_job(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> SeedJobFn:
+    """Return an async factory that inserts a job row and returns its ID."""
+
+    async def _seed(
+        state: str = "running",
+        job_id: str | None = None,
+        **overrides: Any,
+    ) -> str:
+        job_id = job_id or f"job-{uuid4().hex[:8]}"
+        async with session_factory() as session:
+            session.add(
+                JobRow(
+                    id=job_id,
+                    repo="/test/repo",
+                    prompt="Test prompt",
+                    state=state,
+                    base_ref="main",
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                    **overrides,
+                )
+            )
+            await session.commit()
+        return job_id
+
+    return _seed

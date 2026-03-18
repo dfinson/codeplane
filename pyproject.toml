@@ -93,7 +93,12 @@ disable_error_code = ["arg-type", "no-untyped-def", "no-untyped-call", "attr-def
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning",
+    "ignore:coroutine .* was never awaited:RuntimeWarning",
+]
 
 [dependency-groups]
 dev = [
