@@ -569,6 +569,11 @@ class RuntimeService:
                         prompt=fallback_prompt,
                         resume_sdk_session_id=None,
                     )
+                    # Suppress the SDK echo of the handoff prompt so it never
+                    # appears in the transcript.  The original echo_suppress entry
+                    # only contains the user instruction; we need to also register
+                    # the full [RESUMED SESSION…] prompt used for this new session.
+                    self._echo_suppress.setdefault(job_id, set()).add(fallback_prompt)
                     session_id, error_reason, _ = await self._execute_session_attempt(
                         job_id,
                         fallback_session,
@@ -1761,14 +1766,24 @@ class RuntimeService:
                         pre_built_transcript=transcript_text,
                         pre_built_changed_files=changed_files,
                     )
-                    summary_artifact = await artifact_svc.get_latest_session_summary(job.id)
+                    # summarize_and_store commits in its own inner session; the
+                    # outer session's WAL read snapshot predates that commit and
+                    # cannot see the new artifact.  Open a fresh session so the
+                    # lookup reflects the latest committed state.
+                    async with self._session_factory() as fresh_session:
+                        fresh_svc = ArtifactService(ArtifactRepository(fresh_session))
+                        summary_artifact = await fresh_svc.get_latest_session_summary(job.id)
                 except Exception:
                     log.warning("session_log_summarization_failed", job_id=job.id, exc_info=True)
 
             if summary_artifact is None:
                 try:
                     await self._summarization_service.summarize_and_store(job.id, job.session_count, job.prompt)
-                    summary_artifact = await artifact_svc.get_latest_session_summary(job.id)
+                    # Same fresh-session pattern: inner commit is not visible to
+                    # the outer session's transaction snapshot.
+                    async with self._session_factory() as fresh_session:
+                        fresh_svc = ArtifactService(ArtifactRepository(fresh_session))
+                        summary_artifact = await fresh_svc.get_latest_session_summary(job.id)
                 except Exception:
                     log.warning("inline_summarization_failed", job_id=job.id, exc_info=True)
 
