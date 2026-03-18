@@ -202,9 +202,7 @@ async def app(
     monkeypatch.setattr("backend.api.artifacts._get_config", _test_config)
 
     # -- settings router git-service override ------------------------------
-    application.dependency_overrides[settings._get_git_service] = (
-        lambda: mock_git_service
-    )
+    application.dependency_overrides[settings._get_git_service] = lambda: mock_git_service
 
     # -- terminal module-level service -------------------------------------
     terminal.set_terminal_service(Mock())

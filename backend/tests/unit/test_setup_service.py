@@ -190,8 +190,13 @@ class TestOfferInlineFix:
             category="agent",
         )
         cli_fixed = AgentCLIStatus(
-            "claude", "Claude Code", True, True, True,
-            "claude CLI and SDK installed", "",
+            "claude",
+            "Claude Code",
+            True,
+            True,
+            True,
+            "claude CLI and SDK installed",
+            "",
         )
 
         with (

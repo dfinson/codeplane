@@ -941,10 +941,13 @@ class TestCreateSession:
             async def connect(self, prompt_stream: Any) -> None:
                 raise ConnectionError("SDK down")
 
-        with patch.dict(
-            sys.modules["claude_code_sdk"].__dict__,
-            {"ClaudeSDKClient": lambda opts: _FailingClient()},
-        ), pytest.raises(ConnectionError):
+        with (
+            patch.dict(
+                sys.modules["claude_code_sdk"].__dict__,
+                {"ClaudeSDKClient": lambda opts: _FailingClient()},
+            ),
+            pytest.raises(ConnectionError),
+        ):
             await adapter.create_session(config)
 
         # All state should be cleaned up

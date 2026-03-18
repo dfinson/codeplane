@@ -47,9 +47,7 @@ class TestTranscribe:
         )
         assert resp.status_code == 415
 
-    async def test_no_voice_service(
-        self, app: FastAPI, client: AsyncClient
-    ) -> None:
+    async def test_no_voice_service(self, app: FastAPI, client: AsyncClient) -> None:
         original = app.state.voice_service
         app.state.voice_service = None
         try:
@@ -61,9 +59,7 @@ class TestTranscribe:
         finally:
             app.state.voice_service = original
 
-    async def test_file_too_large(
-        self, app: FastAPI, client: AsyncClient
-    ) -> None:
+    async def test_file_too_large(self, app: FastAPI, client: AsyncClient) -> None:
         original = app.state.voice_max_bytes
         app.state.voice_max_bytes = 64  # very small
         try:
@@ -82,9 +78,7 @@ class TestTranscribe:
         )
         assert resp.status_code == 400
 
-    async def test_transcribe_exception(
-        self, app: FastAPI, client: AsyncClient
-    ) -> None:
+    async def test_transcribe_exception(self, app: FastAPI, client: AsyncClient) -> None:
         svc = Mock()
         svc.transcribe = Mock(side_effect=RuntimeError("model crashed"))
         original = app.state.voice_service

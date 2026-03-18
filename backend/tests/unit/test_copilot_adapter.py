@@ -566,8 +566,7 @@ class TestOnEventCallback:
         events = self._drain_queue(queue)
         # Only log events (from tool started etc.) might appear, no mapped event
         mapped = [
-            e for e in events
-            if e.kind in (SessionEventKind.transcript, SessionEventKind.done, SessionEventKind.error)
+            e for e in events if e.kind in (SessionEventKind.transcript, SessionEventKind.done, SessionEventKind.error)
         ]
         assert len(mapped) == 0
 
@@ -772,8 +771,7 @@ class TestEventTelemetry:
                 events.append(e)
 
         transcripts = [
-            e for e in events
-            if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
+            e for e in events if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
         ]
         assert len(transcripts) == 1
         assert transcripts[0].payload["tool_name"] == "bash"
@@ -813,8 +811,7 @@ class TestEventTelemetry:
                 events.append(e)
 
         transcripts = [
-            e for e in events
-            if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
+            e for e in events if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
         ]
         assert len(transcripts) == 0
 
@@ -945,8 +942,11 @@ class TestLogEvents:
 
         adapter._tool_start_times["tc-log"] = time.monotonic()
         adapter._tool_call_buffer["tc-log"] = {
-            "tool_name": "grep", "tool_args": "", "turn_id": "",
-            "tool_intent": "", "tool_title": "",
+            "tool_name": "grep",
+            "tool_args": "",
+            "turn_id": "",
+            "tool_intent": "",
+            "tool_title": "",
         }
 
         data = _FakeEventData(
@@ -975,8 +975,11 @@ class TestLogEvents:
 
         adapter._tool_start_times["tc-fail"] = time.monotonic()
         adapter._tool_call_buffer["tc-fail"] = {
-            "tool_name": "bash", "tool_args": "", "turn_id": "",
-            "tool_intent": "", "tool_title": "",
+            "tool_name": "bash",
+            "tool_args": "",
+            "turn_id": "",
+            "tool_intent": "",
+            "tool_title": "",
         }
 
         data = _FakeEventData(
@@ -993,7 +996,7 @@ class TestLogEvents:
             patch("backend.services.telemetry.collector"),
             patch("backend.services.tool_formatters.format_tool_display", return_value="bash: failed"),
         ):
-                session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
+            session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -1311,8 +1314,7 @@ class TestToolResultExtraction:
                 events.append(e)
 
         transcripts = [
-            e for e in events
-            if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
+            e for e in events if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
         ]
         assert len(transcripts) == 1
         assert transcripts[0].payload["tool_result"] == "partial result text"
@@ -1359,8 +1361,7 @@ class TestToolResultExtraction:
                 events.append(e)
 
         transcripts = [
-            e for e in events
-            if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
+            e for e in events if e.kind == SessionEventKind.transcript and e.payload.get("role") == "tool_call"
         ]
         assert len(transcripts) == 1
         assert transcripts[0].payload["tool_result"] == "plain string result"

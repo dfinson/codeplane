@@ -418,9 +418,7 @@ class _FakeAsyncCtx:
 class TestSummarizeAndStore:
     """Integration-style tests for the main orchestration method."""
 
-    def _make_service(
-        self, adapter_response: str = ""
-    ) -> tuple[SummarizationService, AsyncMock, AsyncMock]:
+    def _make_service(self, adapter_response: str = "") -> tuple[SummarizationService, AsyncMock, AsyncMock]:
         adapter = AsyncMock()
         adapter.complete = AsyncMock(return_value=adapter_response)
 

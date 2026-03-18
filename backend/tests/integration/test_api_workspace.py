@@ -111,9 +111,7 @@ class TestListWorkspace:
     ) -> None:
         """Passing limit=2 returns at most 2 entries with has_more=True."""
         job_id = await seed_job(worktree_path=workspace_dir)
-        resp = await client.get(
-            f"/api/jobs/{job_id}/workspace", params={"limit": 2}
-        )
+        resp = await client.get(f"/api/jobs/{job_id}/workspace", params={"limit": 2})
         body = resp.json()
         assert len(body["items"]) == 2
         assert body["hasMore"] is True
@@ -128,9 +126,7 @@ class TestListWorkspace:
     ) -> None:
         """Using cursor from first page returns subsequent entries."""
         job_id = await seed_job(worktree_path=workspace_dir)
-        page1 = (
-            await client.get(f"/api/jobs/{job_id}/workspace", params={"limit": 2})
-        ).json()
+        page1 = (await client.get(f"/api/jobs/{job_id}/workspace", params={"limit": 2})).json()
         cursor = page1["cursor"]
 
         page2 = (
@@ -157,9 +153,7 @@ class TestListWorkspace:
     ) -> None:
         """Attempting directory traversal is rejected."""
         job_id = await seed_job(worktree_path=workspace_dir)
-        resp = await client.get(
-            f"/api/jobs/{job_id}/workspace", params={"path": "../../etc"}
-        )
+        resp = await client.get(f"/api/jobs/{job_id}/workspace", params={"path": "../../etc"})
         assert resp.status_code == 400
 
     @pytest.mark.asyncio
@@ -196,9 +190,7 @@ class TestGetWorkspaceFile:
         workspace_dir: str,
     ) -> None:
         job_id = await seed_job(worktree_path=workspace_dir)
-        resp = await client.get(
-            f"/api/jobs/{job_id}/workspace/file", params={"path": "README.md"}
-        )
+        resp = await client.get(f"/api/jobs/{job_id}/workspace/file", params={"path": "README.md"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["path"] == "README.md"
@@ -212,9 +204,7 @@ class TestGetWorkspaceFile:
         workspace_dir: str,
     ) -> None:
         job_id = await seed_job(worktree_path=workspace_dir)
-        resp = await client.get(
-            f"/api/jobs/{job_id}/workspace/file", params={"path": "src/main.py"}
-        )
+        resp = await client.get(f"/api/jobs/{job_id}/workspace/file", params={"path": "src/main.py"})
         assert resp.status_code == 200
         assert resp.json()["content"] == "print('hello')"
 
@@ -226,9 +216,7 @@ class TestGetWorkspaceFile:
         workspace_dir: str,
     ) -> None:
         job_id = await seed_job(worktree_path=workspace_dir)
-        resp = await client.get(
-            f"/api/jobs/{job_id}/workspace/file", params={"path": "nope.txt"}
-        )
+        resp = await client.get(f"/api/jobs/{job_id}/workspace/file", params={"path": "nope.txt"})
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
@@ -258,16 +246,12 @@ class TestGetWorkspaceFile:
             big_file.write_bytes(b"x" * (5 * 1024 * 1024 + 1))
 
             job_id = await seed_job(worktree_path=tmpdir)
-            resp = await client.get(
-                f"/api/jobs/{job_id}/workspace/file", params={"path": "big.bin"}
-            )
+            resp = await client.get(f"/api/jobs/{job_id}/workspace/file", params={"path": "big.bin"})
             assert resp.status_code == 413
 
     @pytest.mark.asyncio
     async def test_nonexistent_job_returns_404(self, client: AsyncClient) -> None:
-        resp = await client.get(
-            "/api/jobs/no-such-job/workspace/file", params={"path": "any.txt"}
-        )
+        resp = await client.get("/api/jobs/no-such-job/workspace/file", params={"path": "any.txt"})
         assert resp.status_code == 404
 
     @pytest.mark.asyncio

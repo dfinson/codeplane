@@ -14,7 +14,7 @@ from backend.models.domain import Job
 
 
 def _make_job(**overrides: object) -> Job:
-    defaults: dict = dict(
+    defaults: dict[str, object] = dict(
         id="job-123",
         repo="/test/repo",
         prompt="Fix the bug",
@@ -159,17 +159,13 @@ class TestJobTool:
             svc.get_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_job")(
-                action="create", repo="/test/repo", prompt="Fix bug"
-            )
+            result = await _tool(mcp_server, "codeplane_job")(action="create", repo="/test/repo", prompt="Fix bug")
             assert result["id"] == "job-123"
             assert result["state"] == "queued"
 
     @pytest.mark.asyncio
     async def test_create_missing_params(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="create", repo=None, prompt=None
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="create", repo=None, prompt=None)
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -198,9 +194,7 @@ class TestJobTool:
             svc.get_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_job")(
-                action="get", job_id="job-123"
-            )
+            result = await _tool(mcp_server, "codeplane_job")(action="get", job_id="job-123")
             assert result["id"] == "job-123"
 
     @pytest.mark.asyncio
@@ -215,16 +209,12 @@ class TestJobTool:
             svc.get_job = AsyncMock(side_effect=JobNotFoundError("nope"))
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_job")(
-                action="get", job_id="missing"
-            )
+            result = await _tool(mcp_server, "codeplane_job")(action="get", job_id="missing")
             assert "error" in result
 
     @pytest.mark.asyncio
     async def test_get_missing_job_id(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="get", job_id=None
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="get", job_id=None)
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -238,9 +228,7 @@ class TestJobTool:
             svc.cancel_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_job")(
-                action="cancel", job_id="job-123"
-            )
+            result = await _tool(mcp_server, "codeplane_job")(action="cancel", job_id="job-123")
             assert result["state"] == "cancelled"
 
     @pytest.mark.asyncio
@@ -254,41 +242,29 @@ class TestJobTool:
             svc.rerun_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_job")(
-                action="rerun", job_id="job-123"
-            )
+            result = await _tool(mcp_server, "codeplane_job")(action="rerun", job_id="job-123")
             assert result["id"] == "job-new"
 
     @pytest.mark.asyncio
     async def test_message_success(self, mcp_server, mock_runtime) -> None:
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="message", job_id="job-123", content="hello"
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-123", content="hello")
         assert "seq" in result
         mock_runtime.send_message.assert_awaited_once_with("job-123", "hello")
 
     @pytest.mark.asyncio
     async def test_message_missing_params(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="message", job_id=None, content=None
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id=None, content=None)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_message_too_long(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="message", job_id="job-1", content="x" * 10001
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-1", content="x" * 10001)
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_message_not_running(
-        self, mcp_server, mock_runtime
-    ) -> None:
+    async def test_message_not_running(self, mcp_server, mock_runtime) -> None:
         mock_runtime.send_message = AsyncMock(return_value=False)
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="message", job_id="job-1", content="hi"
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-1", content="hi")
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -304,28 +280,20 @@ class TestJobTool:
 class TestApprovalTool:
     @pytest.mark.asyncio
     async def test_list(self, mcp_server, mock_approval) -> None:
-        mock_approval.list_for_job = AsyncMock(
-            return_value=[_make_approval()]
-        )
-        result = await _tool(mcp_server, "codeplane_approval")(
-            action="list", job_id="job-123"
-        )
+        mock_approval.list_for_job = AsyncMock(return_value=[_make_approval()])
+        result = await _tool(mcp_server, "codeplane_approval")(action="list", job_id="job-123")
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["id"] == "apr-1"
 
     @pytest.mark.asyncio
     async def test_list_missing_job_id(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_approval")(
-            action="list", job_id=None
-        )
+        result = await _tool(mcp_server, "codeplane_approval")(action="list", job_id=None)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_resolve_approve(self, mcp_server, mock_approval) -> None:
-        resolved = _make_approval(
-            resolved_at=datetime.now(UTC), resolution="approved"
-        )
+        resolved = _make_approval(resolved_at=datetime.now(UTC), resolution="approved")
         mock_approval.resolve = AsyncMock(return_value=resolved)
 
         result = await _tool(mcp_server, "codeplane_approval")(
@@ -335,9 +303,7 @@ class TestApprovalTool:
 
     @pytest.mark.asyncio
     async def test_resolve_reject(self, mcp_server, mock_approval) -> None:
-        resolved = _make_approval(
-            resolved_at=datetime.now(UTC), resolution="rejected"
-        )
+        resolved = _make_approval(resolved_at=datetime.now(UTC), resolution="rejected")
         mock_approval.resolve = AsyncMock(return_value=resolved)
 
         result = await _tool(mcp_server, "codeplane_approval")(
@@ -354,16 +320,12 @@ class TestApprovalTool:
 
     @pytest.mark.asyncio
     async def test_resolve_missing_params(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_approval")(
-            action="resolve", approval_id=None, resolution=None
-        )
+        result = await _tool(mcp_server, "codeplane_approval")(action="resolve", approval_id=None, resolution=None)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_invalid_action(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_approval")(
-            action="nope"
-        )
+        result = await _tool(mcp_server, "codeplane_approval")(action="nope")
         assert "error" in result
 
 
@@ -383,9 +345,7 @@ class TestWorkspaceTool:
             svc.get_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_workspace")(
-                action="list", job_id="job-123"
-            )
+            result = await _tool(mcp_server, "codeplane_workspace")(action="list", job_id="job-123")
             assert "items" in result
             names = [e["path"] for e in result["items"]]
             assert "hello.txt" in names
@@ -402,16 +362,12 @@ class TestWorkspaceTool:
             svc.get_job = AsyncMock(return_value=job)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_workspace")(
-                action="read", job_id="job-123", path="readme.md"
-            )
+            result = await _tool(mcp_server, "codeplane_workspace")(action="read", job_id="job-123", path="readme.md")
             assert result["content"] == "# Hello"
 
     @pytest.mark.asyncio
     async def test_missing_job_id(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_workspace")(
-            action="list", job_id=None
-        )
+        result = await _tool(mcp_server, "codeplane_workspace")(action="list", job_id=None)
         assert "error" in result
 
 
@@ -430,17 +386,13 @@ class TestArtifactTool:
             svc.list_for_job = AsyncMock(return_value=[art])
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_artifact")(
-                action="list", job_id="job-123"
-            )
+            result = await _tool(mcp_server, "codeplane_artifact")(action="list", job_id="job-123")
             assert len(result["items"]) == 1
             assert result["items"][0]["name"] == "diff.patch"
 
     @pytest.mark.asyncio
     async def test_list_missing_job_id(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_artifact")(
-            action="list", job_id=None
-        )
+        result = await _tool(mcp_server, "codeplane_artifact")(action="list", job_id=None)
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -454,9 +406,7 @@ class TestArtifactTool:
             svc.get = AsyncMock(return_value=art)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_artifact")(
-                action="get", artifact_id="art-1"
-            )
+            result = await _tool(mcp_server, "codeplane_artifact")(action="get", artifact_id="art-1")
             assert result["id"] == "art-1"
 
     @pytest.mark.asyncio
@@ -469,23 +419,17 @@ class TestArtifactTool:
             svc.get = AsyncMock(return_value=None)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_artifact")(
-                action="get", artifact_id="missing"
-            )
+            result = await _tool(mcp_server, "codeplane_artifact")(action="get", artifact_id="missing")
             assert "error" in result
 
     @pytest.mark.asyncio
     async def test_get_missing_id(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_artifact")(
-            action="get", artifact_id=None
-        )
+        result = await _tool(mcp_server, "codeplane_artifact")(action="get", artifact_id=None)
         assert "error" in result
 
     @pytest.mark.asyncio
     async def test_invalid_action(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_artifact")(
-            action="bad"
-        )
+        result = await _tool(mcp_server, "codeplane_artifact")(action="bad")
         assert "error" in result
 
 
@@ -500,9 +444,7 @@ class TestSettingsTool:
                 "max_concurrent_jobs": 3,
                 "completion_strategy": "merge",
             }
-            result = await _tool(mcp_server, "codeplane_settings")(
-                action="get"
-            )
+            result = await _tool(mcp_server, "codeplane_settings")(action="get")
             assert "max_concurrent_jobs" in result
 
     @pytest.mark.asyncio
@@ -515,16 +457,12 @@ class TestSettingsTool:
                 "max_concurrent_jobs": 5,
                 "completion_strategy": "merge",
             }
-            result = await _tool(mcp_server, "codeplane_settings")(
-                action="update", max_concurrent_jobs=5
-            )
+            result = await _tool(mcp_server, "codeplane_settings")(action="update", max_concurrent_jobs=5)
             assert result["max_concurrent_jobs"] == 5
 
     @pytest.mark.asyncio
     async def test_invalid_action(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_settings")(
-            action="delete"
-        )
+        result = await _tool(mcp_server, "codeplane_settings")(action="delete")
         assert "error" in result
 
 
@@ -539,9 +477,7 @@ class TestRepoTool:
             cfg.repos = ["/test/repo"]
             mock_cfg.return_value = cfg
 
-            result = await _tool(mcp_server, "codeplane_repo")(
-                action="list"
-            )
+            result = await _tool(mcp_server, "codeplane_repo")(action="list")
             assert result["items"] == ["/test/repo"]
 
     @pytest.mark.asyncio
@@ -554,23 +490,17 @@ class TestRepoTool:
             cfg.repos = ["/test/repo"]
             mock_cfg.return_value = cfg
             git = AsyncMock()
-            git.get_origin_url = AsyncMock(
-                return_value="https://github.com/test/repo.git"
-            )
+            git.get_origin_url = AsyncMock(return_value="https://github.com/test/repo.git")
             git.get_default_branch = AsyncMock(return_value="main")
             mock_git_cls.return_value = git
 
-            result = await _tool(mcp_server, "codeplane_repo")(
-                action="get", repo_path="/test/repo"
-            )
+            result = await _tool(mcp_server, "codeplane_repo")(action="get", repo_path="/test/repo")
             assert result["path"] == "/test/repo"
             assert result["base_branch"] == "main"
 
     @pytest.mark.asyncio
     async def test_get_missing_path(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_repo")(
-            action="get", repo_path=None
-        )
+        result = await _tool(mcp_server, "codeplane_repo")(action="get", repo_path=None)
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -590,9 +520,7 @@ class TestRepoTool:
             mock_git_cls.return_value = git
             mock_git_cls.is_remote_url = MagicMock(return_value=False)
 
-            result = await _tool(mcp_server, "codeplane_repo")(
-                action="register", source=str(repo_dir)
-            )
+            result = await _tool(mcp_server, "codeplane_repo")(action="register", source=str(repo_dir))
             assert result["cloned"] is False
 
     @pytest.mark.asyncio
@@ -601,16 +529,12 @@ class TestRepoTool:
             patch("backend.mcp.server.load_config"),
             patch("backend.mcp.server.unregister_repo"),
         ):
-            result = await _tool(mcp_server, "codeplane_repo")(
-                action="remove", repo_path="/test/repo"
-            )
+            result = await _tool(mcp_server, "codeplane_repo")(action="remove", repo_path="/test/repo")
             assert result["status"] == "removed"
 
     @pytest.mark.asyncio
     async def test_remove_missing_path(self, mcp_server) -> None:
-        result = await _tool(mcp_server, "codeplane_repo")(
-            action="remove", repo_path=None
-        )
+        result = await _tool(mcp_server, "codeplane_repo")(action="remove", repo_path=None)
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -634,9 +558,7 @@ class TestHealthTool:
             svc.count_queued_jobs = AsyncMock(return_value=1)
             mock_svc_cls.return_value = svc
 
-            result = await _tool(mcp_server, "codeplane_health")(
-                action="check"
-            )
+            result = await _tool(mcp_server, "codeplane_health")(action="check")
             assert result["status"] == "healthy"
             assert result["active_jobs"] == 2
             assert result["queued_jobs"] == 1
@@ -654,9 +576,7 @@ class TestHealthTool:
             git.cleanup_worktrees = AsyncMock(return_value=3)
             mock_git_cls.return_value = git
 
-            result = await _tool(mcp_server, "codeplane_health")(
-                action="cleanup"
-            )
+            result = await _tool(mcp_server, "codeplane_health")(action="cleanup")
             assert result["removed"] == 3
 
     @pytest.mark.asyncio

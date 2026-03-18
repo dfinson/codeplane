@@ -22,6 +22,7 @@ from backend.services.terminal_service import (
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _make_mock_process(pid: int = 12345) -> MagicMock:
     proc = MagicMock()
     proc.pid = pid
@@ -50,6 +51,7 @@ def _make_session(
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
+
 
 class TestSanitizeForReplay:
     def test_strips_osc_color_queries(self) -> None:
@@ -108,6 +110,7 @@ class TestDetectShell:
 # PtySession dataclass
 # ------------------------------------------------------------------
 
+
 class TestPtySession:
     def test_append_scrollback_basic(self) -> None:
         s = _make_session()
@@ -139,6 +142,7 @@ class TestPtySession:
 # ------------------------------------------------------------------
 # TerminalService
 # ------------------------------------------------------------------
+
 
 class TestTerminalServiceInit:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -422,9 +426,7 @@ class TestResize:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.kill")
     @patch("backend.services.terminal_service.fcntl.ioctl")
-    def test_resize_session(
-        self, mock_ioctl: MagicMock, mock_kill: MagicMock, mock_detect: MagicMock
-    ) -> None:
+    def test_resize_session(self, mock_ioctl: MagicMock, mock_kill: MagicMock, mock_detect: MagicMock) -> None:
         svc = TerminalService()
         session = _make_session(session_id="s1", master_fd=42, pid=999)
         svc._sessions["s1"] = session
@@ -491,9 +493,7 @@ class TestShutdown:
 class TestOnPtyReadable:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.read", return_value=b"hello output")
-    def test_reads_data_and_appends_scrollback(
-        self, mock_read: MagicMock, mock_detect: MagicMock
-    ) -> None:
+    def test_reads_data_and_appends_scrollback(self, mock_read: MagicMock, mock_detect: MagicMock) -> None:
         svc = TerminalService()
         session = _make_session(session_id="s1", master_fd=42)
         svc._sessions["s1"] = session
@@ -548,9 +548,7 @@ class TestOnPtyReadable:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.read", return_value=b"data")
     @patch("backend.services.terminal_service.asyncio.ensure_future", side_effect=Exception("ws dead"))
-    def test_removes_dead_clients(
-        self, mock_ensure: MagicMock, mock_read: MagicMock, mock_detect: MagicMock
-    ) -> None:
+    def test_removes_dead_clients(self, mock_ensure: MagicMock, mock_read: MagicMock, mock_detect: MagicMock) -> None:
         svc = TerminalService()
         session = _make_session(session_id="s1")
         ws = AsyncMock()

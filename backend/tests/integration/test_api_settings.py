@@ -44,9 +44,7 @@ class TestGetSettings:
     """GET /api/settings"""
 
     @pytest.mark.asyncio
-    async def test_returns_all_expected_fields(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_returns_all_expected_fields(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.get("/api/settings")
@@ -70,9 +68,7 @@ class TestGetSettings:
         assert expected_keys.issubset(data.keys())
 
     @pytest.mark.asyncio
-    async def test_default_values_have_correct_types(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_default_values_have_correct_types(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.get("/api/settings")
@@ -89,15 +85,9 @@ class TestUpdateSettings:
     """PUT /api/settings"""
 
     @pytest.mark.asyncio
-    async def test_update_max_concurrent_jobs(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "backend.api.settings.load_config", lambda path=None: _test_config()
-        )
-        monkeypatch.setattr(
-            "backend.api.settings.save_config", lambda config, path=None: None
-        )
+    async def test_update_max_concurrent_jobs(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("backend.api.settings.load_config", lambda path=None: _test_config())
+        monkeypatch.setattr("backend.api.settings.save_config", lambda config, path=None: None)
 
         resp = await client.put("/api/settings", json={"maxConcurrentJobs": 5})
         assert resp.status_code == 200
@@ -107,12 +97,8 @@ class TestUpdateSettings:
     async def test_partial_update_preserves_other_fields(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            "backend.api.settings.load_config", lambda path=None: _test_config()
-        )
-        monkeypatch.setattr(
-            "backend.api.settings.save_config", lambda config, path=None: None
-        )
+        monkeypatch.setattr("backend.api.settings.load_config", lambda path=None: _test_config())
+        monkeypatch.setattr("backend.api.settings.save_config", lambda config, path=None: None)
 
         baseline = (await client.get("/api/settings")).json()
 
@@ -124,15 +110,9 @@ class TestUpdateSettings:
         assert data["permissionMode"] == baseline["permissionMode"]
 
     @pytest.mark.asyncio
-    async def test_update_verification_fields(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "backend.api.settings.load_config", lambda path=None: _test_config()
-        )
-        monkeypatch.setattr(
-            "backend.api.settings.save_config", lambda config, path=None: None
-        )
+    async def test_update_verification_fields(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("backend.api.settings.load_config", lambda path=None: _test_config())
+        monkeypatch.setattr("backend.api.settings.save_config", lambda config, path=None: None)
 
         resp = await client.put(
             "/api/settings",
@@ -145,15 +125,9 @@ class TestUpdateSettings:
         assert data["maxTurns"] == 3
 
     @pytest.mark.asyncio
-    async def test_invalid_value_returns_422(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "backend.api.settings.load_config", lambda path=None: _test_config()
-        )
-        monkeypatch.setattr(
-            "backend.api.settings.save_config", lambda config, path=None: None
-        )
+    async def test_invalid_value_returns_422(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("backend.api.settings.load_config", lambda path=None: _test_config())
+        monkeypatch.setattr("backend.api.settings.save_config", lambda config, path=None: None)
 
         resp = await client.put("/api/settings", json={"maxConcurrentJobs": 0})
         assert resp.status_code == 422
@@ -168,9 +142,7 @@ class TestListRepos:
     """GET /api/settings/repos"""
 
     @pytest.mark.asyncio
-    async def test_returns_registered_repos(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_returns_registered_repos(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.get("/api/settings/repos")
@@ -182,9 +154,7 @@ class TestGetRepoDetail:
     """GET /api/settings/repos/{repo_path}"""
 
     @pytest.mark.asyncio
-    async def test_registered_repo(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_registered_repo(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.get("/api/settings/repos//test/repo")
@@ -196,9 +166,7 @@ class TestGetRepoDetail:
         assert "platform" in data
 
     @pytest.mark.asyncio
-    async def test_unregistered_repo_returns_404(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_unregistered_repo_returns_404(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.get("/api/settings/repos//not/registered")
@@ -225,9 +193,7 @@ class TestRegisterRepo:
         assert data["cloned"] is False
 
     @pytest.mark.asyncio
-    async def test_remote_url_without_clone_to_returns_400(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_remote_url_without_clone_to_returns_400(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.post(
@@ -296,9 +262,7 @@ class TestCleanupWorktrees:
     """POST /api/settings/cleanup-worktrees"""
 
     @pytest.mark.asyncio
-    async def test_returns_removed_count(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_returns_removed_count(self, client: AsyncClient, app: FastAPI) -> None:
         app.dependency_overrides[_get_config] = _test_config
 
         resp = await client.post("/api/settings/cleanup-worktrees")
@@ -340,9 +304,7 @@ class TestBrowseDirectories:
 
         monkeypatch.setenv("HOME", str(fake_home))
 
-        resp = await client.get(
-            "/api/settings/browse", params={"path": str(fake_home)}
-        )
+        resp = await client.get("/api/settings/browse", params={"path": str(fake_home)})
         assert resp.status_code == 200
         data = resp.json()
         assert data["current"] == str(fake_home)
@@ -380,9 +342,7 @@ class TestBrowseDirectories:
         outside.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
 
-        resp = await client.get(
-            "/api/settings/browse", params={"path": str(outside)}
-        )
+        resp = await client.get("/api/settings/browse", params={"path": str(outside)})
         assert resp.status_code == 403
 
 
@@ -400,16 +360,12 @@ class TestPlatformStatus:
     """
 
     @pytest.mark.asyncio
-    async def test_raises_due_to_missing_timestamp(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_raises_due_to_missing_timestamp(self, client: AsyncClient, app: FastAPI) -> None:
         from backend.services.platform_adapter import PlatformStatus
 
         registry = AsyncMock()
         registry.check_all.return_value = [
-            PlatformStatus(
-                platform="github", authenticated=True, user="octocat"
-            ),
+            PlatformStatus(platform="github", authenticated=True, user="octocat"),
         ]
         app.state.platform_registry = registry
 
@@ -417,9 +373,7 @@ class TestPlatformStatus:
             await client.get("/api/platforms/status")
 
     @pytest.mark.asyncio
-    async def test_no_registry_also_raises(
-        self, client: AsyncClient, app: FastAPI
-    ) -> None:
+    async def test_no_registry_also_raises(self, client: AsyncClient, app: FastAPI) -> None:
         app.state.platform_registry = None
 
         with pytest.raises(ValidationError, match="timestamp"):
@@ -435,9 +389,7 @@ class TestListSDKs:
     """GET /api/sdks"""
 
     @pytest.mark.asyncio
-    async def test_returns_available_sdks(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_returns_available_sdks(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
         from backend.services.setup_service import AgentCLIStatus
 
         def _mock_check(sdk_id: str) -> AgentCLIStatus:
@@ -451,9 +403,7 @@ class TestListSDKs:
                 hint="",
             )
 
-        monkeypatch.setattr(
-            "backend.services.setup_service.check_agent_cli", _mock_check
-        )
+        monkeypatch.setattr("backend.services.setup_service.check_agent_cli", _mock_check)
 
         resp = await client.get("/api/sdks")
         assert resp.status_code == 200

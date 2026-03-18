@@ -32,9 +32,7 @@ def _mock_subprocess(
 ) -> AsyncMock:
     """Create a mock for asyncio.create_subprocess_exec that returns a process."""
     mock_proc = AsyncMock()
-    mock_proc.communicate = AsyncMock(
-        return_value=(stdout.encode(), stderr.encode())
-    )
+    mock_proc.communicate = AsyncMock(return_value=(stdout.encode(), stderr.encode()))
     mock_proc.returncode = returncode
     return mock_proc
 
@@ -539,9 +537,7 @@ class TestCreateWorktree:
             return _mock_subprocess()
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            wt_path, branch = await git_service.create_worktree(
-                str(tmp_path), "job-1", "main"
-            )
+            wt_path, branch = await git_service.create_worktree(str(tmp_path), "job-1", "main")
 
         assert branch == "cpl/job-1"
         assert "job-1" in wt_path
@@ -552,9 +548,7 @@ class TestCreateWorktree:
             return _mock_subprocess()
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            wt_path, branch = await git_service.create_worktree(
-                str(tmp_path), "job-1", "main", branch="custom-branch"
-            )
+            wt_path, branch = await git_service.create_worktree(str(tmp_path), "job-1", "main", branch="custom-branch")
 
         assert branch == "custom-branch"
 
@@ -611,9 +605,7 @@ class TestResolveRef:
 
 class TestReattachWorktree:
     @pytest.mark.asyncio
-    async def test_reattach_existing_path_returns_immediately(
-        self, git_service: GitService, tmp_path: Path
-    ) -> None:
+    async def test_reattach_existing_path_returns_immediately(self, git_service: GitService, tmp_path: Path) -> None:
         wt_dir = tmp_path / ".codeplane-worktrees"
         wt_dir.mkdir()
         wt_path = wt_dir / "job-1"
@@ -644,9 +636,7 @@ class TestRemoveWorktree:
         await git_service.remove_worktree("/repo", "/repo/.codeplane-worktrees/nope")
 
     @pytest.mark.asyncio
-    async def test_remove_path_outside_worktrees_dir(
-        self, git_service: GitService, tmp_path: Path
-    ) -> None:
+    async def test_remove_path_outside_worktrees_dir(self, git_service: GitService, tmp_path: Path) -> None:
         """Paths outside the worktrees directory are rejected for safety."""
         outside = tmp_path / "outside"
         outside.mkdir()
@@ -674,9 +664,7 @@ class TestRemoveWorktree:
             await git_service.remove_worktree(str(tmp_path), str(wt_path))
 
     @pytest.mark.asyncio
-    async def test_remove_worktree_skips_protected_branches(
-        self, git_service: GitService, tmp_path: Path
-    ) -> None:
+    async def test_remove_worktree_skips_protected_branches(self, git_service: GitService, tmp_path: Path) -> None:
         """Should not delete main/master/HEAD branches."""
         wt_dir = tmp_path / ".codeplane-worktrees"
         wt_dir.mkdir()
@@ -699,9 +687,7 @@ class TestRemoveWorktree:
         assert len(branch_delete_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_remove_worktree_fallback_to_rmtree(
-        self, git_service: GitService, tmp_path: Path
-    ) -> None:
+    async def test_remove_worktree_fallback_to_rmtree(self, git_service: GitService, tmp_path: Path) -> None:
         """When git worktree remove fails, falls back to shutil.rmtree."""
         wt_dir = tmp_path / ".codeplane-worktrees"
         wt_dir.mkdir()

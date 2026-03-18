@@ -19,6 +19,7 @@ from backend.services.permission_policy import (
 # PolicyDecision enum
 # ---------------------------------------------------------------------------
 
+
 class TestPolicyDecision:
     def test_values(self) -> None:
         assert PolicyDecision.approve == "approve"
@@ -29,6 +30,7 @@ class TestPolicyDecision:
 # ---------------------------------------------------------------------------
 # _READONLY_SHELL_RE
 # ---------------------------------------------------------------------------
+
 
 class TestReadonlyShellRegex:
     @pytest.mark.parametrize(
@@ -95,6 +97,7 @@ class TestReadonlyShellRegex:
 # _is_path_within_workspace
 # ---------------------------------------------------------------------------
 
+
 class TestIsPathWithinWorkspace:
     def test_path_inside_workspace(self, tmp_path: str) -> None:
         workspace = str(tmp_path)
@@ -139,6 +142,7 @@ class TestIsPathWithinWorkspace:
 # ---------------------------------------------------------------------------
 # evaluate_auto
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateAuto:
     """AUTO mode: everything should be approved."""
@@ -202,6 +206,7 @@ class TestEvaluateAuto:
 # evaluate_read_only
 # ---------------------------------------------------------------------------
 
+
 class TestEvaluateReadOnly:
     """READ_ONLY mode: reads + grep/find allowed; everything else denied."""
 
@@ -234,21 +239,15 @@ class TestEvaluateReadOnly:
         assert result == PolicyDecision.deny
 
     def test_shell_grep_approved(self, tmp_path: str) -> None:
-        result = evaluate_read_only(
-            kind="shell", workspace_path=str(tmp_path), full_command_text="grep -r pattern ."
-        )
+        result = evaluate_read_only(kind="shell", workspace_path=str(tmp_path), full_command_text="grep -r pattern .")
         assert result == PolicyDecision.approve
 
     def test_shell_find_approved(self, tmp_path: str) -> None:
-        result = evaluate_read_only(
-            kind="shell", workspace_path=str(tmp_path), full_command_text="find . -name '*.py'"
-        )
+        result = evaluate_read_only(kind="shell", workspace_path=str(tmp_path), full_command_text="find . -name '*.py'")
         assert result == PolicyDecision.approve
 
     def test_shell_rm_denied(self, tmp_path: str) -> None:
-        result = evaluate_read_only(
-            kind="shell", workspace_path=str(tmp_path), full_command_text="rm -rf /"
-        )
+        result = evaluate_read_only(kind="shell", workspace_path=str(tmp_path), full_command_text="rm -rf /")
         assert result == PolicyDecision.deny
 
     def test_shell_no_command_denied(self, tmp_path: str) -> None:
@@ -287,6 +286,7 @@ class TestEvaluateReadOnly:
 # ---------------------------------------------------------------------------
 # evaluate_approval_required
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluateApprovalRequired:
     """APPROVAL_REQUIRED mode: reads auto-approve; rest needs approval."""

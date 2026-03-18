@@ -63,10 +63,7 @@ async def _raw_asgi_sse(
     async def send(message: dict[str, Any]) -> None:
         if message["type"] == "http.response.start":
             result["status"] = message["status"]
-            result["headers"] = {
-                k.decode(): v.decode()
-                for k, v in message.get("headers", [])
-            }
+            result["headers"] = {k.decode(): v.decode() for k, v in message.get("headers", [])}
             response_started.set()
         elif message["type"] == "http.response.body":
             chunk = message.get("body", b"")
@@ -124,9 +121,7 @@ class TestSSEFiltering:
     """SSE connection with query parameters."""
 
     @pytest.mark.asyncio
-    async def test_connect_with_job_id_filter(
-        self, app: FastAPI, seed_job: SeedJobFn
-    ) -> None:
+    async def test_connect_with_job_id_filter(self, app: FastAPI, seed_job: SeedJobFn) -> None:
         """Connecting with ?job_id= still returns 200 and heartbeat."""
         job_id = await seed_job(state="running")
         r = await _raw_asgi_sse(app, query_params={"job_id": job_id})

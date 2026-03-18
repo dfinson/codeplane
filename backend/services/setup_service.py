@@ -544,9 +544,7 @@ def _offer_inline_fix(warning: CheckResult) -> bool:
     fixes: list[tuple[str, list[str]]] = []
 
     if warning.category == "agent":
-        cli = check_agent_cli(
-            "copilot" if "Copilot" in warning.label else "claude"
-        )
+        cli = check_agent_cli("copilot" if "Copilot" in warning.label else "claude")
         if cli.sdk_id == "claude":
             if not cli.cli_reachable:
                 fixes.append(("Install claude CLI", _INLINE_FIX_COMMANDS["claude_cli"]))
@@ -557,19 +555,18 @@ def _offer_inline_fix(warning: CheckResult) -> bool:
 
     if not fixes:
         # No automated fix available — just ask continue/abort
-        choice = _prompt_select([
-            questionary.Choice("Continue anyway", value="continue"),
-            questionary.Choice("Abort", value="abort"),
-        ])
+        choice = _prompt_select(
+            [
+                questionary.Choice("Continue anyway", value="continue"),
+                questionary.Choice("Abort", value="abort"),
+            ]
+        )
         if choice == "abort" or choice is None:
             raise SystemExit(1)
         return False
 
     # Offer to run the fix
-    fix_choices = [
-        questionary.Choice(f"Fix now  {' '.join(cmd)}", value=("fix", cmd))
-        for _label, cmd in fixes
-    ]
+    fix_choices = [questionary.Choice(f"Fix now  {' '.join(cmd)}", value=("fix", cmd)) for _label, cmd in fixes]
     fix_choices.append(questionary.Choice("Skip", value=("skip", [])))
     fix_choices.append(questionary.Choice("Abort", value=("abort", [])))
 
@@ -602,19 +599,19 @@ def _offer_inline_fix(warning: CheckResult) -> bool:
         _console.print(f"       [cyan]{' '.join(fix_cmd)}[/cyan]")
     _console.print()
 
-    retry = _prompt_select([
-        questionary.Choice("I've fixed it — recheck", value="recheck"),
-        questionary.Choice("Continue anyway", value="continue"),
-        questionary.Choice("Abort", value="abort"),
-    ])
+    retry = _prompt_select(
+        [
+            questionary.Choice("I've fixed it — recheck", value="recheck"),
+            questionary.Choice("Continue anyway", value="continue"),
+            questionary.Choice("Abort", value="abort"),
+        ]
+    )
 
     if retry == "abort" or retry is None:
         raise SystemExit(1)
     if retry == "recheck":
         if warning.category == "agent":
-            rechecked = check_agent_cli(
-                "copilot" if "Copilot" in warning.label else "claude"
-            )
+            rechecked = check_agent_cli("copilot" if "Copilot" in warning.label else "claude")
             if rechecked.ready:
                 return True
             _console.print(f"       [yellow]Still not resolved: {rechecked.detail}[/yellow]")

@@ -14,6 +14,7 @@ from backend.services import auth
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_request(
     *,
     client_host: str = "192.168.1.1",
@@ -51,6 +52,7 @@ def _reset_auth_state(monkeypatch: pytest.MonkeyPatch) -> None:
 # set_password / generate_password / _check_password
 # ---------------------------------------------------------------------------
 
+
 class TestPasswordManagement:
     def test_set_password_stores_sha256_hash(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _reset_auth_state(monkeypatch)
@@ -86,6 +88,7 @@ class TestPasswordManagement:
 # Rate limiting
 # ---------------------------------------------------------------------------
 
+
 class TestRateLimiting:
     def test_not_rate_limited_initially(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _reset_auth_state(monkeypatch)
@@ -118,6 +121,7 @@ class TestRateLimiting:
 # Session tokens
 # ---------------------------------------------------------------------------
 
+
 class TestSessionTokens:
     def test_create_session_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _reset_auth_state(monkeypatch)
@@ -147,6 +151,7 @@ class TestSessionTokens:
 # _is_localhost
 # ---------------------------------------------------------------------------
 
+
 class TestIsLocalhost:
     @pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost"])
     def test_localhost_addresses(self, host: str) -> None:
@@ -166,6 +171,7 @@ class TestIsLocalhost:
 # ---------------------------------------------------------------------------
 # handle_login
 # ---------------------------------------------------------------------------
+
 
 class TestHandleLogin:
     @pytest.mark.asyncio
@@ -281,6 +287,7 @@ class TestHandleLogin:
 # ---------------------------------------------------------------------------
 # auth_middleware
 # ---------------------------------------------------------------------------
+
 
 class TestAuthMiddleware:
     @pytest.mark.asyncio

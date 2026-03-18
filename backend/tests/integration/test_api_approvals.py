@@ -32,9 +32,7 @@ class TestListApprovals:
     """GET /api/jobs/{job_id}/approvals"""
 
     @pytest.mark.asyncio
-    async def test_empty_when_no_approvals_exist(
-        self, client: AsyncClient, seed_job: SeedJobFn
-    ) -> None:
+    async def test_empty_when_no_approvals_exist(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         job_id = await seed_job()
         resp = await client.get(f"/api/jobs/{job_id}/approvals")
         assert resp.status_code == 200
@@ -205,9 +203,7 @@ class TestTrustJob:
         assert resp.json()["resolved"] == 2
 
     @pytest.mark.asyncio
-    async def test_returns_zero_when_no_pending(
-        self, client: AsyncClient, seed_job: SeedJobFn
-    ) -> None:
+    async def test_returns_zero_when_no_pending(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         job_id = await seed_job()
         resp = await client.post(f"/api/jobs/{job_id}/approvals/trust")
         assert resp.status_code == 200
@@ -255,9 +251,7 @@ class TestSendMessage:
         body = resp.json()
         assert "seq" in body
         assert "timestamp" in body
-        mock_runtime_service.send_message.assert_called_once_with(
-            job_id, "Try a different approach"
-        )
+        mock_runtime_service.send_message.assert_called_once_with(job_id, "Try a different approach")
 
     @pytest.mark.asyncio
     async def test_non_running_job_returns_409(
@@ -276,9 +270,7 @@ class TestSendMessage:
         assert resp.status_code == 409
 
     @pytest.mark.asyncio
-    async def test_empty_content_returns_422(
-        self, client: AsyncClient, seed_job: SeedJobFn
-    ) -> None:
+    async def test_empty_content_returns_422(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         job_id = await seed_job()
         resp = await client.post(
             f"/api/jobs/{job_id}/messages",
@@ -287,9 +279,7 @@ class TestSendMessage:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_missing_content_field_returns_422(
-        self, client: AsyncClient, seed_job: SeedJobFn
-    ) -> None:
+    async def test_missing_content_field_returns_422(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         job_id = await seed_job()
         resp = await client.post(f"/api/jobs/{job_id}/messages", json={})
         assert resp.status_code == 422

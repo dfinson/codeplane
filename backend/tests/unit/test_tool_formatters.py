@@ -491,9 +491,7 @@ class TestHintBash:
         assert "→ done" in result
 
     def test_failure(self):
-        result = _fmt_with_result(
-            "bash", {"command": "false"}, "error: not found", success=False
-        )
+        result = _fmt_with_result("bash", {"command": "false"}, "error: not found", success=False)
         assert "→ FAIL:" in result
 
     def test_failure_empty_output(self):
@@ -501,9 +499,7 @@ class TestHintBash:
         assert "→ FAIL: error" in result
 
     def test_run_in_terminal_uses_bash_hint(self):
-        result = _fmt_with_result(
-            "run_in_terminal", {"command": "echo hi"}, "hi\n"
-        )
+        result = _fmt_with_result("run_in_terminal", {"command": "echo hi"}, "hi\n")
         assert "→ 1 lines" in result
 
 
@@ -529,15 +525,11 @@ class TestHintCreateFile:
 
 class TestHintReplaceString:
     def test_success(self):
-        result = _fmt_with_result(
-            "replace_string_in_file", {"filePath": "a.py"}, "ok"
-        )
+        result = _fmt_with_result("replace_string_in_file", {"filePath": "a.py"}, "ok")
         assert "→ applied" in result
 
     def test_failure(self):
-        result = _fmt_with_result(
-            "replace_string_in_file", {"filePath": "a.py"}, "err", success=False
-        )
+        result = _fmt_with_result("replace_string_in_file", {"filePath": "a.py"}, "err", success=False)
         assert "→ FAIL: no match" in result
 
 
@@ -562,9 +554,7 @@ class TestHintMultiReplace:
 
 class TestHintGrepSearch:
     def test_matches(self):
-        result = _fmt_with_result(
-            "grep_search", {"query": "TODO"}, "file1:1:TODO\nfile2:5:TODO\n"
-        )
+        result = _fmt_with_result("grep_search", {"query": "TODO"}, "file1:1:TODO\nfile2:5:TODO\n")
         assert "→ 2 matches" in result
 
     def test_no_matches(self):
@@ -574,9 +564,7 @@ class TestHintGrepSearch:
 
 class TestHintSemanticSearch:
     def test_results(self):
-        result = _fmt_with_result(
-            "semantic_search", {"query": "auth"}, "result1\nresult2\n"
-        )
+        result = _fmt_with_result("semantic_search", {"query": "auth"}, "result1\nresult2\n")
         assert "→ 2 results" in result
 
     def test_no_results(self):
@@ -651,21 +639,15 @@ class TestHintGetTerminalOutput:
 
 class TestHintFetchWebpage:
     def test_success_large(self):
-        result = _fmt_with_result(
-            "fetch_webpage", {"url": "https://example.com"}, "x" * 2048
-        )
+        result = _fmt_with_result("fetch_webpage", {"url": "https://example.com"}, "x" * 2048)
         assert "→ 2KB" in result
 
     def test_success_small(self):
-        result = _fmt_with_result(
-            "fetch_webpage", {"url": "https://example.com"}, "hello"
-        )
+        result = _fmt_with_result("fetch_webpage", {"url": "https://example.com"}, "hello")
         assert "→ 5 bytes" in result
 
     def test_failure(self):
-        result = _fmt_with_result(
-            "fetch_webpage", {"url": "https://fail.com"}, "err", success=False
-        )
+        result = _fmt_with_result("fetch_webpage", {"url": "https://fail.com"}, "err", success=False)
         assert "→ FAIL" in result
 
 
@@ -693,23 +675,17 @@ class TestHintRenameSymbol:
         assert "→ renamed" in result
 
     def test_failure(self):
-        result = _fmt_with_result(
-            "vscode_renameSymbol", {}, "err", success=False
-        )
+        result = _fmt_with_result("vscode_renameSymbol", {}, "err", success=False)
         assert "→ FAIL" in result
 
 
 class TestHintListCodeUsages:
     def test_usages_found(self):
-        result = _fmt_with_result(
-            "vscode_listCodeUsages", {"symbol": "Foo"}, "a.py:1\nb.py:2\n"
-        )
+        result = _fmt_with_result("vscode_listCodeUsages", {"symbol": "Foo"}, "a.py:1\nb.py:2\n")
         assert "→ 2 usages" in result
 
     def test_none_found(self):
-        result = _fmt_with_result(
-            "vscode_listCodeUsages", {"symbol": "Foo"}, ""
-        )
+        result = _fmt_with_result("vscode_listCodeUsages", {"symbol": "Foo"}, "")
         assert "→ none" in result
 
 
@@ -727,9 +703,7 @@ class TestFormatToolDisplay:
         assert result == "unknown_tool"
 
     def test_mcp_prefix_stripped(self):
-        result = format_tool_display(
-            "github/bash", json.dumps({"command": "echo hi"})
-        )
+        result = format_tool_display("github/bash", json.dumps({"command": "echo hi"}))
         assert result == "$ echo hi"
 
     def test_mcp_prefix_with_result(self):
@@ -745,9 +719,7 @@ class TestFormatToolDisplay:
         assert "→" not in result
 
     def test_result_none_no_hint(self):
-        result = format_tool_display(
-            "bash", json.dumps({"command": "ls"}), tool_result=None
-        )
+        result = format_tool_display("bash", json.dumps({"command": "ls"}), tool_result=None)
         assert "→" not in result
 
     def test_invalid_args_falls_back_to_tool_name(self):
@@ -763,20 +735,14 @@ class TestFormatToolDisplay:
         assert result == "$ ok"
 
     def test_special_characters_in_args(self):
-        result = format_tool_display(
-            "bash", json.dumps({"command": 'echo "hello world" | grep \'test\''})
-        )
+        result = format_tool_display("bash", json.dumps({"command": "echo \"hello world\" | grep 'test'"}))
         assert result.startswith("$ echo")
 
     def test_unicode_in_args(self):
-        result = format_tool_display(
-            "bash", json.dumps({"command": "echo 日本語"})
-        )
+        result = format_tool_display("bash", json.dumps({"command": "echo 日本語"}))
         assert "日本語" in result
 
     def test_deeply_nested_mcp_prefix(self):
         # Only the last segment after "/" is used
-        result = format_tool_display(
-            "a/b/c/bash", json.dumps({"command": "ls"})
-        )
+        result = format_tool_display("a/b/c/bash", json.dumps({"command": "ls"}))
         assert result == "$ ls"
