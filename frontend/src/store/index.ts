@@ -283,6 +283,11 @@ export const useStore = create<AppState>((set, get) => ({
           const newState = payload.newState as string;
           const existing = state.jobs[jobId];
           if (existing) {
+            const isCanceled = newState === "canceled";
+            const existingPlan = isCanceled ? state.plans[jobId] : undefined;
+            const finalPlan = existingPlan?.map((s: PlanStep) =>
+              s.status === "active" || s.status === "pending" ? { ...s, status: "skipped" as const } : s,
+            );
             return {
               jobs: {
                 ...state.jobs,
@@ -292,6 +297,7 @@ export const useStore = create<AppState>((set, get) => ({
                   updatedAt: (payload.timestamp as string) ?? existing.updatedAt,
                 },
               },
+              ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
             };
           }
           return null;
@@ -405,6 +411,10 @@ export const useStore = create<AppState>((set, get) => ({
           const actualModel = (payload.actualModel as string | null) ?? null;
           const existing = state.jobs[jobId];
           if (existing) {
+            const existingPlan = state.plans[jobId];
+            const finalPlan = existingPlan?.map((s: PlanStep) =>
+              s.status === "active" || s.status === "pending" ? { ...s, status: "done" as const } : s,
+            );
             return {
               jobs: {
                 ...state.jobs,
@@ -419,6 +429,7 @@ export const useStore = create<AppState>((set, get) => ({
                   ...(modelDowngraded && { modelDowngraded, requestedModel, actualModel }),
                 },
               },
+              ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
             };
           }
           return null;
@@ -429,6 +440,10 @@ export const useStore = create<AppState>((set, get) => ({
           const reason = (payload.reason as string | null) ?? "Unknown error";
           const existing = state.jobs[jobId];
           if (existing) {
+            const existingPlan = state.plans[jobId];
+            const finalPlan = existingPlan?.map((s: PlanStep) =>
+              s.status === "active" || s.status === "pending" ? { ...s, status: "skipped" as const } : s,
+            );
             return {
               jobs: {
                 ...state.jobs,
@@ -439,6 +454,7 @@ export const useStore = create<AppState>((set, get) => ({
                   progressHeadline: null,
                 },
               },
+              ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
             };
           }
           return null;

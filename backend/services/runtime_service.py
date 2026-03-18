@@ -378,6 +378,8 @@ class RuntimeService:
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
         self._plan_transcript: dict[str, list[str]] = {}
         self._plan_last_steps: dict[str, list[dict[str, str]]] = {}
+        # Terminal outcome per job: "succeeded" | "failed" | "canceled"
+        self._plan_terminal_state: dict[str, str] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
 
@@ -605,6 +607,7 @@ class RuntimeService:
                 await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
                 await session.commit()
 
+            self._plan_terminal_state[job_id] = "succeeded"
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=_make_event_id(),
@@ -638,6 +641,7 @@ class RuntimeService:
                     if current and current.state != JobState.canceled:
                         await svc.transition_state(job_id, JobState.canceled)
                         await session.commit()
+                        self._plan_terminal_state[job_id] = "canceled"
                         await self._event_bus.publish(
                             DomainEvent(
                                 event_id=_make_event_id(),
@@ -670,6 +674,30 @@ class RuntimeService:
             plan_t = self._plan_tasks.pop(job_id, None)
             if plan_t is not None:
                 plan_t.cancel()
+            # Emit a final plan update so the frontend resolves any spinning steps.
+            terminal_outcome = self._plan_terminal_state.pop(job_id, None)
+            last_steps = self._plan_last_steps.get(job_id)
+            if terminal_outcome and last_steps:
+                succeeded = terminal_outcome == "succeeded"
+                final_steps = []
+                for s in last_steps:
+                    status = s.get("status", "pending")
+                    if status in ("active", "pending"):
+                        status = "done" if succeeded else "skipped"
+                    final_steps.append({"label": s["label"], "status": status})
+                if final_steps != last_steps:
+                    try:
+                        await self._event_bus.publish(
+                            DomainEvent(
+                                event_id=_make_event_id(),
+                                job_id=job_id,
+                                timestamp=datetime.now(UTC),
+                                kind=DomainEventKind.agent_plan_updated,
+                                payload={"steps": final_steps},
+                            )
+                        )
+                    except Exception:
+                        log.debug("plan_finalize_emit_failed", job_id=job_id, exc_info=True)
             self._headline_transcript.pop(job_id, None)
             self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)
@@ -1515,6 +1543,7 @@ class RuntimeService:
                 await svc.get_job(job_id)
                 await svc.transition_state(job_id, JobState.failed, failure_reason=reason)
                 await session.commit()
+            self._plan_terminal_state[job_id] = "failed"
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=_make_event_id(),
