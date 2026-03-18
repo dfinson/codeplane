@@ -706,17 +706,14 @@ class RuntimeService:
             await self._fail_job(job_id, f"Execution error: {exc}")
         finally:
             tel.end_job(job_id)
-            with suppress(RuntimeError):
-                heartbeat_task.cancel()
+            heartbeat_task.cancel()
             self._heartbeat_tasks.pop(job_id, None)
             headline_t = self._headline_tasks.pop(job_id, None)
             if headline_t is not None:
-                with suppress(RuntimeError):
-                    headline_t.cancel()
+                headline_t.cancel()
             plan_t = self._plan_tasks.pop(job_id, None)
             if plan_t is not None:
-                with suppress(RuntimeError):
-                    plan_t.cancel()
+                plan_t.cancel()
             self._headline_transcript.pop(job_id, None)
             self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)

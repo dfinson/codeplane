@@ -1,7 +1,7 @@
 """API integration tests for Terminal endpoints.
 
-Tests exercise the REST endpoints for terminal session management
-and the AI ask feature.
+Tests exercise the REST endpoints for terminal session management,
+the AI ask feature, and the WebSocket terminal I/O handler.
 """
 
 from __future__ import annotations
@@ -10,9 +10,13 @@ import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+from starlette.testclient import TestClient
+
 import backend.api.terminal as terminal_mod
 
 if TYPE_CHECKING:
+    from fastapi import FastAPI
     from httpx import AsyncClient
 
 
@@ -216,3 +220,129 @@ class TestAskAI:
             )
         assert resp.status_code == 200
         assert resp.json()["command"] == "just run: ls"
+
+
+# ── WebSocket tests ──────────────────────────────────────────────────
+
+
+def _mock_terminal_svc_for_ws(
+    *, session_id: str = "s1", scrollback: str = ""
+) -> Mock:
+    """Build a mock TerminalService suitable for WebSocket handler tests."""
+    svc = Mock()
+    session = Mock()
+    session.id = session_id
+    session.clients = set()
+    svc.get_session = Mock(return_value=session)
+    svc.get_scrollback = Mock(return_value=scrollback)
+    svc.write = Mock()
+    svc.resize = Mock()
+    return svc
+
+
+class TestTerminalWebSocket:
+    """Tests for the WebSocket endpoint ``/api/terminal/ws``."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_svc(self) -> None:
+        self._original = terminal_mod._terminal_service
+
+    @pytest.fixture(autouse=True)
+    def _teardown_svc(self) -> None:
+        yield
+        terminal_mod._terminal_service = self._original
+
+    def test_attach_success(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "attached"
+            assert msg["sessionId"] == "s1"
+
+    def test_attach_sends_scrollback(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws(scrollback="$ whoami\nuser\n")
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+            # First message is scrollback replay
+            output = json.loads(ws.receive_text())
+            assert output["type"] == "output"
+            assert "whoami" in output["data"]
+            # Second is attached confirmation
+            attached = json.loads(ws.receive_text())
+            assert attached["type"] == "attached"
+
+    def test_attach_unknown_session(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        svc.get_session = Mock(return_value=None)
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "nope"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "not found" in msg["message"].lower()
+
+    def test_input_writes_to_session(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+            ws.receive_text()  # attached confirmation
+            ws.send_text(json.dumps({"type": "input", "data": "ls\n"}))
+            svc.write.assert_called_with("s1", b"ls\n")
+
+    def test_resize_calls_service(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+            ws.receive_text()  # attached
+            ws.send_text(
+                json.dumps({"type": "resize", "cols": 100, "rows": 40})
+            )
+            svc.resize.assert_called_with("s1", 100, 40)
+
+    def test_detach_removes_client(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+            ws.receive_text()  # attached
+            session = svc.get_session.return_value
+            assert len(session.clients) == 1
+            ws.send_text(json.dumps({"type": "detach"}))
+            # After detach, close and re-check — the handler processes
+            # detach synchronously in its receive loop.
+        # After context manager exit the WebSocket is closed and cleanup runs
+        assert len(session.clients) == 0
+
+    def test_invalid_json_returns_error(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc, tc.websocket_connect("/api/terminal/ws") as ws:
+            ws.send_text("not json at all")
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "invalid" in msg["message"].lower()
+
+    def test_disconnect_cleans_up_client(self, app: FastAPI) -> None:
+        svc = _mock_terminal_svc_for_ws()
+        terminal_mod._terminal_service = svc
+
+        with TestClient(app) as tc:
+            with tc.websocket_connect("/api/terminal/ws") as ws:
+                ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
+                ws.receive_text()  # attached
+                session = svc.get_session.return_value
+                assert len(session.clients) == 1
+            # WebSocket closed — finally block should clean up
+            assert len(session.clients) == 0
