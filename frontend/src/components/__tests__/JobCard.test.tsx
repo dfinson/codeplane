@@ -118,12 +118,12 @@ describe("JobCard", () => {
     expect(screen.getByText("gpt-3.5")).toBeInTheDocument();
   });
 
-  it("shows prompt text when not running", () => {
+  it("shows branch name for queued jobs", () => {
     render(
       <MemoryRouter>
-        <JobCard job={makeJob({ state: "queued" })} />
+        <JobCard job={makeJob({ state: "queued", branch: "fix/auth-bug" })} />
       </MemoryRouter>,
     );
-    expect(screen.getByText("Fix the authentication bug")).toBeInTheDocument();
+    expect(screen.getByText("fix/auth-bug")).toBeInTheDocument();
   });
 });
