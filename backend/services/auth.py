@@ -33,11 +33,20 @@ _session_tokens: set[str] = set()
 # The password hash (set during startup)
 _password_hash: str | None = None
 
-# Load logo as base64 for the login page
+# Load logo as base64 for the login page — deferred to first use
 _logo_path = Path(__file__).resolve().parent.parent.parent / "docs" / "images" / "logo.png"
-_logo_b64 = ""
-if _logo_path.is_file():
-    _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
+_logo_b64: str | None = None
+
+
+def _get_logo_b64() -> str:
+    """Return base64-encoded logo, reading from disk on first call."""
+    global _logo_b64  # noqa: PLW0603
+    if _logo_b64 is None:
+        if _logo_path.is_file():
+            _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
+        else:
+            _logo_b64 = ""
+    return _logo_b64
 
 
 def set_password(password: str) -> None:
@@ -96,10 +105,17 @@ def _is_localhost(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
-_LOGIN_HTML_TEMPLATE = Template(
-    (Path(__file__).resolve().parent.parent / "templates" / "login.html").read_text()
-)
-_LOGIN_HTML = _LOGIN_HTML_TEMPLATE.safe_substitute(logo_b64=_logo_b64)
+_LOGIN_HTML_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "login.html"
+_LOGIN_HTML: str | None = None
+
+
+def _get_login_html() -> str:
+    """Return the rendered login HTML page, reading template on first call."""
+    global _LOGIN_HTML  # noqa: PLW0603
+    if _LOGIN_HTML is None:
+        template = Template(_LOGIN_HTML_TEMPLATE_PATH.read_text())
+        _LOGIN_HTML = template.safe_substitute(logo_b64=_get_logo_b64())
+    return _LOGIN_HTML
 
 
 async def handle_login(request: Request) -> Response:
@@ -167,4 +183,4 @@ async def auth_middleware(request: Request, call_next: Any) -> Response:
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
     # Browser request — serve login page
-    return HTMLResponse(_LOGIN_HTML, status_code=401)
+    return HTMLResponse(_get_login_html(), status_code=401)

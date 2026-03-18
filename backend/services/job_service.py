@@ -47,7 +47,7 @@ class JobService:
     def __init__(
         self,
         job_repo: JobRepository,
-        git_service: GitService,
+        git_service: GitService | None,
         config: CPLConfig,
         naming_service: NamingService | None = None,
     ) -> None:

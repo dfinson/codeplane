@@ -322,5 +322,8 @@ class TelemetryCollector:
         return dict(self._jobs)
 
 
-# Global singleton
+# Module-level singleton — intentional.  All agent adapters import ``collector``
+# directly and call its methods to feed telemetry.  A single shared instance is
+# required so that the API layer can read aggregated data for any job regardless
+# of which adapter produced it.  Instantiation is side-effect-free (no I/O).
 collector = TelemetryCollector()

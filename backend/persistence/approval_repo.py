@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from sqlalchemy import select, update
 
 from backend.models.db import ApprovalRow
 from backend.models.domain import Approval
 from backend.persistence.repository import BaseRepository
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 class ApprovalRepository(BaseRepository):
@@ -14,14 +19,16 @@ class ApprovalRepository(BaseRepository):
 
     @staticmethod
     def _to_domain(row: ApprovalRow) -> Approval:
+        # SQLAlchemy Column descriptors return Any at the type level;
+        # cast() documents the expected runtime type for each field.
         return Approval(
-            id=row.id,  # type: ignore[arg-type]
-            job_id=row.job_id,  # type: ignore[arg-type]
-            description=row.description,  # type: ignore[arg-type]
-            proposed_action=row.proposed_action,  # type: ignore[arg-type]
-            requested_at=row.requested_at,  # type: ignore[arg-type]
-            resolved_at=row.resolved_at,  # type: ignore[arg-type]
-            resolution=row.resolution,  # type: ignore[arg-type]
+            id=cast(str, row.id),
+            job_id=cast(str, row.job_id),
+            description=cast(str, row.description),
+            proposed_action=cast("str | None", row.proposed_action),
+            requested_at=cast("datetime", row.requested_at),
+            resolved_at=cast("datetime | None", row.resolved_at),
+            resolution=cast("str | None", row.resolution),
         )
 
     async def create(self, approval: Approval) -> Approval:
@@ -65,7 +72,7 @@ class ApprovalRepository(BaseRepository):
         self,
         approval_id: str,
         resolution: str,
-        resolved_at: object,
+        resolved_at: datetime,
     ) -> Approval | None:
         """Mark an approval as resolved atomically. Returns updated approval or None.
 
@@ -78,7 +85,8 @@ class ApprovalRepository(BaseRepository):
             .values(resolution=resolution, resolved_at=resolved_at)
         )
         result = await self._session.execute(stmt)
-        if result.rowcount == 0:  # type: ignore[attr-defined]
+        # CursorResult.rowcount is always present but not in the generic type stub
+        if cast(int, result.rowcount) == 0:
             return None
         await self._session.flush()
         # Re-fetch the updated row

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import and_, or_, select
 
@@ -34,35 +34,37 @@ class JobRepository(BaseRepository):
 
     @staticmethod
     def _to_domain(row: JobRow) -> Job:
+        # SQLAlchemy Column descriptors return Any at the type level;
+        # cast() documents the expected runtime type for each field.
         return Job(
-            id=row.id,  # type: ignore[arg-type]
-            repo=row.repo,  # type: ignore[arg-type]
-            prompt=row.prompt,  # type: ignore[arg-type]
-            state=row.state,  # type: ignore[arg-type]
-            base_ref=row.base_ref,  # type: ignore[arg-type]
-            branch=row.branch,  # type: ignore[arg-type]
-            worktree_path=row.worktree_path,  # type: ignore[arg-type]
-            session_id=row.session_id,  # type: ignore[arg-type]
-            created_at=row.created_at,  # type: ignore[arg-type]
-            updated_at=row.updated_at,  # type: ignore[arg-type]
-            completed_at=row.completed_at,  # type: ignore[arg-type]
-            pr_url=row.pr_url,  # type: ignore[arg-type]
-            merge_status=row.merge_status,  # type: ignore[arg-type]
-            title=row.title,  # type: ignore[arg-type]
-            worktree_name=row.worktree_name,  # type: ignore[arg-type]
-            permission_mode=row.permission_mode or PermissionMode.auto,  # type: ignore[arg-type]
-            session_count=row.session_count or 1,  # type: ignore[arg-type]
-            sdk_session_id=row.sdk_session_id,  # type: ignore[arg-type]
-            model=row.model,  # type: ignore[arg-type]
-            resolution=row.resolution,  # type: ignore[arg-type]
-            archived_at=row.archived_at,  # type: ignore[arg-type]
-            failure_reason=row.failure_reason,  # type: ignore[arg-type]
-            sdk=row.sdk or "copilot",  # type: ignore[arg-type]
-            verify=row.verify,  # type: ignore[arg-type]
-            self_review=row.self_review,  # type: ignore[arg-type]
-            max_turns=row.max_turns,  # type: ignore[arg-type]
-            verify_prompt=row.verify_prompt,  # type: ignore[arg-type]
-            self_review_prompt=row.self_review_prompt,  # type: ignore[arg-type]
+            id=cast(str, row.id),
+            repo=cast(str, row.repo),
+            prompt=cast(str, row.prompt),
+            state=cast(str, row.state),
+            base_ref=cast(str, row.base_ref),
+            branch=cast("str | None", row.branch),
+            worktree_path=cast("str | None", row.worktree_path),
+            session_id=cast("str | None", row.session_id),
+            created_at=cast("datetime", row.created_at),
+            updated_at=cast("datetime", row.updated_at),
+            completed_at=cast("datetime | None", row.completed_at),
+            pr_url=cast("str | None", row.pr_url),
+            merge_status=cast("str | None", row.merge_status),
+            title=cast("str | None", row.title),
+            worktree_name=cast("str | None", row.worktree_name),
+            permission_mode=cast(str, row.permission_mode) or PermissionMode.auto,
+            session_count=cast(int, row.session_count) or 1,
+            sdk_session_id=cast("str | None", row.sdk_session_id),
+            model=cast("str | None", row.model),
+            resolution=cast("str | None", row.resolution),
+            archived_at=cast("datetime | None", row.archived_at),
+            failure_reason=cast("str | None", row.failure_reason),
+            sdk=cast(str, row.sdk) or "copilot",
+            verify=cast("bool | None", row.verify),
+            self_review=cast("bool | None", row.self_review),
+            max_turns=cast("int | None", row.max_turns),
+            verify_prompt=cast("str | None", row.verify_prompt),
+            self_review_prompt=cast("str | None", row.self_review_prompt),
         )
 
     async def create(self, job: Job) -> Job:

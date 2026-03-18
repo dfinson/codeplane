@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -113,7 +113,7 @@ class SessionEventKind(StrEnum):
 @dataclass
 class SessionEvent:
     kind: SessionEventKind
-    payload: dict  # type: ignore[type-arg]
+    payload: dict[str, Any]
 
 
 @dataclass

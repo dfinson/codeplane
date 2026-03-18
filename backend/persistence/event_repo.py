@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 from sqlalchemy import select
 
@@ -16,13 +17,15 @@ class EventRepository(BaseRepository):
 
     @staticmethod
     def _to_domain(row: EventRow) -> DomainEvent:
+        # SQLAlchemy Column descriptors return Any at the type level;
+        # cast() documents the expected runtime type for each field.
         return DomainEvent(
-            event_id=row.event_id,  # type: ignore[arg-type]
-            job_id=row.job_id,  # type: ignore[arg-type]
-            timestamp=row.timestamp,  # type: ignore[arg-type]
-            kind=DomainEventKind(row.kind),  # type: ignore[arg-type]
-            payload=json.loads(row.payload),  # type: ignore[arg-type]
-            db_id=row.id,  # type: ignore[arg-type]
+            event_id=cast(str, row.event_id),
+            job_id=cast(str, row.job_id),
+            timestamp=cast("datetime", row.timestamp),
+            kind=DomainEventKind(cast(str, row.kind)),
+            payload=json.loads(cast(str, row.payload)),
+            db_id=cast("int | None", row.id),
         )
 
     async def append(self, event: DomainEvent) -> int:
@@ -36,8 +39,9 @@ class EventRepository(BaseRepository):
         )
         self._session.add(row)
         await self._session.flush()
-        event.db_id = row.id  # type: ignore[assignment]
-        return row.id  # type: ignore[return-value]
+        db_id = cast(int, row.id)
+        event.db_id = db_id
+        return db_id
 
     async def list_after(
         self,

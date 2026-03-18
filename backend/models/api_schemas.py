@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime  # noqa: TC003 — Pydantic resolves annotations at runtime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -335,7 +335,7 @@ class LogLinePayload(CamelModel):
     timestamp: datetime
     level: LogLevel
     message: str
-    context: dict | None = None  # type: ignore[type-arg]
+    context: dict[str, Any] | None = None
 
 
 class TranscriptPayload(CamelModel):
@@ -516,9 +516,12 @@ class ProgressHeadlinePayload(CamelModel):
     replaces_count: int = 0
 
 
+PlanStepStatus = Literal["pending", "active", "done", "skipped"]
+
+
 class AgentPlanStep(CamelModel):
     label: str
-    status: str  # "pending" | "active" | "done" | "skipped"
+    status: PlanStepStatus
 
 
 class AgentPlanPayload(CamelModel):
@@ -536,7 +539,7 @@ class SDKInfoResponse(CamelModel):
     id: str
     name: str
     enabled: bool
-    status: str  # ready | not_installed | not_configured
+    status: Literal["ready", "not_installed", "not_configured"]
 
 
 class SDKListResponse(CamelModel):

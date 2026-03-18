@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -23,18 +24,29 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/api/terminal", tags=["terminal"])
 
-# Will be set by main.py during lifespan
-_terminal_service: TerminalService | None = None
+
+@dataclass
+class _TerminalState:
+    """Encapsulates mutable wiring set by main.py during lifespan."""
+
+    service: TerminalService | None = field(default=None, repr=False)
+    utility_session: Any = field(default=None, repr=False)
+
+
+_state = _TerminalState()
 
 
 def set_terminal_service(service: TerminalService) -> None:
-    global _terminal_service  # noqa: PLW0603
-    _terminal_service = service
+    _state.service = service
+
+
+def set_utility_session(session: object) -> None:
+    _state.utility_session = session
 
 
 def _svc() -> TerminalService:
-    assert _terminal_service is not None, "TerminalService not initialized"
-    return _terminal_service
+    assert _state.service is not None, "TerminalService not initialized"
+    return _state.service
 
 
 # ------------------------------------------------------------------
@@ -85,7 +97,7 @@ async def ask_ai(req: TerminalAskRequest) -> TerminalAskResponse:
     """Translate natural language to a shell command using the utility model."""
     # Access utility session from app state (set in main.py)
     try:
-        if _ask_utility_session is None:
+        if _state.utility_session is None:
             return TerminalAskResponse(command="", explanation="AI assistant not available")
 
         prompt = f"""Translate this natural language request into a single shell command.
@@ -98,7 +110,7 @@ Terminal context (recent output):
 
 User request: {req.prompt}"""
 
-        result = await _ask_utility_session.complete(prompt, timeout=10.0)
+        result = await _state.utility_session.complete(prompt, timeout=10.0)
         try:
             parsed = json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
             return TerminalAskResponse(command=parsed["command"], explanation=parsed.get("explanation", ""))
@@ -107,14 +119,6 @@ User request: {req.prompt}"""
     except Exception as exc:
         log.warning("terminal_ask_failed", error=str(exc))
         return TerminalAskResponse(command="", explanation=f"Error: {exc}")
-
-
-_ask_utility_session: Any = None
-
-
-def set_utility_session(session: object) -> None:
-    global _ask_utility_session  # noqa: PLW0603
-    _ask_utility_session = session
 
 
 # ------------------------------------------------------------------

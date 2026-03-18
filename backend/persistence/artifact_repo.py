@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from sqlalchemy import select
 
 from backend.models.db import ArtifactRow
@@ -14,16 +16,18 @@ class ArtifactRepository(BaseRepository):
 
     @staticmethod
     def _to_domain(row: ArtifactRow) -> Artifact:
+        # SQLAlchemy Column descriptors return Any at the type level;
+        # cast() documents the expected runtime type for each field.
         return Artifact(
-            id=row.id,  # type: ignore[arg-type]
-            job_id=row.job_id,  # type: ignore[arg-type]
-            name=row.name,  # type: ignore[arg-type]
-            type=row.type,  # type: ignore[arg-type]
-            mime_type=row.mime_type,  # type: ignore[arg-type]
-            size_bytes=row.size_bytes,  # type: ignore[arg-type]
-            disk_path=row.disk_path,  # type: ignore[arg-type]
-            phase=row.phase,  # type: ignore[arg-type]
-            created_at=row.created_at,  # type: ignore[arg-type]
+            id=cast(str, row.id),
+            job_id=cast(str, row.job_id),
+            name=cast(str, row.name),
+            type=cast(str, row.type),
+            mime_type=cast(str, row.mime_type),
+            size_bytes=cast(int, row.size_bytes),
+            disk_path=cast(str, row.disk_path),
+            phase=cast(str, row.phase),
+            created_at=cast("datetime", row.created_at),
         )
 
     async def create(self, artifact: Artifact) -> Artifact:
@@ -62,5 +66,5 @@ class ArtifactRepository(BaseRepository):
         result = await self._session.execute(select(ArtifactRow).where(ArtifactRow.id == artifact_id))
         row = result.scalar_one_or_none()
         if row is not None:
-            row.size_bytes = size_bytes  # type: ignore[assignment]
+            row.size_bytes = size_bytes  # type: ignore[assignment]  # Column[int] vs int
             await self._session.flush()

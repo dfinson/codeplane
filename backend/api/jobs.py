@@ -34,6 +34,7 @@ from backend.services.job_service import JobNotFoundError, JobService, RepoNotAl
 from backend.services.naming_service import NamingService
 
 if TYPE_CHECKING:
+    from backend.models.domain import Job
     from backend.services.merge_service import MergeService
     from backend.services.runtime_service import RuntimeService
 
@@ -78,35 +79,32 @@ def _get_merge_service(request: Request) -> MergeService | None:
     return getattr(request.app.state, "merge_service", None)
 
 
-def _job_to_response(job: object) -> JobResponse:
+def _job_to_response(job: Job) -> JobResponse:
     """Map a domain Job to a JobResponse."""
-    from backend.models.domain import Job  # noqa: TC001
-
-    j: Job = job  # type: ignore[assignment]
     return JobResponse(
-        id=j.id,
-        repo=j.repo,
-        prompt=j.prompt,
-        title=j.title,
-        state=j.state,
-        base_ref=j.base_ref,
-        worktree_path=j.worktree_path,
-        branch=j.branch,
-        created_at=j.created_at,
-        updated_at=j.updated_at,
-        completed_at=j.completed_at,
-        pr_url=j.pr_url,
-        merge_status=j.merge_status,
-        resolution=j.resolution,
-        archived_at=j.archived_at,
-        failure_reason=j.failure_reason,
-        model=j.model,
-        worktree_name=j.worktree_name,
-        verify=j.verify,
-        self_review=j.self_review,
-        max_turns=j.max_turns,
-        verify_prompt=j.verify_prompt,
-        self_review_prompt=j.self_review_prompt,
+        id=job.id,
+        repo=job.repo,
+        prompt=job.prompt,
+        title=job.title,
+        state=job.state,
+        base_ref=job.base_ref,
+        worktree_path=job.worktree_path,
+        branch=job.branch,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+        completed_at=job.completed_at,
+        pr_url=job.pr_url,
+        merge_status=job.merge_status,
+        resolution=job.resolution,
+        archived_at=job.archived_at,
+        failure_reason=job.failure_reason,
+        model=job.model,
+        worktree_name=job.worktree_name,
+        verify=job.verify,
+        self_review=job.self_review,
+        max_turns=job.max_turns,
+        verify_prompt=job.verify_prompt,
+        self_review_prompt=job.self_review_prompt,
     )
 
 

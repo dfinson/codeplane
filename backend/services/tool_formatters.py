@@ -14,6 +14,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+# Type alias for deserialized tool argument dicts (JSON-parsed tool_args).
+ToolArgs = dict[str, Any]
+
 
 def _truncate(s: str, max_len: int = 60) -> str:
     if len(s) <= max_len:
@@ -21,7 +24,7 @@ def _truncate(s: str, max_len: int = 60) -> str:
     return s[: max_len - 1] + "…"
 
 
-def _parse_args(tool_args: str | None) -> dict[str, Any]:
+def _parse_args(tool_args: str | None) -> ToolArgs:
     if not tool_args:
         return {}
     try:
@@ -61,17 +64,17 @@ def _short_path(path: str) -> str:
 # -- Individual formatters ---------------------------------------------------
 
 
-def _fmt_bash(args: dict[str, Any]) -> str:
+def _fmt_bash(args: ToolArgs) -> str:
     cmd = args.get("command", "")
     return f"$ {_truncate(cmd, 55)}" if cmd else "bash"
 
 
-def _fmt_run_in_terminal(args: dict[str, Any]) -> str:
+def _fmt_run_in_terminal(args: ToolArgs) -> str:
     cmd = args.get("command", "")
     return f"$ {_truncate(cmd, 55)}" if cmd else "Run command"
 
 
-def _fmt_read_file(args: dict[str, Any]) -> str:
+def _fmt_read_file(args: ToolArgs) -> str:
     path = args.get("filePath", args.get("file_path", ""))
     if not path:
         return "Read file"
@@ -83,17 +86,17 @@ def _fmt_read_file(args: dict[str, Any]) -> str:
     return f"Read {short}"
 
 
-def _fmt_create_file(args: dict[str, Any]) -> str:
+def _fmt_create_file(args: ToolArgs) -> str:
     path = args.get("filePath", args.get("file_path", ""))
     return f"Create {_short_path(path)}" if path else "Create file"
 
 
-def _fmt_replace_string(args: dict[str, Any]) -> str:
+def _fmt_replace_string(args: ToolArgs) -> str:
     path = args.get("filePath", args.get("file_path", ""))
     return f"Edit {_short_path(path)}" if path else "Edit file"
 
 
-def _fmt_multi_replace(args: dict[str, Any]) -> str:
+def _fmt_multi_replace(args: ToolArgs) -> str:
     replacements = args.get("replacements", [])
     paths: set[str] = set()
     for r in replacements:
@@ -109,27 +112,27 @@ def _fmt_multi_replace(args: dict[str, Any]) -> str:
     return f"Edit {count} locations"
 
 
-def _fmt_grep_search(args: dict[str, Any]) -> str:
+def _fmt_grep_search(args: ToolArgs) -> str:
     query = args.get("query", args.get("pattern", ""))
     return f'Grep: "{_truncate(query, 40)}"' if query else "Grep search"
 
 
-def _fmt_semantic_search(args: dict[str, Any]) -> str:
+def _fmt_semantic_search(args: ToolArgs) -> str:
     query = args.get("query", "")
     return f'Search: "{_truncate(query, 40)}"' if query else "Semantic search"
 
 
-def _fmt_file_search(args: dict[str, Any]) -> str:
+def _fmt_file_search(args: ToolArgs) -> str:
     query = args.get("query", args.get("pattern", ""))
     return f'Find: "{_truncate(query, 40)}"' if query else "File search"
 
 
-def _fmt_list_dir(args: dict[str, Any]) -> str:
+def _fmt_list_dir(args: ToolArgs) -> str:
     path = args.get("path", args.get("directory", ""))
     return f"List {_short_path(path)}" if path else "List directory"
 
 
-def _fmt_memory(args: dict[str, Any]) -> str:
+def _fmt_memory(args: ToolArgs) -> str:
     cmd = args.get("command", "")
     path = args.get("path", "")
     if cmd and path:
@@ -137,13 +140,13 @@ def _fmt_memory(args: dict[str, Any]) -> str:
     return f"Memory {cmd}" if cmd else "Memory"
 
 
-def _fmt_manage_todo(args: dict[str, Any]) -> str:
+def _fmt_manage_todo(args: ToolArgs) -> str:
     items = args.get("todoList", [])
     count = len(items) if isinstance(items, list) else 0
     return f"Update todo list ({count} items)" if count else "Update todo list"
 
 
-def _fmt_get_errors(args: dict[str, Any]) -> str:
+def _fmt_get_errors(args: ToolArgs) -> str:
     paths = args.get("filePaths", [])
     if not paths:
         return "Check all errors"
@@ -152,22 +155,22 @@ def _fmt_get_errors(args: dict[str, Any]) -> str:
     return f"Check errors: {len(paths)} files"
 
 
-def _fmt_run_subagent(args: dict[str, Any]) -> str:
+def _fmt_run_subagent(args: ToolArgs) -> str:
     desc = args.get("description", "")
     return f"Subagent: {_truncate(desc, 50)}" if desc else "Run subagent"
 
 
-def _fmt_search_subagent(args: dict[str, Any]) -> str:
+def _fmt_search_subagent(args: ToolArgs) -> str:
     desc = args.get("description", args.get("query", ""))
     return f"Search agent: {_truncate(desc, 45)}" if desc else "Search agent"
 
 
-def _fmt_get_terminal_output(args: dict[str, Any]) -> str:
+def _fmt_get_terminal_output(args: ToolArgs) -> str:
     tid = args.get("id", "")
     return f"Read terminal {tid}" if tid else "Read terminal"
 
 
-def _fmt_fetch_webpage(args: dict[str, Any]) -> str:
+def _fmt_fetch_webpage(args: ToolArgs) -> str:
     url = args.get("url", "")
     if url:
         # Show domain + path start only
@@ -182,12 +185,12 @@ def _fmt_fetch_webpage(args: dict[str, Any]) -> str:
     return "Fetch webpage"
 
 
-def _fmt_tool_search(args: dict[str, Any]) -> str:
+def _fmt_tool_search(args: ToolArgs) -> str:
     pat = args.get("pattern", "")
     return f'Find tools: "{_truncate(pat, 40)}"' if pat else "Find tools"
 
 
-def _fmt_rename_symbol(args: dict[str, Any]) -> str:
+def _fmt_rename_symbol(args: ToolArgs) -> str:
     old = args.get("oldName", args.get("old_name", ""))
     new = args.get("newName", args.get("new_name", ""))
     if old and new:
@@ -195,7 +198,7 @@ def _fmt_rename_symbol(args: dict[str, Any]) -> str:
     return "Rename symbol"
 
 
-def _fmt_list_code_usages(args: dict[str, Any]) -> str:
+def _fmt_list_code_usages(args: ToolArgs) -> str:
     sym = args.get("symbol", args.get("query", ""))
     return f"Usages: {_truncate(sym, 45)}" if sym else "Find usages"
 
@@ -307,7 +310,7 @@ def _hint_list_code_usages(result: str, success: bool) -> str:
 
 # -- Registries ---------------------------------------------------------------
 
-_FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
+_FORMATTERS: dict[str, Callable[[ToolArgs], str]] = {
     "bash": _fmt_bash,
     "run_in_terminal": _fmt_run_in_terminal,
     "read_file": _fmt_read_file,

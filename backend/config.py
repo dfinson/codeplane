@@ -20,9 +20,37 @@ def _resolve_tower_dir() -> Path:
     return Path.home() / ".codeplane"
 
 
-CODEPLANE_DIR = _resolve_tower_dir()
-DEFAULT_CONFIG_PATH = CODEPLANE_DIR / "config.yaml"
-DEFAULT_DB_PATH = CODEPLANE_DIR / "data.db"
+_codeplane_dir: Path | None = None
+
+
+def get_codeplane_dir() -> Path:
+    """Return the resolved CodePlane home directory (lazy, cached).
+
+    Prefer this over importing ``CODEPLANE_DIR`` directly — the env-var read
+    is deferred until first call instead of happening at import time.
+    """
+    global _codeplane_dir  # noqa: PLW0603
+    if _codeplane_dir is None:
+        _codeplane_dir = _resolve_tower_dir()
+    return _codeplane_dir
+
+
+# Lazy module-level constants via __getattr__.  ``from backend.config import
+# CODEPLANE_DIR`` still works, but the env-var read is deferred until the
+# attribute is first accessed rather than when *this* module is imported.
+_LAZY_CONSTANTS = {"CODEPLANE_DIR", "DEFAULT_CONFIG_PATH", "DEFAULT_DB_PATH"}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_CONSTANTS:
+        d = get_codeplane_dir()
+        if name == "CODEPLANE_DIR":
+            return d
+        if name == "DEFAULT_CONFIG_PATH":
+            return d / "config.yaml"
+        if name == "DEFAULT_DB_PATH":
+            return d / "data.db"
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Hardcoded constants — not user-configurable
 VOICE_ENABLED = True
@@ -157,7 +185,7 @@ def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
 def load_config(path: Path | None = None) -> CPLConfig:
     """Load CodePlane configuration from a YAML file."""
     if path is None:
-        path = DEFAULT_CONFIG_PATH
+        path = get_codeplane_dir() / "config.yaml"
 
     if not path.exists():
         return CPLConfig()
@@ -203,7 +231,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     silently overwriting repo registrations that happened concurrently.
     """
     if path is None:
-        path = DEFAULT_CONFIG_PATH
+        path = get_codeplane_dir() / "config.yaml"
 
     # Load existing config to preserve unknown keys
     existing: dict[str, Any] = {}
@@ -296,7 +324,7 @@ def register_repo(config: CPLConfig, repo_path: str, config_path: Path | None = 
     Returns the resolved path that was added.
     """
     if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
+        config_path = get_codeplane_dir() / "config.yaml"
     resolved = str(Path(repo_path).expanduser().resolve())
 
     # Read the authoritative repos from the file (not from the caller's
@@ -328,7 +356,7 @@ def unregister_repo(config: CPLConfig, repo_path: str, config_path: Path | None 
     Raises ValueError if the repo is not in the allowlist.
     """
     if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
+        config_path = get_codeplane_dir() / "config.yaml"
     resolved = str(Path(repo_path).expanduser().resolve())
 
     # Read the authoritative repos from the file.
@@ -363,7 +391,7 @@ def init_config(path: Path | None = None) -> Path:
     Non-destructive: never overwrites an existing config.
     """
     if path is None:
-        path = DEFAULT_CONFIG_PATH
+        path = get_codeplane_dir() / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_text(DEFAULT_CONFIG_YAML)

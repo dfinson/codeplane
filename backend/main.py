@@ -5,9 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import subprocess
+    import threading
 
 import click
 import structlog
@@ -16,6 +21,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
+from starlette.responses import Response
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, terminal, voice, workspace
 from backend.config import MCP_PATH, VOICE_MAX_AUDIO_SIZE_MB, load_config
@@ -354,7 +361,7 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
         app.routes.insert(0, Route("/api/auth/login", handle_login, methods=["POST"]))
 
         @app.middleware("http")
-        async def _auth_gate(request: Any, call_next: Any) -> Any:
+        async def _auth_gate(request: Request, call_next: Callable[..., Awaitable[Response]]) -> Response:
             # SSE must bypass middleware wrapping — BaseHTTPMiddleware
             # buffers streaming responses and kills the connection.
             if request.url.path == "/api/events":
@@ -388,7 +395,7 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
         _index_html = str(_FRONTEND_DIR / "index.html")
 
         @app.exception_handler(404)
-        async def _spa_fallback(request: Any, exc: Any) -> Any:
+        async def _spa_fallback(request: Request, exc: Exception) -> Response:
             path = request.url.path
             if (
                 request.method in ("GET", "HEAD")
@@ -577,13 +584,13 @@ class _TunnelWatchdog:
     _FAIL_THRESHOLD = 2  # consecutive failures before restart
     _HTTP_TIMEOUT = 5  # seconds per health check request
 
-    def __init__(self, *, tunnel_url: str, tunnel_name: str, port: int, proc: Any) -> None:
+    def __init__(self, *, tunnel_url: str, tunnel_name: str, port: int, proc: subprocess.Popen[str]) -> None:
         self.tunnel_url = tunnel_url
         self.tunnel_name = tunnel_name
         self.port = port
         self.proc = proc
-        self._stop_event: Any = __import__("threading").Event()
-        self._thread: Any = None
+        self._stop_event: threading.Event = __import__("threading").Event()
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         import threading
@@ -676,7 +683,7 @@ class _TunnelWatchdog:
                 return
 
 
-def _start_tunnel(port: int) -> tuple[str | None, Any]:
+def _start_tunnel(port: int) -> tuple[str | None, subprocess.Popen[str] | None]:
     """Start a devtunnel with a stable, reusable tunnel name.
 
     Naming convention: {username}-cpl

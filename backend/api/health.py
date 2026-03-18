@@ -10,6 +10,9 @@ from backend.models.api_schemas import HealthResponse, HealthStatus
 
 router = APIRouter(tags=["health"])
 
+# Intentionally captured at import time — this module is first imported during
+# app startup, so the value accurately represents the process start time and is
+# used to compute uptime in the health endpoint.
 _start_time = time.monotonic()
 
 
