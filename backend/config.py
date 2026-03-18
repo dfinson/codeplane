@@ -37,6 +37,7 @@ runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .codeplane-worktrees
   default_sdk: copilot
+  naming_pool_max: 8
 
 retention:
   artifact_retention_days: 30
@@ -66,6 +67,12 @@ class RuntimeConfig:
     permission_mode: str = "auto"  # auto | read_only | approval_required
     utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
     default_sdk: str = "copilot"  # copilot | claude
+    # Maximum number of warm utility sessions for naming and meta-work.
+    # Naming is blocking (job creation waits for it), so this must be large
+    # enough to handle peak concurrent job-creation bursts.  This is intentionally
+    # decoupled from max_concurrent_jobs — you can run 2 jobs at a time but still
+    # name 10 jobs in parallel.
+    naming_pool_max: int = 8
 
 
 @dataclass
@@ -215,6 +222,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
         "permission_mode": str(config.runtime.permission_mode),
         "utility_model": config.runtime.utility_model,
         "default_sdk": config.runtime.default_sdk,
+        "naming_pool_max": config.runtime.naming_pool_max,
     }
     existing["retention"] = {
         "artifact_retention_days": config.retention.artifact_retention_days,

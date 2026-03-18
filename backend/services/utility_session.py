@@ -169,52 +169,102 @@ class UtilitySessionService:
         self._active_jobs = max(0, self._active_jobs - 1)
 
     async def _scale_to_target(self) -> None:
-        """Scale pool up to match active job count (capped at max_pool)."""
-        target = min(max(_MIN_POOL, self._active_jobs), max(_MIN_POOL, self._max_pool_fn()))
+        """Scale pool up to match active job count (capped at max_pool).
+
+        Session creation is done outside the lock to allow parallel connects.
+        """
+        max_p = max(_MIN_POOL, self._max_pool_fn())
+        target = min(max(_MIN_POOL, self._active_jobs), max_p)
         if len(self._sessions) >= target:
             return
+
+        need = target - len(self._sessions)
+        new_index_base = len(self._sessions)
+        candidates = [_WarmSession(model=self._model, index=new_index_base + i) for i in range(need)]
+
+        results = await asyncio.gather(*[ws.connect() for ws in candidates], return_exceptions=True)
+
+        connected: list[_WarmSession] = []
+        for ws, result in zip(candidates, results):
+            if isinstance(result, Exception):
+                log.warning("utility_pool_scale_up_failed", index=ws.index, exc_info=result)
+            else:
+                connected.append(ws)
+
+        if not connected:
+            return
+
         async with self._lock:
-            while len(self._sessions) < target:
-                new_index = len(self._sessions)
-                ws = _WarmSession(model=self._model, index=new_index)
-                try:
-                    await ws.connect()
-                    self._sessions.append(ws)
-                    log.info(
-                        "utility_pool_scaled_up",
-                        new_size=len(self._sessions),
-                        target=target,
-                        active_jobs=self._active_jobs,
-                    )
-                except Exception:
-                    log.warning("utility_pool_scale_up_failed", index=new_index, exc_info=True)
+            max_p_now = max(_MIN_POOL, self._max_pool_fn())
+            for ws in connected:
+                if len(self._sessions) >= max_p_now:
+                    await ws.close()
                     break
+                ws.index = len(self._sessions)
+                self._sessions.append(ws)
+                log.info(
+                    "utility_pool_scaled_up",
+                    new_size=len(self._sessions),
+                    target=target,
+                    active_jobs=self._active_jobs,
+                )
 
     # ------------------------------------------------------------------
     # Autoscaling internals
     # ------------------------------------------------------------------
 
     async def _maybe_scale_up(self) -> None:
-        """Spawn a new session if the queue is deeper than current capacity."""
+        """Spawn a new session if the queue is deeper than current capacity.
+
+        Session creation (ws.connect) is done OUTSIDE the lock so that
+        concurrent callers can create sessions in parallel rather than
+        serialising behind a single lock.  The lock is held only for the
+        brief list-mutation at the end.
+        """
         max_pool = max(_MIN_POOL, self._max_pool_fn())
         target = max(self._pending, self._active_jobs)
-        if target > len(self._sessions) and len(self._sessions) < max_pool:
-            async with self._lock:
-                if target > len(self._sessions) and len(self._sessions) < max_pool:
-                    new_index = len(self._sessions)
-                    ws = _WarmSession(model=self._model, index=new_index)
-                    try:
-                        await ws.connect()
-                        self._sessions.append(ws)
-                        log.info(
-                            "utility_pool_scaled_up",
-                            new_size=len(self._sessions),
-                            pending=self._pending,
-                            active_jobs=self._active_jobs,
-                            max_pool=max_pool,
-                        )
-                    except Exception:
-                        log.warning("utility_pool_scale_up_failed", index=new_index, exc_info=True)
+        if not (target > len(self._sessions) and len(self._sessions) < max_pool):
+            return
+
+        # Determine how many new sessions to create without holding the lock.
+        # Use a snapshot so we don't over-provision if multiple callers race.
+        need = min(target - len(self._sessions), max_pool - len(self._sessions))
+        if need <= 0:
+            return
+
+        # Spawn sessions concurrently — connect() does network I/O and can
+        # take ~1-2 s; doing them in parallel keeps burst creation fast.
+        new_index_base = len(self._sessions)
+        candidates = [_WarmSession(model=self._model, index=new_index_base + i) for i in range(need)]
+
+        results = await asyncio.gather(*[ws.connect() for ws in candidates], return_exceptions=True)
+
+        connected: list[_WarmSession] = []
+        for ws, result in zip(candidates, results):
+            if isinstance(result, Exception):
+                log.warning("utility_pool_scale_up_failed", index=ws.index, exc_info=result)
+            else:
+                connected.append(ws)
+
+        if not connected:
+            return
+
+        async with self._lock:
+            # Re-check ceiling under lock in case another coroutine already scaled.
+            max_pool_now = max(_MIN_POOL, self._max_pool_fn())
+            for ws in connected:
+                if len(self._sessions) >= max_pool_now:
+                    await ws.close()
+                    break
+                ws.index = len(self._sessions)
+                self._sessions.append(ws)
+            log.info(
+                "utility_pool_scaled_up",
+                new_size=len(self._sessions),
+                pending=self._pending,
+                active_jobs=self._active_jobs,
+                max_pool=max_pool_now,
+            )
 
     async def _housekeeping_loop(self) -> None:
         """Periodically close idle sessions beyond the minimum pool size."""
