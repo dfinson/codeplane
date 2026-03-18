@@ -86,6 +86,11 @@ class JobService:
         permission_mode: str = "auto",
         model: str | None = None,
         sdk: str | None = None,
+        verify: bool | None = None,
+        self_review: bool | None = None,
+        max_turns: int | None = None,
+        verify_prompt: str | None = None,
+        self_review_prompt: str | None = None,
     ) -> Job:
         """Create a new job, set up workspace, and persist it.
 
@@ -233,6 +238,11 @@ class JobService:
             permission_mode=permission_mode,
             model=model,
             sdk=resolved_sdk,
+            verify=verify,
+            self_review=self_review,
+            max_turns=max_turns,
+            verify_prompt=verify_prompt,
+            self_review_prompt=self_review_prompt,
         )
         await self._job_repo.create(job)
         log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)

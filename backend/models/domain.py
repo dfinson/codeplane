@@ -164,6 +164,11 @@ class Job:
     model: str | None = None
     sdk: str = "copilot"
     failure_reason: str | None = None
+    verify: bool | None = None
+    self_review: bool | None = None
+    max_turns: int | None = None
+    verify_prompt: str | None = None
+    self_review_prompt: str | None = None
 
 
 @dataclass

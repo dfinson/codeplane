@@ -71,12 +71,15 @@ class ArtifactType(StrEnum):
     diff_snapshot = "diff_snapshot"
     agent_summary = "agent_summary"
     session_snapshot = "session_snapshot"
+    session_log = "session_log"
+    document = "document"
     custom = "custom"
 
 
 class ExecutionPhase(StrEnum):
     environment_setup = "environment_setup"
     agent_reasoning = "agent_reasoning"
+    verification = "verification"
     finalization = "finalization"
     post_completion = "post_completion"
 
@@ -129,6 +132,11 @@ class CreateJobRequest(BaseModel):
     permission_mode: PermissionMode | None = None
     model: str | None = None
     sdk: str | None = None
+    verify: bool | None = None
+    self_review: bool | None = None
+    max_turns: int | None = Field(None, ge=1, le=10)
+    verify_prompt: str | None = Field(None, max_length=5000)
+    self_review_prompt: str | None = Field(None, max_length=5000)
 
     @model_validator(mode="before")
     @classmethod
@@ -171,6 +179,11 @@ class UpdateSettingsRequest(CamelModel):
     artifact_retention_days: int | None = Field(None, ge=1, le=365)
     max_artifact_size_mb: int | None = Field(None, ge=1, le=10_000)
     auto_archive_days: int | None = Field(None, ge=1, le=365)
+    verify: bool | None = None
+    self_review: bool | None = None
+    max_turns: int | None = Field(None, ge=1, le=10)
+    verify_prompt: str | None = Field(None, max_length=5000)
+    self_review_prompt: str | None = Field(None, max_length=5000)
 
 
 class SettingsResponse(CamelModel):
@@ -182,6 +195,11 @@ class SettingsResponse(CamelModel):
     artifact_retention_days: int
     max_artifact_size_mb: int
     auto_archive_days: int
+    verify: bool
+    self_review: bool
+    max_turns: int
+    verify_prompt: str
+    self_review_prompt: str
 
 
 class RegisterRepoRequest(BaseModel):
@@ -223,6 +241,11 @@ class JobResponse(CamelModel):
     model: str | None = None
     sdk: str = "copilot"
     worktree_name: str | None = None
+    verify: bool | None = None
+    self_review: bool | None = None
+    max_turns: int | None = None
+    verify_prompt: str | None = None
+    self_review_prompt: str | None = None
 
 
 class JobListResponse(CamelModel):
@@ -493,8 +516,20 @@ class ProgressHeadlinePayload(CamelModel):
     job_id: str
     headline: str
     headline_past: str
+    summary: str
     timestamp: datetime
     replaces_count: int = 0
+
+
+class AgentPlanStep(CamelModel):
+    label: str
+    status: str  # "pending" | "active" | "done" | "skipped"
+
+
+class AgentPlanPayload(CamelModel):
+    job_id: str
+    steps: list[AgentPlanStep]
+    timestamp: datetime
 
 
 class SnapshotPayload(CamelModel):

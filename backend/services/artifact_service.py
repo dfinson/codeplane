@@ -93,11 +93,12 @@ class ArtifactService:
             dest.write_bytes(entry.read_bytes())
 
             mime = _guess_mime(entry.name)
+            art_type = _classify_artifact(entry.name)
             artifact = Artifact(
                 id=artifact_id,
                 job_id=job_id,
                 name=entry.name,
-                type=ArtifactType.custom,
+                type=art_type,
                 mime_type=mime,
                 size_bytes=dest.stat().st_size,
                 disk_path=str(dest),
@@ -167,36 +168,181 @@ class ArtifactService:
 
         This is cheap (no LLM) and stored at session end. The actual
         LLM-based summary is generated on-demand during cold resumes.
+
+        Delegates to `upsert_session_log` to maintain a single unified
+        session log per job.  Kept for backward compatibility.
+        """
+        session_data = json.loads(snapshot_json)
+        return await self.upsert_session_log(job_id, session_data, slug=slug)
+
+    async def upsert_session_log(
+        self,
+        job_id: str,
+        session_data: dict,
+        *,
+        slug: str = "",
+    ) -> Artifact:
+        """Create or append to a unified session log for this job.
+
+        The log accumulates every session into a single JSON file so that
+        the full task history lives in one artifact with a human-friendly
+        name derived from the job title / worktree name.
+
+        *session_data* must contain at least ``session_number`` and
+        ``transcript_turns``.  ``original_task`` and ``changed_files``
+        are also expected.
+
+        On first call the file is created; on subsequent calls the new
+        session entry is appended and the file is overwritten in-place.
+        Any legacy ``session_snapshot`` artifacts for this job are
+        retroactively merged into the unified log.
         """
         import re as _re
 
-        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        # Build a human-friendly name: session-{slug}-snapshot.json
-        # Fallback to session number if no slug is available.
-        tag = slug.strip() if slug else ""
-        tag = _re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:30]
-        if not tag:
-            tag = str(session_number)
-        name = f"session-{tag}-snapshot.json"
+        session_number = session_data.get("session_number", 0)
 
+        # --- Try to find an existing unified log artifact ---
+        existing_log = await self._get_session_log_artifact(job_id)
+
+        if existing_log is not None:
+            # Append to existing unified log
+            try:
+                log_contents = json.loads(Path(existing_log.disk_path).read_text(encoding="utf-8"))
+            except Exception:
+                log_contents = {"sessions": []}
+
+            # Avoid duplicate session entries
+            existing_nums = {s.get("session_number") for s in log_contents.get("sessions", [])}
+            if session_number not in existing_nums:
+                log_contents.setdefault("sessions", []).append(
+                    {
+                        "session_number": session_number,
+                        "transcript_turns": session_data.get("transcript_turns", []),
+                        "changed_files": session_data.get("changed_files", []),
+                    }
+                )
+                log_contents["sessions"].sort(key=lambda s: s.get("session_number", 0))
+
+            # Merge changed_files across all sessions
+            all_files: set[str] = set()
+            for sess in log_contents.get("sessions", []):
+                all_files.update(sess.get("changed_files", []))
+            log_contents["all_changed_files"] = sorted(all_files)
+
+            # Update original_task if provided (first session wins)
+            if "original_task" not in log_contents and session_data.get("original_task"):
+                log_contents["original_task"] = session_data["original_task"]
+
+            disk_path = Path(existing_log.disk_path)
+            disk_path.write_text(json.dumps(log_contents, indent=2), encoding="utf-8")
+            await self._repo.update_size_bytes(existing_log.id, disk_path.stat().st_size)
+
+            log.info(
+                "session_log_updated",
+                job_id=job_id,
+                session=session_number,
+                total_sessions=len(log_contents["sessions"]),
+            )
+            return existing_log
+
+        # --- First time: retroactively merge any old session_snapshot artifacts ---
+        all_artifacts = await self._repo.list_for_job(job_id)
+        old_snapshots = sorted(
+            [a for a in all_artifacts if a.type == ArtifactType.session_snapshot],
+            key=lambda a: a.created_at,
+        )
+
+        sessions: list[dict] = []
+        original_task = session_data.get("original_task", "")
+        merged_files: set[str] = set()
+
+        for snap in old_snapshots:
+            try:
+                snap_data = json.loads(Path(snap.disk_path).read_text(encoding="utf-8"))
+                snap_num = snap_data.get("session_number", 0)
+                sessions.append(
+                    {
+                        "session_number": snap_num,
+                        "transcript_turns": snap_data.get("transcript_turns", []),
+                        "changed_files": snap_data.get("changed_files", []),
+                    }
+                )
+                merged_files.update(snap_data.get("changed_files", []))
+                if not original_task:
+                    original_task = snap_data.get("original_task", "")
+            except Exception:
+                log.warning("session_snapshot_migration_failed", artifact_id=snap.id, job_id=job_id)
+
+        # Add the current session (avoid duplicates)
+        existing_nums = {s.get("session_number") for s in sessions}
+        if session_number not in existing_nums:
+            sessions.append(
+                {
+                    "session_number": session_number,
+                    "transcript_turns": session_data.get("transcript_turns", []),
+                    "changed_files": session_data.get("changed_files", []),
+                }
+            )
+            merged_files.update(session_data.get("changed_files", []))
+
+        sessions.sort(key=lambda s: s.get("session_number", 0))
+
+        log_contents = {
+            "job_id": job_id,
+            "original_task": original_task,
+            "sessions": sessions,
+            "all_changed_files": sorted(merged_files),
+        }
+
+        # --- Smart naming from slug ---
+        tag = slug.strip() if slug else ""
+        tag = _re.sub(r"[^a-z0-9]+", "-", tag.lower()).strip("-")[:40]
+        if not tag:
+            tag = job_id[:12]
+        name = f"{tag}-session-log.json"
+
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
         disk_dir = _ARTIFACTS_BASE / job_id
         disk_dir.mkdir(parents=True, exist_ok=True)
         disk_path = disk_dir / f"{artifact_id}-{name}"
-        disk_path.write_text(snapshot_json, encoding="utf-8")
-        size_bytes = disk_path.stat().st_size
+        disk_path.write_text(json.dumps(log_contents, indent=2), encoding="utf-8")
 
         artifact = Artifact(
             id=artifact_id,
             job_id=job_id,
             name=name,
-            type=ArtifactType.session_snapshot,
+            type=ArtifactType.session_log,
             mime_type="application/json",
-            size_bytes=size_bytes,
+            size_bytes=disk_path.stat().st_size,
             disk_path=str(disk_path),
             phase=ExecutionPhase.post_completion,
             created_at=datetime.now(UTC),
         )
-        return await self._repo.create(artifact)
+        created = await self._repo.create(artifact)
+
+        migrated = len(old_snapshots)
+        log.info(
+            "session_log_created",
+            job_id=job_id,
+            session=session_number,
+            total_sessions=len(sessions),
+            migrated_snapshots=migrated,
+        )
+        return created
+
+    async def _get_session_log_artifact(self, job_id: str) -> Artifact | None:
+        """Return the unified session_log artifact for a job, if one exists."""
+        all_artifacts = await self._repo.list_for_job(job_id)
+        logs = [a for a in all_artifacts if a.type == ArtifactType.session_log]
+        return logs[0] if logs else None
+
+    async def get_session_log(self, job_id: str) -> Artifact | None:
+        """Return the unified session log, or fall back to the latest session_snapshot."""
+        unified = await self._get_session_log_artifact(job_id)
+        if unified is not None:
+            return unified
+        # Fall back to legacy session_snapshot for jobs that haven't been unified yet
+        return await self.get_latest_session_snapshot(job_id)
 
     async def get_latest_session_snapshot(self, job_id: str) -> Artifact | None:
         """Return the most recent session_snapshot artifact, or None."""
@@ -229,3 +375,14 @@ def _guess_mime(filename: str) -> str:
         ".pdf": "application/pdf",
     }
     return mapping.get(ext, "application/octet-stream")
+
+
+_DOCUMENT_EXTENSIONS = frozenset({".md", ".txt", ".html", ".csv", ".log"})
+
+
+def _classify_artifact(filename: str) -> ArtifactType:
+    """Classify a workspace artifact by extension."""
+    ext = Path(filename).suffix.lower()
+    if ext in _DOCUMENT_EXTENSIONS:
+        return ArtifactType.document
+    return ArtifactType.custom

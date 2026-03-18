@@ -76,6 +76,24 @@ _HEARTBEAT_INTERVAL_S = 30
 _HEARTBEAT_WARNING_S = 90
 _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
+# Default prompts for post-completion verification and self-review turns
+DEFAULT_VERIFY_PROMPT = (
+    "Before this task is complete: identify and run this project's test suite, "
+    "linter, and type checker. If anything fails, fix it and re-run until "
+    "everything passes. Assume that any failure is caused by your changes — "
+    "do not dismiss failures as pre-existing or flaky. Also check that you "
+    "haven't made unrelated changes outside the scope of the original task; "
+    "revert any that you find. Report what you ran and the results."
+)
+
+DEFAULT_SELF_REVIEW_PROMPT = (
+    "Review the changes you just made. Look at the full diff. Check for: "
+    "missed edge cases, incomplete implementations, leftover debug code, "
+    "broken imports, dead code, backwards-compatibility shims or fallback "
+    "paths that may no longer be needed, and inconsistencies with the "
+    "surrounding codebase. If you find issues, fix them."
+)
+
 
 def _discover_mcp_servers(repo_path: str, config: CPLConfig) -> dict[str, MCPServerConfig]:
     """Discover MCP servers from .vscode/mcp.json and global config, respecting .codeplane.yml disabled list."""
@@ -260,6 +278,10 @@ class RuntimeService:
         self._headline_last_text: dict[str, str] = {}
         # Full milestone history per job (for retroactive collapsing)
         self._headline_history: dict[str, list[str]] = {}
+        # Agent plan extraction state per job
+        self._plan_tasks: dict[str, asyncio.Task[None]] = {}
+        self._plan_transcript: dict[str, list[str]] = {}
+        self._plan_last_steps: dict[str, list[dict[str, str]]] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
 
@@ -384,6 +406,14 @@ class RuntimeService:
                 name=f"headline-{job_id}",
             )
             self._headline_tasks[job_id] = headline_task
+            # Start plan extraction (projects what the agent will do next)
+            self._plan_transcript[job_id] = []
+            self._plan_last_steps[job_id] = []
+            plan_task = asyncio.create_task(
+                self._plan_loop(job_id),
+                name=f"plan-{job_id}",
+            )
+            self._plan_tasks[job_id] = plan_task
             # Proactively scale the utility pool to match running jobs
             await self._utility_session.notify_job_started()
 
@@ -563,6 +593,12 @@ class RuntimeService:
                             # Keep only last 3 assistant messages
                             if len(buf) > 3:
                                 self._headline_transcript[job_id] = buf[-3:]
+                        # Buffer for plan extraction (keep more context)
+                        if role == "agent" and content and job_id in self._plan_transcript:
+                            pbuf = self._plan_transcript[job_id]
+                            pbuf.append(content[:400])
+                            if len(pbuf) > 8:
+                                self._plan_transcript[job_id] = pbuf[-8:]
                         # Also collect tool intents for headline generation
                         if role == "tool_call" and job_id in self._headline_tool_intents:
                             intent = str(domain_event.payload.get("tool_intent") or "")
@@ -594,6 +630,9 @@ class RuntimeService:
                     await self._diff_service.finalize(job_id, worktree_path, base_ref)
                 except Exception:
                     log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
+
+            # Run optional verify / self-review follow-up turns
+            await self._run_verify_review(job_id, config, session_id, worktree_path, base_ref)
 
             # Always go to sign-off: leave resolution to operator
             final_resolution: str = "unresolved"
@@ -671,11 +710,16 @@ class RuntimeService:
             headline_t = self._headline_tasks.pop(job_id, None)
             if headline_t is not None:
                 headline_t.cancel()
+            plan_t = self._plan_tasks.pop(job_id, None)
+            if plan_t is not None:
+                plan_t.cancel()
             self._headline_transcript.pop(job_id, None)
             self._headline_tool_intents.pop(job_id, None)
             self._headline_last_snapshot.pop(job_id, None)
             self._headline_last_text.pop(job_id, None)
             self._headline_history.pop(job_id, None)
+            self._plan_transcript.pop(job_id, None)
+            self._plan_last_steps.pop(job_id, None)
             self._tasks.pop(job_id, None)
             self._agent_sessions.pop(job_id, None)
             self._last_activity.pop(job_id, None)
@@ -694,6 +738,208 @@ class RuntimeService:
             )
             # Check if any queued jobs can now start
             await self._dequeue_next()
+
+    async def _run_followup_turn(
+        self,
+        job_id: str,
+        prompt: str,
+        base_config: SessionConfig,
+        resume_session_id: str | None,
+        worktree_path: str | None,
+        base_ref: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Run a single follow-up agent turn (verify or self-review).
+
+        Returns ``(new_session_id, error_reason)``.  *error_reason* is set if
+        the turn encountered an error; callers decide whether to abort.
+        """
+        import dataclasses
+        import time
+
+        followup_session = _AgentSession()
+        followup_config = dataclasses.replace(
+            base_config,
+            prompt=prompt,
+            resume_sdk_session_id=resume_session_id,
+        )
+
+        # Suppress echo of the follow-up prompt
+        self._echo_suppress.setdefault(job_id, set()).add(prompt)
+
+        error_reason: str | None = None
+        new_session_id: str | None = None
+
+        try:
+            async for event in followup_session.execute(
+                followup_config, self._resolve_adapter(base_config.sdk)
+            ):
+                self._last_activity[job_id] = time.monotonic()
+
+                # Diff recalculation on file changes
+                if (
+                    event.kind == SessionEventKind.file_changed
+                    and self._diff_service is not None
+                    and worktree_path
+                    and base_ref
+                ):
+                    await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
+                    continue
+
+                # Diff recalculation on tool completions
+                if (
+                    event.kind == SessionEventKind.transcript
+                    and event.payload.get("role") == "tool_call"
+                    and self._diff_service is not None
+                    and worktree_path
+                    and base_ref
+                ):
+                    await self._diff_service.handle_file_changed(job_id, worktree_path, base_ref)
+
+                # Capture session ID
+                if new_session_id is None and followup_session.session_id:
+                    new_session_id = followup_session.session_id
+                    self._session_ids[job_id] = new_session_id
+                    asyncio.create_task(
+                        self._persist_sdk_session_id(job_id, new_session_id),
+                        name=f"persist-session-{job_id}",
+                    )
+
+                domain_event = self._translate_event(job_id, event)
+                if domain_event is None:
+                    continue
+
+                if domain_event.kind == DomainEventKind.job_failed:
+                    error_reason = domain_event.payload.get("message", "Turn error")
+
+                # Suppress SDK echoes
+                if domain_event.kind == DomainEventKind.transcript_updated and job_id in self._echo_suppress:
+                    content = domain_event.payload.get("content", "")
+                    if content in self._echo_suppress[job_id]:
+                        self._echo_suppress[job_id].discard(content)
+                        continue
+
+                # Handle approval requests (same pattern as main loop)
+                if domain_event.kind == DomainEventKind.approval_requested and self._approval_service is not None:
+                    async with self._session_factory() as sess:
+                        svc = self._make_job_service(sess)
+                        await svc.transition_state(job_id, JobState.waiting_for_approval)
+                        await sess.commit()
+
+                    await self._event_bus.publish(domain_event)
+
+                    approval_id = domain_event.payload.get("approval_id", "")
+                    resolution = await self._approval_service.wait_for_resolution(approval_id)
+
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=_make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.approval_resolved,
+                            payload={
+                                "approval_id": approval_id,
+                                "resolution": resolution,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            },
+                        )
+                    )
+
+                    async with self._session_factory() as sess:
+                        svc = self._make_job_service(sess)
+                        await svc.transition_state(job_id, JobState.running)
+                        await sess.commit()
+                    await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+                    self._last_activity[job_id] = time.monotonic()
+
+                    if resolution == "rejected":
+                        error_reason = "Approval rejected during verification"
+                        break
+                    continue
+
+                await self._event_bus.publish(domain_event)
+        except Exception:
+            log.warning("followup_turn_failed", job_id=job_id, exc_info=True)
+            error_reason = "Follow-up turn execution error"
+
+        return new_session_id, error_reason
+
+    async def _run_verify_review(
+        self,
+        job_id: str,
+        base_config: SessionConfig,
+        session_id: str | None,
+        worktree_path: str | None,
+        base_ref: str | None,
+    ) -> None:
+        """Run optional verify and self-review turns after the main agent session."""
+        job: Job | None = None
+        try:
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                job = await svc.get_job(job_id)
+        except Exception:
+            log.warning("verify_job_lookup_failed", job_id=job_id, exc_info=True)
+            return
+
+        if job is None:
+            return
+
+        do_verify = job.verify if job.verify is not None else self._config.verification.verify
+        do_self_review = job.self_review if job.self_review is not None else self._config.verification.self_review
+
+        if not do_verify and not do_self_review:
+            return
+
+        max_turns = job.max_turns if job.max_turns is not None else self._config.verification.max_turns
+        verify_prompt = job.verify_prompt or self._config.verification.verify_prompt or DEFAULT_VERIFY_PROMPT
+        self_review_prompt = (
+            job.self_review_prompt or self._config.verification.self_review_prompt or DEFAULT_SELF_REVIEW_PROMPT
+        )
+
+        # Emit verification phase change
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=_make_event_id(),
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.execution_phase_changed,
+                payload={"phase": "verification"},
+            )
+        )
+
+        current_session_id = session_id
+
+        if do_verify:
+            for turn in range(1, max_turns + 1):
+                log.info("verify_turn_start", job_id=job_id, turn=turn, max_turns=max_turns)
+                new_sid, error = await self._run_followup_turn(
+                    job_id, verify_prompt, base_config, current_session_id, worktree_path, base_ref
+                )
+                if new_sid:
+                    current_session_id = new_sid
+                if error:
+                    log.warning("verify_turn_error", job_id=job_id, turn=turn, error=error)
+                    break
+                log.info("verify_turn_complete", job_id=job_id, turn=turn)
+
+        if do_self_review:
+            log.info("self_review_start", job_id=job_id)
+            new_sid, error = await self._run_followup_turn(
+                job_id, self_review_prompt, base_config, current_session_id, worktree_path, base_ref
+            )
+            if new_sid:
+                current_session_id = new_sid
+            if error:
+                log.warning("self_review_error", job_id=job_id, error=error)
+            else:
+                log.info("self_review_complete", job_id=job_id)
+
+        # Final diff snapshot after verify/review turns
+        if self._diff_service is not None and worktree_path and base_ref:
+            try:
+                await self._diff_service.finalize(job_id, worktree_path, base_ref)
+            except Exception:
+                log.warning("diff_finalize_after_verify_failed", job_id=job_id, exc_info=True)
 
     async def _heartbeat_loop(self, job_id: str) -> None:
         """Emit periodic heartbeats; timeout based on time since last activity."""
@@ -803,16 +1049,23 @@ class RuntimeService:
                     + "\n---\n".join(parts)
                     + "\n\nRespond with JSON only — exactly one of:\n\n"
                     '1. No meaningful phase change: {"defer": true}\n'
-                    '2. New milestone: {"present": "Implementing auth API", "past": "Implemented auth API"}\n'
+                    '2. New milestone: {"present": "Implementing auth API", "past": "Implemented auth API", '
+                    '"summary": "Adding JWT token validation to /login and /refresh endpoints. '
+                    'Wiring up middleware to reject expired tokens."}\n'
                     "3. Recent milestones were actually the same phase — consolidate the last N "
                     "into one: {\"replace_last\": 2, \"present\": \"Implementing auth system\", "
-                    '"past": "Implemented auth system"}\n\n'
+                    '"past": "Implemented auth system", '
+                    '"summary": "Built login/refresh endpoints with JWT validation and expiry middleware."}\n\n'
                     "RULES:\n"
                     "- STRONGLY prefer defer. Only emit when the agent has clearly moved to a "
                     "different area of the codebase or a different kind of task.\n"
                     "- Use replace_last to merge entries that say essentially the same thing "
                     "(e.g. 'Updating auth routes' and 'Fixing auth middleware' → 'Implementing auth system').\n"
-                    "- Labels: 3-6 words, no articles, no period, present tense for 'present', past tense for 'past'."
+                    "- Labels: 3-6 words, no articles, no period, present tense for 'present', past tense for 'past'.\n"
+                    "- 'summary': 1-3 SHORT sentences describing specifically what was/is being done. "
+                    "Be concrete — mention actual files, endpoints, functions, or components. "
+                    "BAD: 'Exploring authentication documentation'. "
+                    "GOOD: 'Adding JWT middleware to protect /api routes. Storing refresh tokens in Redis.'"
                 )
 
                 try:
@@ -835,6 +1088,7 @@ class RuntimeService:
                     else:
                         headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
                         headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
+                        summary = str(parsed.get("summary", "")).strip().strip('"')
                         replace_last = int(parsed.get("replace_last", 0))
 
                         last_headline = self._headline_last_text.get(job_id, "")
@@ -859,6 +1113,7 @@ class RuntimeService:
                                         "headline": headline,
                                         "headline_past": headline_past,
                                         "replaces_count": replace_last,
+                                        "summary": summary,
                                     },
                                 )
                             )
@@ -867,6 +1122,104 @@ class RuntimeService:
 
                 await asyncio.sleep(interval_s)
                 first = False
+        except asyncio.CancelledError:
+            pass
+
+    async def _plan_loop(self, job_id: str) -> None:
+        """Periodically extract the agent's plan and project remaining steps.
+
+        Runs less frequently than the headline loop. Emits an agent_plan_updated
+        event with a list of steps and their statuses.
+        """
+        import json as _json
+
+        initial_delay_s = 12
+        interval_s = 30
+        try:
+            await asyncio.sleep(initial_delay_s)
+            while True:
+                buf = self._plan_transcript.get(job_id)
+                if not buf:
+                    await asyncio.sleep(interval_s)
+                    continue
+
+                recent = list(buf)
+                # Don't clear — we want the plan loop to see cumulative context
+
+                milestones = self._headline_history.get(job_id, [])
+                milestone_block = ""
+                if milestones:
+                    milestone_block = (
+                        "Completed milestones:\n"
+                        + "\n".join(f"  - {m}" for m in milestones)
+                        + "\n\n"
+                    )
+
+                prev_steps = self._plan_last_steps.get(job_id, [])
+                prev_block = ""
+                if prev_steps:
+                    lines = []
+                    for s in prev_steps:
+                        lines.append(f"  - [{s.get('status', 'pending')}] {s.get('label', '')}")
+                    prev_block = "Previous plan:\n" + "\n".join(lines) + "\n\n"
+
+                prompt = (
+                    "You are extracting a high-level execution plan from a coding agent's activity. "
+                    "The plan should show 3-7 steps the agent is working through, with status markers.\n\n"
+                    + milestone_block
+                    + prev_block
+                    + "Recent agent messages:\n"
+                    + "\n---\n".join(recent)
+                    + "\n\nRespond with JSON only:\n"
+                    '{"steps": [{"label": "Step description", "status": "done|active|pending"}]}\n\n'
+                    "RULES:\n"
+                    "- 3-7 steps total. Each label: 3-8 words, no articles, no period.\n"
+                    "- Mark completed work as 'done', current work as 'active' (exactly one), "
+                    "future work as 'pending'.\n"
+                    "- Steps should cover the full task arc — from what's been done to what remains.\n"
+                    "- Be concrete: mention actual components, endpoints, files when possible.\n"
+                    "- If you can't determine a plan from the activity, respond: {\"steps\": []}\n"
+                )
+
+                try:
+                    raw = await self._utility_session.complete(prompt, timeout=10)  # type: ignore[union-attr]
+                    raw = raw.strip()
+
+                    # Strip markdown fences
+                    if raw.startswith("```"):
+                        import re as _re
+                        raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                        raw = _re.sub(r"\n?```$", "", raw)
+                        raw = raw.strip()
+
+                    parsed = _json.loads(raw)
+                    steps = parsed.get("steps", [])
+
+                    if steps and isinstance(steps, list):
+                        # Validate steps
+                        clean_steps = []
+                        for s in steps:
+                            if isinstance(s, dict) and s.get("label"):
+                                status = s.get("status", "pending")
+                                if status not in ("done", "active", "pending", "skipped"):
+                                    status = "pending"
+                                clean_steps.append({"label": s["label"], "status": status})
+
+                        if clean_steps and clean_steps != self._plan_last_steps.get(job_id, []):
+                            self._plan_last_steps[job_id] = clean_steps
+                            await self._event_bus.publish(
+                                DomainEvent(
+                                    event_id=_make_event_id(),
+                                    job_id=job_id,
+                                    timestamp=datetime.now(UTC),
+                                    kind=DomainEventKind.agent_plan_updated,
+                                    payload={"steps": clean_steps},
+                                )
+                            )
+                except Exception:
+                    log.debug("plan_extraction_failed", job_id=job_id, exc_info=True)
+
+                await asyncio.sleep(interval_s)
         except asyncio.CancelledError:
             pass
 
@@ -1062,18 +1415,19 @@ class RuntimeService:
                 event_repo = EventRepository(session)
                 artifact_svc = ArtifactService(ArtifactRepository(session))
 
-                # Check if snapshot already stored for this session
-                existing = await artifact_svc.get_latest_session_snapshot(job_id)
+                # Check if this session is already captured in the unified log
+                existing = await artifact_svc.get_session_log(job_id)
                 if existing is not None:
                     try:
                         import json as _json_check
                         from pathlib import Path as _PathCheck
 
-                        _snap = _json_check.loads(_PathCheck(existing.disk_path).read_text(encoding="utf-8"))
-                        if _snap.get("session_number", 0) >= job.session_count:
+                        _log_data = _json_check.loads(_PathCheck(existing.disk_path).read_text(encoding="utf-8"))
+                        _recorded = {s.get("session_number") for s in _log_data.get("sessions", [])}
+                        if job.session_count in _recorded:
                             return  # already captured this session
                     except Exception:
-                        pass  # can't parse previous snapshot — overwrite it
+                        pass  # can't parse previous log — append anyway
 
                 # Build snapshot from events
                 transcript_events = await event_repo.list_by_job(job_id, kinds=[DomainEventKind.transcript_updated])
@@ -1143,9 +1497,9 @@ class RuntimeService:
                 await artifact_svc.store_session_snapshot(job_id, job.session_count, snapshot, slug=slug)
                 await session.commit()
 
-            log.info("session_snapshot_stored", job_id=job_id, session=job.session_count, turns=len(turns))
+            log.info("session_log_stored", job_id=job_id, session=job.session_count, turns=len(turns))
         except Exception:
-            log.warning("session_snapshot_failed", job_id=job_id, exc_info=True)
+            log.warning("session_log_failed", job_id=job_id, exc_info=True)
 
     async def _persist_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
         """Persist the Copilot SDK session ID so resume_job() can reconnect to it later."""
@@ -1221,30 +1575,43 @@ class RuntimeService:
                 changed_files = _extract_changed_files(diff_events)
 
                 if summary_artifact is None and self._summarization_service is not None:
-                    # No cached summary — try to generate from session snapshot
-                    snapshot_artifact = await artifact_svc.get_latest_session_snapshot(job_id)
-                    if snapshot_artifact is not None:
+                    # No cached summary — try to generate from unified session log (or legacy snapshot)
+                    log_artifact = await artifact_svc.get_session_log(job_id)
+                    if log_artifact is not None:
                         try:
                             import json as _json
 
-                            snapshot_text = Path(snapshot_artifact.disk_path).read_text(encoding="utf-8")
-                            snapshot_data = _json.loads(snapshot_text)
-                            _turns = snapshot_data.get("transcript_turns", [])
+                            log_text = Path(log_artifact.disk_path).read_text(encoding="utf-8")
+                            log_data = _json.loads(log_text)
+
+                            # Build transcript from ALL sessions in the log
                             _parts: list[str] = []
-                            for i, t in enumerate(_turns, 1):
-                                role = t.get("role", "")
-                                if role == "tool_call":
-                                    display = (
-                                        t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
-                                    )
-                                    ok = "\u2713" if t.get("tool_success", True) else "\u2717"
-                                    _parts.append(f"[{i}] TOOL {ok}: {display}")
-                                else:
-                                    _parts.append(f"[{i}] {role.upper()}: {t.get('content', '')}")
+                            _counter = 0
+                            all_sessions = log_data.get("sessions", [])
+                            # Fallback for legacy single-session snapshots
+                            if not all_sessions and log_data.get("transcript_turns"):
+                                all_sessions = [log_data]
+                            for sess in all_sessions:
+                                sess_num = sess.get("session_number", "?")
+                                _turns = sess.get("transcript_turns", [])
+                                if len(all_sessions) > 1:
+                                    _counter += 1
+                                    _parts.append(f"=== Session {sess_num} ===")
+                                for t in _turns:
+                                    _counter += 1
+                                    role = t.get("role", "")
+                                    if role == "tool_call":
+                                        display = (
+                                            t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
+                                        )
+                                        ok = "\u2713" if t.get("tool_success", True) else "\u2717"
+                                        _parts.append(f"[{_counter}] TOOL {ok}: {display}")
+                                    else:
+                                        _parts.append(f"[{_counter}] {role.upper()}: {t.get('content', '')}")
                             transcript_text = "\n---\n".join(_parts) or "(no transcript)"
-                            snapshot_changed = snapshot_data.get("changed_files", [])
-                            if snapshot_changed:
-                                changed_files = snapshot_changed
+                            log_changed = log_data.get("all_changed_files") or log_data.get("changed_files", [])
+                            if log_changed:
+                                changed_files = log_changed
                             await self._summarization_service.summarize_and_store(
                                 job_id,
                                 job.session_count,
@@ -1254,7 +1621,7 @@ class RuntimeService:
                             )
                             summary_artifact = await artifact_svc.get_latest_session_summary(job_id)
                         except Exception:
-                            log.warning("snapshot_summarization_failed", job_id=job_id, exc_info=True)
+                            log.warning("session_log_summarization_failed", job_id=job_id, exc_info=True)
 
                     if summary_artifact is None:
                         # Final fallback — generate from raw events

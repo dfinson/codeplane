@@ -89,8 +89,14 @@ export interface TranscriptEntry {
 export interface TimelineEntry {
   headline: string;
   headlinePast: string;
+  summary: string;
   timestamp: string;
   active: boolean;
+}
+
+export interface PlanStep {
+  label: string;
+  status: "done" | "active" | "pending" | "skipped";
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +134,7 @@ interface AppState {
   transcript: Record<string, TranscriptEntry[]>; // keyed by jobId
   diffs: Record<string, DiffFileModel[]>; // keyed by jobId
   timelines: Record<string, TimelineEntry[]>; // keyed by jobId
+  plans: Record<string, PlanStep[]>; // keyed by jobId
 
   // Terminal state
   terminalDrawerOpen: boolean;
@@ -161,6 +168,7 @@ export const useStore = create<AppState>((set, get) => ({
   transcript: {},
   diffs: {},
   timelines: {},
+  plans: {},
   connectionStatus: "reconnecting",
 
   // Terminal state
@@ -489,9 +497,10 @@ export const useStore = create<AppState>((set, get) => ({
           const deactivated = base.map((e) =>
             e.active ? { ...e, active: false } : e,
           );
+          const summary = (payload.summary as string) || "";
           const newTimeline = [
             ...deactivated,
-            { headline, headlinePast, timestamp, active: true },
+            { headline, headlinePast, summary, timestamp, active: true },
           ];
 
           if (existing) {
@@ -530,6 +539,18 @@ export const useStore = create<AppState>((set, get) => ({
             };
           }
           return null;
+        }
+
+        case "agent_plan_updated": {
+          const jobId = payload.jobId as string;
+          const steps = (payload.steps as Array<{ label: string; status: string }>) || [];
+          const typed: PlanStep[] = steps.map((s) => ({
+            label: s.label,
+            status: (s.status as PlanStep["status"]) || "pending",
+          }));
+          return {
+            plans: { ...state.plans, [jobId]: typed },
+          };
         }
 
         default:
@@ -645,6 +666,10 @@ export const selectJobDiffs = (jobId: string) => (state: AppState) =>
 const EMPTY_TIMELINE: TimelineEntry[] = [];
 export const selectJobTimeline = (jobId: string) => (state: AppState) =>
   state.timelines[jobId] ?? EMPTY_TIMELINE;
+
+const EMPTY_PLAN: PlanStep[] = [];
+export const selectJobPlan = (jobId: string) => (state: AppState) =>
+  state.plans[jobId] ?? EMPTY_PLAN;
 
 // Per-column selectors — only recompute when jobs in that column change
 function sortByUpdatedDesc(jobs: JobSummary[]): JobSummary[] {

@@ -81,17 +81,27 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
         )}
       </div>
 
-      <p className="text-xs leading-snug line-clamp-2 text-foreground/70 mb-2">
+      <div className="text-xs leading-snug text-foreground/70 mb-2">
         {job.state === "running" && timeline.length > 0 ? (
-          <span className="italic text-primary/70">
-            {(timeline.find((e) => e.active) ?? timeline[timeline.length - 1])!.headline}
-          </span>
+          (() => {
+            const active = timeline.find((e) => e.active) ?? timeline[timeline.length - 1];
+            return (
+              <>
+                <p className="italic text-primary/70 line-clamp-1">{active!.headline}</p>
+                {active?.summary && (
+                  <p className="text-[11px] text-muted-foreground/70 mt-0.5 line-clamp-2">
+                    {active.summary}
+                  </p>
+                )}
+              </>
+            );
+          })()
         ) : job.progressHeadline ? (
-          <span className="italic text-primary/70">{job.progressHeadline}</span>
+          <p className="italic text-primary/70 line-clamp-2">{job.progressHeadline}</p>
         ) : (
-          job.prompt
+          <p className="line-clamp-2">{job.prompt}</p>
         )}
-      </p>
+      </div>
 
       {/* Model downgrade warning */}
       {job.modelDowngraded && (

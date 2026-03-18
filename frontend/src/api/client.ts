@@ -88,12 +88,13 @@ export function fetchJobTranscript(jobId: string, limit = 2000): Promise<import(
 }
 
 export function fetchJobTimeline(jobId: string, limit = 200): Promise<import("../store").TimelineEntry[]> {
-  return request<Array<{ headline: string; headlinePast: string; timestamp: string }>>(
+  return request<Array<{ headline: string; headlinePast: string; summary?: string; timestamp: string }>>(
     `/jobs/${encodeURIComponent(jobId)}/timeline?limit=${limit}`,
   ).then((entries) =>
     entries.map((e) => ({
       headline: e.headline,
       headlinePast: e.headlinePast,
+      summary: e.summary ?? "",
       timestamp: e.timestamp,
       active: false, // historical entries are never active; live SSE manages active state
     })),
@@ -230,6 +231,13 @@ export async function fetchArtifactContent(artifactId: string): Promise<unknown>
   const res = await fetch(url);
   if (!res.ok) throw new Error(`artifact fetch failed: ${res.status}`);
   return res.json();
+}
+
+export async function fetchArtifactText(artifactId: string): Promise<string> {
+  const url = downloadArtifactUrl(artifactId);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`artifact fetch failed: ${res.status}`);
+  return res.text();
 }
 
 // --- Workspace ---

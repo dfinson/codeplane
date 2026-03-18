@@ -63,9 +63,14 @@ export function ExecutionTimeline({ jobId }: { jobId: string }) {
                     <span className="text-[10px] text-muted-foreground/50 font-mono">
                       {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     </span>
-                    <span className={`text-xs leading-snug ${entry.active ? "text-foreground italic" : "text-muted-foreground"}`}>
+                    <span className={`text-xs leading-snug font-medium ${entry.active ? "text-foreground" : "text-muted-foreground"}`}>
                       {entry.active ? entry.headline : entry.headlinePast}
                     </span>
+                    {entry.summary && (
+                      <span className="text-[11px] leading-relaxed text-muted-foreground/70">
+                        {entry.summary}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}

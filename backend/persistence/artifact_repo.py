@@ -56,3 +56,11 @@ class ArtifactRepository(BaseRepository):
         if row is None:
             return None
         return self._to_domain(row)
+
+    async def update_size_bytes(self, artifact_id: str, size_bytes: int) -> None:
+        """Update the stored file size after appending to a unified log."""
+        result = await self._session.execute(select(ArtifactRow).where(ArtifactRow.id == artifact_id))
+        row = result.scalar_one_or_none()
+        if row is not None:
+            row.size_bytes = size_bytes  # type: ignore[assignment]
+            await self._session.flush()

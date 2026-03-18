@@ -66,6 +66,11 @@ def _config_to_response(config: CPLConfig) -> SettingsResponse:
         artifact_retention_days=config.retention.artifact_retention_days,
         max_artifact_size_mb=config.retention.max_artifact_size_mb,
         auto_archive_days=config.retention.auto_archive_days,
+        verify=config.verification.verify,
+        self_review=config.verification.self_review,
+        max_turns=config.verification.max_turns,
+        verify_prompt=config.verification.verify_prompt,
+        self_review_prompt=config.verification.self_review_prompt,
     )
 
 
@@ -100,6 +105,16 @@ async def update_settings(
         config.retention.max_artifact_size_mb = updates["max_artifact_size_mb"]
     if "auto_archive_days" in updates:
         config.retention.auto_archive_days = updates["auto_archive_days"]
+    if "verify" in updates:
+        config.verification.verify = updates["verify"]
+    if "self_review" in updates:
+        config.verification.self_review = updates["self_review"]
+    if "max_turns" in updates:
+        config.verification.max_turns = updates["max_turns"]
+    if "verify_prompt" in updates:
+        config.verification.verify_prompt = updates["verify_prompt"]
+    if "self_review_prompt" in updates:
+        config.verification.self_review_prompt = updates["self_review_prompt"]
     save_config(config)
     return _config_to_response(config)
 

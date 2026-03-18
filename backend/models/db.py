@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
 # All DateTime columns use timezone=True so timestamps are stored
@@ -37,6 +37,11 @@ class JobRow(Base):
     model = Column(String, nullable=True)
     failure_reason = Column(String, nullable=True)
     sdk = Column(String, nullable=False, default="copilot")
+    verify = Column(Boolean, nullable=True)
+    self_review = Column(Boolean, nullable=True)
+    max_turns = Column(Integer, nullable=True)
+    verify_prompt = Column(Text, nullable=True)
+    self_review_prompt = Column(Text, nullable=True)
     created_at = Column(TZDateTime, nullable=False)
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)

@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 import structlog
 
 from backend.models.api_schemas import (
+    AgentPlanPayload,
+    AgentPlanStep,
     ApprovalRequestedPayload,
     ApprovalResolvedPayload,
     ApprovalResponse,
@@ -65,6 +67,7 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
     DomainEventKind.progress_headline: "progress_headline",
     DomainEventKind.model_downgraded: "model_downgraded",
     DomainEventKind.tool_group_summary: "tool_group_summary",
+    DomainEventKind.agent_plan_updated: "agent_plan_updated",
 }
 
 # State implied by each domain event kind (for job_state_changed payloads)
@@ -266,6 +269,7 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             job_id=event.job_id,
             headline=event.payload.get("headline", ""),
             headline_past=event.payload.get("headline_past", event.payload.get("headline", "")),
+            summary=event.payload.get("summary", ""),
             timestamp=event.timestamp,
             replaces_count=event.payload.get("replaces_count", 0),
         ).model_dump_json(by_alias=True)
@@ -283,6 +287,15 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
             job_id=event.job_id,
             turn_id=event.payload.get("turn_id", ""),
             summary=event.payload.get("summary", ""),
+            timestamp=event.timestamp,
+        ).model_dump_json(by_alias=True)
+
+    if sse_type == "agent_plan_updated":
+        raw_steps = event.payload.get("steps", [])
+        steps = [AgentPlanStep(label=s.get("label", ""), status=s.get("status", "pending")) for s in raw_steps]
+        return AgentPlanPayload(
+            job_id=event.job_id,
+            steps=steps,
             timestamp=event.timestamp,
         ).model_dump_json(by_alias=True)
 

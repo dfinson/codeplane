@@ -48,6 +48,11 @@ class JobRepository(BaseRepository):
             archived_at=row.archived_at,  # type: ignore[arg-type]
             failure_reason=row.failure_reason,  # type: ignore[arg-type]
             sdk=row.sdk or "copilot",  # type: ignore[arg-type]
+            verify=row.verify,  # type: ignore[arg-type]
+            self_review=row.self_review,  # type: ignore[arg-type]
+            max_turns=row.max_turns,  # type: ignore[arg-type]
+            verify_prompt=row.verify_prompt,  # type: ignore[arg-type]
+            self_review_prompt=row.self_review_prompt,  # type: ignore[arg-type]
         )
 
     async def create(self, job: Job) -> Job:
@@ -75,6 +80,11 @@ class JobRepository(BaseRepository):
             resolution=job.resolution,
             archived_at=job.archived_at,
             sdk=job.sdk,
+            verify=job.verify,
+            self_review=job.self_review,
+            max_turns=job.max_turns,
+            verify_prompt=job.verify_prompt,
+            self_review_prompt=job.self_review_prompt,
         )
         self._session.add(row)
         await self._session.flush()

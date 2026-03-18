@@ -98,6 +98,17 @@ class CompletionConfig:
 
 
 @dataclass
+class VerificationConfig:
+    """Default verification/self-review settings for new jobs."""
+
+    verify: bool = False
+    self_review: bool = False
+    max_turns: int = 2
+    verify_prompt: str = ""
+    self_review_prompt: str = ""
+
+
+@dataclass
 class TerminalConfig:
     """Interactive terminal feature configuration."""
 
@@ -124,6 +135,7 @@ class CPLConfig:
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     completion: CompletionConfig = field(default_factory=CompletionConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -168,6 +180,7 @@ def load_config(path: Path | None = None) -> CPLConfig:
         rate_limits=_parse_section(raw, RateLimitConfig, "rate_limits"),
         completion=_parse_section(raw, CompletionConfig, "completion"),
         terminal=_parse_section(raw, TerminalConfig, "terminal"),
+        verification=_parse_section(raw, VerificationConfig, "verification"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )
@@ -231,6 +244,13 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
             "scrollback_size_kb": config.terminal.scrollback_size_kb,
         }
     existing["repos"] = config.repos
+    existing["verification"] = {
+        "verify": config.verification.verify,
+        "self_review": config.verification.self_review,
+        "max_turns": config.verification.max_turns,
+        "verify_prompt": config.verification.verify_prompt,
+        "self_review_prompt": config.verification.self_review_prompt,
+    }
     if config.platforms:
         existing["platforms"] = {name: {"auth": pc.auth, "repos": pc.repos} for name, pc in config.platforms.items()}
 

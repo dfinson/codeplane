@@ -99,6 +99,11 @@ def _job_to_response(job: object) -> JobResponse:
         failure_reason=j.failure_reason,
         model=j.model,
         worktree_name=j.worktree_name,
+        verify=j.verify,
+        self_review=j.self_review,
+        max_turns=j.max_turns,
+        verify_prompt=j.verify_prompt,
+        self_review_prompt=j.self_review_prompt,
     )
 
 
@@ -119,6 +124,11 @@ async def create_job(
             permission_mode=body.permission_mode or "auto",
             model=body.model,
             sdk=body.sdk,
+            verify=body.verify,
+            self_review=body.self_review,
+            max_turns=body.max_turns,
+            verify_prompt=body.verify_prompt,
+            self_review_prompt=body.self_review_prompt,
         )
     except RepoNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -456,6 +466,7 @@ async def get_job_timeline(
                 job_id=event.job_id,
                 headline=event.payload.get("headline", ""),
                 headline_past=event.payload.get("headline_past", ""),
+                summary=event.payload.get("summary", ""),
                 timestamp=event.timestamp,
             )
         )

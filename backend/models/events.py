@@ -33,6 +33,8 @@ class DomainEventKind(StrEnum):
     progress_headline = "ProgressHeadline"
     model_downgraded = "ModelDowngraded"
     tool_group_summary = "ToolGroupSummary"
+    agent_plan_updated = "AgentPlanUpdated"
+    execution_phase_changed = "ExecutionPhaseChanged"
 
 
 @dataclass
