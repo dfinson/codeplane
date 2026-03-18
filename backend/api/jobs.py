@@ -321,8 +321,15 @@ async def resume_job(
 
 
 @router.get("/models")
-async def list_models(request: Request) -> list[dict[str, object]]:
-    """Return the model list cached at server startup."""
+async def list_models(
+    request: Request,
+    sdk: Annotated[str | None, Query(description="SDK id (copilot | claude). Omit for default.")] = None,
+) -> list[dict[str, object]]:
+    """Return the model list for the requested SDK, cached at server startup."""
+    if sdk is not None:
+        by_sdk: dict[str, list[dict[str, object]]] = getattr(request.app.state, "cached_models_by_sdk", {})
+        return by_sdk.get(sdk, [])
+    # Fall back to the legacy flat cache (default SDK)
     models: list[dict[str, object]] = request.app.state.cached_models
     return models
 

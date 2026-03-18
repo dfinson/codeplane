@@ -139,8 +139,9 @@ export function rerunJob(jobId: string): Promise<CreateJobResponse> {
   });
 }
 
-export function fetchModels(): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
-  return request("/models");
+export function fetchModels(sdk?: string): Promise<{ id?: string; name?: string; [key: string]: unknown }[]> {
+  const qs = sdk ? `?sdk=${encodeURIComponent(sdk)}` : "";
+  return request(`/models${qs}`);
 }
 
 export function fetchSDKs(): Promise<SDKListResponse> {

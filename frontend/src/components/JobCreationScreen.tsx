@@ -24,6 +24,12 @@ function slugifyPrompt(text: string): string {
     .slice(0, 50);
 }
 
+function sdkStatusDescription(sdk: SDKInfo): string | undefined {
+  if (!sdk.enabled) return sdk.hint || "Not installed";
+  if (sdk.status === "not_configured") return sdk.hint || "Not authenticated";
+  return undefined;
+}
+
 export function JobCreationScreen() {
   const navigate = useNavigate();
   const [repos, setRepos] = useState<{ value: string; label: string }[]>([]);
@@ -34,6 +40,7 @@ export function JobCreationScreen() {
   const [branchEdited, setBranchEdited] = useState(false);
   const [model, setModel] = useState<string | null>(null);
   const [models, setModels] = useState<{ value: string; label: string }[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
@@ -45,15 +52,9 @@ export function JobCreationScreen() {
   const [selfReview, setSelfReview] = useState(false);
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    fetchRepos()
-      .then((r) => {
-        const items = r.items.map((p) => ({ value: p, label: p.split("/").pop() ?? p }));
-        setRepos(items);
-        setRepo((prev) => prev ?? items[0]?.value ?? null);
-      })
-      .catch(() => toast.error("Failed to load repos"));
-    fetchModels()
+  const loadModels = useCallback((sdkId: string) => {
+    setModelsLoading(true);
+    fetchModels(sdkId)
       .then((m) => {
         setModels(
           m
@@ -64,15 +65,27 @@ export function JobCreationScreen() {
             .filter((x) => x.value),
         );
       })
-      .catch(() => {});
+      .catch(() => setModels([]))
+      .finally(() => setModelsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    fetchRepos()
+      .then((r) => {
+        const items = r.items.map((p) => ({ value: p, label: p.split("/").pop() ?? p }));
+        setRepos(items);
+        setRepo((prev) => prev ?? items[0]?.value ?? null);
+      })
+      .catch(() => toast.error("Failed to load repos"));
     fetchSDKs()
       .then((r) => {
         setSdks(r.sdks);
         setDefaultSdk(r.default);
         setSdk(r.default);
+        loadModels(r.default);
       })
       .catch(() => {});
-  }, []);
+  }, [loadModels]);
 
   useEffect(() => {
     if (branchEdited) return;
@@ -84,6 +97,13 @@ export function JobCreationScreen() {
       if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
     };
   }, [prompt, branchEdited]);
+
+  const handleSdkChange = useCallback((newSdk: string | null) => {
+    const resolved = newSdk ?? defaultSdk;
+    setSdk(resolved);
+    setModel(null);
+    loadModels(resolved);
+  }, [defaultSdk, loadModels]);
 
   const handleSubmit = useCallback(async () => {
     if (!repo || !prompt.trim()) return;
@@ -108,6 +128,11 @@ export function JobCreationScreen() {
       setSubmitting(false);
     }
   }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, sdk, defaultSdk, verify, selfReview]);
+
+  const enabledSdks = sdks.filter((s) => s.enabled);
+  const showSdkSelector = enabledSdks.length > 1;
+  const currentSdkInfo = sdks.find((s) => s.id === sdk);
+  const sdkNotReady = currentSdkInfo && currentSdkInfo.status !== "ready";
 
   return (
     <div className="max-w-xl mx-auto">
@@ -177,17 +202,6 @@ export function JobCreationScreen() {
             </div>
           </div>
 
-          {models.length > 0 && (
-            <Combobox
-              label="Model"
-              placeholder="Default (auto)"
-              items={models}
-              value={model}
-              onChange={setModel}
-              clearable
-            />
-          )}
-
           <hr className="border-border" />
 
           <button
@@ -201,17 +215,36 @@ export function JobCreationScreen() {
 
           {showAdvanced && (
             <div className="flex flex-col gap-3">
-              {sdks.filter((s) => s.enabled).length > 1 && (
+              {showSdkSelector && (
                 <Combobox
                   label="Agent SDK"
                   placeholder="Select SDK…"
-                  items={sdks
-                    .filter((s) => s.enabled)
-                    .map((s) => ({ value: s.id, label: s.name }))}
+                  items={enabledSdks.map((s) => ({
+                    value: s.id,
+                    label: s.name,
+                    disabled: s.status !== "ready",
+                    description: sdkStatusDescription(s),
+                  }))}
                   value={sdk}
-                  onChange={(v) => setSdk(v ?? defaultSdk)}
+                  onChange={handleSdkChange}
                 />
               )}
+
+              {sdkNotReady && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-1">
+                  {currentSdkInfo.hint || `${currentSdkInfo.name} is not authenticated.`}
+                </p>
+              )}
+
+              <Combobox
+                label="Model"
+                placeholder={modelsLoading ? "Loading…" : models.length === 0 ? "No models available" : "Default"}
+                items={models}
+                value={model}
+                onChange={setModel}
+                clearable
+              />
+
               <div className="flex flex-col gap-1.5">
                 <Label>Base Reference</Label>
                 <Input
@@ -233,23 +266,30 @@ export function JobCreationScreen() {
               </div>
 
               <hr className="border-border" />
-              <p className="text-xs font-medium text-muted-foreground">Verification</p>
 
-              <label className="flex items-center justify-between gap-3 cursor-pointer">
-                <span className="text-sm">Verify (run tests/lint after completion)</span>
-                <Switch
-                  checked={verify}
-                  onCheckedChange={setVerify}
-                />
-              </label>
-
-              <label className="flex items-center justify-between gap-3 cursor-pointer">
-                <span className="text-sm">Self-review (review diff for issues)</span>
-                <Switch
-                  checked={selfReview}
-                  onCheckedChange={setSelfReview}
-                />
-              </label>
+              <div className="flex flex-col gap-2">
+                <Label className="text-xs text-muted-foreground">Post-completion</Label>
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">Verify</span>
+                    <span className="text-xs text-muted-foreground">Run tests & lint</span>
+                  </div>
+                  <Switch
+                    checked={verify}
+                    onCheckedChange={setVerify}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">Self-review</span>
+                    <span className="text-xs text-muted-foreground">Review diff for issues</span>
+                  </div>
+                  <Switch
+                    checked={selfReview}
+                    onCheckedChange={setSelfReview}
+                  />
+                </label>
+              </div>
             </div>
           )}
 

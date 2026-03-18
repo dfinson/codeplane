@@ -544,6 +544,8 @@ class SDKInfoResponse(CamelModel):
     name: str
     enabled: bool
     status: str  # ready | not_installed | not_configured
+    authenticated: bool | None = None  # None = unknown / not applicable
+    hint: str = ""  # actionable suggestion for the user
 
 
 class SDKListResponse(CamelModel):

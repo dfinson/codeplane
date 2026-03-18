@@ -151,6 +151,8 @@ export interface SDKInfo {
   name: string;
   enabled: boolean;
   status: "ready" | "not_installed" | "not_configured";
+  authenticated: boolean | null;
+  hint: string;
 }
 
 export interface SDKListResponse {

@@ -307,9 +307,11 @@ _SDK_DISPLAY_NAMES: dict[str, str] = {
 
 @router.get("/sdks", response_model=SDKListResponse)
 async def list_sdks() -> SDKListResponse:
-    """List available agent SDKs and their status."""
+    """List available agent SDKs, installation status, and auth status."""
+    import asyncio
+
     from backend.services.agent_adapter import AgentSDK
-    from backend.services.setup_service import check_agent_cli
+    from backend.services.setup_service import _check_agent_auth, check_agent_cli
 
     config = _get_config()
     default_sdk = config.runtime.default_sdk
@@ -317,12 +319,34 @@ async def list_sdks() -> SDKListResponse:
     items: list[SDKInfoResponse] = []
     for sdk in AgentSDK:
         cli = check_agent_cli(sdk.value)
+        if not cli.ready:
+            items.append(
+                SDKInfoResponse(
+                    id=sdk.value,
+                    name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
+                    enabled=False,
+                    status="not_installed",
+                    authenticated=None,
+                    hint=cli.hint,
+                )
+            )
+            continue
+
+        # Run auth check in a thread to avoid blocking the event loop on subprocess.
+        auth = await asyncio.to_thread(_check_agent_auth, sdk.value)
+        if auth.authenticated is False:
+            status = "not_configured"
+        else:
+            status = "ready"
+
         items.append(
             SDKInfoResponse(
                 id=sdk.value,
                 name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
                 enabled=cli.ready,
-                status="ready" if cli.ready else "not_installed",
+                status=status,
+                authenticated=auth.authenticated,
+                hint=auth.hint,
             )
         )
 

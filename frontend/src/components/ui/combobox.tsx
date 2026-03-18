@@ -7,6 +7,8 @@ import { Label } from "./label";
 export interface ComboboxItem {
   value: string;
   label: string;
+  disabled?: boolean;
+  description?: string;
 }
 
 interface ComboboxProps {
@@ -84,8 +86,15 @@ export function Combobox({
                 <button
                   key={item.value}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-foreground hover:bg-accent cursor-default"
+                  disabled={item.disabled}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm cursor-default",
+                    item.disabled
+                      ? "opacity-40 cursor-not-allowed"
+                      : "text-foreground hover:bg-accent",
+                  )}
                   onClick={() => {
+                    if (item.disabled) return;
                     onChange(item.value);
                     setOpen(false);
                   }}
@@ -94,7 +103,12 @@ export function Combobox({
                     size={14}
                     className={cn("shrink-0", value === item.value ? "opacity-100" : "opacity-0")}
                   />
-                  <span className="truncate">{item.label}</span>
+                  <span className="flex flex-col items-start min-w-0">
+                    <span className="truncate">{item.label}</span>
+                    {item.description && (
+                      <span className="text-xs text-muted-foreground truncate">{item.description}</span>
+                    )}
+                  </span>
                 </button>
               ))
             )}

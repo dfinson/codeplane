@@ -241,21 +241,67 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Model list cache ---
     # Fetch once at startup so the job-creation form renders instantly.
-    # The SDK is not hot-swapped at runtime, so a one-time cache is correct.
-    cached_models: list[dict[str, object]] = []
+    # Models are keyed by SDK id so the frontend can fetch per-SDK.
+    cached_models_by_sdk: dict[str, list[dict[str, object]]] = {}
+
+    # Copilot models
+    copilot_models: list[dict[str, object]] = []
     try:
         from copilot import CopilotClient
 
         _model_client = CopilotClient()
         await _model_client.start()
         try:
-            cached_models = [m.to_dict() for m in await _model_client.list_models()]
-            log.debug("models_cached", count=len(cached_models))
+            copilot_models = [m.to_dict() for m in await _model_client.list_models()]
+            log.debug("copilot_models_cached", count=len(copilot_models))
         finally:
             await _model_client.stop()
     except Exception as exc:
-        log.warning("model_cache_failed", error=str(exc))
-    app.state.cached_models = cached_models
+        log.warning("copilot_model_cache_failed", error=str(exc))
+    cached_models_by_sdk["copilot"] = copilot_models
+
+    # Claude models — only available when the CLI is authenticated
+    claude_models: list[dict[str, object]] = []
+    try:
+        import subprocess as _sp
+
+        _claude_result = await asyncio.to_thread(
+            lambda: _sp.run(
+                ["claude", "models", "--output-format", "json"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        )
+        if _claude_result.returncode == 0 and _claude_result.stdout.strip():
+            import json as _json
+
+            _raw = _json.loads(_claude_result.stdout)
+            # Output may be a list of strings or a list of objects
+            if isinstance(_raw, list):
+                for entry in _raw:
+                    if isinstance(entry, str):
+                        claude_models.append({"id": entry, "name": entry})
+                    elif isinstance(entry, dict):
+                        claude_models.append(entry)
+            log.debug("claude_models_cached", count=len(claude_models))
+        else:
+            # Fallback: try plain text format (one model id per line)
+            for line in _claude_result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("claude-"):
+                    claude_models.append({"id": line, "name": line})
+            if claude_models:
+                log.debug("claude_models_cached_text", count=len(claude_models))
+            else:
+                log.debug("claude_models_unavailable", detail=_claude_result.stderr.strip()[:120])
+    except Exception as exc:
+        log.warning("claude_model_cache_failed", error=str(exc))
+    cached_models_by_sdk["claude"] = claude_models
+
+    # Keep legacy flat cache (default SDK models) for backward compatibility
+    app.state.cached_models = copilot_models
+    app.state.cached_models_by_sdk = cached_models_by_sdk
 
     # --- Voice service ---
     voice_service = VoiceService()
