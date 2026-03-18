@@ -513,10 +513,10 @@ def render_summary(results: list[CheckResult]) -> None:
 
 
 def run_preflight(port: int) -> bool:
-    """Quick non-interactive preflight for ``cpl up``.
+    """Interactive preflight for ``cpl up``.
 
-    Returns True if the server can start (no hard failures).
-    Prints a compact check table.
+    Returns True if the server can start.
+    On warnings, pauses to let the user fix issues or continue.
     """
     results = run_checks(port=port)
 
@@ -527,7 +527,7 @@ def run_preflight(port: int) -> bool:
         _render_check_line(r)
 
     has_fail = any(r.status == CheckStatus.fail for r in results)
-    has_warn = any(r.status == CheckStatus.warn for r in results)
+    warnings = [r for r in results if r.status == CheckStatus.warn]
 
     # Auto-create config on first run
     if not DEFAULT_CONFIG_PATH.exists():
@@ -541,12 +541,38 @@ def run_preflight(port: int) -> bool:
         _console.print("  [dim]Run 'cpl setup' for guided installation, or 'cpl doctor' for details.[/dim]")
         return False
 
-    if has_warn:
+    if warnings:
         _console.print()
-        _console.print("  [yellow]Warnings above may affect some features.[/yellow]")
-        # First-run tip
-        if not DEFAULT_CONFIG_PATH.exists():
-            _console.print("  [dim]Tip: Run 'cpl setup' for guided first-time configuration.[/dim]")
+        _console.print(f"  [yellow bold]{len(warnings)} issue{'s' if len(warnings) != 1 else ''} found:[/yellow bold]")
+        _console.print()
+        for w in warnings:
+            _console.print(f"    [yellow]![/yellow]  [bold]{w.label}[/bold]: {w.detail}")
+            if w.hint:
+                for line in w.hint.split("\n"):
+                    _console.print(f"       → {line}")
+        _console.print()
+
+        choice = questionary.select(
+            "  How would you like to proceed?",
+            choices=[
+                questionary.Choice("Continue anyway — I'll fix this later", value="continue"),
+                questionary.Choice("Run guided setup (cpl setup)", value="setup"),
+                questionary.Choice("Abort", value="abort"),
+            ],
+        ).ask()
+
+        if choice == "setup":
+            _console.print()
+            run_setup()
+            # Re-check after setup
+            results = run_checks(port=port)
+            if any(r.status == CheckStatus.fail for r in results):
+                _console.print()
+                _console.print("  [red bold]Still have hard failures — cannot start.[/red bold]")
+                return False
+        elif choice == "abort" or choice is None:
+            return False
+        # "continue" falls through
 
     _console.print()
     return True
