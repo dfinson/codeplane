@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo } from "react";
 import { Folder, FolderOpen, FileCode, FilePlus2, FileEdit, FileMinus2, FileSymlink, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
 import Editor from "@monaco-editor/react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -12,6 +10,8 @@ import type { DiffFileModel } from "../api/types";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
+
+const MobileSyntaxView = lazy(() => import("./MobileSyntaxView"));
 
 interface TreeEntry {
   path: string;
@@ -140,53 +140,6 @@ function getLanguageFromPath(path: string): string {
     dockerfile: "docker", makefile: "makefile",
   };
   return map[ext] || "text";
-}
-
-const MOBILE_MAX_LINES = 2000;
-
-function MobileCodeView({ content, language }: { content: string; language: string }) {
-  const [showFull, setShowFull] = useState(false);
-  const prevContentRef = useRef(content);
-
-  // Reset truncation when file changes
-  if (prevContentRef.current !== content) {
-    prevContentRef.current = content;
-    if (showFull) setShowFull(false);
-  }
-
-  const lines = content.split("\n");
-  const truncated = !showFull && lines.length > MOBILE_MAX_LINES;
-  const displayContent = truncated ? lines.slice(0, MOBILE_MAX_LINES).join("\n") : content;
-
-  return (
-    <div className="overflow-auto h-full">
-      <SyntaxHighlighter
-        language={language}
-        style={oneDark}
-        customStyle={{
-          margin: 0,
-          padding: "1rem",
-          background: "transparent",
-          fontSize: "12px",
-          lineHeight: "1.5",
-        }}
-        showLineNumbers
-        lineNumberStyle={{ minWidth: "2.5em", paddingRight: "1em", color: "rgba(255,255,255,0.3)" }}
-      >
-        {displayContent}
-      </SyntaxHighlighter>
-      {truncated && (
-        <div className="sticky bottom-0 flex justify-center py-3 bg-gradient-to-t from-card via-card to-transparent">
-          <button
-            onClick={() => setShowFull(true)}
-            className="px-4 py-2 rounded-md bg-accent text-sm font-medium text-foreground hover:bg-accent/80 transition-colors"
-          >
-            Show all {lines.length.toLocaleString()} lines ({Math.round(content.length / 1024)}KB)
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function isMarkdown(path: string): boolean {
@@ -325,7 +278,9 @@ export default function WorkspaceBrowser({ jobId }: Props) {
         ) : (
           <div className="flex-1 overflow-hidden">
             {isMobile ? (
-              <MobileCodeView content={fileContent || ""} language={getLanguageFromPath(selected)} />
+              <Suspense fallback={<div className="flex items-center justify-center h-full"><Spinner /></div>}>
+                <MobileSyntaxView content={fileContent || ""} language={getLanguageFromPath(selected)} />
+              </Suspense>
             ) : (
               <Editor
                 value={fileContent}

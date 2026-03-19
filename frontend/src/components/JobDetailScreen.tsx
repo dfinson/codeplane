@@ -25,8 +25,9 @@ import { ConfirmDialog } from "./ui/confirm-dialog";
 const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
 const DiffViewer = lazy(() => import("./DiffViewer"));
 const ArtifactViewer = lazy(() => import("./ArtifactViewer"));
-
-import { TerminalPanel } from "./TerminalPanel";
+const TerminalPanel = lazy(() =>
+  import("./TerminalPanel").then((module) => ({ default: module.TerminalPanel })),
+);
 import { useStore as useTerminalStore } from "../store";
 
 export function JobDetailScreen() {
@@ -608,7 +609,9 @@ export function JobDetailScreen() {
       {tab === "terminal" && hasWorktree && (
         <div className="h-[32rem] rounded-lg overflow-hidden border border-border">
           {jobTerminalSessionId ? (
-            <TerminalPanel sessionId={jobTerminalSessionId} />
+            <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
+              <TerminalPanel sessionId={jobTerminalSessionId} />
+            </Suspense>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
               <Spinner />
