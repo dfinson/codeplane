@@ -453,7 +453,15 @@ class ClaudeAdapter(AgentAdapterInterface):
             append_system_prompt=(
                 "You are running inside CodePlane, a headless non-interactive orchestration "
                 "framework. There is no human at a terminal. Do not enter plan mode or "
-                "pause to present a plan for review. Proceed directly with task execution."
+                "pause to present a plan for review. Proceed directly with task execution. "
+                "When you believe your implementation is complete, merge the base branch into "
+                "your worktree (e.g. `git merge <base_ref>`) to catch any conflicts early. "
+                "If the merge is clean or you can fully resolve all conflicts while preserving "
+                "the intent of both sides, do so and commit the result. "
+                "If any conflict requires human judgment — you are not fully confident you can "
+                "resolve it without losing functionality or making a product decision — stop, "
+                "describe the conflict clearly in a message to the operator, and ask for "
+                "guidance before finishing."
             ),
         )
 
