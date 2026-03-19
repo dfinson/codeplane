@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { useNavigate } from "react-router-dom";
-import { GitBranch, AlertTriangle, XCircle, ArrowDownCircle, BookOpen, CheckCircle2 } from "lucide-react";
+import { GitBranch, AlertTriangle, XCircle, ArrowDownCircle, FolderGit2, CheckCircle2 } from "lucide-react";
 import { useStore, selectJobTimeline } from "../store";
 import type { JobSummary } from "../store";
 import { StateBadge } from "./StateBadge";
@@ -64,7 +64,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       </div>
 
       <div className="flex items-center gap-1 mb-1">
-        <BookOpen size={11} className="text-muted-foreground/60 shrink-0" />
+        <FolderGit2 size={11} className="text-muted-foreground/60 shrink-0" />
         <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo}>{repoName}</span>
       </div>
 
