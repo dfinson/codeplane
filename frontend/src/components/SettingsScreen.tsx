@@ -12,6 +12,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
 import { Spinner } from "./ui/spinner";
+import { ConfirmDialog } from "./ui/confirm-dialog";
 
 const PERMISSION_MODES = [
   { value: "auto", label: "Full Auto" },
@@ -43,13 +44,14 @@ function SelectField({ label, value, options, onChange, description }: {
   );
 }
 
-function NumberField({ label, value, onChange, min, max, description }: {
+function NumberField({ label, value, onChange, min, max, description, placeholder }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   min?: number;
   max?: number;
   description?: string;
+  placeholder?: string;
 }) {
   const [raw, setRaw] = useState(String(value));
 
@@ -90,6 +92,7 @@ function NumberField({ label, value, onChange, min, max, description }: {
         onChange={handleChange}
         onBlur={handleBlur}
         className="w-32"
+        placeholder={placeholder}
       />
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
     </div>
@@ -103,6 +106,7 @@ export function SettingsScreen() {
   const [saved, setSaved] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
+  const [removeRepoTarget, setRemoveRepoTarget] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([fetchSettings(), fetchRepos()])
@@ -205,8 +209,8 @@ export function SettingsScreen() {
                 <span className="text-sm font-mono text-muted-foreground truncate flex-1" title={r}>{r}</span>
                 <button
                   type="button"
-                  onClick={() => handleRemoveRepo(r)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-red-400 hover:text-red-300 hover:bg-red-400/10"
+                  onClick={() => setRemoveRepoTarget(r)}
+                  className="sm:opacity-0 sm:group-hover:opacity-100 transition-opacity p-1 rounded text-red-400 hover:text-red-300 hover:bg-red-400/10"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -226,7 +230,8 @@ export function SettingsScreen() {
             onChange={(v) => patch({ maxConcurrentJobs: v })}
             min={1}
             max={10}
-            description="How many agent jobs can run simultaneously"
+            placeholder="5"
+            description="Maximum number of agent jobs that can run simultaneously."
           />
           <SelectField
             label="Permission Mode"
@@ -248,6 +253,8 @@ export function SettingsScreen() {
             onChange={(v) => patch({ artifactRetentionDays: v })}
             min={1}
             max={365}
+            placeholder="30"
+            description="Artifacts older than this are automatically deleted."
           />
           <NumberField
             label="Max Artifact Size (MB)"
@@ -255,6 +262,8 @@ export function SettingsScreen() {
             onChange={(v) => patch({ maxArtifactSizeMb: v })}
             min={1}
             max={10000}
+            placeholder="500"
+            description="Maximum size for individual job artifacts."
           />
           <NumberField
             label="Auto-archive (days)"
@@ -262,7 +271,8 @@ export function SettingsScreen() {
             onChange={(v) => patch({ autoArchiveDays: v })}
             min={1}
             max={365}
-            description="Archive completed jobs after this many days"
+            placeholder="30"
+            description="Jobs older than this are automatically archived."
           />
         </div>
       </div>
@@ -300,28 +310,43 @@ export function SettingsScreen() {
             onChange={(v) => patch({ maxTurns: v })}
             min={1}
             max={10}
-            description="Maximum number of verify loop iterations"
+            placeholder="3"
+            description="Maximum number of verify loop iterations."
           />
           <div className="flex flex-col gap-1.5">
             <Label>Verify Prompt</Label>
             <Textarea
-              placeholder="Leave empty to use the built-in default"
+              placeholder="You are a helpful coding assistant..."
               value={settings.verifyPrompt}
               onChange={(e) => patch({ verifyPrompt: e.target.value })}
               rows={3}
             />
+            <p className="text-xs text-muted-foreground">Instructions prepended to every verification session. Leave empty to use the default.</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>Self-Review Prompt</Label>
             <Textarea
-              placeholder="Leave empty to use the built-in default"
+              placeholder="Review the diff for potential issues..."
               value={settings.selfReviewPrompt}
               onChange={(e) => patch({ selfReviewPrompt: e.target.value })}
               rows={3}
             />
+            <p className="text-xs text-muted-foreground">Instructions prepended to every self-review session. Leave empty to use the default.</p>
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!removeRepoTarget}
+        onClose={() => setRemoveRepoTarget(null)}
+        onConfirm={async () => {
+          if (removeRepoTarget) await handleRemoveRepo(removeRepoTarget);
+          setRemoveRepoTarget(null);
+        }}
+        title="Remove Repository?"
+        description={removeRepoTarget ? `${removeRepoTarget} will be unregistered from CodePlane. The repository itself won't be deleted.` : ""}
+        confirmLabel="Remove"
+      />
 
     </div>
   );

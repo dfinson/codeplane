@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
-import { Folder, FolderOpen, FileCode, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Folder, FolderOpen, FileCode, FilePlus2, FileEdit, FileMinus2, FileSymlink, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
 import Editor from "@monaco-editor/react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { fetchWorkspaceFiles, fetchWorkspaceFile } from "../api/client";
+import { useStore, selectJobDiffs } from "../store";
+import type { DiffFileModel } from "../api/types";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
@@ -22,9 +26,28 @@ interface TreeNodeProps {
   onSelect: (path: string) => void;
   jobId: string;
   isMobile: boolean;
+  diffMap: Map<string, DiffFileModel>;
+  changedDirs: Set<string>;
 }
 
-function TreeNode({ entry, depth, selected, onSelect, jobId, isMobile }: TreeNodeProps) {
+const STATUS_COLOR: Record<string, string> = {
+  added: "text-emerald-400",
+  modified: "text-blue-400",
+  deleted: "text-red-400 line-through",
+  renamed: "text-yellow-400",
+};
+
+function FileIcon({ status }: { status?: string }) {
+  switch (status) {
+    case "added": return <FilePlus2 size={14} className="text-emerald-400 shrink-0" />;
+    case "modified": return <FileEdit size={14} className="text-blue-400 shrink-0" />;
+    case "deleted": return <FileMinus2 size={14} className="text-red-400 shrink-0" />;
+    case "renamed": return <FileSymlink size={14} className="text-yellow-400 shrink-0" />;
+    default: return <FileCode size={14} className="text-muted-foreground shrink-0" />;
+  }
+}
+
+function TreeNode({ entry, depth, selected, onSelect, jobId, isMobile, diffMap, changedDirs }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<TreeEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -46,6 +69,10 @@ function TreeNode({ entry, depth, selected, onSelect, jobId, isMobile }: TreeNod
     setExpanded(!expanded);
   }, [isDir, expanded, children.length, entry.path, jobId, onSelect]);
 
+  const diff = !isDir ? diffMap.get(entry.path) : undefined;
+  const hasChanges = isDir && changedDirs.has(entry.path);
+  const statusColor = diff ? (STATUS_COLOR[diff.status] ?? "") : "text-muted-foreground";
+
   return (
     <>
       <button
@@ -64,17 +91,26 @@ function TreeNode({ entry, depth, selected, onSelect, jobId, isMobile }: TreeNod
           <span className="w-3.5" />
         )}
         {isDir ? (
-          expanded
-            ? <FolderOpen size={14} className="text-yellow-500 shrink-0" />
-            : <Folder size={14} className="text-yellow-500 shrink-0" />
+          <>
+            {expanded
+              ? <FolderOpen size={14} className="text-yellow-500 shrink-0" />
+              : <Folder size={14} className="text-yellow-500 shrink-0" />}
+          </>
         ) : (
-          <FileCode size={14} className="text-muted-foreground shrink-0" />
+          <FileIcon status={diff?.status} />
         )}
-        <span className={cn("text-xs", isMobile ? "break-all" : "truncate")}>{name}</span>
+        <span className={cn("text-xs", isMobile ? "break-all" : "truncate", !isDir && statusColor)}>{name}</span>
+        {isDir && hasChanges && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
+        {diff && (diff.additions > 0 || diff.deletions > 0) && (
+          <span className="ml-auto text-xs tabular-nums flex gap-1">
+            {diff.additions > 0 && <span className="text-emerald-400">+{diff.additions}</span>}
+            {diff.deletions > 0 && <span className="text-red-400">−{diff.deletions}</span>}
+          </span>
+        )}
         {loading && <Spinner size="sm" className="ml-auto" />}
       </button>
       {expanded && children.map((c) => (
-        <TreeNode key={c.path} entry={c} depth={depth + 1} selected={selected} onSelect={onSelect} jobId={jobId} isMobile={isMobile} />
+        <TreeNode key={c.path} entry={c} depth={depth + 1} selected={selected} onSelect={onSelect} jobId={jobId} isMobile={isMobile} diffMap={diffMap} changedDirs={changedDirs} />
       ))}
     </>
   );
@@ -89,6 +125,68 @@ function guessLang(path: string): string {
     sh: "shell", sql: "sql", toml: "toml", rb: "ruby", php: "php",
   };
   return m[ext] ?? "plaintext";
+}
+
+function getLanguageFromPath(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
+    py: "python", rs: "rust", go: "go", rb: "ruby",
+    java: "java", kt: "kotlin", swift: "swift", cs: "csharp",
+    cpp: "cpp", c: "c", h: "c", hpp: "cpp",
+    css: "css", scss: "scss", html: "html", xml: "xml",
+    json: "json", yaml: "yaml", yml: "yaml", toml: "toml",
+    md: "markdown", sql: "sql", sh: "bash", bash: "bash",
+    dockerfile: "docker", makefile: "makefile",
+  };
+  return map[ext] || "text";
+}
+
+const MOBILE_MAX_LINES = 2000;
+
+function MobileCodeView({ content, language }: { content: string; language: string }) {
+  const [showFull, setShowFull] = useState(false);
+  const prevContentRef = useRef(content);
+
+  // Reset truncation when file changes
+  if (prevContentRef.current !== content) {
+    prevContentRef.current = content;
+    if (showFull) setShowFull(false);
+  }
+
+  const lines = content.split("\n");
+  const truncated = !showFull && lines.length > MOBILE_MAX_LINES;
+  const displayContent = truncated ? lines.slice(0, MOBILE_MAX_LINES).join("\n") : content;
+
+  return (
+    <div className="overflow-auto h-full">
+      <SyntaxHighlighter
+        language={language}
+        style={oneDark}
+        customStyle={{
+          margin: 0,
+          padding: "1rem",
+          background: "transparent",
+          fontSize: "12px",
+          lineHeight: "1.5",
+        }}
+        showLineNumbers
+        lineNumberStyle={{ minWidth: "2.5em", paddingRight: "1em", color: "rgba(255,255,255,0.3)" }}
+      >
+        {displayContent}
+      </SyntaxHighlighter>
+      {truncated && (
+        <div className="sticky bottom-0 flex justify-center py-3 bg-gradient-to-t from-card via-card to-transparent">
+          <button
+            onClick={() => setShowFull(true)}
+            className="px-4 py-2 rounded-md bg-accent text-sm font-medium text-foreground hover:bg-accent/80 transition-colors"
+          >
+            Show all {lines.length.toLocaleString()} lines ({Math.round(content.length / 1024)}KB)
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function isMarkdown(path: string): boolean {
@@ -107,6 +205,25 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   const [fileLoading, setFileLoading] = useState(false);
   const isMobile = useIsMobile();
   const [mdMode, setMdMode] = useState<"preview" | "raw">("preview");
+
+  const diffs = useStore(selectJobDiffs(jobId));
+
+  const diffMap = useMemo(() => {
+    const map = new Map<string, DiffFileModel>();
+    for (const d of diffs) map.set(d.path, d);
+    return map;
+  }, [diffs]);
+
+  const changedDirs = useMemo(() => {
+    const dirs = new Set<string>();
+    for (const d of diffs) {
+      const parts = d.path.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(parts.slice(0, i).join("/"));
+      }
+    }
+    return dirs;
+  }, [diffs]);
 
   useEffect(() => {
     fetchWorkspaceFiles(jobId)
@@ -142,9 +259,16 @@ export default function WorkspaceBrowser({ jobId }: Props) {
       <div className="px-3 py-2.5 border-b border-border">
         <span className="text-xs font-semibold text-muted-foreground">Files</span>
       </div>
+      {diffs.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-1 border-b border-border">
+          <span className="text-emerald-400">{diffs.filter(d => d.status === "added").length} added</span>
+          <span className="text-blue-400">{diffs.filter(d => d.status === "modified").length} modified</span>
+          <span className="text-red-400">{diffs.filter(d => d.status === "deleted").length} deleted</span>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto py-1">
         {entries.map((e) => (
-          <TreeNode key={e.path} entry={e} depth={0} selected={selected} onSelect={handleSelect} jobId={jobId} isMobile={isMobile} />
+          <TreeNode key={e.path} entry={e} depth={0} selected={selected} onSelect={handleSelect} jobId={jobId} isMobile={isMobile} diffMap={diffMap} changedDirs={changedDirs} />
         ))}
       </div>
     </div>
@@ -200,21 +324,25 @@ export default function WorkspaceBrowser({ jobId }: Props) {
           </div>
         ) : (
           <div className="flex-1 overflow-hidden">
-            <Editor
-              value={fileContent}
-              language={guessLang(selected)}
-              theme="vs-dark"
-              options={{
-                readOnly: true,
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                fontSize: isMobile ? 12 : 13,
-                lineNumbersMinChars: isMobile ? 2 : 3,
-                glyphMargin: false,
-                lineDecorationsWidth: isMobile ? 2 : 4,
-                folding: !isMobile,
-              }}
-            />
+            {isMobile ? (
+              <MobileCodeView content={fileContent || ""} language={getLanguageFromPath(selected)} />
+            ) : (
+              <Editor
+                value={fileContent}
+                language={guessLang(selected)}
+                theme="vs-dark"
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  scrollBeyondLastLine: false,
+                  fontSize: 13,
+                  lineNumbersMinChars: 3,
+                  glyphMargin: false,
+                  lineDecorationsWidth: 4,
+                  folding: true,
+                }}
+              />
+            )}
           </div>
         )
       ) : (
@@ -225,14 +353,14 @@ export default function WorkspaceBrowser({ jobId }: Props) {
 
   if (isMobile) {
     return (
-      <div className="flex flex-col h-[60vh] min-h-[300px]">
+      <div className="flex flex-col h-[calc(100vh-14rem)] md:h-[60vh] min-h-[300px]">
         {mobileShowFile ? filePanel : treePanel}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-row gap-3 h-[60vh] min-h-[300px] max-h-[600px]">
+    <div className="flex flex-row gap-3 h-[calc(100vh-14rem)] md:h-[60vh] min-h-[300px] max-h-[600px]">
       {treePanel}
       {filePanel}
     </div>

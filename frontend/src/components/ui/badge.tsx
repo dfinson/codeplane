@@ -35,11 +35,12 @@ export function DotBadge({
   color,
   children,
   className,
+  ...rest
 }: {
   color: "green" | "yellow" | "red";
   children: React.ReactNode;
   className?: string;
-}) {
+} & React.HTMLAttributes<HTMLSpanElement>) {
   const dot: Record<string, string> = {
     green: "bg-green-500",
     yellow: "bg-yellow-500",
@@ -51,6 +52,7 @@ export function DotBadge({
         "inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground",
         className,
       )}
+      {...rest}
     >
       <span className={cn("h-1.5 w-1.5 rounded-full", dot[color])} />
       {children}

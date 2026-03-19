@@ -181,9 +181,9 @@ function CopilotCostView({ data }: { data: TelemetryData }) {
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">{label}</span>
               {snap.isUnlimited ? (
-                <span className="text-green-400 text-[11px]">Unlimited</span>
+                <span className="text-green-400 text-xs">Unlimited</span>
               ) : (
-                <span className={cn("tabular-nums text-[11px]", exhausted ? "text-red-400" : nearLimit ? "text-yellow-400" : "text-muted-foreground")}>
+                <span className={cn("tabular-nums text-xs", exhausted ? "text-red-400" : nearLimit ? "text-yellow-400" : "text-muted-foreground")}>
                   {snap.usedRequests.toFixed(1)} / {snap.entitlementRequests.toFixed(0)} used
                   {snap.overage > 0 && ` (+${snap.overage.toFixed(1)} overage)`}
                 </span>
@@ -196,7 +196,7 @@ function CopilotCostView({ data }: { data: TelemetryData }) {
               />
             )}
             {snap.resetDate && (
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Resets {new Date(snap.resetDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
               </p>
             )}
@@ -208,7 +208,7 @@ function CopilotCostView({ data }: { data: TelemetryData }) {
         <p className="text-xs text-muted-foreground italic">Premium request data available after session completes.</p>
       )}
 
-      <p className="text-[10px] text-muted-foreground leading-snug">
+      <p className="text-xs text-muted-foreground leading-snug">
         Premium requests are consumed based on model multipliers (e.g. Claude Sonnet 4.6 = 1×,
         Claude Opus 4.5 = 3×). Included models (GPT-5 mini, GPT-4.1, GPT-4o) cost 0 on paid plans.
       </p>
@@ -230,7 +230,7 @@ function ClaudeCostView({ data }: { data: TelemetryData }) {
       </div>
 
       {rate && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {rate.label}: ${rate.input}/MTok input · ${rate.output}/MTok output
         </p>
       )}
@@ -239,7 +239,7 @@ function ClaudeCostView({ data }: { data: TelemetryData }) {
         <p className="text-xs text-muted-foreground italic">Cost data available after session completes.</p>
       )}
 
-      <p className="text-[10px] text-muted-foreground leading-snug">
+      <p className="text-xs text-muted-foreground leading-snug">
         Claude Max and enterprise (Bedrock/Vertex/Foundry) plans do not expose quota via the SDK.
       </p>
     </div>
@@ -328,8 +328,8 @@ function SortHeader({
 
 export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
   const [collapsed, setCollapsed] = useState(true);
-  const [toolsCollapsed, setToolsCollapsed] = useState(false);
-  const [llmCollapsed, setLlmCollapsed] = useState(false);
+  const [toolsCollapsed, setToolsCollapsed] = useState(true);
+  const [llmCollapsed, setLlmCollapsed] = useState(true);
   const [llmMainExpanded, setLlmMainExpanded] = useState(false);
   const [llmSubExpanded, setLlmSubExpanded] = useState(false);
   const [data, setData] = useState<TelemetryData | null>(null);
@@ -453,7 +453,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
         {collapsed ? <ChevronRight size={14} className="text-muted-foreground shrink-0" /> : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
         <span className="text-sm font-semibold text-muted-foreground">Metrics</span>
         {headerStats && (
-          <span className="text-[11px] text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>
+          <span className="text-xs text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>
         )}
       </button>
 
@@ -497,7 +497,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">
                   <Cpu size={12} className="text-violet-400" /> Token Breakdown
                 </h4>
-                <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
                   <div>
                     <p className="text-sm font-bold tabular-nums">{formatTokens(data.inputTokens ?? 0)}</p>
                     <p className="text-muted-foreground">Input</p>
@@ -531,7 +531,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                     color={(data.contextUtilization ?? 0) > 0.8 ? "red" : "blue"}
                   />
                   {(data.compactions ?? 0) > 0 && (
-                    <p className="text-[11px] text-yellow-400 mt-1.5 flex items-center gap-1">
+                    <p className="text-xs text-yellow-400 mt-1.5 flex items-center gap-1">
                       <ArrowDownUp size={10} />
                       {data.compactions} compaction{data.compactions !== 1 ? "s" : ""} ({formatTokens(data.tokensCompacted ?? 0)} removed)
                     </p>
@@ -573,11 +573,11 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                             <div className="absolute -left-5 top-[3px] w-3 h-3 rounded-full border-2 border-blue-400 bg-background" />
                             <div className="space-y-1">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[11px] font-semibold text-foreground">Session {cp.sessionNumber}</span>
-                                <span className="text-[10px] text-muted-foreground tabular-nums">
+                                <span className="text-xs font-semibold text-foreground">Session {cp.sessionNumber}</span>
+                                <span className="text-xs text-muted-foreground tabular-nums">
                                   {new Date(cp.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                                 </span>
-                                {verBadge && <span className="text-[10px]">{verBadge}</span>}
+                                {verBadge && <span className="text-xs">{verBadge}</span>}
                               </div>
                               {accomplished.length > 0 && (
                                 <ul className="space-y-0.5">
@@ -588,19 +588,19 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                                     </li>
                                   ))}
                                   {accomplished.length > 4 && (
-                                    <li className="text-[11px] text-muted-foreground/60 pl-3">
+                                    <li className="text-xs text-muted-foreground/60 pl-3">
                                       and {accomplished.length - 4} more
                                     </li>
                                   )}
                                 </ul>
                               )}
                               {inProgress.length > 0 && inProgress[0] && (
-                                <p className="text-[11px] text-yellow-400/80">
+                                <p className="text-xs text-yellow-400/80">
                                   In progress: {inProgress[0].description}
                                 </p>
                               )}
                               {summary?.resume_instructions && (
-                                <p className="text-[11px] text-muted-foreground/70 italic">
+                                <p className="text-xs text-muted-foreground/70 italic">
                                   Next: {summary.resume_instructions}
                                 </p>
                               )}
@@ -683,9 +683,9 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                           {llmMainExpanded ? <ChevronDown size={11} className="text-muted-foreground shrink-0" /> : <ChevronRight size={11} className="text-muted-foreground shrink-0" />}
                           <span className="text-xs font-medium text-foreground">Main agent</span>
                           {(data.mainModel || data.model) && (
-                            <span className="font-mono text-[11px] text-muted-foreground">{data.mainModel || data.model}</span>
+                            <span className="font-mono text-xs text-muted-foreground">{data.mainModel || data.model}</span>
                           )}
-                          <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                          <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
                             <span>{mainCalls.length} calls</span>
                             <span>{formatTokens(mainTotals.inputTokens)} in</span>
                             <span>{formatTokens(mainTotals.outputTokens)} out</span>
@@ -733,10 +733,10 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                           >
                             {llmSubExpanded ? <ChevronDown size={11} className="text-muted-foreground shrink-0" /> : <ChevronRight size={11} className="text-muted-foreground shrink-0" />}
                             <span className="text-xs font-medium text-foreground">Sub-agents</span>
-                            <span className="text-[11px] text-muted-foreground">
+                            <span className="text-xs text-muted-foreground">
                               {subAgentGroups.length} model{subAgentGroups.length !== 1 ? "s" : ""}
                             </span>
-                            <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                            <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
                               <span>{subCalls.length} calls</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.inputTokens, 0))} in</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.outputTokens, 0))} out</span>
@@ -770,7 +770,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
     <div className="rounded-md border border-border bg-background p-3 text-center">
       <div className={cn("flex items-center justify-center gap-1.5 mb-1", color)}>
         {icon}
-        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
       </div>
       <p className="text-lg font-bold tabular-nums">{value}</p>
     </div>
@@ -788,8 +788,8 @@ function SubAgentGroup({ group }: {
         onClick={() => setExpanded((c) => !c)}
       >
         {expanded ? <ChevronDown size={10} className="text-muted-foreground shrink-0" /> : <ChevronRight size={10} className="text-muted-foreground shrink-0" />}
-        <span className="font-mono text-[11px] text-foreground">{group.model || "unknown"}</span>
-        <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+        <span className="font-mono text-xs text-foreground">{group.model || "unknown"}</span>
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           <span>{group.count} calls</span>
           <span>{formatTokens(group.inputTokens)} in</span>
           <span>{formatTokens(group.outputTokens)} out</span>

@@ -11,6 +11,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
 import { Combobox } from "./ui/combobox";
+import { Tooltip } from "./ui/tooltip";
 
 function sdkStatusDescription(sdk: SDKInfo): string | undefined {
   if (!sdk.enabled) return sdk.hint || "Not installed";
@@ -39,6 +40,7 @@ export function JobCreationScreen() {
   const [verify, setVerify] = useState(false);
   const [selfReview, setSelfReview] = useState(false);
   const [branchSuggesting, setBranchSuggesting] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadModels = useCallback((sdkId: string) => {
@@ -105,6 +107,18 @@ export function JobCreationScreen() {
     setModel(null);
     loadModels(resolved);
   }, [defaultSdk, loadModels]);
+
+  const validateField = useCallback((field: string, value: string) => {
+    setErrors(prev => {
+      const next = { ...prev };
+      if (field === "prompt" && !value.trim()) {
+        next.prompt = "A prompt is required";
+      } else {
+        delete next[field];
+      }
+      return next;
+    });
+  }, []);
 
   const handleSubmit = useCallback(async () => {
     if (!repo || !prompt.trim()) return;
@@ -174,7 +188,18 @@ export function JobCreationScreen() {
             }}
           />
 
-          <PromptWithVoice value={prompt} onChange={setPrompt} />
+          <PromptWithVoice
+            value={prompt}
+            onChange={setPrompt}
+            error={errors.prompt}
+            onBlur={(e) => validateField("prompt", e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+          />
 
           <div className="flex flex-col gap-1.5">
             <Label>Permission Mode</Label>
@@ -186,19 +211,19 @@ export function JobCreationScreen() {
                   { value: "read_only", label: "Observe Only", title: "Deny all writes and mutations" },
                 ] as { value: PermissionMode; label: string; title: string }[]
               ).map(({ value, label, title }) => (
-                <button
-                  key={value}
-                  type="button"
-                  title={title}
-                  onClick={() => setPermissionMode(value)}
-                  className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
-                    permissionMode === value
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-foreground/40"
-                  }`}
-                >
-                  {label}
-                </button>
+                <Tooltip key={value} content={title}>
+                  <button
+                    type="button"
+                    onClick={() => setPermissionMode(value)}
+                    className={`flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                      permissionMode === value
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-transparent text-muted-foreground hover:text-foreground hover:border-foreground/40"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                </Tooltip>
               ))}
             </div>
           </div>

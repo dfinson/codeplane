@@ -1,11 +1,13 @@
 import { Component, type ReactNode, Suspense, lazy, useEffect, useCallback } from "react";
-import { Routes, Route, Link } from "react-router-dom";
-import { Settings, History, TerminalSquare } from "lucide-react";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
+import { Settings, History, TerminalSquare, Search } from "lucide-react";
+import { CommandPalette } from "./components/CommandPalette";
 import { useSSE } from "./hooks/useSSE";
-import { useStore, selectConnectionStatus } from "./store";
+import { useStore, selectConnectionStatus, selectReconnectAttempt } from "./store";
 import { DashboardScreen } from "./components/DashboardScreen";
 import { DotBadge } from "./components/ui/badge";
 import { Spinner } from "./components/ui/spinner";
+import { Tooltip } from "./components/ui/tooltip";
 
 const JobDetailScreen = lazy(() =>
   import("./components/JobDetailScreen").then((module) => ({ default: module.JobDetailScreen })),
@@ -60,12 +62,17 @@ class ErrorBoundary extends Component<
 /* Connection status                                                   */
 /* ------------------------------------------------------------------ */
 
-function ConnectionStatus() {
+function ConnectionStatusIndicator() {
   const status = useStore(selectConnectionStatus);
+  const attempt = useStore(selectReconnectAttempt);
   const color = status === "connected" ? "green" : status === "reconnecting" ? "yellow" : "red";
+  const label =
+    status === "reconnecting"
+      ? `Reconnecting ${attempt}/${20}\u2026`
+      : status;
   return (
-    <DotBadge color={color}>
-      {status === "reconnecting" ? "connecting" : status}
+    <DotBadge color={color} aria-live="polite" aria-label={`Connection status: ${label}`}>
+      {label}
     </DotBadge>
   );
 }
@@ -84,19 +91,24 @@ function RouteFallback() {
 
 export function App() {
   useSSE();
+  const navigate = useNavigate();
   const toggleTerminalDrawer = useStore((s) => s.toggleTerminalDrawer);
   const terminalDrawerOpen = useStore((s) => s.terminalDrawerOpen);
   const sessionCount = useStore((s) => Object.keys(s.terminalSessions).length);
 
-  // Ctrl+` keyboard shortcut to toggle the terminal drawer
+  // Global keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "`") {
         e.preventDefault();
         toggleTerminalDrawer();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
+        e.preventDefault();
+        navigate("/jobs/new");
+      }
     },
-    [toggleTerminalDrawer],
+    [toggleTerminalDrawer, navigate],
   );
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -113,36 +125,52 @@ export function App() {
           </span>
         </Link>
 
-        <div className="flex items-center gap-3 opacity-[0.78]">
-          <ConnectionStatus />
-          <button
-            onClick={toggleTerminalDrawer}
-            className={`p-1.5 rounded-md transition-colors ${
-              terminalDrawerOpen
-                ? "text-foreground bg-accent"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
-            }`}
-            title={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}
-          >
-            <TerminalSquare size={16} />
-          </button>
-          <Link
-            to="/history"
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-            title="Job History"
-          >
-            <History size={16} />
-          </Link>
-          <Link
-            to="/settings"
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-          >
-            <Settings size={16} />
-          </Link>
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
+          className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        >
+          <Search size={12} />
+          <span>Search…</span>
+          <kbd className="text-xs border border-border rounded px-1 py-0.5 font-mono">⌘K</kbd>
+        </button>
+
+        <div className="flex items-center gap-1 opacity-[0.78]">
+          <ConnectionStatusIndicator />
+          <Tooltip content={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}>
+            <button
+              onClick={toggleTerminalDrawer}
+              aria-label="Toggle terminal"
+              className={`p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md transition-colors ${
+                terminalDrawerOpen
+                  ? "text-foreground bg-accent"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              }`}
+            >
+              <TerminalSquare size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Job history">
+            <Link
+              to="/history"
+              aria-label="Job history"
+              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
+            >
+              <History size={16} />
+            </Link>
+          </Tooltip>
+          <Tooltip content="Settings">
+            <Link
+              to="/settings"
+              aria-label="Settings"
+              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
+            >
+              <Settings size={16} />
+            </Link>
+          </Tooltip>
         </div>
       </header>
 
-      <main className={`flex-1 overflow-y-auto p-4 ${terminalDrawerOpen ? "min-h-0" : ""}`}>
+      <main className={`flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 ${terminalDrawerOpen ? "min-h-0" : ""}`}>
         <ErrorBoundary>
           <Suspense fallback={<RouteFallback />}>
             <Routes>
@@ -159,6 +187,7 @@ export function App() {
       <Suspense fallback={null}>
         <TerminalDrawer />
       </Suspense>
+      <CommandPalette />
     </div>
   );
 }

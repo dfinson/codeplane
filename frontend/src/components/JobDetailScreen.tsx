@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, GitBranch, BookOpen, TerminalSquare } from "lucide-react";
+import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, GitBranch, BookOpen, TerminalSquare, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
@@ -16,6 +16,11 @@ import { CompleteJobDialog } from "./CompleteJobDialog";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { JobDetailSkeleton } from "./JobDetailSkeleton";
+import { useIsMobile } from "../hooks/useIsMobile";
+import { cn } from "../lib/utils";
+import { Tooltip } from "./ui/tooltip";
+import { ConfirmDialog } from "./ui/confirm-dialog";
 
 const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
 const DiffViewer = lazy(() => import("./DiffViewer"));
@@ -33,11 +38,40 @@ export function JobDetailScreen() {
   const [actionLoading, setActionLoading] = useState(false);
   const [resolveLoading, setResolveLoading] = useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const [tab, setTab] = useState("live");
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
   const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
   const [hasArtifacts, setHasArtifacts] = useState(false);
+  const [metaExpanded, setMetaExpanded] = useState(false);
+  const isMobile = useIsMobile();
+
+  // Measure available height for the Live tab using ResizeObserver
+  const liveContainerRef = useRef<HTMLDivElement>(null);
+  const [liveHeight, setLiveHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = liveContainerRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      const available = window.innerHeight - rect.top - 16; // 16px bottom margin
+      setLiveHeight(Math.max(available, 400));
+    };
+
+    measure();
+
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [tab]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -168,15 +202,11 @@ export function JobDetailScreen() {
       .catch(() => {});
   }, [jobId, jobState, tab]);
 
-  const handleCancel = useCallback(async () => {
+  const doCancelJob = useCallback(async () => {
     if (!jobId) return;
-    setActionLoading(true);
-    try {
-      const updated = await cancelJob(jobId);
-      useStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
-      toast.success("Job canceled");
-    } catch (e) { toast.error(String(e)); }
-    finally { setActionLoading(false); }
+    const updated = await cancelJob(jobId);
+    useStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
+    toast.success("Job canceled");
   }, [jobId]);
 
   const handleRerun = useCallback(async () => {
@@ -211,13 +241,7 @@ export function JobDetailScreen() {
 
   if (!jobId) return null;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Spinner size="lg" />
-      </div>
-    );
-  }
+  if (loading) return <JobDetailSkeleton />;
 
   if (!job) {
     return (
@@ -261,7 +285,7 @@ export function JobDetailScreen() {
               <span className="text-lg font-bold text-foreground">{job.id}</span>
             )}
             <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
-            <StateBadge state={job.state} />
+            <span aria-live="polite"><StateBadge state={job.state} /></span>
             <SdkBadge sdk={job.sdk} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -270,8 +294,7 @@ export function JobDetailScreen() {
                 size="sm"
                 variant="outline"
                 className="text-destructive border-destructive/40 hover:bg-destructive/10"
-                loading={actionLoading}
-                onClick={handleCancel}
+                onClick={() => setCancelOpen(true)}
               >
                 <XCircle size={14} />
                 Cancel
@@ -286,32 +309,34 @@ export function JobDetailScreen() {
             {needsResolution && hasChanges && (
               <>
                 {job.resolution !== "conflict" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1"
-                    loading={resolveLoading === "smart_merge"}
-                    disabled={resolveLoading !== null}
-                    onClick={() => handleResolve("smart_merge")}
-                    title="Ask the agent to merge changes onto the base branch"
-                  >
-                    <GitMerge size={14} />
-                    Merge
-                  </Button>
+                  <Tooltip content="Ask the agent to merge changes onto the base branch">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1"
+                      loading={resolveLoading === "smart_merge"}
+                      disabled={resolveLoading !== null}
+                      onClick={() => handleResolve("smart_merge")}
+                    >
+                      <GitMerge size={14} />
+                      Merge
+                    </Button>
+                  </Tooltip>
                 )}
                 {job.resolution === "conflict" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1"
-                    loading={resolveLoading === "agent_merge"}
-                    disabled={resolveLoading !== null}
-                    onClick={() => handleResolve("agent_merge")}
-                    title="Ask the agent to resolve the merge conflict"
-                  >
-                    <GitMerge size={14} />
-                    Resolve with Agent
-                  </Button>
+                  <Tooltip content="Ask the agent to resolve the merge conflict">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1"
+                      loading={resolveLoading === "agent_merge"}
+                      disabled={resolveLoading !== null}
+                      onClick={() => handleResolve("agent_merge")}
+                    >
+                      <GitMerge size={14} />
+                      Resolve with Agent
+                    </Button>
+                  </Tooltip>
                 )}
                 <Button
                   size="sm"
@@ -328,9 +353,7 @@ export function JobDetailScreen() {
                   size="sm"
                   variant="outline"
                   className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
-                  loading={resolveLoading === "discard"}
-                  disabled={resolveLoading !== null}
-                  onClick={() => handleResolve("discard")}
+                  onClick={() => setDiscardOpen(true)}
                 >
                   <Trash2 size={14} />
                   Discard
@@ -384,20 +407,38 @@ export function JobDetailScreen() {
           <p className="text-sm italic text-primary/70 mb-3">{job.progressHeadline}</p>
         )}
 
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-6 gap-y-2 text-sm mb-3">
-          {[
-            ["Branch", job.branch ?? "—"],
-            ["Base", job.baseRef],
-            ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
-            ["Created", new Date(job.createdAt).toLocaleString()],
-            ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
-          ].map(([label, value]) => (
-            <div key={label}>
-              <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wide">{label}</p>
-              <p className="text-sm break-all">{value}</p>
-            </div>
-          ))}
-        </div>
+        {(!isMobile || metaExpanded) ? (
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-6 gap-y-2 text-sm mb-3">
+            {[
+              ["Branch", job.branch ?? "—"],
+              ["Base", job.baseRef],
+              ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
+              ...(job.sdk && job.sdk !== "copilot" ? [["SDK", job.sdk]] : []),
+              ["Created", new Date(job.createdAt).toLocaleString()],
+              ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
+            ].map(([label, value]) => (
+              <div key={label}>
+                <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wide">{label}</p>
+                <p className="text-sm break-all">{value}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span>{job.repo}</span>
+            <span>·</span>
+            <span className="font-mono text-xs">{job.branch || "main"}</span>
+          </div>
+        )}
+        {isMobile && (
+          <button
+            onClick={() => setMetaExpanded(!metaExpanded)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
+          >
+            <ChevronDown className={cn("h-3 w-3 transition-transform", metaExpanded && "rotate-180")} />
+            {metaExpanded ? "Less" : "More details"}
+          </button>
+        )}
 
         {job.prUrl && (
           <a
@@ -497,23 +538,52 @@ export function JobDetailScreen() {
         setTab(v);
         if (v === "terminal" && !jobTerminalSessionId) handleOpenJobTerminal();
       }} className="mb-4">
-        <TabsList className="overflow-x-auto">
-          <TabsTrigger value="live">Live</TabsTrigger>
-          <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
-          <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
-          {hasWorktree && <TabsTrigger value="terminal"><TerminalSquare size={13} className="mr-1.5" />Terminal</TabsTrigger>}
-          {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
-        </TabsList>
+        <div className="flex items-center gap-2">
+          <TabsList className="flex-1 overflow-x-auto">
+            {isMobile ? (
+              <>
+                <TabsTrigger value="live">Live</TabsTrigger>
+                <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
+                <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
+                {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
+              </>
+            ) : (
+              <>
+                <TabsTrigger value="live">Live</TabsTrigger>
+                <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
+                <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
+                {hasWorktree && <TabsTrigger value="terminal"><TerminalSquare size={13} className="mr-1.5" />Terminal</TabsTrigger>}
+                {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
+              </>
+            )}
+          </TabsList>
+          {isMobile && hasWorktree && (
+            <Tooltip content="Open terminal">
+              <button
+                onClick={() => {
+                  if (!jobTerminalSessionId) handleOpenJobTerminal();
+                  useStore.setState({ terminalDrawerOpen: true });
+                }}
+                className="p-2.5 rounded-md hover:bg-accent text-muted-foreground"
+                aria-label="Open terminal"
+              >
+                <TerminalSquare className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </Tabs>
 
       {tab === "live" && (
-        <div className="flex flex-col gap-4">
-          <div className="h-[32rem]">
+        <div ref={liveContainerRef} className="flex flex-col" style={liveHeight ? { height: liveHeight } : { height: 'calc(100vh - 13rem)' }}>
+          <div className="flex-1 min-h-[24rem]">
             <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
-          <PlanPanel jobId={jobId} />
-          <ExecutionTimeline jobId={jobId} />
-          <MetricsPanel jobId={jobId} isRunning={isRunning} />
+          <div className="overflow-y-auto max-h-[40vh] space-y-4 mt-4 shrink-0">
+            <PlanPanel jobId={jobId} />
+            <ExecutionTimeline jobId={jobId} />
+            <MetricsPanel jobId={jobId} isRunning={isRunning} />
+          </div>
         </div>
       )}
 
@@ -547,6 +617,27 @@ export function JobDetailScreen() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        onConfirm={doCancelJob}
+        title="Cancel Job?"
+        description="This will stop the running agent. Any uncommitted work will remain in the worktree."
+        confirmLabel="Cancel Job"
+      />
+
+      <ConfirmDialog
+        open={discardOpen}
+        onClose={() => setDiscardOpen(false)}
+        onConfirm={async () => {
+          await resolveJob(jobId!, "discard");
+          toast.success("Discarded");
+        }}
+        title="Discard Changes?"
+        description="All changes in the worktree will be deleted. This cannot be undone."
+        confirmLabel="Discard"
+      />
 
     </div>
   );

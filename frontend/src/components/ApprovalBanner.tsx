@@ -4,11 +4,13 @@ import { toast } from "sonner";
 import { useStore, selectApprovals } from "../store";
 import { resolveApproval, trustJob } from "../api/client";
 import { Button } from "./ui/button";
+import { ConfirmDialog } from "./ui/confirm-dialog";
 
 export function ApprovalBanner({ jobId }: { jobId: string }) {
   const approvals = useStore(selectApprovals);
   const [loading, setLoading] = useState<string | null>(null);
   const [trusting, setTrusting] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
 
   const pending = Object.values(approvals).filter(
     (a) => a.jobId === jobId && !a.resolvedAt,
@@ -90,13 +92,24 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
               variant="outline"
               className="border-red-500/40 text-red-400 hover:bg-red-500/10"
               loading={loading === a.id}
-              onClick={() => handleResolve(a.id, "rejected")}
+              onClick={() => setRejectTarget(a.id)}
             >
               Reject
             </Button>
           </div>
         </div>
       ))}
+      <ConfirmDialog
+        open={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        onConfirm={async () => {
+          if (rejectTarget) await handleResolve(rejectTarget, "rejected");
+          setRejectTarget(null);
+        }}
+        title="Reject Approval?"
+        description="The agent's proposed action will be denied. It may fail or take a different approach."
+        confirmLabel="Reject"
+      />
     </div>
   );
 }

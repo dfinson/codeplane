@@ -115,6 +115,7 @@ export function HistoryScreen() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8 h-8 text-sm"
+            aria-label="Search jobs"
           />
         </div>
         <div className="flex rounded-lg bg-muted p-0.5 gap-0.5">
@@ -122,6 +123,7 @@ export function HistoryScreen() {
             <button
               key={f.value}
               onClick={() => setFilter(f.value)}
+              aria-pressed={filter === f.value}
               className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                 filter === f.value
                   ? "bg-background text-foreground shadow"

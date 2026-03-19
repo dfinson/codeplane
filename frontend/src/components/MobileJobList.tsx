@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { PlayCircle, CheckCircle2 } from "lucide-react";
 import { useStore, selectJobs, selectApprovals } from "../store";
 import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
@@ -68,9 +69,48 @@ export function MobileJobList() {
       </div>
       <div className="flex flex-col gap-2">
         {filtered.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-8">
-            No {tab.toLowerCase()} jobs
-          </p>
+          (() => {
+            if (tab === KANBAN_COLUMNS.IN_PROGRESS) {
+              return (
+                <div className="flex flex-col items-center gap-3 px-4 py-6">
+                  <div className="rounded-full bg-primary/10 p-3">
+                    <PlayCircle className="h-6 w-6 text-primary" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-muted-foreground">No jobs running</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">Create a new job to get started</p>
+                  </div>
+                </div>
+              );
+            }
+            if (tab === KANBAN_COLUMNS.NEEDS_REVIEW) {
+              return (
+                <div className="flex flex-col items-center gap-3 px-4 py-6">
+                  <div className="rounded-full bg-emerald-500/10 p-3">
+                    <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-muted-foreground">All caught up</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing needs your review right now</p>
+                  </div>
+                </div>
+              );
+            }
+            if (tab === KANBAN_COLUMNS.NEEDS_ATTENTION) {
+              return (
+                <div className="flex flex-col items-center gap-3 px-4 py-6">
+                  <div className="rounded-full bg-emerald-500/10 p-3">
+                    <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-muted-foreground">All clear</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">No failures or issues</p>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()
         ) : (
           filtered.map((job) => <JobCard key={job.id} job={job} />)
         )}

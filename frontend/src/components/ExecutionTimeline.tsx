@@ -38,7 +38,7 @@ export function ExecutionTimeline({ jobId }: { jobId: string }) {
             — {current.active ? current.headline : current.headlinePast}
           </span>
         )}
-        <span className="ml-auto text-[11px] text-muted-foreground/50 tabular-nums shrink-0">
+        <span className="ml-auto text-xs text-muted-foreground/50 tabular-nums shrink-0">
           {timeline.length} milestone{timeline.length !== 1 ? "s" : ""}
         </span>
       </button>
@@ -60,14 +60,14 @@ export function ExecutionTimeline({ jobId }: { jobId: string }) {
                     }`}
                   />
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-[10px] text-muted-foreground/50 font-mono">
+                    <span className="text-xs text-muted-foreground/50 font-mono">
                       {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     </span>
                     <span className={`text-xs leading-snug font-medium ${entry.active ? "text-foreground" : "text-muted-foreground"}`}>
                       {entry.active ? entry.headline : entry.headlinePast}
                     </span>
                     {entry.summary && (
-                      <span className="text-[11px] leading-relaxed text-muted-foreground/70">
+                      <span className="text-xs leading-relaxed text-muted-foreground/70">
                         {entry.summary}
                       </span>
                     )}

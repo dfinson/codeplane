@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, selectJobLogs } from "../store";
 import { fetchJobLogs } from "../api/client";
 import { cn } from "../lib/utils";
+import { Tooltip } from "./ui/tooltip";
 
 const LEVELS = ["debug", "info", "warn", "error"] as const;
 type Level = typeof LEVELS[number];
@@ -60,6 +62,20 @@ export function LogsPanel({ jobId }: { jobId: string }) {
     }
   }, [logs.length]);
 
+  const virtualizer = useVirtualizer({
+    count: logs.length,
+    getScrollElement: () => viewportRef.current,
+    estimateSize: () => 28,
+    overscan: 20,
+    enabled: !collapsed,
+  });
+
+  useEffect(() => {
+    if (stickRef.current && logs.length > 0 && !collapsed) {
+      virtualizer.scrollToIndex(logs.length - 1, { align: "end" });
+    }
+  }, [logs.length, virtualizer, collapsed]);
+
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -85,27 +101,29 @@ export function LogsPanel({ jobId }: { jobId: string }) {
         </span>
         {/* Minimum-level selector — radio style, each button activates that level+ */}
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          {LEVELS.map((level) => {
+            {LEVELS.map((level) => {
             const active = LEVEL_PRIORITY[level] === LEVEL_PRIORITY[minLevel];
             const dimmed = LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel];
             return (
-              <button
-                key={level}
-                type="button"
-                onClick={() => handleLevelClick(level)}
-                title={`Show ${level} and above`}
-                className={cn(
-                  "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors",
-                  active
-                    ? "border-transparent bg-muted text-foreground ring-1 ring-ring"
-                    : dimmed
-                    ? "border-transparent text-muted-foreground/40"
-                    : "border-border text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <span className={cn("w-1.5 h-1.5 rounded-full", dimmed ? "bg-muted-foreground/30" : LEVEL_DOT[level])} />
-                {level}
-              </button>
+              <Tooltip key={level} content={`Show ${level} and above`}>
+                <button
+                  type="button"
+                  onClick={() => handleLevelClick(level)}
+                  aria-label={`Filter by ${level}`}
+                  aria-pressed={active}
+                  className={cn(
+                    "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors",
+                    active
+                      ? "border-transparent bg-muted text-foreground ring-1 ring-ring"
+                      : dimmed
+                      ? "border-transparent text-muted-foreground/40"
+                      : "border-border text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span className={cn("w-1.5 h-1.5 rounded-full", dimmed ? "bg-muted-foreground/30" : LEVEL_DOT[level])} />
+                  {level}
+                </button>
+              </Tooltip>
             );
           })}
         </div>
@@ -115,23 +133,41 @@ export function LogsPanel({ jobId }: { jobId: string }) {
         <div
           ref={viewportRef}
           className="h-64 min-h-0 overflow-y-auto overscroll-contain font-mono"
+          style={{ contain: "strict" }}
           onScroll={handleScroll}
         >
           {logs.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">No logs</p>
           ) : (
-            <div className="p-2 space-y-px">
-              {logs.map((l, i) => (
-                <div key={i} className="flex items-start gap-2 text-xs py-0.5 hover:bg-accent/30 px-1 rounded">
-                  <span className="text-muted-foreground shrink-0 tabular-nums">
-                    {new Date(l.timestamp).toLocaleTimeString()}
-                  </span>
-                  <span className={cn("uppercase font-semibold w-10 shrink-0", LEVEL_CLASSES[l.level])}>
-                    {l.level}
-                  </span>
-                  <span className="text-foreground/80 break-words min-w-0">{l.message}</span>
-                </div>
-              ))}
+            <div style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>
+              {virtualizer.getVirtualItems().map((virtualRow) => {
+                const l = logs[virtualRow.index];
+                if (!l) return null;
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <div className="flex items-start gap-2 text-xs py-0.5 hover:bg-accent/30 px-2 rounded">
+                      <span className="text-muted-foreground shrink-0 tabular-nums">
+                        {new Date(l.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span className={cn("uppercase font-semibold w-10 shrink-0", LEVEL_CLASSES[l.level])}>
+                        {l.level}
+                      </span>
+                      <span className="text-foreground/80 break-words min-w-0">{l.message}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

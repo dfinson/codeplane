@@ -6,7 +6,7 @@ const Tabs = TabsPrimitive.Root;
 const TabsList = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>) => (
   <TabsPrimitive.List
     className={cn(
-      "inline-flex h-9 items-center justify-start rounded-lg bg-muted p-1 text-muted-foreground gap-0.5 overflow-x-auto max-w-full",
+      "inline-flex h-9 items-center justify-start rounded-lg bg-muted p-1 text-muted-foreground gap-0.5 overflow-x-auto scroll-smooth max-w-full",
       className,
     )}
     {...props}

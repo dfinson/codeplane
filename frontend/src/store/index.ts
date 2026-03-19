@@ -228,9 +228,11 @@ interface AppState {
 
   // UI state
   connectionStatus: ConnectionStatus;
+  reconnectAttempt: number;
 
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
+  setReconnectAttempt: (attempt: number) => void;
   dispatchSSEEvent: (eventType: string, data: unknown) => void;
   applySnapshot: (jobs: JobSummary[], approvals: ApprovalRequest[]) => void;
 
@@ -254,6 +256,7 @@ export const useStore = create<AppState>((set, get) => ({
   timelines: {},
   plans: {},
   connectionStatus: "reconnecting",
+  reconnectAttempt: 0,
 
   // Terminal state
   terminalDrawerOpen: false,
@@ -263,6 +266,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   setConnectionStatus: (status) =>
     get().connectionStatus !== status && set({ connectionStatus: status }),
+
+  setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
 
   applySnapshot: (jobs, approvals) =>
     set({
@@ -790,6 +795,8 @@ export const useStore = create<AppState>((set, get) => ({
 export const selectJobs = (state: AppState) => state.jobs;
 export const selectConnectionStatus = (state: AppState) =>
   state.connectionStatus;
+export const selectReconnectAttempt = (state: AppState) =>
+  state.reconnectAttempt;
 export const selectApprovals = (state: AppState) => state.approvals;
 
 // Stable empty-array sentinels — MUST NOT be inline `?? []` because a new
