@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
-  BookOpen, CheckCircle, XCircle,
+  BookOpen, CheckCircle, XCircle, DollarSign, Zap,
 } from "lucide-react";
 import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
 import { Badge } from "./ui/badge";
@@ -34,6 +34,7 @@ interface LLMCall {
 
 interface TelemetryData {
   available: boolean;
+  sdk?: string;
   model?: string;
   mainModel?: string;
   durationMs?: number;
@@ -58,6 +59,21 @@ interface TelemetryData {
   totalApprovalWaitMs?: number;
   agentMessages?: number;
   operatorMessages?: number;
+  // Copilot: premium requests consumed this session
+  premiumRequests?: number;
+  // Copilot: per-resource quota snapshots
+  quotaSnapshots?: Record<string, QuotaSnapshotData>;
+}
+
+interface QuotaSnapshotData {
+  usedRequests: number;
+  entitlementRequests: number;
+  remainingPercentage: number;
+  overage: number;
+  overageAllowed: boolean;
+  isUnlimited: boolean;
+  usageAllowedWithExhaustedQuota: boolean;
+  resetDate: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +92,158 @@ function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+// ---------------------------------------------------------------------------
+// Cost / quota helpers
+// ---------------------------------------------------------------------------
+
+// Per-model USD rates ($/MTok) for Claude API — input / output
+const CLAUDE_MODEL_RATES: Record<string, { input: number; output: number; label: string }> = {
+  "claude-opus-4-6":    { input: 5,   output: 25,  label: "Claude Opus 4.6" },
+  "claude-opus-4-5":    { input: 5,   output: 25,  label: "Claude Opus 4.5" },
+  "claude-opus-4":      { input: 15,  output: 75,  label: "Claude Opus 4" },
+  "claude-sonnet-4-6":  { input: 3,   output: 15,  label: "Claude Sonnet 4.6" },
+  "claude-sonnet-4-5":  { input: 3,   output: 15,  label: "Claude Sonnet 4.5" },
+  "claude-sonnet-4":    { input: 3,   output: 15,  label: "Claude Sonnet 4" },
+  "claude-haiku-4-5":   { input: 1,   output: 5,   label: "Claude Haiku 4.5" },
+  "claude-haiku-3-5":   { input: 0.8, output: 4,   label: "Claude Haiku 3.5" },
+};
+
+function normalizeModelKey(model: string): string {
+  return model.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-");
+}
+
+function lookupModelRate(model: string) {
+  const key = normalizeModelKey(model);
+  return CLAUDE_MODEL_RATES[key] ?? null;
+}
+
+function formatUsd(amount: number): string {
+  if (amount < 0.001) return `$${amount.toFixed(6)}`;
+  if (amount < 0.01)  return `$${amount.toFixed(4)}`;
+  if (amount < 1)     return `$${amount.toFixed(3)}`;
+  return `$${amount.toFixed(2)}`;
+}
+
+// ---------------------------------------------------------------------------
+// CostSection component
+// ---------------------------------------------------------------------------
+
+function CostSection({ data }: { data: TelemetryData }) {
+  const sdk = data.sdk ?? "";
+  const isCopilot = sdk === "copilot";
+  const isClaude = sdk === "claude";
+
+  if (!isCopilot && !isClaude) {
+    return null;
+  }
+
+  return (
+    <div>
+      <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
+        {isCopilot ? <Zap size={12} className="text-yellow-400" /> : <DollarSign size={12} className="text-green-400" />}
+        {isCopilot ? "Premium Requests" : "Cost"}
+      </h4>
+
+      {isCopilot && <CopilotCostView data={data} />}
+      {isClaude && <ClaudeCostView data={data} />}
+    </div>
+  );
+}
+
+function CopilotCostView({ data }: { data: TelemetryData }) {
+  const snapshots = data.quotaSnapshots ?? {};
+  const snapshotEntries = Object.entries(snapshots);
+
+  return (
+    <div className="space-y-3">
+      {/* Premium requests consumed this session */}
+      {(data.premiumRequests ?? 0) > 0 && (
+        <div className="flex items-baseline justify-between text-xs">
+          <span className="text-muted-foreground">This session</span>
+          <span className="font-semibold tabular-nums text-yellow-400">
+            {data.premiumRequests} premium request{data.premiumRequests !== 1 ? "s" : ""}
+          </span>
+        </div>
+      )}
+
+      {/* Per-resource quota snapshots */}
+      {snapshotEntries.map(([key, snap]) => {
+        const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        const pct = snap.remainingPercentage;
+        const usedPct = Math.min(100, 100 - pct);
+        const exhausted = !snap.isUnlimited && pct <= 0;
+        const nearLimit = !snap.isUnlimited && pct < 20 && pct > 0;
+
+        return (
+          <div key={key} className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{label}</span>
+              {snap.isUnlimited ? (
+                <span className="text-green-400 text-[11px]">Unlimited</span>
+              ) : (
+                <span className={cn("tabular-nums text-[11px]", exhausted ? "text-red-400" : nearLimit ? "text-yellow-400" : "text-muted-foreground")}>
+                  {snap.usedRequests.toFixed(1)} / {snap.entitlementRequests.toFixed(0)} used
+                  {snap.overage > 0 && ` (+${snap.overage.toFixed(1)} overage)`}
+                </span>
+              )}
+            </div>
+            {!snap.isUnlimited && (
+              <Progress
+                value={usedPct}
+                color={exhausted || nearLimit ? "red" : "blue"}
+              />
+            )}
+            {snap.resetDate && (
+              <p className="text-[10px] text-muted-foreground">
+                Resets {new Date(snap.resetDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      {(data.premiumRequests ?? 0) === 0 && snapshotEntries.length === 0 && (
+        <p className="text-xs text-muted-foreground italic">Premium request data available after session completes.</p>
+      )}
+
+      <p className="text-[10px] text-muted-foreground leading-snug">
+        Premium requests are consumed based on model multipliers (e.g. Claude Sonnet 4.6 = 1×,
+        Claude Opus 4.5 = 3×). Included models (GPT-5 mini, GPT-4.1, GPT-4o) cost 0 on paid plans.
+      </p>
+    </div>
+  );
+}
+
+function ClaudeCostView({ data }: { data: TelemetryData }) {
+  const totalCost = data.totalCost ?? 0;
+  const rate = data.model ? lookupModelRate(data.model) : null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="text-muted-foreground">Total API cost</span>
+        <span className={cn("font-semibold tabular-nums", totalCost > 5 ? "text-red-400" : totalCost > 1 ? "text-yellow-400" : "text-green-400")}>
+          {formatUsd(totalCost)}
+        </span>
+      </div>
+
+      {rate && (
+        <p className="text-[10px] text-muted-foreground">
+          {rate.label}: ${rate.input}/MTok input · ${rate.output}/MTok output
+        </p>
+      )}
+
+      {totalCost === 0 && (
+        <p className="text-xs text-muted-foreground italic">Cost data available after session completes.</p>
+      )}
+
+      <p className="text-[10px] text-muted-foreground leading-snug">
+        Claude Max and enterprise (Bedrock/Vertex/Foundry) plans do not expose quota via the SDK.
+      </p>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +326,7 @@ function SortHeader({
 // Main component — single flat view, no tabs
 // ---------------------------------------------------------------------------
 
-export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
+export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
   const [collapsed, setCollapsed] = useState(true);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const [llmCollapsed, setLlmCollapsed] = useState(false);
@@ -283,7 +451,7 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
         className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-border hover:bg-accent/30 transition-colors text-left"
       >
         {collapsed ? <ChevronRight size={14} className="text-muted-foreground shrink-0" /> : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
-        <span className="text-sm font-semibold text-muted-foreground">Insights</span>
+        <span className="text-sm font-semibold text-muted-foreground">Metrics</span>
         {headerStats && (
           <span className="text-[11px] text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>
         )}
@@ -370,6 +538,9 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
                   )}
                 </div>
               ) : null}
+
+              {/* Cost / quota — shown for copilot and claude sdk jobs */}
+              <CostSection data={data} />
 
               {/* Session summary — only shown when summaries exist */}
               {checkpoints.length > 0 && (

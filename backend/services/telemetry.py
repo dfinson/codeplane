@@ -8,12 +8,14 @@ these standardized telemetry operations.
 Contract:
   telemetry.start_job(job_id)
   telemetry.end_job(job_id)
-  telemetry.record_llm_usage(job_id, ...)     # token counts, model, cost
-  telemetry.record_tool_call(job_id, ...)     # tool invocation
-  telemetry.record_context_change(job_id, ...)# context window state
-  telemetry.record_approval(job_id, ...)      # approval wait
-  telemetry.record_message(job_id, ...)       # conversation messages
-  telemetry.get(job_id) -> JobTelemetry       # read aggregated data
+  telemetry.record_llm_usage(job_id, ...)          # token counts, model, cost
+  telemetry.record_tool_call(job_id, ...)           # tool invocation
+  telemetry.record_context_change(job_id, ...)      # context window state
+  telemetry.record_approval(job_id, ...)            # approval wait
+  telemetry.record_message(job_id, ...)             # conversation messages
+  telemetry.record_premium_requests(job_id, ...)    # Copilot premium req count
+  telemetry.record_quota_snapshots(job_id, ...)     # Copilot quota snapshots
+  telemetry.get(job_id) -> JobTelemetry             # read aggregated data
 """
 
 from __future__ import annotations
@@ -45,6 +47,20 @@ class LLMCallRecord:
     duration_ms: float
     timestamp: float
     is_subagent: bool = False
+
+
+@dataclass
+class QuotaSnapshot:
+    """Point-in-time snapshot of a Copilot premium-request quota resource."""
+
+    used_requests: float = 0.0
+    entitlement_requests: float = 0.0
+    remaining_percentage: float = 0.0
+    overage: float = 0.0
+    overage_allowed: bool = False
+    is_unlimited: bool = False
+    usage_allowed_with_exhausted_quota: bool = False
+    reset_date: str = ""
 
 
 @dataclass
@@ -98,6 +114,13 @@ class JobTelemetry:
     # Message counts
     agent_messages: int = 0
     operator_messages: int = 0
+
+    # --- Cost / quota (populated by the SDK adapter) ---
+    # Copilot: premium requests consumed this session (from session.shutdown).
+    premium_requests: float = 0.0
+    # Latest quota snapshot per resource key (from assistant.usage quota_snapshots).
+    # Key is the quota resource identifier emitted by the Copilot SDK.
+    quota_snapshots: dict[str, QuotaSnapshot] = field(default_factory=dict)
 
     @property
     def duration_ms(self) -> float:
@@ -164,6 +187,20 @@ class JobTelemetry:
             "totalApprovalWaitMs": round(self.total_approval_wait_ms),
             "agentMessages": self.agent_messages,
             "operatorMessages": self.operator_messages,
+            "premiumRequests": self.premium_requests,
+            "quotaSnapshots": {
+                k: {
+                    "usedRequests": v.used_requests,
+                    "entitlementRequests": v.entitlement_requests,
+                    "remainingPercentage": round(v.remaining_percentage, 1),
+                    "overage": v.overage,
+                    "overageAllowed": v.overage_allowed,
+                    "isUnlimited": v.is_unlimited,
+                    "usageAllowedWithExhaustedQuota": v.usage_allowed_with_exhausted_quota,
+                    "resetDate": v.reset_date,
+                }
+                for k, v in self.quota_snapshots.items()
+            },
         }
 
 
@@ -209,6 +246,9 @@ class TelemetryCollector:
                 total_approval_wait_ms=existing.total_approval_wait_ms,
                 agent_messages=existing.agent_messages,
                 operator_messages=existing.operator_messages,
+                # Carry over accumulated quota/premium data across resumptions
+                premium_requests=existing.premium_requests,
+                quota_snapshots=existing.quota_snapshots,
             )
         else:
             self._jobs[job_id] = JobTelemetry(
@@ -361,6 +401,23 @@ class TelemetryCollector:
             tel.agent_messages += 1
         else:
             tel.operator_messages += 1
+
+    def record_premium_requests(self, job_id: str, *, count: float) -> None:
+        """Record total Copilot premium requests consumed (from session.shutdown)."""
+        tel = self._jobs.get(job_id)
+        if tel:
+            tel.premium_requests = count
+
+    def record_quota_snapshots(
+        self,
+        job_id: str,
+        *,
+        snapshots: dict[str, QuotaSnapshot],
+    ) -> None:
+        """Update quota snapshots from a Copilot assistant.usage event."""
+        tel = self._jobs.get(job_id)
+        if tel:
+            tel.quota_snapshots.update(snapshots)
 
     def get(self, job_id: str) -> JobTelemetry | None:
         return self._jobs.get(job_id)

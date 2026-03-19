@@ -510,14 +510,21 @@ async def get_job_timeline(
 
 
 @router.get("/jobs/{job_id}/telemetry")
-async def get_job_telemetry(job_id: str) -> dict[str, object]:
+async def get_job_telemetry(
+    job_id: str,
+    session: Annotated[AsyncSession, Depends(_get_session)],
+) -> dict[str, object]:
     """Get telemetry data for a job run."""
+    from backend.persistence.job_repo import JobRepository
     from backend.services.telemetry import collector
 
     tel = collector.get(job_id)
     if tel is None:
         return {"jobId": job_id, "available": False}
-    return {**tel.to_dict(), "available": True}
+
+    job_row = await JobRepository(session).get(job_id)
+    sdk = job_row.sdk if job_row else ""
+    return {**tel.to_dict(), "sdk": sdk, "available": True}
 
 
 @router.post("/jobs/{job_id}/resolve")

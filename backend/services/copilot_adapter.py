@@ -314,6 +314,25 @@ class CopilotAdapter(AgentAdapterInterface):
                         cost=float(data.cost or 0),
                         duration_ms=float(data.duration or 0),
                     )
+                    # Capture Copilot quota snapshots if present
+                    raw_snapshots = getattr(data, "quota_snapshots", None)
+                    if raw_snapshots:
+                        from backend.services.telemetry import QuotaSnapshot as _QS
+
+                        parsed = {
+                            key: _QS(
+                                used_requests=float(getattr(snap, "used_requests", 0) or 0),
+                                entitlement_requests=float(getattr(snap, "entitlement_requests", 0) or 0),
+                                remaining_percentage=float(getattr(snap, "remaining_percentage", 0) or 0),
+                                overage=float(getattr(snap, "overage", 0) or 0),
+                                overage_allowed=bool(getattr(snap, "overage_allowed_with_exhausted_quota", False)),
+                                is_unlimited=bool(getattr(snap, "is_unlimited_entitlement", False)),
+                                usage_allowed_with_exhausted_quota=bool(getattr(snap, "usage_allowed_with_exhausted_quota", False)),
+                                reset_date=str(getattr(snap, "reset_date", "") or ""),
+                            )
+                            for key, snap in raw_snapshots.items()
+                        }
+                        tel.record_quota_snapshots(job_id, snapshots=parsed)
                 elif kind_str == "tool.execution_start":
                     tool_id = data.tool_call_id or ""
                     import json as _json
@@ -393,6 +412,11 @@ class CopilotAdapter(AgentAdapterInterface):
                     tel.record_message(job_id, role="agent")
                 elif kind_str == "user.message":
                     tel.record_message(job_id, role="operator")
+                elif kind_str == "session.shutdown":
+                    # Capture total premium requests consumed by this session
+                    total_pr = getattr(data, "total_premium_requests", None)
+                    if data and total_pr is not None:
+                        tel.record_premium_requests(job_id, count=float(total_pr))
 
             # --- Emit log events for operational SDK events ---
             # These show up in the LogsPanel and are persisted as log_line_emitted.
