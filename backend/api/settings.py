@@ -258,7 +258,11 @@ async def browse_directories(
                 }
             )
     except PermissionError:
-        structlog.get_logger().warning("browse_directory_permission_denied", path=str(base))
+        structlog.get_logger(__name__).warning(
+            "browse_directory_permission_denied",
+            path=str(base),
+            exc_info=True,
+        )
 
     return {
         "current": str(base),

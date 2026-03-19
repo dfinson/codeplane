@@ -115,6 +115,12 @@ User request: {req.prompt}"""
             parsed = json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
             return TerminalAskResponse(command=parsed["command"], explanation=parsed.get("explanation", ""))
         except (json.JSONDecodeError, KeyError):
+            log.warning(
+                "terminal_ask_parse_failed",
+                raw_result=result[:200],
+                prompt=req.prompt,
+                exc_info=True,
+            )
             return TerminalAskResponse(command=result.strip(), explanation="")
     except Exception as exc:
         log.warning("terminal_ask_failed", error=str(exc))
@@ -204,9 +210,9 @@ async def terminal_ws(ws: WebSocket) -> None:
                     attached_session_id = None
 
     except WebSocketDisconnect:
-        log.debug("terminal_ws_disconnected")
+        log.debug("terminal_ws_disconnected", session_id=attached_session_id)
     except Exception:
-        log.warning("terminal_ws_error", exc_info=True)
+        log.warning("terminal_ws_error", session_id=attached_session_id, exc_info=True)
     finally:
         # Clean up on disconnect
         if attached_session_id:

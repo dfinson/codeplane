@@ -385,9 +385,11 @@ async def get_job_diff(
             try:
                 return await ds.calculate_diff(job.worktree_path, job.base_ref)
             except Exception:
-                structlog.get_logger().warning(
+                structlog.get_logger(__name__).warning(
                     "get_job_diff_live_failed",
                     job_id=job_id,
+                    worktree_path=str(job.worktree_path),
+                    base_ref=job.base_ref,
                     exc_info=True,
                 )
 

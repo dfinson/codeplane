@@ -75,6 +75,10 @@ async def stream_events(
                     # don't prevent idle stream timeouts.
                     yield "event: session_heartbeat\ndata: {}\n\n"
                 except (asyncio.CancelledError, GeneratorExit):
+                    structlog.get_logger(__name__).debug(
+                        "sse_client_disconnected",
+                        job_id=job_id,
+                    )
                     break
         finally:
             sse_manager.unregister(conn)

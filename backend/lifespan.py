@@ -189,7 +189,12 @@ async def _init_optional_services(
         finally:
             await _model_client.stop()
     except Exception as exc:
-        log.warning("model_cache_failed", error=str(exc), exc_info=True)
+        log.warning(
+            "model_cache_failed",
+            error=str(exc),
+            client_type="CopilotClient",
+            exc_info=True,
+        )
     app.state.cached_models = cached_models
 
     # --- Voice service ---

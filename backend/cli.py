@@ -57,8 +57,8 @@ def _build_frontend() -> bool:
     try:
         # Ensure deps are installed
         if not (frontend_root / "node_modules").is_dir():
-            subprocess.run(["npm", "ci"], cwd=str(frontend_root), check=True, capture_output=True)
-        subprocess.run(["npm", "run", "build"], cwd=str(frontend_root), check=True, capture_output=True)
+            subprocess.run(["npm", "ci"], cwd=str(frontend_root), check=True, capture_output=True, timeout=300)
+        subprocess.run(["npm", "run", "build"], cwd=str(frontend_root), check=True, capture_output=True, timeout=300)
         click.secho("Frontend built.", fg="green")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
@@ -345,7 +345,11 @@ def _start_tunnel(port: int) -> tuple[str | None, subprocess.Popen[str] | None]:
                 if tid.startswith(tunnel_name) and "." in tid:
                     tunnel_region = tid.split(".")[1]
         except (json.JSONDecodeError, KeyError):
-            log.warning("tunnel_list_parse_failed", exc_info=True)
+            log.warning(
+                "tunnel_list_parse_failed",
+                stdout=list_result.stdout[:500] if list_result.stdout else None,
+                exc_info=True,
+            )
 
         if tunnel_name not in existing_tunnels:
             # Create the tunnel
@@ -461,7 +465,7 @@ def _print_startup_banner(host: str, port: int, dev: bool, tunnel_url: str | Non
         qr.print_ascii(invert=True)
         click.echo(f"\n  Scan to open: {url}\n")
     except ImportError:
-        log.debug("qrcode_not_installed")
+        log.debug("qrcode_not_installed", package="qrcode", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
