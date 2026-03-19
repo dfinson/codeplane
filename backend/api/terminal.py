@@ -45,7 +45,8 @@ def set_utility_session(session: object) -> None:
 
 
 def _svc() -> TerminalService:
-    assert _state.service is not None, "TerminalService not initialized"
+    if _state.service is None:
+        raise RuntimeError("TerminalService not initialized")
     return _state.service
 
 
