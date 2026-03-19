@@ -43,7 +43,7 @@ export function PlanPanel({ jobId }: { jobId: string }) {
             — {activeStep.label}
           </span>
         )}
-        <span className="ml-auto text-[11px] text-muted-foreground/50 tabular-nums shrink-0">
+        <span className="ml-auto text-xs text-muted-foreground/50 tabular-nums shrink-0">
           {doneCount}/{steps.length}
         </span>
       </button>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock, Check } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
+import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued";
 import { toast } from "sonner";
 import { useStore, selectJobDiffs } from "../store";
 import { fetchJobDiff, sendOperatorMessage, resumeJob } from "../api/client";
@@ -9,6 +10,8 @@ import { Spinner } from "./ui/spinner";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MicButton } from "./VoiceButton";
+import { Tooltip } from "./ui/tooltip";
+import { useDrag } from "../hooks/useDrag";
 import type { DiffFileModel, DiffHunkModel } from "../api/types";
 
 interface DiffViewerProps {
@@ -39,6 +42,65 @@ const STATUS_ICON_CLASS: Record<string, string> = {
   modified: "text-blue-400",
   renamed: "text-yellow-400",
 };
+
+const MOBILE_DIFF_MAX_LINES = 3000;
+
+function MobileDiffView({ oldValue, newValue }: { oldValue: string; newValue: string }) {
+  const [showFull, setShowFull] = useState(false);
+  const prevOldRef = useRef(oldValue);
+
+  // Reset truncation when file changes
+  if (prevOldRef.current !== oldValue) {
+    prevOldRef.current = oldValue;
+    if (showFull) setShowFull(false);
+  }
+
+  const totalLines = Math.max(oldValue.split("\n").length, newValue.split("\n").length);
+  const truncated = !showFull && totalLines > MOBILE_DIFF_MAX_LINES;
+  const displayOld = truncated ? oldValue.split("\n").slice(0, MOBILE_DIFF_MAX_LINES).join("\n") : oldValue;
+  const displayNew = truncated ? newValue.split("\n").slice(0, MOBILE_DIFF_MAX_LINES).join("\n") : newValue;
+
+  return (
+    <div className="overflow-auto h-full text-xs">
+      <ReactDiffViewer
+        oldValue={displayOld || ""}
+        newValue={displayNew || ""}
+        splitView={false}
+        useDarkTheme={true}
+        compareMethod={DiffMethod.LINES}
+        styles={{
+          variables: {
+            dark: {
+              diffViewerBackground: "transparent",
+              addedBackground: "rgba(16, 185, 129, 0.15)",
+              removedBackground: "rgba(239, 68, 68, 0.15)",
+              wordAddedBackground: "rgba(16, 185, 129, 0.3)",
+              wordRemovedBackground: "rgba(239, 68, 68, 0.3)",
+              addedGutterBackground: "rgba(16, 185, 129, 0.1)",
+              removedGutterBackground: "rgba(239, 68, 68, 0.1)",
+              gutterBackground: "transparent",
+              codeFoldBackground: "transparent",
+              emptyLineBackground: "transparent",
+              codeFoldGutterBackground: "transparent",
+            },
+          },
+          contentText: { fontSize: "12px", lineHeight: "1.5" },
+        }}
+        hideLineNumbers={false}
+      />
+      {truncated && (
+        <div className="sticky bottom-0 flex justify-center py-3 bg-gradient-to-t from-card via-card to-transparent">
+          <button
+            onClick={() => setShowFull(true)}
+            className="px-4 py-2 rounded-md bg-accent text-sm font-medium text-foreground hover:bg-accent/80 transition-colors"
+          >
+            Show all {totalLines.toLocaleString()} lines
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function guessLanguage(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -137,20 +199,12 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
   const minSidebarWidth = 150;
   const maxSidebarWidth = 400;
 
-  const handleResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = sidebarWidth;
-    const onMouseMove = (ev: MouseEvent) => {
-      setSidebarWidth(Math.min(maxSidebarWidth, Math.max(minSidebarWidth, startWidth + ev.clientX - startX)));
-    };
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  };
+  const dragHandlers = useDrag({
+    axis: "x",
+    onDrag: (delta) => {
+      setSidebarWidth(Math.min(maxSidebarWidth, Math.max(minSidebarWidth, sidebarWidth - delta)));
+    },
+  });
 
   // Ask-about-diff state
   const [checkedFiles, setCheckedFiles] = useState<Set<number>>(new Set());
@@ -250,7 +304,7 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-col md:flex-row gap-3 md:gap-0 h-[60vh] min-h-[300px] max-h-[600px]">
+      <div className="flex flex-col md:flex-row gap-3 md:gap-0 h-[calc(100vh-14rem)] md:h-[60vh] min-h-[300px] max-h-[600px]">
         {/* File list sidebar */}
         <div
           className="shrink-0 flex flex-col overflow-hidden rounded-lg border border-border bg-card max-md:max-h-[30%]"
@@ -277,19 +331,22 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
                 >
                   {/* Checkbox — visible when ask is active, disabled placeholder when not */}
                   {canAsk ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleFile(i)}
-                      className={cn(
-                        "shrink-0 w-3.5 h-3.5 rounded-[3px] border flex items-center justify-center transition-colors cursor-pointer",
-                        checked
-                          ? "bg-primary border-primary text-primary-foreground"
-                          : "border-muted-foreground/40 hover:border-muted-foreground",
-                      )}
-                      title="Select to ask about this file's changes"
-                    >
-                      {checked && <Check size={10} strokeWidth={3} />}
-                    </button>
+                    <Tooltip content="Select to ask about this file's changes">
+                      <label className="shrink-0 p-1 cursor-pointer">
+                        <button
+                          type="button"
+                          onClick={() => toggleFile(i)}
+                          className={cn(
+                            "w-5 h-5 rounded-[3px] border flex items-center justify-center transition-colors cursor-pointer",
+                            checked
+                              ? "bg-primary border-primary text-primary-foreground"
+                              : "border-muted-foreground/40 hover:border-muted-foreground",
+                          )}
+                        >
+                          {checked && <Check size={12} strokeWidth={3} />}
+                        </button>
+                      </label>
+                    </Tooltip>
                   ) : (
                     <span className="shrink-0 w-3.5" />
                   )}
@@ -314,7 +371,7 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
         {!isMobile && (
           <div
             className="hidden md:flex items-center justify-center w-1.5 shrink-0 cursor-col-resize rounded-full bg-border hover:bg-primary/60 transition-colors active:bg-primary"
-            onMouseDown={handleResizeStart}
+            {...dragHandlers}
           />
         )}
 
@@ -325,23 +382,27 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
               <Spinner />
             </div>
           ) : selectedFile ? (
-            <DiffEditor
-              original={original}
-              modified={modified}
-              language={guessLanguage(selectedFile.path)}
-              theme="vs-dark"
-              options={{
-                readOnly: true,
-                minimap: { enabled: false },
-                renderSideBySide: !isMobile,
-                scrollBeyondLastLine: false,
-                fontSize: isMobile ? 12 : 13,
-                lineNumbersMinChars: isMobile ? 2 : 3,
-                glyphMargin: false,
-                lineDecorationsWidth: isMobile ? 2 : 4,
-                folding: !isMobile,
-              }}
-            />
+            isMobile ? (
+              <MobileDiffView oldValue={original} newValue={modified} />
+            ) : (
+              <DiffEditor
+                original={original}
+                modified={modified}
+                language={guessLanguage(selectedFile.path)}
+                theme="vs-dark"
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  renderSideBySide: true,
+                  scrollBeyondLastLine: false,
+                  fontSize: 13,
+                  lineNumbersMinChars: 3,
+                  glyphMargin: false,
+                  lineDecorationsWidth: 4,
+                  folding: true,
+                }}
+              />
+            )
           ) : null}
         </div>
       </div>

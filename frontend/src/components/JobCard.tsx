@@ -33,7 +33,7 @@ function ResolutionBadge({ resolution }: { resolution: string }) {
     discarded: "Discarded",
   };
   return (
-    <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${styles[resolution] ?? styles.unresolved}`}>
+    <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-xs font-medium ${styles[resolution] ?? styles.unresolved}`}>
       {resolution === "conflict" && <AlertTriangle size={10} className="mr-0.5" />}
       {labels[resolution] ?? resolution}
     </span>
@@ -87,7 +87,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
                 <>
                   <p className="italic text-primary/70 line-clamp-1">{active!.headline}</p>
                   {active?.summary && (
-                    <p className="text-[11px] text-muted-foreground/70 mt-0.5 line-clamp-2">
+                    <p className="text-xs text-muted-foreground/70 mt-0.5 line-clamp-2">
                       {active.summary}
                     </p>
                   )}
@@ -102,7 +102,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       {/* Model downgrade warning */}
       {job.modelDowngraded && (
-        <div className="flex items-start gap-1.5 text-[11px] text-amber-600 mb-2 rounded bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
+        <div className="flex items-start gap-1.5 text-xs text-amber-600 mb-2 rounded bg-amber-500/10 border border-amber-500/30 px-2 py-1.5">
           <ArrowDownCircle size={12} className="shrink-0 mt-0.5" />
           <span>Model downgraded: requested <span className="font-medium">{job.requestedModel}</span> but received <span className="font-medium">{job.actualModel}</span></span>
         </div>
@@ -110,7 +110,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       {/* Failure reason */}
       {isFailed && job.failureReason && (
-        <div className="flex items-start gap-1.5 text-[11px] text-red-500 mb-2 rounded bg-red-500/10 px-2 py-1.5">
+        <div className="flex items-start gap-1.5 text-xs text-red-500 mb-2 rounded bg-red-500/10 px-2 py-1.5">
           <XCircle size={12} className="shrink-0 mt-0.5" />
           <span className="line-clamp-2">{job.failureReason}</span>
         </div>
@@ -118,7 +118,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       {/* Success outcome */}
       {job.state === "succeeded" && job.resolution && job.resolution !== "unresolved" && (
-        <div className="flex items-start gap-1.5 text-[11px] text-green-600 mb-2 rounded bg-green-500/10 px-2 py-1.5">
+        <div className="flex items-start gap-1.5 text-xs text-green-600 mb-2 rounded bg-green-500/10 px-2 py-1.5">
           <CheckCircle2 size={12} className="shrink-0 mt-0.5" />
           <span>
             {job.resolution === "merged" && "Changes merged into base branch"}
@@ -131,13 +131,13 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       {/* Conflict file list */}
       {job.resolution === "conflict" && job.conflictFiles && job.conflictFiles.length > 0 && (
-        <div className="text-[11px] text-red-500 mb-2">
+        <div className="text-xs text-red-500 mb-2">
           <span className="font-medium">Conflicts in {job.conflictFiles.length} file{job.conflictFiles.length > 1 ? "s" : ""}:</span>
           <span className="ml-1">{job.conflictFiles.slice(0, 3).join(", ")}{job.conflictFiles.length > 3 ? "…" : ""}</span>
         </div>
       )}
 
-      <div className="text-[11px] text-muted-foreground">
+      <div className="text-xs text-muted-foreground">
         <span>{elapsed(job.createdAt)}</span>
       </div>
 

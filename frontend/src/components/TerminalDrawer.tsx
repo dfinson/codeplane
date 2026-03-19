@@ -6,11 +6,13 @@
  * collapse/expand.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus, X, Minus, Maximize2, TerminalSquare } from "lucide-react";
 import { TerminalPanel } from "./TerminalPanel";
 import { useStore } from "../store";
 import { useShallow } from "zustand/react/shallow";
+import { Tooltip } from "./ui/tooltip";
+import { useDrag } from "../hooks/useDrag";
 
 const MIN_HEIGHT = 150;
 const DEFAULT_HEIGHT = 300;
@@ -39,7 +41,6 @@ export function TerminalDrawer() {
     createTerminalSession: s.createTerminalSession,
   })));
 
-  const dragging = useRef(false);
   const [maximized, setMaximized] = useState(false);
 
   const sessionList = Object.values(terminalSessions).filter((s) => !s.jobId);
@@ -52,33 +53,15 @@ export function TerminalDrawer() {
   }, [terminalDrawerOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle drag-to-resize
-  const onDragStart = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      dragging.current = true;
-
-      const startY = e.clientY;
-      const startHeight = terminalDrawerHeight;
-
-      const onMove = (ev: MouseEvent) => {
-        if (!dragging.current) return;
-        const delta = startY - ev.clientY;
-        const maxH = window.innerHeight * MAX_HEIGHT_RATIO;
-        const newHeight = Math.min(Math.max(startHeight + delta, MIN_HEIGHT), maxH);
-        setTerminalDrawerHeight(newHeight);
-      };
-
-      const onUp = () => {
-        dragging.current = false;
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
+  const dragHandlers = useDrag({
+    axis: "y",
+    onDrag: (delta) => {
+      const maxH = window.innerWidth < 640
+        ? window.innerHeight * 0.5
+        : window.innerHeight * MAX_HEIGHT_RATIO;
+      setTerminalDrawerHeight(Math.min(Math.max(terminalDrawerHeight + delta, MIN_HEIGHT), maxH));
     },
-    [terminalDrawerHeight, setTerminalDrawerHeight],
-  );
+  });
 
   const handleNewSession = useCallback(() => {
     createTerminalSession();
@@ -112,9 +95,11 @@ export function TerminalDrawer() {
     >
       {/* Drag handle */}
       <div
-        className="h-1 cursor-row-resize hover:bg-primary/30 transition-colors shrink-0"
-        onMouseDown={onDragStart}
-      />
+        className="h-3 cursor-row-resize hover:bg-primary/30 transition-colors shrink-0 flex items-center justify-center touch-none"
+        {...dragHandlers}
+      >
+        <div className="w-8 h-0.5 bg-muted-foreground/30 rounded-full" />
+      </div>
 
       {/* Tab bar */}
       <div className="flex items-center h-8 shrink-0 border-b border-border px-1 gap-0.5 overflow-x-auto">
@@ -134,37 +119,40 @@ export function TerminalDrawer() {
             </span>
             <span
               onClick={(e) => handleCloseSession(session.id, e)}
-              className="ml-0.5 p-0.5 rounded hover:bg-muted-foreground/20"
+              className="ml-0.5 p-1.5 rounded hover:bg-muted-foreground/20"
             >
-              <X size={10} />
+              <X size={12} />
             </span>
           </button>
         ))}
 
-        <button
-          onClick={handleNewSession}
-          className="flex items-center justify-center w-6 h-6 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0"
-          title="New terminal session"
-        >
-          <Plus size={13} />
-        </button>
+        <Tooltip content="New terminal session">
+          <button
+            onClick={handleNewSession}
+            className="flex items-center justify-center w-9 h-9 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors shrink-0"
+          >
+            <Plus size={13} />
+          </button>
+        </Tooltip>
 
         <div className="flex-1" />
 
-        <button
-          onClick={toggleMaximize}
-          className="p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
-          title={maximized ? "Restore" : "Maximize"}
-        >
-          <Maximize2 size={12} />
-        </button>
-        <button
-          onClick={toggleTerminalDrawer}
-          className="p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
-          title="Minimize terminal"
-        >
-          <Minus size={12} />
-        </button>
+        <Tooltip content={maximized ? "Restore" : "Maximize"}>
+          <button
+            onClick={toggleMaximize}
+            className="p-2 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+          >
+            <Maximize2 size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip content="Minimize terminal">
+          <button
+            onClick={toggleTerminalDrawer}
+            className="p-2 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+          >
+            <Minus size={12} />
+          </button>
+        </Tooltip>
       </div>
 
       {/* Terminal area */}

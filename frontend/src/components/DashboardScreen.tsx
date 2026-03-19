@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus } from "lucide-react";
 import { useStore, enrichJob } from "../store";
@@ -7,9 +7,11 @@ import { fetchJobs } from "../api/client";
 import { KanbanBoard } from "./KanbanBoard";
 import { MobileJobList } from "./MobileJobList";
 import { Button } from "./ui/button";
+import { KanbanSkeleton } from "./KanbanSkeleton";
 
 export function DashboardScreen() {
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchJobs({ limit: 100, archived: false })
@@ -20,8 +22,11 @@ export function DashboardScreen() {
           return { jobs: updated };
         });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
+
+  if (loading) return <KanbanSkeleton />;
 
   return (
     <div>

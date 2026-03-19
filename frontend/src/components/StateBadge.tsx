@@ -18,7 +18,7 @@ const DEFAULT_CFG = { bg: "bg-gray-800/50", text: "text-gray-400", label: "Unkno
 export const StateBadge = memo(function StateBadge({ state }: { state: string }) {
   const cfg = STATE_CONFIG[state] ?? DEFAULT_CFG;
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wide ${cfg.bg} ${cfg.text}`}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${cfg.bg} ${cfg.text}`}>
       <cfg.Icon size={12} />
       {cfg.label}
     </span>

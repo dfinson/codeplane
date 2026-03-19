@@ -30,7 +30,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
 
-    const { setConnectionStatus, dispatchSSEEvent } =
+    const { setConnectionStatus, setReconnectAttempt, dispatchSSEEvent } =
       useStore.getState();
 
     function connect() {
@@ -61,7 +61,10 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         // snapshots and trigger the "Too many re-renders" (React #185) loop.
         // A macrotask guarantees react's current render+commit fully complete
         // before any store update is processed.
-        setTimeout(() => setConnectionStatus("connected"), 0);
+        setTimeout(() => {
+          setConnectionStatus("connected");
+          setReconnectAttempt(0);
+        }, 0);
       };
 
       // Handle named event types
@@ -112,11 +115,17 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         attemptRef.current += 1;
 
         if (attemptRef.current > MAX_ATTEMPTS) {
-          setTimeout(() => setConnectionStatus("disconnected"), 0);
+          setTimeout(() => {
+            setConnectionStatus("disconnected");
+            setReconnectAttempt(attemptRef.current);
+          }, 0);
           return;
         }
 
-        setTimeout(() => setConnectionStatus("reconnecting"), 0);
+        setTimeout(() => {
+          setConnectionStatus("reconnecting");
+          setReconnectAttempt(attemptRef.current);
+        }, 0);
 
         if (reconnectTimer) clearTimeout(reconnectTimer);
         const delay = Math.min(

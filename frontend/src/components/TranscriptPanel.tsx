@@ -7,6 +7,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, selectJobTranscript, selectApprovals } from "../store";
 import type { TranscriptEntry, ApprovalRequest } from "../store";
 import { sendOperatorMessage, resumeJob, pauseJob, resolveApproval } from "../api/client";
@@ -15,6 +16,7 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { ConfirmDialog } from "./ui/confirm-dialog";
 
 // ---------------------------------------------------------------------------
 // Turn grouping
@@ -223,6 +225,24 @@ function prettifyJson(raw: string | undefined): string {
   }
 }
 
+function TruncatedPayload({ content, maxLength = 500 }: { content: string; maxLength?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!content || content.length <= maxLength) return <pre className="text-xs whitespace-pre-wrap break-all">{content}</pre>;
+  return (
+    <div>
+      <pre className="text-xs whitespace-pre-wrap break-all">
+        {expanded ? content : content.slice(0, maxLength) + "…"}
+      </pre>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-xs text-primary hover:underline mt-1"
+      >
+        {expanded ? "Show less" : `Show all (${content.length.toLocaleString()} chars)`}
+      </button>
+    </div>
+  );
+}
+
 /** Group sequential identical tool names into counted chips. */
 function chipify(calls: TranscriptEntry[]): { name: string; display: string; count: number; entries: TranscriptEntry[] }[] {
   const chips: { name: string; display: string; count: number; entries: TranscriptEntry[] }[] = [];
@@ -261,7 +281,7 @@ function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand
                 setExpanded((prev) => prev === target ? null : target);
               }}
               className={cn(
-                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono transition-colors",
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono transition-colors",
                 "border border-border/60 hover:border-border hover:bg-muted/50",
                 hasFail
                   ? "text-red-400 border-red-500/30 bg-red-500/5"
@@ -270,13 +290,13 @@ function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand
             >
               <span>{chip.display}</span>
               {chip.count > 1 && (
-                <span className="text-[10px] opacity-60">×{chip.count}</span>
+                <span className="text-xs opacity-60">×{chip.count}</span>
               )}
             </button>
           );
         })}
         {anyFailed && (
-          <span className="text-[10px] text-red-400 self-center ml-0.5">
+          <span className="text-xs text-red-400 self-center ml-0.5">
             {firstIssue ? `issue: ${firstIssue}` : "reported issue"}
           </span>
         )}
@@ -291,14 +311,14 @@ function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand
             </span>
             <div className="flex items-center gap-2">
               <span className={cn(
-                "text-[10px] font-medium",
+                "text-xs font-medium",
                 expanded.toolSuccess !== false ? "text-green-500" : "text-red-400",
               )}>
                 {expanded.toolSuccess !== false ? "ok" : "issue"}
               </span>
               {/* Navigation within the chip group */}
               {calls.length > 1 && (
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <button
                     onClick={() => {
                       const idx = calls.indexOf(expanded);
@@ -330,24 +350,20 @@ function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand
           <div className="divide-y divide-border/30">
             {expanded.toolSuccess === false && expanded.toolIssue && (
               <div className="px-2.5 py-2 bg-red-500/5">
-                <p className="text-[10px] font-semibold text-red-400 uppercase tracking-wide mb-1">Issue</p>
+                <p className="text-xs font-semibold text-red-400 uppercase tracking-wide mb-1">Issue</p>
                 <p className="text-red-200/90 whitespace-pre-wrap break-words">{expanded.toolIssue}</p>
               </div>
             )}
             {expanded.toolArgs && (
               <div className="px-2.5 py-2">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Input</p>
-                <pre className="font-mono text-foreground/70 whitespace-pre-wrap overflow-x-auto max-h-32 overflow-y-auto">
-                  {prettifyJson(expanded.toolArgs)}
-                </pre>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Input</p>
+                <TruncatedPayload content={prettifyJson(expanded.toolArgs)} />
               </div>
             )}
             {expanded.toolResult && (
               <div className="px-2.5 py-2">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">Output</p>
-                <pre className="font-mono text-foreground/70 whitespace-pre-wrap overflow-x-auto max-h-40 overflow-y-auto">
-                  {expanded.toolResult}
-                </pre>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Output</p>
+                <TruncatedPayload content={expanded.toolResult} />
               </div>
             )}
             {!expanded.toolArgs && !expanded.toolResult && (
@@ -463,7 +479,7 @@ function AgentTurn({ turn, isLast }: { turn: AgentTurnData; isLast?: boolean }) 
         {msg && (
           <div className="bg-muted rounded-xl rounded-tl-sm px-3 py-2 text-sm leading-relaxed">
             {msg.title && (
-              <p className="text-[11px] text-muted-foreground font-medium mb-1.5 tracking-wide">
+              <p className="text-xs text-muted-foreground font-medium mb-1.5 tracking-wide">
                 {msg.title}
               </p>
             )}
@@ -488,6 +504,7 @@ function AgentTurn({ turn, isLast }: { turn: AgentTurnData; isLast?: boolean }) 
 
 function InlineApprovalCard({ approval }: { approval: ApprovalRequest }) {
   const [loading, setLoading] = useState<string | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
 
   const handleResolve = useCallback(async (resolution: "approved" | "rejected") => {
     setLoading(resolution);
@@ -544,11 +561,21 @@ function InlineApprovalCard({ approval }: { approval: ApprovalRequest }) {
           className="border-red-500/40 text-red-400 hover:bg-red-500/10 h-7 px-3 text-xs"
           loading={loading === "rejected"}
           disabled={!!loading}
-          onClick={() => handleResolve("rejected")}
+          onClick={() => setRejectOpen(true)}
         >
           Reject
         </Button>
       </div>
+      <ConfirmDialog
+        open={rejectOpen}
+        onClose={() => setRejectOpen(false)}
+        onConfirm={async () => {
+          await handleResolve("rejected");
+        }}
+        title="Reject Approval?"
+        description="The agent's proposed action will be denied. It may fail or take a different approach."
+        confirmLabel="Reject"
+      />
     </div>
   );
 }
@@ -603,11 +630,18 @@ export function TranscriptPanel({
 
   const agentMessageCount = rawEntries.filter((e) => e.role === "agent").length;
 
+  const virtualizer = useVirtualizer({
+    count: displayItems.length,
+    getScrollElement: () => viewportRef.current,
+    estimateSize: () => 120,
+    overscan: 5,
+  });
+
   useEffect(() => {
-    if (stickRef.current && viewportRef.current) {
-      viewportRef.current.scrollTo({ top: viewportRef.current.scrollHeight });
+    if (stickRef.current && displayItems.length > 0) {
+      virtualizer.scrollToIndex(displayItems.length - 1, { align: "end" });
     }
-  }, [displayItems.length]);
+  }, [displayItems.length, virtualizer]);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -617,12 +651,12 @@ export function TranscriptPanel({
   };
 
   const scrollToBottom = useCallback(() => {
-    if (viewportRef.current) {
-      viewportRef.current.scrollTo({ top: viewportRef.current.scrollHeight, behavior: "smooth" });
+    if (displayItems.length > 0) {
+      virtualizer.scrollToIndex(displayItems.length - 1, { align: "end", behavior: "smooth" });
       stickRef.current = true;
       setShowScrollBtn(false);
     }
-  }, []);
+  }, [displayItems.length, virtualizer]);
 
   const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
 
@@ -683,53 +717,67 @@ export function TranscriptPanel({
       <div
         ref={viewportRef}
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain"
+        style={{ contain: "strict" }}
         onScroll={handleScroll}
       >
         {displayItems.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-8">No messages yet</p>
         ) : (
-          <div className="p-3 space-y-3">
-            {displayItems.map((item, i) => {
-              if (item.type === "divider") {
-                return (
-                  <div key={i} className="flex items-center gap-3 py-1">
-                    <div className="flex-1 h-px bg-border" />
-                    <span className="text-xs text-muted-foreground font-medium px-1">
-                      {item.entry.content} resumed
-                      {item.entry.timestamp
-                        ? ` · ${new Date(item.entry.timestamp).toLocaleTimeString()}`
-                        : ""}
-                    </span>
-                    <div className="flex-1 h-px bg-border" />
-                  </div>
-                );
-              }
-
-              if (item.type === "operator") {
-                return (
-                  <div key={i} className="flex gap-2 flex-row-reverse">
-                    <div className="w-6 h-6 rounded-full bg-green-900/50 flex items-center justify-center shrink-0 mt-1">
-                      <User size={14} />
-                    </div>
-                    <div className="max-w-[80%] rounded-xl rounded-tr-sm px-3 py-2 text-sm leading-relaxed bg-blue-900/30">
-                      <div className="whitespace-pre-wrap break-words">{item.entry.content}</div>
-                      <span className="text-xs text-muted-foreground mt-1 block">
-                        {new Date(item.entry.timestamp).toLocaleTimeString()}
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const item = displayItems[virtualRow.index];
+              if (!item) return null;
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <div className="p-3">
+                  {item.type === "divider" && (
+                    <div className="flex items-center gap-3 py-1">
+                      <div className="flex-1 h-px bg-border" />
+                      <span className="text-xs text-muted-foreground font-medium px-1">
+                        {item.entry.content} resumed
+                        {item.entry.timestamp
+                          ? ` · ${new Date(item.entry.timestamp).toLocaleTimeString()}`
+                          : ""}
                       </span>
+                      <div className="flex-1 h-px bg-border" />
                     </div>
+                  )}
+
+                  {item.type === "operator" && (
+                    <div className="flex gap-2 flex-row-reverse">
+                      <div className="w-6 h-6 rounded-full bg-green-900/50 flex items-center justify-center shrink-0 mt-1">
+                        <User size={14} />
+                      </div>
+                      <div className="max-w-[80%] rounded-xl rounded-tr-sm px-3 py-2 text-sm leading-relaxed bg-blue-900/30">
+                        <div className="whitespace-pre-wrap break-words">{item.entry.content}</div>
+                        <span className="text-xs text-muted-foreground mt-1 block">
+                          {new Date(item.entry.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {item.type === "turn" && (
+                    <AgentTurn turn={item.turn} isLast={virtualRow.index === displayItems.length - 1} />
+                  )}
+
+                  {item.type === "approval" && (
+                    <InlineApprovalCard approval={item.approval} />
+                  )}
                   </div>
-                );
-              }
-
-              if (item.type === "turn") {
-                return <AgentTurn key={item.turn.key} turn={item.turn} isLast={i === displayItems.length - 1} />;
-              }
-
-              if (item.type === "approval") {
-                return <InlineApprovalCard key={item.approval.id} approval={item.approval} />;
-              }
-
-              return null;
+                </div>
+              );
             })}
           </div>
         )}
@@ -784,6 +832,7 @@ export function TranscriptPanel({
                 }}
                 disabled={sending || micState !== "idle"}
                 rows={1}
+                aria-label="Chat input"
                 className="flex w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm text-foreground shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none pr-8 overflow-y-auto"
                 style={{ maxHeight: 160 }}
               />
@@ -800,7 +849,8 @@ export function TranscriptPanel({
               onClick={handleSend}
               disabled={sending || !msg.trim() || micState !== "idle"}
               loading={sending}
-              className="shrink-0"
+              className="shrink-0 min-w-[44px] min-h-[44px]"
+              aria-label="Send message"
             >
               <Send size={16} />
             </Button>

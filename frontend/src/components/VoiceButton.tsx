@@ -6,15 +6,19 @@ import RecordPlugin from "wavesurfer.js/dist/plugins/record.esm.js";
 import { transcribeAudio } from "../api/client";
 import { Textarea } from "./ui/textarea";
 import { Spinner } from "./ui/spinner";
+import { Tooltip } from "./ui/tooltip";
 
 type RecordingState = "idle" | "recording" | "transcribing";
 
 interface PromptWithVoiceProps {
   value: string;
   onChange: (value: string) => void;
+  error?: string;
+  onBlur?: React.FocusEventHandler<HTMLTextAreaElement>;
+  onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;
 }
 
-export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
+export function PromptWithVoice({ value, onChange, error, onBlur, onKeyDown }: PromptWithVoiceProps) {
   const [state, setState] = useState<RecordingState>("idle");
   const containerRef = useRef<HTMLDivElement>(null);
   const recordRef = useRef<ReturnType<typeof RecordPlugin.create> | null>(null);
@@ -99,28 +103,35 @@ export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
       {/* Normal textarea — visible when NOT recording */}
       <div style={{ display: state === "recording" ? "none" : "block" }}>
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-foreground">Prompt</label>
+          <label className="text-sm font-medium text-foreground">
+            Prompt<span className="text-red-500 ml-0.5">*</span>
+          </label>
           <Textarea
             value={value}
             onChange={(e) => onChange(e.currentTarget.value)}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
+            error={error}
             placeholder="Describe the task you want the agent to perform…"
             rows={6}
             className="pr-12"
           />
+          <p className="text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
         </div>
 
         <div className="absolute bottom-2 right-2" style={{ zIndex: 10 }}>
           {state === "transcribing" ? (
             <Spinner size="sm" />
           ) : (
-            <button
-              type="button"
-              onClick={handleToggle}
-              title="Voice input"
-              className="h-9 w-9 rounded-full bg-primary/20 text-primary flex items-center justify-center hover:bg-primary/30 transition-colors"
-            >
-              <Mic size={18} />
-            </button>
+            <Tooltip content="Voice input">
+              <button
+                type="button"
+                onClick={handleToggle}
+                className="h-9 w-9 rounded-full bg-primary/20 text-primary flex items-center justify-center hover:bg-primary/30 transition-colors"
+              >
+                <Mic size={18} />
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -131,14 +142,15 @@ export function PromptWithVoice({ value, onChange }: PromptWithVoiceProps) {
           className="rounded-lg border border-blue-600 p-4 flex flex-col items-center gap-3 bg-card"
           style={{ minHeight: 120 }}
         >
-          <button
-            type="button"
-            onClick={handleToggle}
-            title="Stop recording"
-            className="h-9 w-9 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center hover:bg-destructive/80 transition-colors"
-          >
-            <Square size={18} />
-          </button>
+          <Tooltip content="Stop recording">
+            <button
+              type="button"
+              onClick={handleToggle}
+              className="h-9 w-9 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center hover:bg-destructive/80 transition-colors"
+            >
+              <Square size={18} />
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -254,18 +266,19 @@ export function MicButton({ onTranscript, onStateChange, waveformContainerRef }:
   }, [state, ensureInit, updateState]);
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={state === "transcribing"}
-      title={state === "recording" ? "Stop recording" : "Voice input"}
-      className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors ${
-        state === "recording"
-          ? "bg-destructive text-destructive-foreground hover:bg-destructive/80"
-          : "text-muted-foreground hover:text-foreground hover:bg-accent"
-      }`}
-    >
-      {state === "recording" ? <Square size={12} /> : <Mic size={14} />}
-    </button>
+    <Tooltip content={state === "recording" ? "Stop recording" : "Voice input"}>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state === "transcribing"}
+        className={`h-6 w-6 rounded-full flex items-center justify-center transition-colors ${
+          state === "recording"
+            ? "bg-destructive text-destructive-foreground hover:bg-destructive/80"
+            : "text-muted-foreground hover:text-foreground hover:bg-accent"
+        }`}
+      >
+        {state === "recording" ? <Square size={12} /> : <Mic size={14} />}
+      </button>
+    </Tooltip>
   );
 }
