@@ -702,6 +702,33 @@ class TestRecovery:
         assert len(failed_events) == 1
         assert failed_events[0].payload["reason"] == "process_restarted"
 
+    async def test_recover_commits_state_before_publishing_failure_event(
+        self,
+        runtime: RuntimeService,
+        event_bus: EventBus,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        observed_states: list[str] = []
+
+        async def _assert_failed_state_visible(_event: DomainEvent) -> None:
+            async with session_factory() as session:
+                from backend.persistence.job_repo import JobRepository
+
+                repo = JobRepository(session)
+                row = await repo.get("job-1")
+                assert row is not None
+                observed_states.append(row.state)
+
+        event_bus.subscribe(_assert_failed_state_visible)
+
+        job = _make_job(job_id="job-1", repo=config.repos[0], state=JobState.running)
+        await _create_db_job(session_factory, job)
+
+        await runtime.recover_on_startup()
+
+        assert observed_states == [JobState.failed]
+
     async def test_recover_restarts_queued_jobs(
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
     ) -> None:

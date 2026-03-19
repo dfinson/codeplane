@@ -78,6 +78,14 @@ class _ConsoleNoiseFilter(logging.Filter):
         return not any(record.name.startswith(prefix) for prefix in _CONSOLE_NOISE_PREFIXES)
 
 
+def _shared_log_processors() -> list[structlog.typing.Processor]:
+    return [
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+    ]
+
+
 def setup_logging(log_file: str, console_level: str = "info") -> None:
     """Configure structlog + stdlib logging.
 
@@ -94,11 +102,24 @@ def setup_logging(log_file: str, console_level: str = "info") -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     console_int = _LOG_LEVEL_MAP.get(console_level.lower(), logging.INFO)
+    shared_processors = _shared_log_processors()
 
-    # Shared formatter — human-readable key=value pairs
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-8s %(name)s  %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
+    file_formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.KeyValueRenderer(
+                key_order=["timestamp", "level", "logger", "event"],
+                sort_keys=True,
+            ),
+        ],
+    )
+    console_formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.dev.ConsoleRenderer(colors=False),
+        ],
     )
 
     # File handler: DEBUG, rotating 10 MB × 5
@@ -109,12 +130,12 @@ def setup_logging(log_file: str, console_level: str = "info") -> None:
         encoding="utf-8",
     )
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(fmt)
+    file_handler.setFormatter(file_formatter)
 
     # Stderr handler: configured level
     console_handler = logging.StreamHandler()
     console_handler.setLevel(console_int)
-    console_handler.setFormatter(fmt)
+    console_handler.setFormatter(console_formatter)
     console_handler.addFilter(_ConsoleNoiseFilter())
 
     root_logger = logging.getLogger()
@@ -130,9 +151,7 @@ def setup_logging(log_file: str, console_level: str = "info") -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
-            structlog.processors.TimeStamper(fmt="iso"),
+            *shared_processors,
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

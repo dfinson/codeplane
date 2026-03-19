@@ -2006,31 +2006,36 @@ class RuntimeService:
 
     async def recover_on_startup(self) -> None:
         """Recover from a previous crash: fail orphaned running jobs, re-enqueue queued ones."""
+        orphaned_jobs: list[tuple[Job, JobState]] = []
         async with self._session_factory() as session:
             svc = self._make_job_service(session)
             # Fail jobs that were 'running' or 'waiting_for_approval' — we can't reconnect
             for state in (JobState.running, JobState.waiting_for_approval):
                 jobs, _, _ = await svc.list_jobs(state=state, limit=10000)
-                for job in jobs:
-                    log.warning("recovering_orphaned_job", job_id=job.id, state=state)
-                    await svc.transition_state(
-                        job.id,
-                        JobState.failed,
-                        failure_reason="Server restarted while job was running",
-                    )
-                    await self._event_bus.publish(
-                        DomainEvent(
-                            event_id=_make_event_id(),
-                            job_id=job.id,
-                            timestamp=datetime.now(UTC),
-                            kind=DomainEventKind.job_failed,
-                            payload={"reason": "process_restarted"},
-                        )
-                    )
+                orphaned_jobs.extend((job, state) for job in jobs)
 
             # Re-enqueue queued jobs
             queued_jobs, _, _ = await svc.list_jobs(state=JobState.queued, limit=10000)
-            await session.commit()
+
+        for job, state in orphaned_jobs:
+            log.warning("recovering_orphaned_job", job_id=job.id, state=state)
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                await svc.transition_state(
+                    job.id,
+                    JobState.failed,
+                    failure_reason="Server restarted while job was running",
+                )
+                await session.commit()
+            await self._event_bus.publish(
+                DomainEvent(
+                    event_id=_make_event_id(),
+                    job_id=job.id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.job_failed,
+                    payload={"reason": "process_restarted"},
+                )
+            )
 
         for job in queued_jobs:
             await self.start_or_enqueue(job)
