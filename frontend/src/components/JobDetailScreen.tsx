@@ -9,7 +9,7 @@ import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fe
 import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { InsightsPanel } from "./InsightsPanel";
+import { MetricsPanel } from "./MetricsPanel";
 import { ExecutionTimeline } from "./ExecutionTimeline";
 import { PlanPanel } from "./PlanPanel";
 import { CompleteJobDialog } from "./CompleteJobDialog";
@@ -513,7 +513,7 @@ export function JobDetailScreen() {
           </div>
           <PlanPanel jobId={jobId} />
           <ExecutionTimeline jobId={jobId} />
-          <InsightsPanel jobId={jobId} isRunning={isRunning} />
+          <MetricsPanel jobId={jobId} isRunning={isRunning} />
         </div>
       )}
 

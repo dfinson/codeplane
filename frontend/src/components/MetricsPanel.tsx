@@ -324,7 +324,7 @@ function SortHeader({
 // Main component — single flat view, no tabs
 // ---------------------------------------------------------------------------
 
-export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
+export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRunning?: boolean }) {
   const [collapsed, setCollapsed] = useState(true);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const [llmCollapsed, setLlmCollapsed] = useState(false);
@@ -420,7 +420,7 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
         className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-border hover:bg-accent/30 transition-colors text-left"
       >
         {collapsed ? <ChevronRight size={14} className="text-muted-foreground shrink-0" /> : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
-        <span className="text-sm font-semibold text-muted-foreground">Insights</span>
+        <span className="text-sm font-semibold text-muted-foreground">Metrics</span>
         {headerStats && (
           <span className="text-[11px] text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>
         )}
