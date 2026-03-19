@@ -1312,6 +1312,8 @@ class RuntimeService:
                         raw = raw.strip()
 
                     try:
+                        # Keys (defer, present, past, summary, replace_last)
+                        # are set dynamically by the LLM JSON response.
                         parsed = _json.loads(raw)
                     except (ValueError, AttributeError):
                         parsed = {}

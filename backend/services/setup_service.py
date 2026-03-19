@@ -200,22 +200,6 @@ def _check_gh_auth() -> tuple[bool, str]:
         return False, "gh not available"
 
 
-def _check_devtunnel_login() -> tuple[bool, str]:
-    """Check if devtunnel is logged in. Returns (ok, detail)."""
-    try:
-        result = subprocess.run(
-            ["devtunnel", "user", "show"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return True, "logged in"
-        return False, "not logged in"
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return False, "devtunnel not available"
-
-
 def _check_port(port: int) -> tuple[bool, str]:
     """Check if a port is available. Returns (available, detail)."""
     probe_targets: list[tuple[int, str]] = [(socket.AF_INET, "127.0.0.1")]

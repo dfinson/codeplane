@@ -37,16 +37,6 @@ class CamelModel(BaseModel):
 
 from enum import StrEnum  # noqa: E402 — after domain imports to keep grouping clear
 
-# Alias so any code referencing api_schemas.ResolutionStatus still works.
-ResolutionStatus = Resolution
-
-
-class CompletionStrategy(StrEnum):
-    auto_merge = "auto_merge"
-    pr_only = "pr_only"
-    manual = "manual"
-
-
 class ApprovalResolution(StrEnum):
     approved = "approved"
     rejected = "rejected"
