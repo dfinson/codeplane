@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
+from backend.models.domain import PermissionMode
+
 # All DateTime columns use timezone=True so timestamps are stored
 # and retrieved as timezone-aware UTC values, never naive.
 TZDateTime = DateTime(timezone=True)
@@ -31,7 +33,7 @@ class JobRow(Base):
     archived_at = Column(TZDateTime, nullable=True)
     title = Column(String, nullable=True)
     worktree_name = Column(String, nullable=True)
-    permission_mode = Column(String, nullable=False, default="auto")
+    permission_mode = Column(String, nullable=False, default=PermissionMode.auto)
     session_count = Column(Integer, nullable=False, default=1)
     sdk_session_id = Column(String, nullable=True)
     model = Column(String, nullable=True)

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlalchemy import and_, or_, select
 
 from backend.models.db import JobRow
-from backend.models.domain import Job, PermissionMode
+from backend.models.domain import Job, JobState, PermissionMode
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -176,7 +176,7 @@ class JobRepository(BaseRepository):
 
         await self._update_row(
             job_id,
-            state="running",
+            state=JobState.running,
             completed_at=None,
             session_id=None,
             session_count=new_session_count,

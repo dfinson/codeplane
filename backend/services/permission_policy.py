@@ -19,6 +19,8 @@ from typing import NamedTuple
 
 import structlog
 
+from backend.models.domain import PermissionMode
+
 log = structlog.get_logger()
 
 
@@ -83,36 +85,36 @@ class _Rule(NamedTuple):
 # (mode, kind) → rule.  Missing entries fall through to the mode default.
 _RULES: dict[tuple[str, str], _Rule] = {
     # ── AUTO ──────────────────────────────────────────────────────────
-    ("auto", "read"):        _Rule(_A),
-    ("auto", "memory"):      _Rule(_A),
-    ("auto", "write"):       _Rule(_PATH_WS, _A),  # approve; workspace path check first
-    ("auto", "shell"):       _Rule(_A),
-    ("auto", "mcp"):         _Rule(_A),
-    ("auto", "url"):         _Rule(_A),
-    ("auto", "custom-tool"): _Rule(_A),
+    (PermissionMode.auto, "read"):        _Rule(_A),
+    (PermissionMode.auto, "memory"):      _Rule(_A),
+    (PermissionMode.auto, "write"):       _Rule(_PATH_WS, _A),  # approve; workspace path check first
+    (PermissionMode.auto, "shell"):       _Rule(_A),
+    (PermissionMode.auto, "mcp"):         _Rule(_A),
+    (PermissionMode.auto, "url"):         _Rule(_A),
+    (PermissionMode.auto, "custom-tool"): _Rule(_A),
     # ── READ_ONLY ────────────────────────────────────────────────────
-    ("read_only", "memory"):      _Rule(_A),
-    ("read_only", "read"):        _Rule(_READ_WS),
-    ("read_only", "shell"):       _Rule(_SHELL_RO, _D),
-    ("read_only", "mcp"):         _Rule(_MCP_RO, _D),
-    ("read_only", "write"):       _Rule(_D),
-    ("read_only", "url"):         _Rule(_D),
-    ("read_only", "custom-tool"): _Rule(_D),
+    (PermissionMode.read_only, "memory"):      _Rule(_A),
+    (PermissionMode.read_only, "read"):        _Rule(_READ_WS),
+    (PermissionMode.read_only, "shell"):       _Rule(_SHELL_RO, _D),
+    (PermissionMode.read_only, "mcp"):         _Rule(_MCP_RO, _D),
+    (PermissionMode.read_only, "write"):       _Rule(_D),
+    (PermissionMode.read_only, "url"):         _Rule(_D),
+    (PermissionMode.read_only, "custom-tool"): _Rule(_D),
     # ── APPROVAL_REQUIRED ────────────────────────────────────────────
-    ("approval_required", "memory"):      _Rule(_A),
-    ("approval_required", "read"):        _Rule(_A),
-    ("approval_required", "shell"):       _Rule(_SHELL_RO, _K),
-    ("approval_required", "write"):       _Rule(_K),
-    ("approval_required", "url"):         _Rule(_K),
-    ("approval_required", "mcp"):         _Rule(_MCP_RO, _K),
-    ("approval_required", "custom-tool"): _Rule(_K),
+    (PermissionMode.approval_required, "memory"):      _Rule(_A),
+    (PermissionMode.approval_required, "read"):        _Rule(_A),
+    (PermissionMode.approval_required, "shell"):       _Rule(_SHELL_RO, _K),
+    (PermissionMode.approval_required, "write"):       _Rule(_K),
+    (PermissionMode.approval_required, "url"):         _Rule(_K),
+    (PermissionMode.approval_required, "mcp"):         _Rule(_MCP_RO, _K),
+    (PermissionMode.approval_required, "custom-tool"): _Rule(_K),
 }
 
 # Default decisions when a (mode, kind) pair is not in the table.
 _MODE_DEFAULTS: dict[str, PolicyDecision] = {
-    "auto": _A,
-    "read_only": _D,
-    "approval_required": _K,
+    PermissionMode.auto: _A,
+    PermissionMode.read_only: _D,
+    PermissionMode.approval_required: _K,
 }
 
 

@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     from backend.services.merge_service import MergeService
     from backend.services.runtime_service import RuntimeService
 
+from backend.models.domain import JobState, Resolution
+
 router = APIRouter(tags=["jobs"])
 
 
@@ -128,7 +130,7 @@ async def create_job(
     await session.commit()
 
     # Hand off to RuntimeService for execution / queueing (skip if already failed)
-    if job.state != "failed":
+    if job.state != JobState.failed:
         runtime: RuntimeService = request.app.state.runtime_service
         await runtime.start_or_enqueue(
             job,
@@ -213,7 +215,7 @@ async def rerun_job(
 
     await session.commit()
 
-    if job.state != "failed":
+    if job.state != JobState.failed:
         runtime: RuntimeService = request.app.state.runtime_service
         await runtime.start_or_enqueue(job)
         job = await svc.get_job(job.id)
@@ -256,7 +258,7 @@ async def continue_job(
 
     await session.commit()
 
-    if job.state != "failed":
+    if job.state != JobState.failed:
         runtime: RuntimeService = request.app.state.runtime_service
         await runtime.start_or_enqueue(job)
         job = await svc.get_job(job.id)
@@ -339,7 +341,7 @@ async def get_job_diff(
     job = await svc.get_job(job_id)
 
     # For active jobs with a worktree, calculate a fresh diff
-    if job.state in ("running", "waiting_for_approval") and job.worktree_path and job.worktree_path != job.repo:
+    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path and job.worktree_path != job.repo:
         from backend.services.diff_service import DiffService
 
         config = load_config()
@@ -467,7 +469,7 @@ async def resolve_job(
 
     # agent_merge: hand the conflict back to the agent to resolve
     if body.action == ResolutionAction.agent_merge:
-        if job.resolution != "conflict":
+        if job.resolution != Resolution.conflict:
             raise HTTPException(status_code=409, detail="agent_merge is only valid when resolution is 'conflict'")
 
         runtime_service: RuntimeService = request.app.state.runtime_service

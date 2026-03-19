@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.models.domain import JobState
 from backend.models.events import DomainEvent, DomainEventKind
 
 if TYPE_CHECKING:
@@ -302,7 +303,7 @@ class ProgressTrackingService:
         if not terminal_outcome or not last_steps:
             return
 
-        succeeded = terminal_outcome == "succeeded"
+        succeeded = terminal_outcome == JobState.succeeded
         final_steps = []
         for s in last_steps:
             status = s.get("status", "pending")

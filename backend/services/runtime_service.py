@@ -23,6 +23,7 @@ from backend.models.domain import (
     JobState,
     MCPServerConfig,
     PermissionMode,
+    Resolution,
     SessionConfig,
     SessionEvent,
     SessionEventKind,
@@ -206,7 +207,7 @@ def _resolve_permission_mode(repo_path: str) -> str | None:
         with open(codeplane_yml) as f:
             data = yaml.safe_load(f) or {}
         mode = data.get("permission_mode")
-        if mode and str(mode) in ("auto", "read_only", "approval_required"):
+        if mode and str(mode) in (PermissionMode.auto, PermissionMode.read_only, PermissionMode.approval_required):
             return str(mode)
         return None
     except Exception:
@@ -480,7 +481,7 @@ class RuntimeService:
             await self._run_verify_review(job_id, config, session_id, worktree_path, base_ref)
 
             # Always go to sign-off: leave resolution to operator
-            final_resolution: str = "unresolved"
+            final_resolution = Resolution.unresolved
             log.info("job_awaiting_sign_off", job_id=job_id)
 
             # Strategy completed normally → succeeded
@@ -493,7 +494,7 @@ class RuntimeService:
                 await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
                 await session.commit()
 
-            self._set_progress_terminal_state(job_id, "succeeded")
+            self._set_progress_terminal_state(job_id, JobState.succeeded)
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=_make_event_id(),
@@ -673,7 +674,7 @@ class RuntimeService:
                 if current and current.state != JobState.canceled:
                     await svc.transition_state(job_id, JobState.canceled)
                     await session.commit()
-                    self._set_progress_terminal_state(job_id, "canceled")
+                    self._set_progress_terminal_state(job_id, JobState.canceled)
                     await self._event_bus.publish(
                         DomainEvent(
                             event_id=_make_event_id(),
@@ -777,7 +778,7 @@ class RuntimeService:
                     from backend.persistence.job_repo import JobRepository
 
                     job_repo = JobRepository(session)
-                    await job_repo.update_resolution(job_id, "unresolved")
+                    await job_repo.update_resolution(job_id, Resolution.unresolved)
                     await session.commit()
 
                 await self._event_bus.publish(
@@ -787,7 +788,7 @@ class RuntimeService:
                         timestamp=datetime.now(UTC),
                         kind=DomainEventKind.job_succeeded,
                         payload={
-                            "resolution": "unresolved",
+                            "resolution": Resolution.unresolved,
                             "model_downgraded": True,
                             "requested_model": requested,
                             "actual_model": actual,
@@ -1175,7 +1176,7 @@ class RuntimeService:
                 await svc.get_job(job_id)
                 await svc.transition_state(job_id, JobState.failed, failure_reason=reason)
                 await session.commit()
-            self._set_progress_terminal_state(job_id, "failed")
+            self._set_progress_terminal_state(job_id, JobState.failed)
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=_make_event_id(),

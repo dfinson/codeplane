@@ -34,6 +34,7 @@ from backend.models.api_schemas import (
     ToolGroupSummaryPayload,
     TranscriptPayload,
 )
+from backend.models.domain import JobState, Resolution
 from backend.models.events import DomainEvent, DomainEventKind
 
 if TYPE_CHECKING:
@@ -72,10 +73,10 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
 
 # State implied by each domain event kind (for job_state_changed payloads)
 _KIND_TO_STATE: dict[DomainEventKind, str] = {
-    DomainEventKind.job_created: "running",
-    DomainEventKind.job_succeeded: "succeeded",
-    DomainEventKind.job_failed: "failed",
-    DomainEventKind.job_canceled: "canceled",
+    DomainEventKind.job_created: JobState.running,
+    DomainEventKind.job_succeeded: JobState.succeeded,
+    DomainEventKind.job_failed: JobState.failed,
+    DomainEventKind.job_canceled: JobState.canceled,
 }
 
 # High-frequency event types suppressed in selective mode (>20 active jobs)
@@ -124,7 +125,7 @@ def _format_sse(event_id: str | None, event_type: str, data: str) -> str:
 
 
 def _build_job_state_changed(event: DomainEvent) -> str:
-    new_state = _KIND_TO_STATE.get(event.kind, event.payload.get("state", event.payload.get("new_state", "queued")))
+    new_state = _KIND_TO_STATE.get(event.kind, event.payload.get("state", event.payload.get("new_state", JobState.queued)))
     return JobStateChangedPayload(
         job_id=event.job_id,
         previous_state=event.payload.get("previous_state"),
@@ -252,7 +253,7 @@ def _build_job_succeeded(event: DomainEvent) -> str:
 def _build_job_resolved(event: DomainEvent) -> str:
     return JobResolvedPayload(
         job_id=event.job_id,
-        resolution=event.payload.get("resolution", "unresolved"),
+        resolution=event.payload.get("resolution", Resolution.unresolved),
         pr_url=event.payload.get("pr_url"),
         conflict_files=event.payload.get("conflict_files"),
         timestamp=event.timestamp,
@@ -419,7 +420,7 @@ class SSEManager:
             state_payload = JobStateChangedPayload(
                 job_id=event.job_id,
                 previous_state=event.payload.get("previous_state"),
-                new_state="waiting_for_approval",
+                new_state=JobState.waiting_for_approval,
                 timestamp=event.timestamp,
             )
             state_frame = _format_sse(
@@ -430,10 +431,10 @@ class SSEManager:
             await self._broadcast_frame(state_frame, event.job_id)
 
         elif event.kind == DomainEventKind.approval_resolved:
-            new_state = "running" if event.payload.get("resolution") == "approved" else "failed"
+            new_state = JobState.running if event.payload.get("resolution") == "approved" else JobState.failed
             state_payload = JobStateChangedPayload(
                 job_id=event.job_id,
-                previous_state="waiting_for_approval",
+                previous_state=JobState.waiting_for_approval,
                 new_state=new_state,
                 timestamp=event.timestamp,
             )
@@ -593,7 +594,7 @@ class SSEManager:
                 derived_payload = JobStateChangedPayload(
                     job_id=event.job_id,
                     previous_state=event.payload.get("previous_state"),
-                    new_state="waiting_for_approval",
+                    new_state=JobState.waiting_for_approval,
                     timestamp=event.timestamp,
                 )
                 await conn.send(
@@ -604,10 +605,10 @@ class SSEManager:
                     )
                 )
             elif event.kind == DomainEventKind.approval_resolved:
-                new_state = "running" if event.payload.get("resolution") == "approved" else "failed"
+                new_state = JobState.running if event.payload.get("resolution") == "approved" else JobState.failed
                 derived_payload = JobStateChangedPayload(
                     job_id=event.job_id,
-                    previous_state="waiting_for_approval",
+                    previous_state=JobState.waiting_for_approval,
                     new_state=new_state,
                     timestamp=event.timestamp,
                 )

@@ -16,6 +16,7 @@ from backend.models.domain import (
     Job,
     JobState,
     PermissionMode,
+    Resolution,
     validate_state_transition,
 )
 from backend.services.agent_adapter import validate_sdk_model
@@ -415,7 +416,7 @@ class JobService:
         job = await self.get_job(job_id)
         if job.state != JobState.succeeded:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, not 'succeeded'")
-        if job.resolution not in (None, "unresolved", "conflict"):
+        if job.resolution not in (None, Resolution.unresolved, Resolution.conflict):
             raise StateConflictError(f"Job {job_id} already resolved as {job.resolution!r}")
         return job
 
@@ -444,12 +445,12 @@ class JobService:
         )
 
         _STATUS_MAP = {
-            "merged": "merged",
-            "pr_created": "pr_created",
-            "discarded": "discarded",
-            "conflict": "conflict",
+            Resolution.merged: Resolution.merged,
+            Resolution.pr_created: Resolution.pr_created,
+            Resolution.discarded: Resolution.discarded,
+            Resolution.conflict: Resolution.conflict,
         }
-        resolution = _STATUS_MAP.get(result.status, "unresolved")
+        resolution = _STATUS_MAP.get(result.status, Resolution.unresolved)
 
         # Persist resolution
         await self._job_repo.update_resolution(job.id, resolution, pr_url=result.pr_url)

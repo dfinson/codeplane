@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 
 from backend.config import CODEPLANE_DIR
 from backend.models.db import ArtifactRow, DiffSnapshotRow, JobRow
-from backend.models.domain import TERMINAL_STATES
+from backend.models.domain import TERMINAL_STATES, JobState, Resolution
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -171,8 +171,8 @@ class RetentionService:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(JobRow).where(
-                    JobRow.state == "succeeded",
-                    JobRow.resolution.in_(["merged", "pr_created", "discarded"]),
+                    JobRow.state == JobState.succeeded,
+                    JobRow.resolution.in_([Resolution.merged, Resolution.pr_created, Resolution.discarded]),
                     JobRow.archived_at.is_(None),
                     JobRow.completed_at < cutoff,
                 )

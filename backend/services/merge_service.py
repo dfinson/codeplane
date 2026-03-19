@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.models.domain import Resolution
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.services.git_service import GitError
 from sqlalchemy.exc import SQLAlchemyError
@@ -178,8 +179,8 @@ class MergeService:
 
         await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
         await self._post_merge_cleanup(job_id, repo_path, None, branch)
-        await self._update_merge_status(job_id, "merged")
-        return MergeResult(status="merged", strategy="ff_only")
+        await self._update_merge_status(job_id, Resolution.merged)
+        return MergeResult(status=Resolution.merged, strategy="ff_only")
 
     @contextlib.asynccontextmanager
     async def _preserved_worktree(
@@ -291,8 +292,8 @@ class MergeService:
             log.info("merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
             await self._publish_merge_completed(job_id, branch, base_ref, "merge")
             await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, "merged")
-            return MergeResult(status="merged", strategy="merge")
+            await self._update_merge_status(job_id, Resolution.merged)
+            return MergeResult(status=Resolution.merged, strategy="merge")
 
         log.info("merge_conflict_detected", job_id=job_id, conflict_files=conflict_files)
 
@@ -303,8 +304,8 @@ class MergeService:
             conflict_files,
             fallback="none",
         )
-        await self._update_merge_status(job_id, "conflict")
-        return MergeResult(status="conflict", conflict_files=conflict_files)
+        await self._update_merge_status(job_id, Resolution.conflict)
+        return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
 
     async def _get_conflict_file_list(self, repo_path: str, branch: str, base_ref: str) -> list[str]:
         """Attempt a merge to discover conflicting files, then abort."""
@@ -361,8 +362,8 @@ class MergeService:
 
         if pr_result.ok:
             log.info("pr_created", job_id=job_id, pr_url=pr_result.url, platform=adapter.name)
-            await self._update_merge_status(job_id, "pr_created", pr_url=pr_result.url)
-            return MergeResult(status="pr_created", strategy="pr", pr_url=pr_result.url)
+            await self._update_merge_status(job_id, Resolution.pr_created, pr_url=pr_result.url)
+            return MergeResult(status=Resolution.pr_created, strategy="pr", pr_url=pr_result.url)
 
         log.warning("pr_creation_failed", job_id=job_id, platform=adapter.name, error=pr_result.error)
         await self._update_merge_status(job_id, "not_merged")
@@ -489,7 +490,7 @@ class MergeService:
 
         if action == "create_pr":
             result = await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
-            if result.status == "pr_created":
+            if result.status == Resolution.pr_created:
                 await self._cleanup_worktree_only(job_id, repo_path, worktree_path)
             return result
 
@@ -583,8 +584,8 @@ class MergeService:
                 log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
                 await self._publish_merge_completed(job_id, branch, base_ref, "merge")
                 await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-                await self._update_merge_status(job_id, "merged")
-                return MergeResult(status="merged", strategy="merge")
+                await self._update_merge_status(job_id, Resolution.merged)
+                return MergeResult(status=Resolution.merged, strategy="merge")
 
             await self._publish_merge_conflict(
                 job_id,
@@ -594,7 +595,7 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
-            return MergeResult(status="conflict", conflict_files=conflict_files)
+            return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
 
     async def _operator_smart_merge(
         self,
@@ -637,13 +638,13 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
-            return MergeResult(status="conflict", conflict_files=conflict_files)
+            return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
 
         log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
         await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
         await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-        await self._update_merge_status(job_id, "merged")
-        return MergeResult(status="merged", strategy="cherry_pick")
+        await self._update_merge_status(job_id, Resolution.merged)
+        return MergeResult(status=Resolution.merged, strategy="cherry_pick")
 
     async def _discard(
         self,
@@ -668,7 +669,7 @@ class MergeService:
             except GitError:
                 log.warning("branch_discard_failed", job_id=job_id, exc_info=True)
 
-        return MergeResult(status="discarded")
+        return MergeResult(status=Resolution.discarded)
 
     async def _cleanup_worktree_only(
         self,
