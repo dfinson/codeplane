@@ -173,7 +173,7 @@ class MergeService:
         log.info("merge_ff_ref_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
 
         await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
-        await self._post_merge_cleanup(job_id, repo_path, None, branch, base_ref)
+        await self._post_merge_cleanup(job_id, repo_path, None, branch)
         await self._update_merge_status(job_id, "merged")
         return MergeResult(status="merged", strategy="ff_only")
 
@@ -262,7 +262,7 @@ class MergeService:
         else:
             log.info("merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
             await self._publish_merge_completed(job_id, branch, base_ref, "merge")
-            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch, base_ref)
+            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
             await self._update_merge_status(job_id, "merged")
             return MergeResult(status="merged", strategy="merge")
 
@@ -287,7 +287,7 @@ class MergeService:
             else:
                 log.info("merge_succeeded_on_retry", job_id=job_id, branch=branch, base_ref=base_ref)
                 await self._publish_merge_completed(job_id, branch, base_ref, "merge")
-                await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch, base_ref)
+                await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
                 await self._update_merge_status(job_id, "merged")
                 return MergeResult(status="merged", strategy="merge")
 
@@ -398,13 +398,8 @@ class MergeService:
         repo_path: str,
         worktree_path: str | None,
         branch: str,
-        base_ref: str = "",
     ) -> None:
-        """Clean up worktree and branch after a successful merge, then push base_ref."""
-        # Push the merged base branch to origin so the result is visible remotely.
-        if base_ref:
-            await self._push_base_ref(job_id, repo_path, base_ref)
-
+        """Clean up worktree and branch after a successful merge."""
         if self._config.cleanup_worktree and worktree_path:
             try:
                 await self._git.remove_worktree(repo_path, worktree_path)
@@ -420,14 +415,6 @@ class MergeService:
                     await self._git._run_git("branch", "-d", branch, cwd=repo_path)  # noqa: SLF001
             except Exception:
                 log.warning("branch_cleanup_failed", job_id=job_id, exc_info=True)
-
-    async def _push_base_ref(self, job_id: str, repo_path: str, base_ref: str) -> None:
-        """Push base_ref to origin after a successful merge."""
-        try:
-            await self._git.push(base_ref, cwd=repo_path)
-            log.info("merge_pushed_to_origin", job_id=job_id, base_ref=base_ref)
-        except Exception:
-            log.warning("merge_push_to_origin_failed", job_id=job_id, base_ref=base_ref, exc_info=True)
 
     async def _update_merge_status(
         self,
@@ -646,7 +633,7 @@ class MergeService:
             else:
                 log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
                 await self._publish_merge_completed(job_id, branch, base_ref, "merge")
-                await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch, base_ref)
+                await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
                 await self._update_merge_status(job_id, "merged")
                 return MergeResult(status="merged", strategy="merge")
 
@@ -670,7 +657,7 @@ class MergeService:
                 else:
                     log.info("resolve_merge_succeeded_on_retry", job_id=job_id, branch=branch)
                     await self._publish_merge_completed(job_id, branch, base_ref, "merge")
-                    await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch, base_ref)
+                    await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
                     await self._update_merge_status(job_id, "merged")
                     return MergeResult(status="merged", strategy="merge")
 
@@ -770,7 +757,7 @@ class MergeService:
 
         log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
         await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
-        await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch, base_ref)
+        await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
         await self._update_merge_status(job_id, "merged")
         return MergeResult(status="merged", strategy="cherry_pick")
 
