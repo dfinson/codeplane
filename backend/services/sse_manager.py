@@ -124,115 +124,50 @@ def _format_sse(event_id: str | None, event_type: str, data: str) -> str:
     return "\n".join(parts) + "\n\n"
 
 
+# ---------------------------------------------------------------------------
+# Generic field-map builder
+# ---------------------------------------------------------------------------
+# Sentinels for timestamp handling in field maps
+_TS_FALLBACK = object()  # event.payload.get(key, event.timestamp)
+_TS_EVENT = object()  # always event.timestamp
+
+# FieldMap: model kwarg → (payload_key, default)
+# When default is _TS_FALLBACK, falls back to event.timestamp if missing.
+# When default is _TS_EVENT, always uses event.timestamp (payload_key ignored).
+FieldMap = dict[str, tuple[str, object]]
+
+
+def _build_from_fields(event: DomainEvent, model_cls: type, fields: FieldMap) -> str:
+    """Build a Pydantic SSE payload from a declarative field map.
+
+    Every model receives ``job_id=event.job_id`` automatically.
+    """
+    kwargs: dict[str, object] = {"job_id": event.job_id}
+    for kwarg_name, (payload_key, default) in fields.items():
+        if default is _TS_FALLBACK:
+            kwargs[kwarg_name] = event.payload.get(payload_key, event.timestamp)
+        elif default is _TS_EVENT:
+            kwargs[kwarg_name] = event.timestamp
+        else:
+            kwargs[kwarg_name] = event.payload.get(payload_key, default)
+    return model_cls(**kwargs).model_dump_json(by_alias=True)
+
+
+# ---------------------------------------------------------------------------
+# Custom builders for event types with non-trivial extraction logic
+# ---------------------------------------------------------------------------
+
+from collections.abc import Callable
+
+_BuilderFn = Callable[[DomainEvent], str]
+
+
 def _build_job_state_changed(event: DomainEvent) -> str:
     new_state = _KIND_TO_STATE.get(event.kind, event.payload.get("state", event.payload.get("new_state", JobState.queued)))
     return JobStateChangedPayload(
         job_id=event.job_id,
         previous_state=event.payload.get("previous_state"),
         new_state=new_state,
-        timestamp=event.timestamp,
-    ).model_dump_json(by_alias=True)
-
-
-def _build_log_line(event: DomainEvent) -> str:
-    return LogLinePayload(
-        job_id=event.job_id,
-        seq=event.payload.get("seq", 0),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-        level=event.payload.get("level", "info"),
-        message=event.payload.get("message", ""),
-        context=event.payload.get("context"),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_transcript_update(event: DomainEvent) -> str:
-    return TranscriptPayload(
-        job_id=event.job_id,
-        seq=event.payload.get("seq", 0),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-        role=event.payload.get("role", "agent"),
-        content=event.payload.get("content", ""),
-        title=event.payload.get("title"),
-        turn_id=event.payload.get("turn_id"),
-        tool_name=event.payload.get("tool_name"),
-        tool_args=event.payload.get("tool_args"),
-        tool_result=event.payload.get("tool_result"),
-        tool_success=event.payload.get("tool_success"),
-        tool_issue=event.payload.get("tool_issue"),
-        tool_intent=event.payload.get("tool_intent"),
-        tool_title=event.payload.get("tool_title"),
-        tool_display=event.payload.get("tool_display"),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_diff_update(event: DomainEvent) -> str:
-    return DiffUpdatePayload(
-        job_id=event.job_id,
-        changed_files=event.payload.get("changed_files", []),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_approval_requested(event: DomainEvent) -> str:
-    return ApprovalRequestedPayload(
-        job_id=event.job_id,
-        approval_id=event.payload.get("approval_id", ""),
-        description=event.payload.get("description", ""),
-        proposed_action=event.payload.get("proposed_action"),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_approval_resolved(event: DomainEvent) -> str:
-    return ApprovalResolvedPayload(
-        job_id=event.job_id,
-        approval_id=event.payload.get("approval_id", ""),
-        resolution=event.payload.get("resolution", ""),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_session_heartbeat(event: DomainEvent) -> str:
-    return SessionHeartbeatPayload(
-        job_id=event.job_id,
-        session_id=event.payload.get("session_id", ""),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_merge_completed(event: DomainEvent) -> str:
-    return MergeCompletedPayload(
-        job_id=event.job_id,
-        branch=event.payload.get("branch", ""),
-        base_ref=event.payload.get("base_ref", ""),
-        strategy=event.payload.get("strategy", ""),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_merge_conflict(event: DomainEvent) -> str:
-    return MergeConflictPayload(
-        job_id=event.job_id,
-        branch=event.payload.get("branch", ""),
-        base_ref=event.payload.get("base_ref", ""),
-        conflict_files=event.payload.get("conflict_files", []),
-        fallback=event.payload.get("fallback", "none"),
-        pr_url=event.payload.get("pr_url"),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_session_resumed(event: DomainEvent) -> str:
-    return SessionResumedPayload(
-        job_id=event.job_id,
-        session_number=event.payload.get("session_number", 1),
-        timestamp=event.payload.get("timestamp", event.timestamp),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_job_failed(event: DomainEvent) -> str:
-    return JobFailedPayload(
-        job_id=event.job_id,
-        reason=event.payload.get("reason", "Unknown error"),
         timestamp=event.timestamp,
     ).model_dump_json(by_alias=True)
 
@@ -250,32 +185,6 @@ def _build_job_succeeded(event: DomainEvent) -> str:
     ).model_dump_json(by_alias=True)
 
 
-def _build_job_resolved(event: DomainEvent) -> str:
-    return JobResolvedPayload(
-        job_id=event.job_id,
-        resolution=event.payload.get("resolution", Resolution.unresolved),
-        pr_url=event.payload.get("pr_url"),
-        conflict_files=event.payload.get("conflict_files"),
-        timestamp=event.timestamp,
-    ).model_dump_json(by_alias=True)
-
-
-def _build_job_archived(event: DomainEvent) -> str:
-    return JobArchivedPayload(
-        job_id=event.job_id,
-        timestamp=event.timestamp,
-    ).model_dump_json(by_alias=True)
-
-
-def _build_job_title_updated(event: DomainEvent) -> str:
-    return JobTitleUpdatedPayload(
-        job_id=event.job_id,
-        title=event.payload.get("title"),
-        branch=event.payload.get("branch"),
-        timestamp=event.timestamp,
-    ).model_dump_json(by_alias=True)
-
-
 def _build_progress_headline(event: DomainEvent) -> str:
     return ProgressHeadlinePayload(
         job_id=event.job_id,
@@ -284,24 +193,6 @@ def _build_progress_headline(event: DomainEvent) -> str:
         summary=event.payload.get("summary", ""),
         timestamp=event.timestamp,
         replaces_count=event.payload.get("replaces_count", 0),
-    ).model_dump_json(by_alias=True)
-
-
-def _build_model_downgraded(event: DomainEvent) -> str:
-    return ModelDowngradedPayload(
-        job_id=event.job_id,
-        requested_model=event.payload.get("requested_model", ""),
-        actual_model=event.payload.get("actual_model", ""),
-        timestamp=event.timestamp,
-    ).model_dump_json(by_alias=True)
-
-
-def _build_tool_group_summary(event: DomainEvent) -> str:
-    return ToolGroupSummaryPayload(
-        job_id=event.job_id,
-        turn_id=event.payload.get("turn_id", ""),
-        summary=event.payload.get("summary", ""),
-        timestamp=event.timestamp,
     ).model_dump_json(by_alias=True)
 
 
@@ -315,28 +206,107 @@ def _build_agent_plan_updated(event: DomainEvent) -> str:
     ).model_dump_json(by_alias=True)
 
 
-from collections.abc import Callable
+# ---------------------------------------------------------------------------
+# Unified SSE payload registry
+# ---------------------------------------------------------------------------
+# Each entry is either a (ModelClass, FieldMap) tuple handled generically by
+# ``_build_from_fields``, or a custom callable for event types that need
+# non-trivial extraction logic.
 
-_SSE_BUILDERS: dict[str, Callable[[DomainEvent], str]] = {
+_SSE_PAYLOAD_REGISTRY: dict[str, tuple[type, FieldMap] | _BuilderFn] = {
+    # --- Custom builders (non-trivial extraction) ---
     "job_state_changed": _build_job_state_changed,
-    "log_line": _build_log_line,
-    "transcript_update": _build_transcript_update,
-    "diff_update": _build_diff_update,
-    "approval_requested": _build_approval_requested,
-    "approval_resolved": _build_approval_resolved,
-    "session_heartbeat": _build_session_heartbeat,
-    "merge_completed": _build_merge_completed,
-    "merge_conflict": _build_merge_conflict,
-    "session_resumed": _build_session_resumed,
-    "job_failed": _build_job_failed,
     "job_succeeded": _build_job_succeeded,
-    "job_resolved": _build_job_resolved,
-    "job_archived": _build_job_archived,
-    "job_title_updated": _build_job_title_updated,
     "progress_headline": _build_progress_headline,
-    "model_downgraded": _build_model_downgraded,
-    "tool_group_summary": _build_tool_group_summary,
     "agent_plan_updated": _build_agent_plan_updated,
+    # --- Field-map builders (declarative) ---
+    "log_line": (LogLinePayload, {
+        "seq": ("seq", 0),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+        "level": ("level", "info"),
+        "message": ("message", ""),
+        "context": ("context", None),
+    }),
+    "transcript_update": (TranscriptPayload, {
+        "seq": ("seq", 0),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+        "role": ("role", "agent"),
+        "content": ("content", ""),
+        "title": ("title", None),
+        "turn_id": ("turn_id", None),
+        "tool_name": ("tool_name", None),
+        "tool_args": ("tool_args", None),
+        "tool_result": ("tool_result", None),
+        "tool_success": ("tool_success", None),
+        "tool_issue": ("tool_issue", None),
+        "tool_intent": ("tool_intent", None),
+        "tool_title": ("tool_title", None),
+        "tool_display": ("tool_display", None),
+    }),
+    "diff_update": (DiffUpdatePayload, {
+        "changed_files": ("changed_files", []),
+    }),
+    "approval_requested": (ApprovalRequestedPayload, {
+        "approval_id": ("approval_id", ""),
+        "description": ("description", ""),
+        "proposed_action": ("proposed_action", None),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "approval_resolved": (ApprovalResolvedPayload, {
+        "approval_id": ("approval_id", ""),
+        "resolution": ("resolution", ""),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "session_heartbeat": (SessionHeartbeatPayload, {
+        "session_id": ("session_id", ""),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "merge_completed": (MergeCompletedPayload, {
+        "branch": ("branch", ""),
+        "base_ref": ("base_ref", ""),
+        "strategy": ("strategy", ""),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "merge_conflict": (MergeConflictPayload, {
+        "branch": ("branch", ""),
+        "base_ref": ("base_ref", ""),
+        "conflict_files": ("conflict_files", []),
+        "fallback": ("fallback", "none"),
+        "pr_url": ("pr_url", None),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "session_resumed": (SessionResumedPayload, {
+        "session_number": ("session_number", 1),
+        "timestamp": ("timestamp", _TS_FALLBACK),
+    }),
+    "job_failed": (JobFailedPayload, {
+        "reason": ("reason", "Unknown error"),
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
+    "job_resolved": (JobResolvedPayload, {
+        "resolution": ("resolution", Resolution.unresolved),
+        "pr_url": ("pr_url", None),
+        "conflict_files": ("conflict_files", None),
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
+    "job_archived": (JobArchivedPayload, {
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
+    "job_title_updated": (JobTitleUpdatedPayload, {
+        "title": ("title", None),
+        "branch": ("branch", None),
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
+    "model_downgraded": (ModelDowngradedPayload, {
+        "requested_model": ("requested_model", ""),
+        "actual_model": ("actual_model", ""),
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
+    "tool_group_summary": (ToolGroupSummaryPayload, {
+        "turn_id": ("turn_id", ""),
+        "summary": ("summary", ""),
+        "timestamp": ("timestamp", _TS_EVENT),
+    }),
 }
 
 
@@ -345,11 +315,46 @@ def _build_sse_data(event: DomainEvent, sse_type: str) -> str:
 
     This ensures all SSE payloads use **camelCase** keys matching the API contract.
     """
-    builder = _SSE_BUILDERS.get(sse_type)
-    if builder is not None:
-        return builder(event)
-    # Fallback (should not happen for known types)
-    return json.dumps(event.payload, default=str)
+    spec = _SSE_PAYLOAD_REGISTRY.get(sse_type)
+    if spec is None:
+        # Fallback (should not happen for known types)
+        return json.dumps(event.payload, default=str)
+    if callable(spec):
+        return spec(event)
+    model_cls, fields = spec
+    return _build_from_fields(event, model_cls, fields)
+
+
+def _build_derived_state_frame(event: DomainEvent, sse_id: str | None) -> str | None:
+    """Build a derived ``job_state_changed`` SSE frame for events that imply a state transition.
+
+    Returns ``None`` when *event* does not trigger a secondary frame.
+    """
+    if event.kind == DomainEventKind.approval_requested:
+        payload = JobStateChangedPayload(
+            job_id=event.job_id,
+            previous_state=event.payload.get("previous_state"),
+            new_state=JobState.waiting_for_approval,
+            timestamp=event.timestamp,
+        )
+    elif event.kind == DomainEventKind.approval_resolved:
+        new_state = JobState.running if event.payload.get("resolution") == "approved" else JobState.failed
+        payload = JobStateChangedPayload(
+            job_id=event.job_id,
+            previous_state=JobState.waiting_for_approval,
+            new_state=new_state,
+            timestamp=event.timestamp,
+        )
+    elif event.kind in (DomainEventKind.job_succeeded, DomainEventKind.job_failed):
+        payload = JobStateChangedPayload(
+            job_id=event.job_id,
+            previous_state=None,
+            new_state=_KIND_TO_STATE[event.kind],
+            timestamp=event.timestamp,
+        )
+    else:
+        return None
+    return _format_sse(sse_id, "job_state_changed", payload.model_dump_json(by_alias=True))
 
 
 class SSEManager:
@@ -416,49 +421,9 @@ class SSEManager:
             await conn.send(frame)
 
         # Emit secondary SSE events per the mapping in §5.3.1
-        if event.kind == DomainEventKind.approval_requested:
-            state_payload = JobStateChangedPayload(
-                job_id=event.job_id,
-                previous_state=event.payload.get("previous_state"),
-                new_state=JobState.waiting_for_approval,
-                timestamp=event.timestamp,
-            )
-            state_frame = _format_sse(
-                None,
-                "job_state_changed",
-                state_payload.model_dump_json(by_alias=True),
-            )
-            await self._broadcast_frame(state_frame, event.job_id)
-
-        elif event.kind == DomainEventKind.approval_resolved:
-            new_state = JobState.running if event.payload.get("resolution") == "approved" else JobState.failed
-            state_payload = JobStateChangedPayload(
-                job_id=event.job_id,
-                previous_state=JobState.waiting_for_approval,
-                new_state=new_state,
-                timestamp=event.timestamp,
-            )
-            state_frame = _format_sse(
-                None,
-                "job_state_changed",
-                state_payload.model_dump_json(by_alias=True),
-            )
-            await self._broadcast_frame(state_frame, event.job_id)
-
-        elif event.kind in (DomainEventKind.job_succeeded, DomainEventKind.job_failed):
-            new_state = _KIND_TO_STATE[event.kind]
-            state_payload = JobStateChangedPayload(
-                job_id=event.job_id,
-                previous_state=None,
-                new_state=new_state,
-                timestamp=event.timestamp,
-            )
-            state_frame = _format_sse(
-                None,
-                "job_state_changed",
-                state_payload.model_dump_json(by_alias=True),
-            )
-            await self._broadcast_frame(state_frame, event.job_id)
+        derived = _build_derived_state_frame(event, sse_id=None)
+        if derived is not None:
+            await self._broadcast_frame(derived, event.job_id)
 
     async def _broadcast_frame(self, frame: str, job_id: str) -> None:
         """Send a pre-formatted frame to all relevant connections."""
@@ -586,54 +551,13 @@ class SSEManager:
             frame = _format_sse(sse_id, sse_type, _build_sse_data(event, sse_type))
             await conn.send(frame)
 
-            # Mirror broadcast_domain_event(): approval events emit a derived
+            # Mirror broadcast_domain_event(): emit a derived
             # job_state_changed frame so the client sees the state
             # transition on reconnect.  Reuse the same SSE id so the
             # replay cursor does not advance beyond the underlying event.
-            if event.kind == DomainEventKind.approval_requested:
-                derived_payload = JobStateChangedPayload(
-                    job_id=event.job_id,
-                    previous_state=event.payload.get("previous_state"),
-                    new_state=JobState.waiting_for_approval,
-                    timestamp=event.timestamp,
-                )
-                await conn.send(
-                    _format_sse(
-                        sse_id,
-                        "job_state_changed",
-                        derived_payload.model_dump_json(by_alias=True),
-                    )
-                )
-            elif event.kind == DomainEventKind.approval_resolved:
-                new_state = JobState.running if event.payload.get("resolution") == "approved" else JobState.failed
-                derived_payload = JobStateChangedPayload(
-                    job_id=event.job_id,
-                    previous_state=JobState.waiting_for_approval,
-                    new_state=new_state,
-                    timestamp=event.timestamp,
-                )
-                await conn.send(
-                    _format_sse(
-                        sse_id,
-                        "job_state_changed",
-                        derived_payload.model_dump_json(by_alias=True),
-                    )
-                )
-            elif event.kind in (DomainEventKind.job_succeeded, DomainEventKind.job_failed):
-                derived_state = _KIND_TO_STATE[event.kind]
-                derived_payload = JobStateChangedPayload(
-                    job_id=event.job_id,
-                    previous_state=None,
-                    new_state=derived_state,
-                    timestamp=event.timestamp,
-                )
-                await conn.send(
-                    _format_sse(
-                        sse_id,
-                        "job_state_changed",
-                        derived_payload.model_dump_json(by_alias=True),
-                    )
-                )
+            derived = _build_derived_state_frame(event, sse_id=sse_id)
+            if derived is not None:
+                await conn.send(derived)
 
     async def replay_from_factory(
         self,
