@@ -12,8 +12,18 @@ import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
 import { Combobox } from "./ui/combobox";
 
+function inferBranchPrefix(text: string): string {
+  const lower = text.toLowerCase();
+  if (/\b(fix|bug|broken|crash|error|regression|revert|patch|hotfix)\b/.test(lower)) return "fix";
+  if (/\b(test|spec|coverage|assert)\b/.test(lower)) return "test";
+  if (/\b(doc|docs|readme|comment|changelog)\b/.test(lower)) return "docs";
+  if (/\b(refactor|chore|cleanup|clean up|upgrade|update|bump|remove|delete|migrate|rename)\b/.test(lower)) return "chore";
+  return "feat";
+}
+
 function slugifyPrompt(text: string): string {
-  return text
+  const prefix = inferBranchPrefix(text);
+  const slug = text
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9\s-]/g, "")
@@ -21,7 +31,8 @@ function slugifyPrompt(text: string): string {
     .slice(0, 6)
     .join("-")
     .replace(/-+/g, "-")
-    .slice(0, 50);
+    .slice(0, 43); // 43 + "/" + up to 5 char prefix = 50 max
+  return `${prefix}/${slug}`;
 }
 
 function sdkStatusDescription(sdk: SDKInfo): string | undefined {
