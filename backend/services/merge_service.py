@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 import structlog
 
 from backend.models.events import DomainEvent, DomainEventKind
+from backend.services.git_service import GitError
+from sqlalchemy.exc import SQLAlchemyError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -126,7 +128,7 @@ class MergeService:
             )
             if committed:
                 log.info("merge_auto_committed", job_id=job_id, cwd=commit_cwd)
-        except Exception:
+        except GitError:
             log.warning("merge_auto_commit_failed", job_id=job_id, exc_info=True)
 
         # --- Step 1: Try fast-forward via ref update (no checkout needed) ---
@@ -134,7 +136,7 @@ class MergeService:
             ff_result = await self._try_ff_via_ref(job_id, repo_path, branch, base_ref)
             if ff_result is not None:
                 return ff_result
-        except Exception:
+        except GitError:
             log.debug("merge_ff_ref_failed", job_id=job_id, exc_info=True)
 
         # --- Step 2: Full merge requires the main worktree. Acquire lock. ---
@@ -187,12 +189,12 @@ class MergeService:
         original_branch: str | None = None
         main_stashed = False
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(GitError):
             original_branch = await self._git.get_current_branch(cwd=repo_path)
 
         try:
             main_stashed = await self._git.stash(cwd=repo_path)
-        except Exception:
+        except GitError:
             log.warning(f"{log_prefix}_main_stash_failed", job_id=job_id, exc_info=True)
 
         try:
@@ -201,12 +203,12 @@ class MergeService:
             if original_branch:
                 try:
                     await self._git.checkout(original_branch, cwd=repo_path)
-                except Exception:
+                except GitError:
                     log.warning(f"{log_prefix}_restore_branch_failed", job_id=job_id, exc_info=True)
             if main_stashed:
                 try:
                     await self._git.stash_pop(cwd=repo_path)
-                except Exception:
+                except GitError:
                     log.warning(f"{log_prefix}_main_stash_pop_failed", job_id=job_id, exc_info=True)
 
     async def _checkout_and_merge(
@@ -220,8 +222,6 @@ class MergeService:
 
         Returns (merge_ok, conflict_files).
         """
-        from backend.services.git_service import GitError
-
         merge_ok = False
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
@@ -243,7 +243,7 @@ class MergeService:
 
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
-        except Exception:
+        except GitError:
             log.warning("checkout_base_ref_failed", job_id=job_id, exc_info=True)
 
         return False, conflict_files
@@ -310,16 +310,16 @@ class MergeService:
         """Attempt a merge to discover conflicting files, then abort."""
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
-        except Exception:
+        except GitError:
             return []
 
         try:
             await self._git.merge(branch, cwd=repo_path)
             # Merge succeeded — no conflicts. Reset HEAD back to undo the merge commit.
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(GitError):
                 await self._git._run_git("reset", "--hard", "HEAD~1", cwd=repo_path)  # noqa: SLF001
             return []
-        except Exception:
+        except GitError:
             files = await self._git.get_conflict_files(cwd=repo_path)
             await self._git.merge_abort(cwd=repo_path)
             return files
@@ -341,7 +341,7 @@ class MergeService:
             try:
                 await self._git.push(branch, cwd=cwd)
                 log.info("branch_pushed", job_id=job_id, branch=branch)
-            except Exception:
+            except GitError:
                 log.warning("branch_push_failed", job_id=job_id, exc_info=True)
                 # Continue — agent may have already pushed
 
@@ -380,16 +380,14 @@ class MergeService:
             try:
                 await self._git.remove_worktree(repo_path, worktree_path)
                 log.info("worktree_cleaned_after_merge", job_id=job_id, worktree=worktree_path)
-            except Exception:
+            except (GitError, OSError):
                 log.warning("worktree_cleanup_failed", job_id=job_id, exc_info=True)
 
         if self._config.delete_branch_after_merge:
             try:
-                from backend.services.git_service import GitError
-
                 with contextlib.suppress(GitError):
                     await self._git._run_git("branch", "-d", branch, cwd=repo_path)  # noqa: SLF001
-            except Exception:
+            except GitError:
                 log.warning("branch_cleanup_failed", job_id=job_id, exc_info=True)
 
     async def _update_merge_status(
@@ -406,7 +404,7 @@ class MergeService:
                 repo = JobRepository(session)
                 await repo.update_merge_status(job_id, merge_status, pr_url=pr_url)
                 await session.commit()
-        except Exception:
+        except SQLAlchemyError:
             log.warning("merge_status_update_failed", job_id=job_id, exc_info=True)
 
     async def _publish_merge_completed(
@@ -522,7 +520,7 @@ class MergeService:
         try:
             await self._diff_service.finalize(job_id, worktree_path, base_ref)
             log.info("diff_snapshot_preserved", job_id=job_id, worktree=worktree_path)
-        except Exception:
+        except (GitError, OSError, ValueError):
             log.warning("diff_snapshot_failed", job_id=job_id, exc_info=True)
 
     async def _operator_merge(
@@ -545,7 +543,7 @@ class MergeService:
             )
             if committed:
                 log.info("resolve_auto_committed", job_id=job_id, cwd=commit_cwd)
-        except Exception:
+        except GitError:
             log.warning("resolve_auto_commit_failed", job_id=job_id, exc_info=True)
 
         # --- Step 1: Try fast-forward via ref update (no checkout needed) ---
@@ -553,7 +551,7 @@ class MergeService:
             ff_result = await self._try_ff_via_ref(job_id, repo_path, branch, base_ref)
             if ff_result is not None:
                 return ff_result
-        except Exception:
+        except GitError:
             log.debug("resolve_ff_ref_failed", job_id=job_id, exc_info=True)
 
         # --- Step 2: Full merge requires the main worktree. Acquire lock. ---
@@ -614,8 +612,6 @@ class MergeService:
         3. On success: cleanup worktree/branch → merged.
         4. On conflict: abort, collect conflict files → conflict (no PR fallback).
         """
-        from backend.services.git_service import GitError
-
         try:
             await self._git.checkout(base_ref, cwd=repo_path)
         except GitError:
@@ -631,7 +627,7 @@ class MergeService:
             conflict_files = await self._git.get_conflict_files(cwd=repo_path)
             try:
                 await self._git.checkout(base_ref, cwd=repo_path)
-            except Exception:
+            except GitError:
                 log.warning("smart_merge_checkout_base_failed", job_id=job_id, exc_info=True)
             await self._publish_merge_conflict(
                 job_id,
@@ -661,17 +657,15 @@ class MergeService:
             try:
                 await self._git.remove_worktree(repo_path, worktree_path)
                 log.info("worktree_discarded", job_id=job_id, worktree=worktree_path)
-            except Exception:
+            except (GitError, OSError):
                 log.warning("worktree_discard_failed", job_id=job_id, exc_info=True)
 
         if branch and branch not in ("main", "master"):
             try:
-                from backend.services.git_service import GitError
-
                 with contextlib.suppress(GitError):
                     await self._git._run_git("branch", "-D", branch, cwd=repo_path)  # noqa: SLF001
                 log.info("branch_discarded", job_id=job_id, branch=branch)
-            except Exception:
+            except GitError:
                 log.warning("branch_discard_failed", job_id=job_id, exc_info=True)
 
         return MergeResult(status="discarded")
@@ -693,10 +687,10 @@ class MergeService:
                 return
             try:
                 await self._git._run_git("worktree", "remove", str(worktree_path), "--force", cwd=repo_path)  # noqa: SLF001
-            except Exception:
+            except GitError:
                 if wt.exists():
                     shutil.rmtree(wt)
                 await self._git._run_git("worktree", "prune", cwd=repo_path)  # noqa: SLF001
             log.info("worktree_cleaned_after_pr", job_id=job_id, worktree=worktree_path)
-        except Exception:
+        except (GitError, OSError):
             log.warning("worktree_cleanup_after_pr_failed", job_id=job_id, exc_info=True)
