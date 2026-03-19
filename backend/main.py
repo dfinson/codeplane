@@ -541,6 +541,20 @@ def up(
         if not run_preflight(port):
             raise SystemExit(1)
 
+    # Check Tailscale availability when --remote is requested
+    if remote:
+        import shutil
+
+        if not shutil.which("tailscale"):
+            click.secho(
+                "ERROR: 'tailscale' is not installed. Remote access requires Tailscale.\n"
+                "  Install: https://tailscale.com/download\n"
+                "  Or run: cpl setup",
+                fg="red",
+                err=True,
+            )
+            raise SystemExit(1)
+
     # Password logic: auto-generate for tunnel, allow explicit, block unsafe combos
     if remote and no_password:
         click.secho("ERROR: --remote with --no-password is not allowed. Remote access requires authentication.", fg="red")
