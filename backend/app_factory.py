@@ -18,6 +18,8 @@ from starlette.responses import Response
 
 from backend.api import approvals, artifacts, events, health, jobs, settings, terminal, voice, workspace
 from backend.lifespan import lifespan
+from backend.services.agent_adapter import SDKModelMismatchError
+from backend.services.job_service import JobNotFoundError, RepoNotAllowedError, StateConflictError
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -90,6 +92,26 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(terminal.router)
 
 
+def _register_domain_exception_handlers(app: FastAPI) -> None:
+    """Map domain exceptions to HTTP error responses centrally."""
+
+    @app.exception_handler(JobNotFoundError)
+    async def _job_not_found(request: Request, exc: JobNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(StateConflictError)
+    async def _state_conflict(request: Request, exc: StateConflictError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(RepoNotAllowedError)
+    async def _repo_not_allowed(request: Request, exc: RepoNotAllowedError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(SDKModelMismatchError)
+    async def _sdk_model_mismatch(request: Request, exc: SDKModelMismatchError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 def _mount_spa_fallback(app: FastAPI) -> None:
     """Serve frontend static files (SPA fallback for client-side routing).
 
@@ -133,6 +155,7 @@ def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password:
 
     _configure_middleware(app, dev=dev, tunnel_origin=tunnel_origin, password=password)
     _register_routes(app)
+    _register_domain_exception_handlers(app)
     _mount_spa_fallback(app)
 
     return app

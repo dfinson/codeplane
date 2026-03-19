@@ -58,6 +58,7 @@ from backend.services.platform_adapter import detect_platform as _detect_platfor
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from backend.config import CPLConfig
     from backend.models.domain import Job
     from backend.services.approval_service import ApprovalService
     from backend.services.runtime_service import RuntimeService
@@ -107,6 +108,23 @@ def _get_runtime() -> RuntimeService:
 def _get_approval() -> ApprovalService:
     assert _approval_service is not None, "MCP server not initialized"  # noqa: S101
     return _approval_service
+
+
+# ---------------------------------------------------------------------------
+# Service factory helpers — avoid repeating construction across tool handlers
+# ---------------------------------------------------------------------------
+
+
+def _make_job_service(session: AsyncSession, config: CPLConfig, *, git: bool = True) -> JobService:
+    return JobService(
+        job_repo=JobRepository(session),
+        git_service=GitService(config) if git else None,
+        config=config,
+    )
+
+
+def _make_artifact_service(session: AsyncSession) -> ArtifactService:
+    return ArtifactService(ArtifactRepository(session))
 
 
 def _job_to_response(job: Job) -> McpToolResult:
@@ -213,11 +231,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
             if not repo or not prompt:
                 return {"error": "repo and prompt are required for create"}
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 try:
                     job = await svc.create_job(
                         repo=repo,
@@ -246,11 +260,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
 
         if action == "list":
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 jobs, next_cursor, has_more = await svc.list_jobs(
                     state=state,
                     limit=min(max(limit, 1), 100),
@@ -281,11 +291,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
             if not job_id:
                 return {"error": "job_id is required for get"}
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 try:
                     job = await svc.get_job(job_id)
                 except JobNotFoundError as exc:
@@ -296,11 +302,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
             if not job_id:
                 return {"error": "job_id is required for cancel"}
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 try:
                     job = await svc.cancel_job(job_id)
                 except (JobNotFoundError, StateConflictError) as exc:
@@ -313,11 +315,7 @@ def _register_job_tool(mcp: FastMCP) -> None:
             if not job_id:
                 return {"error": "job_id is required for rerun"}
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 try:
                     job = await svc.rerun_job(job_id)
                 except (JobNotFoundError, RepoNotAllowedError) as exc:
@@ -452,11 +450,7 @@ def _register_workspace_tool(mcp: FastMCP) -> None:
         sf = _get_session_factory()
         config = load_config()
         async with sf() as session:
-            svc = JobService(
-                job_repo=JobRepository(session),
-                git_service=None,
-                config=config,
-            )
+            svc = _make_job_service(session, config, git=False)
             try:
                 job = await svc.get_job(job_id)
             except JobNotFoundError as exc:
@@ -554,7 +548,7 @@ def _register_artifact_tool(mcp: FastMCP) -> None:
             if not job_id:
                 return {"error": "job_id is required for list"}
             async with sf() as session:
-                svc = ArtifactService(ArtifactRepository(session))
+                svc = _make_artifact_service(session)
                 artifacts = await svc.list_for_job(job_id)
                 await session.commit()
             return {
@@ -577,7 +571,7 @@ def _register_artifact_tool(mcp: FastMCP) -> None:
             if not artifact_id:
                 return {"error": "artifact_id is required for get"}
             async with sf() as session:
-                svc = ArtifactService(ArtifactRepository(session))
+                svc = _make_artifact_service(session)
                 artifact = await svc.get(artifact_id)
                 await session.commit()
             if artifact is None:
@@ -798,11 +792,7 @@ def _register_health_tool(mcp: FastMCP) -> None:
         if action == "check":
             sf = _get_session_factory()
             async with sf() as session:
-                svc = JobService(
-                    job_repo=JobRepository(session),
-                    git_service=GitService(config),
-                    config=config,
-                )
+                svc = _make_job_service(session, config)
                 active = await svc.count_active_jobs()
                 queued = await svc.count_queued_jobs()
             return HealthResponse(

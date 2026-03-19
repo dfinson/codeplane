@@ -52,33 +52,39 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
     [onAdded, onClose],
   );
 
-  const loadDirectory = useCallback(async (path: string) => {
-    setBrowseLoading(true);
-    try {
-      const result = await browseDirectories(path);
-      setBrowsePath(result.current);
-      setBrowseParent(result.parent);
-      setBrowseEntries(result.items);
-    } catch {
-      toast.error("Failed to browse directory");
-    } finally {
-      setBrowseLoading(false);
-    }
-  }, []);
+  const makeDirectoryLoader = useCallback(
+    (
+      setPath: (p: string) => void,
+      setParent: (p: string | null) => void,
+      setEntries: (e: { name: string; path: string; isGitRepo: boolean }[]) => void,
+      setLoading: (l: boolean) => void,
+    ) =>
+      async (path: string) => {
+        setLoading(true);
+        try {
+          const result = await browseDirectories(path);
+          setPath(result.current);
+          setParent(result.parent);
+          setEntries(result.items);
+        } catch {
+          toast.error("Failed to browse directory");
+        } finally {
+          setLoading(false);
+        }
+      },
+    [],
+  );
 
-  const loadCloneDirectory = useCallback(async (path: string) => {
-    setCloneBrowseLoading(true);
-    try {
-      const result = await browseDirectories(path);
-      setCloneBrowsePath(result.current);
-      setCloneBrowseParent(result.parent);
-      setCloneBrowseEntries(result.items);
-    } catch {
-      toast.error("Failed to browse directory");
-    } finally {
-      setCloneBrowseLoading(false);
-    }
-  }, []);
+  const loadDirectory = useCallback(
+    (path: string) => makeDirectoryLoader(setBrowsePath, setBrowseParent, setBrowseEntries, setBrowseLoading)(path),
+    [makeDirectoryLoader],
+  );
+
+  const loadCloneDirectory = useCallback(
+    (path: string) =>
+      makeDirectoryLoader(setCloneBrowsePath, setCloneBrowseParent, setCloneBrowseEntries, setCloneBrowseLoading)(path),
+    [makeDirectoryLoader],
+  );
 
   useEffect(() => {
     if (tab === "browse" && browseEntries.length === 0) {

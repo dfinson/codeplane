@@ -20,9 +20,7 @@ from backend.services.agent_adapter import AgentAdapterInterface
 from backend.services.claude_adapter import _CODEPLANE_SYSTEM_PROMPT
 from backend.services.permission_policy import (
     PolicyDecision,
-    evaluate_approval_required,
-    evaluate_auto,
-    evaluate_read_only,
+    evaluate,
 )
 
 if TYPE_CHECKING:
@@ -104,7 +102,8 @@ class CopilotAdapter(AgentAdapterInterface):
             if request.possible_paths:
                 candidate_paths.extend(request.possible_paths)
 
-            decision = evaluate_auto(
+            decision = evaluate(
+                mode="auto",
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 possible_paths=candidate_paths or None,
@@ -117,7 +116,8 @@ class CopilotAdapter(AgentAdapterInterface):
 
         # --- READ_ONLY: deny mutations ---
         if mode == PermissionMode.read_only:
-            decision = evaluate_read_only(
+            decision = evaluate(
+                mode="read_only",
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 full_command_text=request.full_command_text,
@@ -135,7 +135,8 @@ class CopilotAdapter(AgentAdapterInterface):
 
         # --- APPROVAL_REQUIRED: check policy ---
         if mode == PermissionMode.approval_required:
-            decision = evaluate_approval_required(
+            decision = evaluate(
+                mode="approval_required",
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 full_command_text=request.full_command_text,

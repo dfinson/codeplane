@@ -26,9 +26,8 @@ from backend.models.api_schemas import (
     TranscriptPayload,
 )
 from backend.models.events import DomainEventKind
-from backend.services.agent_adapter import SDKModelMismatchError
 from backend.services.git_service import GitService
-from backend.services.job_service import JobNotFoundError, JobService, RepoNotAllowedError, StateConflictError
+from backend.services.job_service import JobService
 from backend.services.naming_service import NamingService
 
 if TYPE_CHECKING:
@@ -111,25 +110,20 @@ async def create_job(
     request: Request,
 ) -> CreateJobResponse:
     """Create a new job."""
-    try:
-        job = await svc.create_job(
-            repo=body.repo,
-            prompt=body.prompt,
-            base_ref=body.base_ref,
-            branch=body.branch,
-            permission_mode=body.permission_mode or PermissionMode.auto,
-            model=body.model,
-            sdk=body.sdk,
-            verify=body.verify,
-            self_review=body.self_review,
-            max_turns=body.max_turns,
-            verify_prompt=body.verify_prompt,
-            self_review_prompt=body.self_review_prompt,
-        )
-    except RepoNotAllowedError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except SDKModelMismatchError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = await svc.create_job(
+        repo=body.repo,
+        prompt=body.prompt,
+        base_ref=body.base_ref,
+        branch=body.branch,
+        permission_mode=body.permission_mode or PermissionMode.auto,
+        model=body.model,
+        sdk=body.sdk,
+        verify=body.verify,
+        self_review=body.self_review,
+        max_turns=body.max_turns,
+        verify_prompt=body.verify_prompt,
+        self_review_prompt=body.self_review_prompt,
+    )
 
     # Commit so the job row is visible to RuntimeService (separate session)
     await session.commit()
@@ -188,10 +182,7 @@ async def get_job(
     svc: Annotated[JobService, Depends(_get_job_service)],
 ) -> JobResponse:
     """Get full job detail."""
-    try:
-        job = await svc.get_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    job = await svc.get_job(job_id)
     return _job_to_response(job)
 
 
@@ -202,12 +193,7 @@ async def cancel_job(
     request: Request,
 ) -> JobResponse:
     """Cancel a running or queued job."""
-    try:
-        job = await svc.cancel_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except StateConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = await svc.cancel_job(job_id)
 
     # Also cancel the runtime task if running
     runtime: RuntimeService = request.app.state.runtime_service
@@ -224,12 +210,7 @@ async def rerun_job(
     request: Request,
 ) -> CreateJobResponse:
     """Create a new job from an existing job's configuration."""
-    try:
-        job = await svc.rerun_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RepoNotAllowedError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = await svc.rerun_job(job_id)
 
     await session.commit()
 
@@ -256,10 +237,7 @@ async def pause_job(
     request: Request,
 ) -> None:
     """Send a silent pause instruction to the agent of a running job."""
-    try:
-        await svc.get_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await svc.get_job(job_id)
     runtime: RuntimeService = request.app.state.runtime_service
     sent = await runtime.pause_job(job_id)
     if not sent:
@@ -275,12 +253,7 @@ async def continue_job(
     request: Request,
 ) -> CreateJobResponse:
     """Create a follow-up job with a new instruction on the same repo/config."""
-    try:
-        job = await svc.continue_job(job_id, body.instruction)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RepoNotAllowedError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = await svc.continue_job(job_id, body.instruction)
 
     await session.commit()
 
@@ -307,12 +280,7 @@ async def resume_job(
 ) -> JobResponse:
     """Resume a completed/failed/canceled job in-place with a new instruction."""
     runtime: RuntimeService = request.app.state.runtime_service
-    try:
-        job = await runtime.resume_job(job_id, body.instruction)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except StateConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = await runtime.resume_job(job_id, body.instruction)
     return _job_to_response(job)
 
 
@@ -368,10 +336,7 @@ async def get_job_diff(
     For completed/archived jobs, returns the last stored diff snapshot.
     """
     svc = _make_job_service(session)
-    try:
-        job = await svc.get_job(job_id)
-    except JobNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    job = await svc.get_job(job_id)
 
     # For active jobs with a worktree, calculate a fresh diff
     if job.state in ("running", "waiting_for_approval") and job.worktree_path and job.worktree_path != job.repo:
@@ -499,12 +464,7 @@ async def resolve_job(
 ) -> ResolveJobResponse:
     """Resolve a succeeded job: merge, create PR, discard, or resolve with agent."""
     svc = _make_job_service(session)
-    try:
-        job = await svc.resolve_job(job_id, body.action)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except StateConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = await svc.resolve_job(job_id, body.action)
 
     # agent_merge: hand the conflict back to the agent to resolve
     if body.action == ResolutionAction.agent_merge:
@@ -568,12 +528,7 @@ async def archive_job(
 ) -> None:
     """Archive a completed job (hide from Kanban board)."""
     svc = _make_job_service(session)
-    try:
-        await svc.archive_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except StateConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await svc.archive_job(job_id)
     await session.commit()
 
     # Publish event
@@ -602,8 +557,5 @@ async def unarchive_job(
 ) -> None:
     """Unarchive a job (show on Kanban board again)."""
     svc = _make_job_service(session)
-    try:
-        await svc.unarchive_job(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await svc.unarchive_job(job_id)
     await session.commit()

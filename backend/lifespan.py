@@ -34,9 +34,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from fastapi import FastAPI
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from backend.config import CPLConfig
     from backend.models.events import DomainEvent
+    from backend.services.terminal_service import TerminalService
 
 log = structlog.get_logger()
 
@@ -62,7 +64,7 @@ class _CoreServices:
 
 
 def _init_event_infrastructure(
-    session_factory: Any,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[EventBus, SSEManager]:
     """Create event bus and SSE manager with persist-then-broadcast wiring."""
     event_bus = EventBus()
@@ -85,9 +87,9 @@ def _init_event_infrastructure(
 
 
 async def _wire_core_services(
-    session_factory: Any,
+    session_factory: async_sessionmaker[AsyncSession],
     event_bus: EventBus,
-    config: Any,
+    config: CPLConfig,
 ) -> _CoreServices:
     """Instantiate and wire together the core application services."""
     approval_service = ApprovalService(session_factory=session_factory)
@@ -148,10 +150,10 @@ async def _wire_core_services(
 
 async def _init_optional_services(
     app: FastAPI,
-    config: Any,
-    session_factory: Any,
+    config: CPLConfig,
+    session_factory: async_sessionmaker[AsyncSession],
     services: _CoreServices,
-) -> tuple[Any, asyncio.Task[None], Any]:
+) -> tuple[TerminalService | None, asyncio.Task[None], Any]:
     """Initialise terminal, voice, retention, model cache, and MCP services.
 
     Returns (terminal_service, retention_task, mcp_cleanup) needed for

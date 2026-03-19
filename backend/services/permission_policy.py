@@ -156,39 +156,27 @@ def _resolve(
     return rule.fallback  # pragma: no cover
 
 
-def evaluate_auto(
+def evaluate(
+    mode: str,
     *,
     kind: str,
     workspace_path: str,
     possible_paths: list[str] | None = None,
+    full_command_text: str | None = None,
     file_name: str | None = None,
     path: str | None = None,
+    read_only: bool | None = None,
 ) -> PolicyDecision:
-    """AUTO mode: approve everything that touches the current worktree."""
+    """Evaluate a permission request against the given mode.
+
+    This is the single public entry-point — callers pass the mode string
+    directly instead of picking a mode-specific wrapper function.
+    """
     return _evaluate(
-        "auto",
+        mode,
         kind=kind,
         workspace_path=workspace_path,
         possible_paths=possible_paths,
-        file_name=file_name,
-        path=path,
-    )
-
-
-def evaluate_read_only(
-    *,
-    kind: str,
-    workspace_path: str,
-    full_command_text: str | None = None,
-    file_name: str | None = None,
-    path: str | None = None,
-    read_only: bool | None = None,
-) -> PolicyDecision:
-    """READ_ONLY mode: allow reads within worktree + grep/find. Block everything else."""
-    return _evaluate(
-        "read_only",
-        kind=kind,
-        workspace_path=workspace_path,
         full_command_text=full_command_text,
         file_name=file_name,
         path=path,
@@ -196,25 +184,10 @@ def evaluate_read_only(
     )
 
 
-def evaluate_approval_required(
-    *,
-    kind: str,
-    workspace_path: str,
-    full_command_text: str | None = None,
-    file_name: str | None = None,
-    path: str | None = None,
-    read_only: bool | None = None,
-) -> PolicyDecision:
-    """APPROVAL_REQUIRED mode: always allow read_file. Require approval for the rest."""
-    return _evaluate(
-        "approval_required",
-        kind=kind,
-        workspace_path=workspace_path,
-        full_command_text=full_command_text,
-        file_name=file_name,
-        path=path,
-        read_only=read_only,
-    )
+# Keep legacy wrappers for backward compatibility
+evaluate_auto = evaluate
+evaluate_read_only = evaluate
+evaluate_approval_required = evaluate
 
 
 def _evaluate(

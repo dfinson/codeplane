@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.config import CPLConfig, load_config
 from backend.models.api_schemas import WorkspaceEntry, WorkspaceEntryType, WorkspaceListResponse
-from backend.services.job_service import JobNotFoundError, JobService
+from backend.services.job_service import JobService
 
 router = APIRouter(tags=["workspace"])
 
@@ -31,10 +31,7 @@ async def list_workspace(
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
         job_svc = JobService.from_session(session, config, git_service=None)
-        try:
-            job = await job_svc.get_job(job_id)
-        except JobNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        job = await job_svc.get_job(job_id)
 
     worktree = Path(job.worktree_path or job.repo).resolve()
     if not worktree.is_dir():
