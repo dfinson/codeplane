@@ -152,6 +152,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   available: boolean;
   jobId: string;
   model?: string;
+  mainModel?: string;
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -169,7 +170,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   toolCalls?: { name: string; durationMs: number; success: boolean }[];
   llmCallCount?: number;
   totalLlmDurationMs?: number;
-  llmCalls?: { model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number }[];
+  llmCalls?: { model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; isSubagent: boolean }[];
   approvalCount?: number;
   totalApprovalWaitMs?: number;
   agentMessages?: number;

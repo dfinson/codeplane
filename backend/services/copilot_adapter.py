@@ -294,6 +294,8 @@ class CopilotAdapter(AgentAdapterInterface):
                             )
                         else:
                             log.info("model_confirmed", model=actual_model, job_id=job_id)
+                        # Lock in the main model once confirmed (on first usage event)
+                        tel.set_main_model(job_id, actual_model)
                     tel.record_llm_usage(
                         job_id,
                         model=actual_model,
@@ -378,9 +380,7 @@ class CopilotAdapter(AgentAdapterInterface):
                         )
                 elif kind_str == "session.model_change":
                     if data.new_model:
-                        t = tel.get(job_id)
-                        if t:
-                            t.model = data.new_model
+                        tel.set_main_model(job_id, data.new_model)
                 elif kind_str == "assistant.message":
                     tel.record_message(job_id, role="agent")
                 elif kind_str == "user.message":

@@ -857,13 +857,9 @@ class TestEventTelemetry:
         data = _FakeEventData(new_model="gpt-4o-mini")
 
         with patch("backend.services.telemetry.collector") as mock_tel:
-            fake_telemetry = MagicMock()
-            mock_tel.get.return_value = fake_telemetry
-
             session.fire_event(_FakeSdkSessionEvent("session.model_change", data))
 
-            mock_tel.get.assert_called_once_with("job-tel")
-            assert fake_telemetry.model == "gpt-4o-mini"
+            mock_tel.set_main_model.assert_called_once_with("job-tel", "gpt-4o-mini")
 
     @pytest.mark.asyncio
     async def test_assistant_message_records_telemetry(self, adapter: CopilotAdapter) -> None:

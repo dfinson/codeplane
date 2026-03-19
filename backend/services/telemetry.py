@@ -44,6 +44,7 @@ class LLMCallRecord:
     cost: float
     duration_ms: float
     timestamp: float
+    is_subagent: bool = False
 
 
 @dataclass
@@ -85,6 +86,11 @@ class JobTelemetry:
     llm_call_count: int = 0
     total_llm_duration_ms: float = 0.0
 
+    # The authoritative model for the *main* agent (not sub-agents).
+    # Set via set_main_model(); sub-agent calls are detected when the model
+    # on a usage event differs from main_model after main_model is known.
+    main_model: str = ""
+
     # Approval tracking
     approval_count: int = 0
     total_approval_wait_ms: float = 0.0
@@ -112,6 +118,7 @@ class JobTelemetry:
         return {
             "jobId": self.job_id,
             "model": self.model,
+            "mainModel": self.main_model or self.model,
             "durationMs": round(self.duration_ms),
             "inputTokens": self.input_tokens,
             "outputTokens": self.output_tokens,
@@ -149,6 +156,7 @@ class JobTelemetry:
                     "cost": round(lc.cost, 6),
                     "durationMs": round(lc.duration_ms),
                     "offsetSec": round(lc.timestamp - self.start_time, 1) if self.start_time else 0,
+                    "isSubagent": lc.is_subagent,
                 }
                 for lc in self.llm_calls[-100:]
             ],
@@ -177,6 +185,7 @@ class TelemetryCollector:
             self._jobs[job_id] = JobTelemetry(
                 job_id=job_id,
                 model=model or existing.model,
+                main_model=existing.main_model or model or existing.model,
                 start_time=time.monotonic(),
                 end_time=0.0,
                 accumulated_duration_ms=existing.duration_ms,
@@ -205,6 +214,7 @@ class TelemetryCollector:
             self._jobs[job_id] = JobTelemetry(
                 job_id=job_id,
                 model=model,
+                main_model=model,
                 start_time=time.monotonic(),
             )
 
@@ -212,6 +222,18 @@ class TelemetryCollector:
         tel = self._jobs.get(job_id)
         if tel:
             tel.end_time = time.monotonic()
+
+    def set_main_model(self, job_id: str, model: str) -> None:
+        """Explicitly set the main agent's model (called when the SDK confirms the model).
+
+        This is authoritative: any subsequent LLM call with a *different* model
+        will be tagged as a sub-agent call.
+        """
+        tel = self._jobs.get(job_id)
+        if not tel or not model:
+            return
+        tel.main_model = model
+        tel.model = model
 
     def record_llm_usage(
         self,
@@ -224,13 +246,26 @@ class TelemetryCollector:
         cache_write_tokens: int = 0,
         cost: float = 0.0,
         duration_ms: float = 0.0,
+        is_subagent: bool = False,
     ) -> None:
         """Record an LLM API call's token usage and cost."""
         tel = self._jobs.get(job_id)
         if not tel:
             return
-        if model:
+
+        resolved_model = model or tel.model or tel.main_model
+
+        # Auto-detect sub-agent calls: if we have a confirmed main_model and this
+        # call's model differs, it's a sub-agent process.
+        if not is_subagent and tel.main_model and resolved_model and resolved_model != tel.main_model:
+            is_subagent = True
+
+        # Only update the live model/main_model when this is a main-agent call
+        if not is_subagent and model:
             tel.model = model
+            if not tel.main_model:
+                tel.main_model = model
+
         tel.input_tokens += input_tokens
         tel.output_tokens += output_tokens
         tel.total_tokens += input_tokens + output_tokens
@@ -241,7 +276,7 @@ class TelemetryCollector:
         tel.total_llm_duration_ms += duration_ms
         tel.llm_calls.append(
             LLMCallRecord(
-                model=model or tel.model,
+                model=resolved_model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
@@ -249,6 +284,7 @@ class TelemetryCollector:
                 cost=cost,
                 duration_ms=duration_ms,
                 timestamp=time.monotonic(),
+                is_subagent=is_subagent,
             )
         )
         # Keep last 100 LLM calls

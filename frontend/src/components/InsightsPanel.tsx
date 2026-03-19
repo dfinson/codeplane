@@ -29,11 +29,13 @@ interface LLMCall {
   cacheWriteTokens: number;
   durationMs: number;
   offsetSec?: number;
+  isSubagent: boolean;
 }
 
 interface TelemetryData {
   available: boolean;
   model?: string;
+  mainModel?: string;
   durationMs?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -160,6 +162,8 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
   const [collapsed, setCollapsed] = useState(true);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const [llmCollapsed, setLlmCollapsed] = useState(false);
+  const [llmMainExpanded, setLlmMainExpanded] = useState(false);
+  const [llmSubExpanded, setLlmSubExpanded] = useState(false);
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
@@ -241,7 +245,34 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
     );
   };
 
-  const llmCalls = data?.llmCalls ?? [];
+  const allLlmCalls = data?.llmCalls ?? [];
+  const mainCalls = allLlmCalls.filter((c) => !c.isSubagent);
+  const subCalls = allLlmCalls.filter((c) => c.isSubagent);
+
+  // Aggregate sub-agent calls by model
+  const subAgentGroups = useMemo(() => {
+    const map = new Map<string, { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; durationMs: number; calls: LLMCall[] }>();
+    for (const c of subCalls) {
+      const key = c.model || "unknown";
+      const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, durationMs: 0, calls: [] };
+      g.count++;
+      g.inputTokens += c.inputTokens;
+      g.outputTokens += c.outputTokens;
+      g.cacheReadTokens += c.cacheReadTokens;
+      g.durationMs += c.durationMs;
+      g.calls.push(c);
+      map.set(key, g);
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [subCalls]);
+
+  // Main agent totals
+  const mainTotals = useMemo(() => ({
+    inputTokens: mainCalls.reduce((s, c) => s + c.inputTokens, 0),
+    outputTokens: mainCalls.reduce((s, c) => s + c.outputTokens, 0),
+    cacheReadTokens: mainCalls.reduce((s, c) => s + c.cacheReadTokens, 0),
+    durationMs: mainCalls.reduce((s, c) => s + c.durationMs, 0),
+  }), [mainCalls]);
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -268,7 +299,11 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
             <>
               {/* Session Info — on top */}
               <div className="flex flex-wrap items-center gap-3 text-xs">
-                {data.model && <Badge variant="secondary">{data.model}</Badge>}
+                {(data.mainModel || data.model) && (
+                  <Badge variant="secondary" title="Main agent model">
+                    {data.mainModel || data.model}
+                  </Badge>
+                )}
                 <span className="flex items-center gap-1.5 text-muted-foreground">
                   <MessageSquare size={12} />
                   {data.agentMessages ?? 0} agent / {data.operatorMessages ?? 0} operator
@@ -450,8 +485,8 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
                 </div>
               )}
 
-              {/* LLM calls table */}
-              {llmCalls.length > 0 && (
+              {/* LLM calls — two-tier: Main Agent + Sub-agents */}
+              {allLlmCalls.length > 0 && (
                 <div>
                   <button
                     className="flex w-full items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2 hover:text-foreground transition-colors"
@@ -464,34 +499,89 @@ export function InsightsPanel({ jobId, isRunning = false }: { jobId: string; isR
                       ({data.llmCallCount ?? 0} calls, {formatDuration(data.totalLlmDurationMs ?? 0)})
                     </span>
                   </button>
+
                   {!llmCollapsed && (
-                    <div className="rounded-md border border-border overflow-hidden">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-muted/50 text-muted-foreground">
-                            <th className="px-2 py-1.5 text-left font-medium">#</th>
-                            <th className="px-2 py-1.5 text-left font-medium">Model</th>
-                            <th className="px-2 py-1.5 text-right font-medium">In</th>
-                            <th className="px-2 py-1.5 text-right font-medium">Out</th>
-                            <th className="px-2 py-1.5 text-right font-medium">Cache</th>
-                            <th className="px-2 py-1.5 text-right font-medium">Duration</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/50">
-                          {llmCalls.map((lc, i) => (
-                            <tr key={i} className="hover:bg-accent/30">
-                              <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
-                              <td className="px-2 py-1.5 font-mono">{lc.model || "—"}</td>
-                              <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.inputTokens)}</td>
-                              <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.outputTokens)}</td>
-                              <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                                {lc.cacheReadTokens > 0 ? formatTokens(lc.cacheReadTokens) : "—"}
-                              </td>
-                              <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(lc.durationMs)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <div className="space-y-2">
+
+                      {/* ── Main agent tier ── */}
+                      <div className="rounded-md border border-border overflow-hidden">
+                        <button
+                          className="flex w-full items-center gap-2 px-3 py-2 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+                          onClick={() => setLlmMainExpanded((c) => !c)}
+                        >
+                          {llmMainExpanded ? <ChevronDown size={11} className="text-muted-foreground shrink-0" /> : <ChevronRight size={11} className="text-muted-foreground shrink-0" />}
+                          <span className="text-xs font-medium text-foreground">Main agent</span>
+                          {(data.mainModel || data.model) && (
+                            <span className="font-mono text-[11px] text-muted-foreground">{data.mainModel || data.model}</span>
+                          )}
+                          <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                            <span>{mainCalls.length} calls</span>
+                            <span>{formatTokens(mainTotals.inputTokens)} in</span>
+                            <span>{formatTokens(mainTotals.outputTokens)} out</span>
+                            {mainTotals.cacheReadTokens > 0 && <span>{formatTokens(mainTotals.cacheReadTokens)} cache</span>}
+                            <span>{formatDuration(mainTotals.durationMs)}</span>
+                          </span>
+                        </button>
+                        {llmMainExpanded && mainCalls.length > 0 && (
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-muted/20 text-muted-foreground">
+                                <th className="px-2 py-1.5 text-left font-medium w-8">#</th>
+                                <th className="px-2 py-1.5 text-right font-medium">In</th>
+                                <th className="px-2 py-1.5 text-right font-medium">Out</th>
+                                <th className="px-2 py-1.5 text-right font-medium">Cache</th>
+                                <th className="px-2 py-1.5 text-right font-medium">Duration</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border/50">
+                              {mainCalls.map((lc, i) => (
+                                <tr key={i} className="hover:bg-accent/30">
+                                  <td className="px-2 py-1.5 text-muted-foreground tabular-nums">{i + 1}</td>
+                                  <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.inputTokens)}</td>
+                                  <td className="px-2 py-1.5 text-right tabular-nums">{formatTokens(lc.outputTokens)}</td>
+                                  <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                                    {lc.cacheReadTokens > 0 ? formatTokens(lc.cacheReadTokens) : "—"}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(lc.durationMs)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        {llmMainExpanded && mainCalls.length === 0 && (
+                          <p className="px-3 py-2 text-xs text-muted-foreground">No main-agent calls recorded yet.</p>
+                        )}
+                      </div>
+
+                      {/* ── Sub-agents tier (only shown if any) ── */}
+                      {subCalls.length > 0 && (
+                        <div className="rounded-md border border-border overflow-hidden">
+                          <button
+                            className="flex w-full items-center gap-2 px-3 py-2 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+                            onClick={() => setLlmSubExpanded((c) => !c)}
+                          >
+                            {llmSubExpanded ? <ChevronDown size={11} className="text-muted-foreground shrink-0" /> : <ChevronRight size={11} className="text-muted-foreground shrink-0" />}
+                            <span className="text-xs font-medium text-foreground">Sub-agents</span>
+                            <span className="text-[11px] text-muted-foreground">
+                              {subAgentGroups.length} model{subAgentGroups.length !== 1 ? "s" : ""}
+                            </span>
+                            <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                              <span>{subCalls.length} calls</span>
+                              <span>{formatTokens(subCalls.reduce((s, c) => s + c.inputTokens, 0))} in</span>
+                              <span>{formatTokens(subCalls.reduce((s, c) => s + c.outputTokens, 0))} out</span>
+                              <span>{formatDuration(subCalls.reduce((s, c) => s + c.durationMs, 0))}</span>
+                            </span>
+                          </button>
+                          {llmSubExpanded && (
+                            <div className="divide-y divide-border/50">
+                              {subAgentGroups.map((grp) => (
+                                <SubAgentGroup key={grp.model} group={grp} />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                     </div>
                   )}
                 </div>
@@ -512,6 +602,56 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
         <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
       </div>
       <p className="text-lg font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function SubAgentGroup({ group }: {
+  group: { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; durationMs: number; calls: LLMCall[] };
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div>
+      <button
+        className="flex w-full items-center gap-2 px-3 py-2 hover:bg-accent/30 transition-colors text-left"
+        onClick={() => setExpanded((c) => !c)}
+      >
+        {expanded ? <ChevronDown size={10} className="text-muted-foreground shrink-0" /> : <ChevronRight size={10} className="text-muted-foreground shrink-0" />}
+        <span className="font-mono text-[11px] text-foreground">{group.model || "unknown"}</span>
+        <span className="ml-auto flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+          <span>{group.count} calls</span>
+          <span>{formatTokens(group.inputTokens)} in</span>
+          <span>{formatTokens(group.outputTokens)} out</span>
+          {group.cacheReadTokens > 0 && <span>{formatTokens(group.cacheReadTokens)} cache</span>}
+          <span>{formatDuration(group.durationMs)}</span>
+        </span>
+      </button>
+      {expanded && (
+        <table className="w-full text-xs bg-background/50">
+          <thead>
+            <tr className="bg-muted/20 text-muted-foreground">
+              <th className="px-2 py-1 text-left font-medium w-8">#</th>
+              <th className="px-2 py-1 text-right font-medium">In</th>
+              <th className="px-2 py-1 text-right font-medium">Out</th>
+              <th className="px-2 py-1 text-right font-medium">Cache</th>
+              <th className="px-2 py-1 text-right font-medium">Duration</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {group.calls.map((lc, i) => (
+              <tr key={i} className="hover:bg-accent/30">
+                <td className="px-2 py-1 text-muted-foreground tabular-nums">{i + 1}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{formatTokens(lc.inputTokens)}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{formatTokens(lc.outputTokens)}</td>
+                <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
+                  {lc.cacheReadTokens > 0 ? formatTokens(lc.cacheReadTokens) : "—"}
+                </td>
+                <td className="px-2 py-1 text-right tabular-nums">{formatDuration(lc.durationMs)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

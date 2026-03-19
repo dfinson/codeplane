@@ -248,6 +248,11 @@ class ClaudeAdapter(AgentAdapterInterface):
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
 
+        # Lock in the main model from the first AssistantMessage that carries one
+        if job_id and model:
+            from backend.services.telemetry import collector as tel
+            tel.set_main_model(job_id, model)
+
         for block in content_blocks:
             if isinstance(block, TextBlock):
                 text = block.text or ""
