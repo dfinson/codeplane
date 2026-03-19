@@ -19,14 +19,10 @@ ALLOWED_AUDIO_TYPES = frozenset({"audio/webm", "audio/ogg", "audio/wav", "audio/
 _transcribe_semaphore = asyncio.Semaphore(2)
 
 
-def _get_voice_service(request: Request) -> VoiceService:
-    return request.app.state.voice_service  # type: ignore[no-any-return]
-
-
 @router.post("/voice/transcribe", response_model=TranscribeResponse)
 async def transcribe(request: Request, audio: UploadFile) -> TranscribeResponse:
     """Upload audio, receive transcript."""
-    voice_service: VoiceService = _get_voice_service(request)
+    voice_service: VoiceService = request.app.state.voice_service
 
     if voice_service is None:
         raise HTTPException(status_code=501, detail="Voice transcription is disabled")
