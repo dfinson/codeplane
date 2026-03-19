@@ -22,6 +22,9 @@ from typing import Any
 from starlette.requests import Request  # noqa: TC002
 from starlette.responses import HTMLResponse, JSONResponse, Response  # noqa: TC002
 
+COOKIE_NAME = "cpl_session"
+LOCALHOST_ADDRS = {"127.0.0.1", "::1", "localhost"}
+
 # Rate limiting: track failed attempts per IP
 _login_attempts: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT_WINDOW = 60  # seconds
@@ -89,20 +92,33 @@ def _create_session_token() -> str:
     return token
 
 
-def _is_valid_token(token: str | None) -> bool:
+def is_valid_token(token: str | None) -> bool:
     """Check if a session token is valid."""
     if not token:
         return False
     return token in _session_tokens
 
 
-def _is_localhost(request: Request) -> bool:
+def is_localhost(request: Request) -> bool:
     """Check if the request comes from localhost (trusted)."""
     client = request.client
     if client is None:
         return False
     host = client.host
-    return host in ("127.0.0.1", "::1", "localhost")
+    return host in LOCALHOST_ADDRS
+
+
+def is_request_authenticated(request: Request) -> bool:
+    """Check if a request is authenticated via localhost or valid session cookie.
+
+    Returns True when auth is not enabled, the request is from localhost,
+    or the request carries a valid session cookie.
+    """
+    if not is_password_auth_enabled():
+        return True
+    if is_localhost(request):
+        return True
+    return is_valid_token(request.cookies.get("cpl_session"))
 
 
 def is_password_auth_enabled() -> bool:
@@ -121,7 +137,7 @@ def check_websocket_auth(*, client_host: str | None, cookies: dict[str, str]) ->
         return True
     if client_host and client_host in ("127.0.0.1", "::1", "localhost"):
         return True
-    return _is_valid_token(cookies.get("cpl_session"))
+    return is_valid_token(cookies.get("cpl_session"))
 
 
 _LOGIN_HTML_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "login.html"
@@ -163,7 +179,7 @@ async def authenticate_login_request(request: Request) -> Response:
         or ".devtunnels.ms" in request.headers.get("host", "")
     )
     response.set_cookie(
-        key="cpl_session",
+        key=COOKIE_NAME,
         value=token,
         httponly=True,
         samesite="lax",
@@ -189,12 +205,12 @@ async def auth_middleware(request: Request, call_next: Any) -> Response:
         return await call_next(request)  # type: ignore[no-any-return]
 
     # Localhost is trusted — no auth needed
-    if _is_localhost(request):
+    if is_localhost(request):
         return await call_next(request)  # type: ignore[no-any-return]
 
     # Check session cookie
-    token = request.cookies.get("cpl_session")
-    if _is_valid_token(token):
+    token = request.cookies.get(COOKIE_NAME)
+    if is_valid_token(token):
         return await call_next(request)  # type: ignore[no-any-return]
 
     # Not authenticated

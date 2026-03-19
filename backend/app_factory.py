@@ -19,6 +19,7 @@ from starlette.responses import Response
 from backend.api import approvals, artifacts, events, health, jobs, settings, terminal, voice, workspace
 from backend.lifespan import lifespan
 from backend.services.agent_adapter import SDKModelMismatchError
+from backend.services.approval_service import ApprovalAlreadyResolvedError, ApprovalNotFoundError
 from backend.services.job_service import JobNotFoundError, RepoNotAllowedError, StateConflictError
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
@@ -54,7 +55,12 @@ def _configure_middleware(
 
     # Password auth — enabled when password is provided (tunnel mode or explicit)
     if password:
-        from backend.services.auth import auth_middleware, authenticate_login_request, set_password
+        from backend.services.auth import (
+            auth_middleware,
+            authenticate_login_request,
+            is_request_authenticated,
+            set_password,
+        )
 
         set_password(password)
 
@@ -67,13 +73,8 @@ def _configure_middleware(
             # SSE must bypass middleware wrapping — BaseHTTPMiddleware
             # buffers streaming responses and kills the connection.
             if request.url.path == "/api/events":
-                # Check auth inline without wrapping
-                from backend.services.auth import _is_localhost, _is_valid_token
-
-                if not _is_localhost(request):
-                    token = request.cookies.get("cpl_session")
-                    if not _is_valid_token(token):
-                        return JSONResponse({"detail": "Authentication required"}, status_code=401)
+                if not is_request_authenticated(request):
+                    return JSONResponse({"detail": "Authentication required"}, status_code=401)
                 return await call_next(request)
             return await auth_middleware(request, call_next)
 
@@ -106,6 +107,14 @@ def _register_domain_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RepoNotAllowedError)
     async def _repo_not_allowed(request: Request, exc: RepoNotAllowedError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(ApprovalNotFoundError)
+    async def _approval_not_found(request: Request, exc: ApprovalNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(ApprovalAlreadyResolvedError)
+    async def _approval_already_resolved(request: Request, exc: ApprovalAlreadyResolvedError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(SDKModelMismatchError)
     async def _sdk_model_mismatch(request: Request, exc: SDKModelMismatchError) -> JSONResponse:

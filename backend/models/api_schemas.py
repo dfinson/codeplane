@@ -107,7 +107,7 @@ class DiffFileStatus(StrEnum):
 # --- Request Models ---
 
 
-class CreateJobRequest(BaseModel):
+class CreateJobRequest(CamelModel):
     repo: str
     prompt: str
     base_ref: str | None = None
@@ -136,19 +136,19 @@ class CreateJobRequest(BaseModel):
         return values
 
 
-class SendMessageRequest(BaseModel):
+class SendMessageRequest(CamelModel):
     content: str = Field(min_length=1, max_length=10_000)
 
 
-class ResumeJobRequest(BaseModel):
+class ResumeJobRequest(CamelModel):
     instruction: str = Field(min_length=1, max_length=50_000)
 
 
-class ContinueJobRequest(BaseModel):
+class ContinueJobRequest(CamelModel):
     instruction: str = Field(min_length=1, max_length=10_000)
 
 
-class ResolveApprovalRequest(BaseModel):
+class ResolveApprovalRequest(CamelModel):
     resolution: ApprovalResolution
 
 
@@ -186,7 +186,7 @@ class SettingsResponse(CamelModel):
     self_review_prompt: str
 
 
-class RegisterRepoRequest(BaseModel):
+class RegisterRepoRequest(CamelModel):
     source: str
     clone_to: str | None = None
 
@@ -445,7 +445,7 @@ class PlatformStatusListResponse(CamelModel):
     timestamp: datetime
 
 
-class ResolveJobRequest(BaseModel):
+class ResolveJobRequest(CamelModel):
     action: ResolutionAction
 
 
@@ -544,12 +544,10 @@ class SDKListResponse(CamelModel):
 # --- Terminal schemas (moved from backend/api/terminal.py) ---
 
 
-class CreateTerminalSessionRequest(BaseModel):
+class CreateTerminalSessionRequest(CamelModel):
     shell: str | None = None
     cwd: str | None = None
-    job_id: str | None = Field(None, alias="jobId")
-
-    model_config = ConfigDict(populate_by_name=True)
+    job_id: str | None = None
 
 
 class CreateTerminalSessionResponse(CamelModel):
@@ -569,7 +567,7 @@ class TerminalSessionInfo(CamelModel):
     clients: int
 
 
-class TerminalAskRequest(BaseModel):
+class TerminalAskRequest(CamelModel):
     prompt: str
     context: str | None = None  # recent terminal output for context
 
