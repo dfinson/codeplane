@@ -20,6 +20,8 @@ from backend.models.api_schemas import (
     ResolveJobRequest,
     ResolveJobResponse,
     ResumeJobRequest,
+    SuggestNamesRequest,
+    SuggestNamesResponse,
     TranscriptPayload,
 )
 from backend.models.events import DomainEventKind
@@ -105,6 +107,32 @@ def _job_to_response(job: object) -> JobResponse:
         verify_prompt=j.verify_prompt,
         self_review_prompt=j.self_review_prompt,
     )
+
+
+@router.post("/jobs/suggest-names", response_model=SuggestNamesResponse)
+async def suggest_names(
+    body: SuggestNamesRequest,
+    request: Request,
+) -> SuggestNamesResponse:
+    """Generate a suggested title, branch name, and worktree name for a task description.
+
+    Calls the utility LLM (NamingService) in the background so the frontend can
+    pre-populate the branch field before the user submits the job.
+    Returns 503 if the utility LLM is not configured.
+    """
+    from backend.services.naming_service import NamingError
+
+    utility = getattr(request.app.state, "utility_session", None)
+    if utility is None:
+        raise HTTPException(status_code=503, detail="Naming service not available")
+
+    naming = NamingService(utility)
+    try:
+        title, branch_name, worktree_name = await naming.generate(body.prompt)
+    except NamingError as exc:
+        raise HTTPException(status_code=503, detail=f"Naming failed: {exc}") from exc
+
+    return SuggestNamesResponse(title=title, branch_name=branch_name, worktree_name=worktree_name)
 
 
 @router.post("/jobs", response_model=CreateJobResponse, status_code=201)

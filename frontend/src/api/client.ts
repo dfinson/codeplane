@@ -127,6 +127,13 @@ export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
   });
 }
 
+export function suggestNames(prompt: string): Promise<import("./types").SuggestNamesResponse> {
+  return request("/jobs/suggest-names", {
+    method: "POST",
+    body: JSON.stringify({ prompt }),
+  });
+}
+
 export function cancelJob(jobId: string): Promise<Job> {
   return request(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
     method: "POST",

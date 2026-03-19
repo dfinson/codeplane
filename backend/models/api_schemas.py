@@ -208,6 +208,17 @@ class RegisterRepoRequest(BaseModel):
     clone_to: str | None = None
 
 
+class SuggestNamesRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=50_000)
+    repo: str | None = None
+
+
+class SuggestNamesResponse(CamelModel):
+    title: str
+    branch_name: str
+    worktree_name: str
+
+
 # --- Response Models ---
 
 

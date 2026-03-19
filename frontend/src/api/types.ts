@@ -159,3 +159,11 @@ export interface SDKListResponse {
   default: string;
   sdks: SDKInfo[];
 }
+
+// --- Naming suggestion types ---
+
+export interface SuggestNamesResponse {
+  title: string;
+  branchName: string;
+  worktreeName: string;
+}

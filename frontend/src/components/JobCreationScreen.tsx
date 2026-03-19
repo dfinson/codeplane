@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs } from "../api/client";
+import { createJob, fetchRepos, fetchModels, fetchSDKs, suggestNames } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
@@ -11,18 +11,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
 import { Combobox } from "./ui/combobox";
-
-function slugifyPrompt(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .split(/\s+/)
-    .slice(0, 6)
-    .join("-")
-    .replace(/-+/g, "-")
-    .slice(0, 50);
-}
 
 function sdkStatusDescription(sdk: SDKInfo): string | undefined {
   if (!sdk.enabled) return sdk.hint || "Not installed";
@@ -50,6 +38,7 @@ export function JobCreationScreen() {
   const [defaultSdk, setDefaultSdk] = useState<string>("copilot");
   const [verify, setVerify] = useState(false);
   const [selfReview, setSelfReview] = useState(false);
+  const [branchSuggesting, setBranchSuggesting] = useState(false);
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadModels = useCallback((sdkId: string) => {
@@ -90,8 +79,20 @@ export function JobCreationScreen() {
   useEffect(() => {
     if (branchEdited) return;
     if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
+    if (!prompt.trim()) {
+      setBranch("");
+      return;
+    }
     branchDebounceRef.current = setTimeout(() => {
-      setBranch(prompt.trim() ? slugifyPrompt(prompt) : "");
+      setBranchSuggesting(true);
+      suggestNames(prompt)
+        .then((names) => {
+          if (!branchEdited) setBranch(names.branchName);
+        })
+        .catch(() => {
+          // silently ignore — user can type a branch name manually
+        })
+        .finally(() => setBranchSuggesting(false));
     }, 1500);
     return () => {
       if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
@@ -255,14 +256,16 @@ export function JobCreationScreen() {
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label>Branch Name</Label>
-                <Input
-                  placeholder="Auto-generated if empty"
-                  value={branch}
-                  onChange={(e) => {
-                    setBranch(e.currentTarget.value);
-                    setBranchEdited(e.currentTarget.value !== "");
-                  }}
-                />
+                <div className="relative">
+                  <Input
+                    placeholder={branchSuggesting ? "Generating…" : "Auto-generated if empty"}
+                    value={branch}
+                    onChange={(e) => {
+                      setBranch(e.currentTarget.value);
+                      setBranchEdited(e.currentTarget.value !== "");
+                    }}
+                  />
+                </div>
               </div>
 
               <hr className="border-border" />
