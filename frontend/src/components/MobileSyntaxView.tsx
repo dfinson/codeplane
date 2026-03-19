@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -13,12 +13,12 @@ export default function MobileSyntaxView({ content, language }: MobileSyntaxView
   const [showFull, setShowFull] = useState(false);
   const prevContentRef = useRef(content);
 
-  if (prevContentRef.current !== content) {
-    prevContentRef.current = content;
-    if (showFull) {
+  useEffect(() => {
+    if (prevContentRef.current !== content) {
+      prevContentRef.current = content;
       setShowFull(false);
     }
-  }
+  }, [content]);
 
   const lines = content.split("\n");
   const truncated = !showFull && lines.length > MOBILE_MAX_LINES;
