@@ -483,6 +483,46 @@ export const useStore = create<AppState>((set, get) => ({
           return null;
         }
 
+        case "merge_completed": {
+          const jobId = payload.jobId as string;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  resolution: "merged",
+                  updatedAt: (payload.timestamp as string) ?? existing.updatedAt,
+                },
+              },
+            };
+          }
+          return null;
+        }
+
+        case "merge_conflict": {
+          const jobId = payload.jobId as string;
+          const conflictFiles = (payload.conflictFiles as string[] | null) ?? null;
+          const prUrl = (payload.prUrl as string | null) ?? null;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  resolution: "conflict",
+                  conflictFiles,
+                  prUrl: prUrl ?? existing.prUrl,
+                  updatedAt: (payload.timestamp as string) ?? existing.updatedAt,
+                },
+              },
+            };
+          }
+          return null;
+        }
+
         case "job_archived": {
           const jobId = payload.jobId as string;
           const existing = state.jobs[jobId];
