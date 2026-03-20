@@ -66,9 +66,9 @@ def _is_path_within_workspace(path: str, workspace: str) -> bool:
 # Rule table
 # ---------------------------------------------------------------------------
 
-_A = PolicyDecision.approve
-_D = PolicyDecision.deny
-_K = PolicyDecision.ask  # "asK" — avoids shadowing `ask` builtin
+_APPROVE = PolicyDecision.approve
+_DENY = PolicyDecision.deny
+_ASK = PolicyDecision.ask
 
 # Sentinel callables for special-case evaluation
 _SHELL_RO = "shell_readonly"  # approve if readonly shell, else <fallback>
@@ -79,42 +79,42 @@ _READ_WS = "read_in_ws"  # approve if read target is in workspace (deny otherwis
 
 class _Rule(NamedTuple):
     decision: PolicyDecision | str
-    fallback: PolicyDecision = _A  # used by compound rules
+    fallback: PolicyDecision = _APPROVE  # used by compound rules
 
 
 # (mode, kind) → rule.  Missing entries fall through to the mode default.
 _RULES: dict[tuple[str, str], _Rule] = {
     # ── AUTO ──────────────────────────────────────────────────────────
-    (PermissionMode.auto, "read"): _Rule(_A),
-    (PermissionMode.auto, "memory"): _Rule(_A),
-    (PermissionMode.auto, "write"): _Rule(_PATH_WS, _A),  # approve; workspace path check first
-    (PermissionMode.auto, "shell"): _Rule(_A),
-    (PermissionMode.auto, "mcp"): _Rule(_A),
-    (PermissionMode.auto, "url"): _Rule(_A),
-    (PermissionMode.auto, "custom-tool"): _Rule(_A),
+    (PermissionMode.auto, "read"): _Rule(_APPROVE),
+    (PermissionMode.auto, "memory"): _Rule(_APPROVE),
+    (PermissionMode.auto, "write"): _Rule(_PATH_WS, _APPROVE),  # approve; workspace path check first
+    (PermissionMode.auto, "shell"): _Rule(_APPROVE),
+    (PermissionMode.auto, "mcp"): _Rule(_APPROVE),
+    (PermissionMode.auto, "url"): _Rule(_APPROVE),
+    (PermissionMode.auto, "custom-tool"): _Rule(_APPROVE),
     # ── READ_ONLY ────────────────────────────────────────────────────
-    (PermissionMode.read_only, "memory"): _Rule(_A),
+    (PermissionMode.read_only, "memory"): _Rule(_APPROVE),
     (PermissionMode.read_only, "read"): _Rule(_READ_WS),
-    (PermissionMode.read_only, "shell"): _Rule(_SHELL_RO, _D),
-    (PermissionMode.read_only, "mcp"): _Rule(_MCP_RO, _D),
-    (PermissionMode.read_only, "write"): _Rule(_D),
-    (PermissionMode.read_only, "url"): _Rule(_D),
-    (PermissionMode.read_only, "custom-tool"): _Rule(_D),
+    (PermissionMode.read_only, "shell"): _Rule(_SHELL_RO, _DENY),
+    (PermissionMode.read_only, "mcp"): _Rule(_MCP_RO, _DENY),
+    (PermissionMode.read_only, "write"): _Rule(_DENY),
+    (PermissionMode.read_only, "url"): _Rule(_DENY),
+    (PermissionMode.read_only, "custom-tool"): _Rule(_DENY),
     # ── APPROVAL_REQUIRED ────────────────────────────────────────────
-    (PermissionMode.approval_required, "memory"): _Rule(_A),
-    (PermissionMode.approval_required, "read"): _Rule(_A),
-    (PermissionMode.approval_required, "shell"): _Rule(_SHELL_RO, _K),
-    (PermissionMode.approval_required, "write"): _Rule(_K),
-    (PermissionMode.approval_required, "url"): _Rule(_K),
-    (PermissionMode.approval_required, "mcp"): _Rule(_MCP_RO, _K),
-    (PermissionMode.approval_required, "custom-tool"): _Rule(_K),
+    (PermissionMode.approval_required, "memory"): _Rule(_APPROVE),
+    (PermissionMode.approval_required, "read"): _Rule(_APPROVE),
+    (PermissionMode.approval_required, "shell"): _Rule(_SHELL_RO, _ASK),
+    (PermissionMode.approval_required, "write"): _Rule(_ASK),
+    (PermissionMode.approval_required, "url"): _Rule(_ASK),
+    (PermissionMode.approval_required, "mcp"): _Rule(_MCP_RO, _ASK),
+    (PermissionMode.approval_required, "custom-tool"): _Rule(_ASK),
 }
 
 # Default decisions when a (mode, kind) pair is not in the table.
 _MODE_DEFAULTS: dict[str, PolicyDecision] = {
-    PermissionMode.auto: _A,
-    PermissionMode.read_only: _D,
-    PermissionMode.approval_required: _K,
+    PermissionMode.auto: _APPROVE,
+    PermissionMode.read_only: _DENY,
+    PermissionMode.approval_required: _ASK,
 }
 
 
@@ -137,23 +137,23 @@ def _resolve(
     if decision == _PATH_WS:
         target = file_name or path
         if target and _is_path_within_workspace(target, workspace_path):
-            return _A
+            return _APPROVE
         if possible_paths and all(_is_path_within_workspace(p, workspace_path) for p in possible_paths):
-            return _A
+            return _APPROVE
         return rule.fallback
 
     if decision == _SHELL_RO:
         cmd = full_command_text or ""
-        return _A if _READONLY_SHELL_RE.match(cmd) else rule.fallback
+        return _APPROVE if _READONLY_SHELL_RE.match(cmd) else rule.fallback
 
     if decision == _MCP_RO:
-        return _A if read_only else rule.fallback
+        return _APPROVE if read_only else rule.fallback
 
     if decision == _READ_WS:
         target = file_name or path
         if target is None or _is_path_within_workspace(target, workspace_path):
-            return _A
-        return _D
+            return _APPROVE
+        return _DENY
 
     return rule.fallback  # pragma: no cover
 
@@ -208,8 +208,8 @@ def _evaluate(
     """Core dispatcher: look up (mode, kind) in the rule table and resolve."""
     rule = _RULES.get((mode, kind))
     if rule is None:
-        default = _MODE_DEFAULTS.get(mode, _K)
-        if default == _K:
+        default = _MODE_DEFAULTS.get(mode, _ASK)
+        if default == _ASK:
             log.warning("unknown_permission_kind", kind=kind)
         return default
 

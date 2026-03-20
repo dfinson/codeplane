@@ -176,9 +176,9 @@ class CopilotAdapter(AgentAdapterInterface):
         )
 
         # Emit approval_request event so RuntimeService transitions state
-        q = self._queues.get(sid)
-        if q is not None:
-            q.put_nowait(
+        event_queue = self._queues.get(sid)
+        if event_queue is not None:
+            event_queue.put_nowait(
                 SessionEvent(
                     kind=SessionEventKind.approval_request,
                     payload={
@@ -725,9 +725,9 @@ class CopilotAdapter(AgentAdapterInterface):
             return None
         finally:
             try:
-                s = self._sessions.get(tmp_session_id)
-                if s:
-                    await s.abort()
+                cleanup_session = self._sessions.get(tmp_session_id)
+                if cleanup_session:
+                    await cleanup_session.abort()
             except Exception:
                 log.warning("copilot_complete_cleanup_failed", session_id=tmp_session_id, exc_info=True)
             self._cleanup_session(tmp_session_id)

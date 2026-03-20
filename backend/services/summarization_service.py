@@ -229,12 +229,11 @@ class SummarizationService:
                 existing = await artifact_svc.get_session_log(job_id)
                 if existing is not None:
                     try:
-                        import json as _json_check
-                        from pathlib import Path as _PathCheck
+                        from pathlib import Path
 
-                        _log_data = _json_check.loads(_PathCheck(existing.disk_path).read_text(encoding="utf-8"))
-                        _recorded = {s.get("session_number") for s in _log_data.get("sessions", [])}
-                        if job.session_count in _recorded:
+                        log_data = json.loads(Path(existing.disk_path).read_text(encoding="utf-8"))
+                        recorded = {s.get("session_number") for s in log_data.get("sessions", [])}
+                        if job.session_count in recorded:
                             return  # already captured this session
                     except Exception:
                         log.debug("session_log_parse_failed", job_id=job_id, exc_info=True)
