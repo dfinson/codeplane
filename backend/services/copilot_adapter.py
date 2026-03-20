@@ -203,6 +203,308 @@ class CopilotAdapter(AgentAdapterInterface):
             return _Result(kind="approved")
         return _Result(kind="denied-interactively-by-user")
 
+    # --- Dispatch tables for telemetry and SDK→SessionEvent bridging ---
+
+    _TELEMETRY_DISPATCH: dict[str, str] = {
+        "assistant.usage": "_handle_usage_event",
+        "tool.execution_start": "_handle_tool_start",
+        "tool.execution_complete": "_handle_tool_end",
+        "session.context_changed": "_handle_context_changed",
+        "session.compaction_complete": "_handle_compaction",
+    }
+
+    _SDK_KIND_MAP: dict[str, SessionEventKind] = {
+        "session.task_complete": SessionEventKind.done,
+        "session.idle": SessionEventKind.done,
+        "session.shutdown": SessionEventKind.done,
+        "session.error": SessionEventKind.error,
+        "assistant.message": SessionEventKind.transcript,
+        "user.message": SessionEventKind.transcript,
+        # assistant.reasoning is intentionally NOT mapped — it duplicates
+        # the reasoning_text already embedded in assistant.message.
+        "tool.execution_complete": SessionEventKind.transcript,
+        "session.workspace_file_changed": SessionEventKind.file_changed,
+    }
+
+    # --- Extracted telemetry handlers ---
+
+    def _handle_usage_event(
+        self, data: object, job_id: str, tel: object,
+        requested_model: str, model_verified: list[bool], queue: asyncio.Queue,
+    ) -> None:
+        actual_model = data.model or ""
+        if not model_verified[0] and requested_model and actual_model:
+            model_verified[0] = True
+            if actual_model != requested_model:
+                log.error(
+                    "model_mismatch",
+                    requested=requested_model,
+                    actual=actual_model,
+                    job_id=job_id,
+                )
+                queue.put_nowait(
+                    SessionEvent(
+                        kind=SessionEventKind.model_downgraded,
+                        payload={
+                            "requested_model": requested_model,
+                            "actual_model": actual_model,
+                        },
+                    )
+                )
+            else:
+                log.info("model_confirmed", model=actual_model, job_id=job_id)
+            # Lock in the main model once confirmed (on first usage event)
+            tel.set_main_model(job_id, actual_model)
+        tel.record_llm_usage(
+            job_id,
+            model=actual_model,
+            input_tokens=int(data.input_tokens or 0),
+            output_tokens=int(data.output_tokens or 0),
+            cache_read_tokens=int(data.cache_read_tokens or 0),
+            cache_write_tokens=int(data.cache_write_tokens or 0),
+            cost=float(data.cost or 0),
+            duration_ms=float(data.duration or 0),
+        )
+        # Capture Copilot quota snapshots if present
+        raw_snapshots = getattr(data, "quota_snapshots", None)
+        if raw_snapshots:
+            from backend.services.telemetry import QuotaSnapshot as _QS
+
+            parsed = {
+                key: _QS(
+                    used_requests=float(getattr(snap, "used_requests", 0) or 0),
+                    entitlement_requests=float(getattr(snap, "entitlement_requests", 0) or 0),
+                    remaining_percentage=float(getattr(snap, "remaining_percentage", 0) or 0),
+                    overage=float(getattr(snap, "overage", 0) or 0),
+                    overage_allowed=bool(getattr(snap, "overage_allowed_with_exhausted_quota", False)),
+                    is_unlimited=bool(getattr(snap, "is_unlimited_entitlement", False)),
+                    usage_allowed_with_exhausted_quota=bool(getattr(snap, "usage_allowed_with_exhausted_quota", False)),
+                    reset_date=str(getattr(snap, "reset_date", "") or ""),
+                )
+                for key, snap in raw_snapshots.items()
+            }
+            tel.record_quota_snapshots(job_id, snapshots=parsed)
+
+    def _handle_tool_start(self, data: object, job_id: str, tel: object) -> None:
+        tool_id = data.tool_call_id or ""
+        import json as _json
+        import time as _time
+
+        self._tool_start_times[tool_id] = _time.monotonic()
+        # Buffer args for the combined transcript entry emitted on complete
+        args_str: str | None = None
+        if data.arguments is not None:
+            try:
+                args_str = (
+                    _json.dumps(data.arguments) if not isinstance(data.arguments, str) else data.arguments
+                )
+            except Exception:
+                args_str = str(data.arguments)
+        t_name = data.tool_name or data.mcp_tool_name or "tool"
+        t_name_display = (
+            f"{data.mcp_server_name}/{data.mcp_tool_name}"
+            if data.mcp_server_name and data.mcp_tool_name
+            else t_name
+        )
+        # Capture human-readable intent/title fields from the SDK if present
+        tool_intent: str = getattr(data, "intention", None) or ""
+        tool_title: str = getattr(data, "tool_title", None) or ""
+        # Also extract description from arguments (SDK provides it for bash etc.)
+        tool_description: str = ""
+        if isinstance(data.arguments, dict):
+            tool_description = str(data.arguments.get("description", ""))
+        self._tool_call_buffer[tool_id] = {
+            "tool_name": t_name_display,
+            "tool_args": args_str or "",
+            "turn_id": str(data.turn_id) if hasattr(data, "turn_id") and data.turn_id else "",
+            "tool_intent": tool_intent or tool_description,
+            "tool_title": tool_title,
+        }
+
+    def _handle_tool_end(self, data: object, job_id: str, tel: object) -> None:
+        tool_id = data.tool_call_id or ""
+        import time as _time
+
+        start = self._tool_start_times.pop(tool_id, _time.monotonic())
+        dur = (_time.monotonic() - start) * 1000
+        # Prefer the display name buffered at tool.execution_start
+        buffered_name = self._tool_call_buffer.get(tool_id, {}).get("tool_name")
+        resolved_name = buffered_name or data.tool_name or data.mcp_tool_name or "tool"
+        tel.record_tool_call(
+            job_id,
+            tool_name=resolved_name,
+            duration_ms=dur,
+            success=bool(data.success) if data.success is not None else True,
+        )
+
+    def _handle_context_changed(self, data: object, job_id: str, tel: object) -> None:
+        tel.record_context_change(
+            job_id,
+            current_tokens=int(data.current_tokens or 0),
+        )
+
+    def _handle_compaction(self, data: object, job_id: str, tel: object) -> None:
+        tel.record_compaction(
+            job_id,
+            pre_tokens=int(data.pre_compaction_tokens or 0),
+            post_tokens=int(data.post_compaction_tokens or 0),
+        )
+        if data.post_compaction_tokens:
+            tel.record_context_change(
+                job_id,
+                current_tokens=int(data.post_compaction_tokens),
+            )
+
+    # --- Log emission ---
+
+    def _emit_log_event(
+        self, kind_str: str, data: object, requested_model: str,
+        queue: asyncio.Queue, log_seq: list[int],
+    ) -> None:
+        """Emit a log SessionEvent for operational SDK events."""
+        _log_msg: str | None = None
+        _log_level: str = "info"
+        if kind_str == "tool.execution_start" and data:
+            t_name = data.tool_name or data.mcp_tool_name or "tool"
+            if data.mcp_server_name and data.mcp_tool_name:
+                t_name = f"{data.mcp_server_name}/{data.mcp_tool_name}"
+            _log_msg = f"Tool started: {t_name}"
+            _log_level = "debug"
+        elif kind_str == "tool.execution_complete" and data:
+            buffered_log_name = self._tool_call_buffer.get((data.tool_call_id or ""), {}).get("tool_name")
+            t_name = buffered_log_name or data.tool_name or data.mcp_tool_name or "tool"
+            ok = bool(data.success) if data.success is not None else True
+            _log_msg = f"Tool {'completed' if ok else 'failed'}: {t_name}"
+            _log_level = "info" if ok else "warn"
+        elif kind_str == "assistant.usage" and data:
+            in_tok = int(data.input_tokens or 0)
+            out_tok = int(data.output_tokens or 0)
+            model = data.model or ""
+            if model and requested_model and model != requested_model:
+                _log_msg = (
+                    f"\u26a0 MODEL MISMATCH: requested {requested_model} but serving {model} ({in_tok}+{out_tok} tokens)"
+                )
+                _log_level = "error"
+            else:
+                _log_msg = f"LLM call: {model} ({in_tok}+{out_tok} tokens)"
+                _log_level = "debug"
+        elif kind_str == "session.compaction_complete" and data:
+            pre = int(data.pre_compaction_tokens or 0)
+            post = int(data.post_compaction_tokens or 0)
+            _log_msg = f"Context compacted: {pre} \u2192 {post} tokens"
+            _log_level = "warn"
+        elif kind_str == "session.model_change" and data:
+            _log_msg = f"Model changed to {data.new_model}"
+            _log_level = "info"
+
+        if _log_msg is not None:
+            from datetime import datetime as _dt
+
+            log_seq[0] += 1
+            queue.put_nowait(
+                SessionEvent(
+                    kind=SessionEventKind.log,
+                    payload={
+                        "seq": log_seq[0],
+                        "timestamp": _dt.now(UTC).isoformat(),
+                        "level": _log_level,
+                        "message": _log_msg,
+                    },
+                )
+            )
+
+    # --- SDK → SessionEvent queue bridge ---
+
+    def _bridge_to_session_queue(
+        self, kind_str: str, data: object, payload: dict,
+        queue: asyncio.Queue, session_id: str,
+    ) -> None:
+        """Map SDK events to SessionEvent entries and push onto the queue."""
+        kind = self._SDK_KIND_MAP.get(kind_str)
+        if kind is None:
+            return  # unrecognised SDK event – skip silently
+        try:
+            event_payload: dict[str, object] = {}
+            if kind == SessionEventKind.transcript:
+                if kind_str == "assistant.message":
+                    content = (data.content or "") if data else ""
+                    # SDK emits empty assistant.message events for tool-dispatch
+                    # turns (content is just whitespace). Skip these — the tool
+                    # calls themselves are separate transcript events.
+                    if not content.strip():
+                        return
+                    event_payload = {
+                        "role": "agent",
+                        "content": content,
+                        "title": data.title if data else None,
+                        "turn_id": data.turn_id if data else None,
+                    }
+                elif kind_str == "user.message":
+                    content = (data.content or data.message or "") if data else ""
+                    # SDK injects internal system_notification messages (e.g.
+                    # agent completion status) — suppress these from the
+                    # transcript since they are not real operator messages.
+                    if "<system_notification>" in content:
+                        return
+                    event_payload = {
+                        "role": "operator",
+                        "content": content,
+                    }
+                elif kind_str == "tool.execution_complete":
+                    tool_id = (data.tool_call_id or "") if data else ""
+                    buffered = self._tool_call_buffer.pop(tool_id, {})
+                    tool_name = buffered.get(
+                        "tool_name",
+                        (data.tool_name or data.mcp_tool_name or "tool") if data else "tool",
+                    )
+                    # Drop SDK-internal tools (e.g. report_intent) from transcript
+                    if tool_name in ("report_intent",):
+                        return
+                    result_text = ""
+                    if data:
+                        result_obj = data.result
+                        if result_obj is not None and hasattr(result_obj, "content") and result_obj.content:
+                            parts = result_obj.content
+                            if isinstance(parts, list):
+                                result_text = "\n".join(
+                                    str(c.text) if hasattr(c, "text") and c.text else str(c) for c in parts
+                                )
+                            else:
+                                result_text = str(parts)
+                        if not result_text and data.partial_output:
+                            result_text = data.partial_output
+                    from backend.services.tool_formatters import extract_tool_issue, format_tool_display
+
+                    tool_args_str = buffered.get("tool_args")
+                    success = bool(data.success) if data and data.success is not None else True
+                    tool_issue = extract_tool_issue(result_text) if not success else None
+                    event_payload = {
+                        "role": "tool_call",
+                        "content": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": tool_args_str,
+                        "tool_result": result_text,
+                        "tool_success": success,
+                        "tool_issue": tool_issue or ("Tool reported an issue" if not success else None),
+                        "turn_id": buffered.get("turn_id") or (data.turn_id if data else None),
+                        "tool_intent": buffered.get("tool_intent"),
+                        "tool_title": buffered.get("tool_title"),
+                        "tool_display": format_tool_display(
+                            tool_name,
+                            tool_args_str,
+                            tool_result=result_text or None,
+                            tool_success=success,
+                        ),
+                    }
+            else:
+                event_payload = payload if isinstance(payload, dict) else {}
+            queue.put_nowait(SessionEvent(kind=kind, payload=event_payload))
+        except Exception:
+            log.warning("copilot_queue_put_failed", session_id=session_id)
+        if kind == SessionEventKind.done or kind == SessionEventKind.error:
+            with contextlib.suppress(Exception):
+                queue.put_nowait(None)  # sentinel
+
     async def create_session(self, config: SessionConfig) -> str:
         from copilot import CopilotClient, PermissionRequest
         from copilot.types import ResumeSessionConfig
@@ -276,139 +578,20 @@ class CopilotAdapter(AgentAdapterInterface):
             data = sdk_event.data
 
             # --- Copilot SDK → standard telemetry contract ---
-            # Compare against event type string values to avoid importing
-            # SessionEventType (which mypy flags as not re-exported).
             job_id = self._session_to_job.get(session_id)
             if job_id and data:
                 from backend.services.telemetry import collector as tel
 
-                if kind_str == "assistant.usage":
-                    actual_model = data.model or ""
-                    if not _model_verified[0] and requested_model and actual_model:
-                        _model_verified[0] = True
-                        if actual_model != requested_model:
-                            log.error(
-                                "model_mismatch",
-                                requested=requested_model,
-                                actual=actual_model,
-                                job_id=job_id,
-                            )
-                            # Emit model_downgraded event so RuntimeService
-                            # can abort and move the job to sign-off.
-                            queue.put_nowait(
-                                SessionEvent(
-                                    kind=SessionEventKind.model_downgraded,
-                                    payload={
-                                        "requested_model": requested_model,
-                                        "actual_model": actual_model,
-                                    },
-                                )
-                            )
-                        else:
-                            log.info("model_confirmed", model=actual_model, job_id=job_id)
-                        # Lock in the main model once confirmed (on first usage event)
-                        tel.set_main_model(job_id, actual_model)
-                    tel.record_llm_usage(
-                        job_id,
-                        model=actual_model,
-                        input_tokens=int(data.input_tokens or 0),
-                        output_tokens=int(data.output_tokens or 0),
-                        cache_read_tokens=int(data.cache_read_tokens or 0),
-                        cache_write_tokens=int(data.cache_write_tokens or 0),
-                        cost=float(data.cost or 0),
-                        duration_ms=float(data.duration or 0),
-                    )
-                    # Capture Copilot quota snapshots if present
-                    raw_snapshots = getattr(data, "quota_snapshots", None)
-                    if raw_snapshots:
-                        from backend.services.telemetry import QuotaSnapshot as _QS
-
-                        parsed = {
-                            key: _QS(
-                                used_requests=float(getattr(snap, "used_requests", 0) or 0),
-                                entitlement_requests=float(getattr(snap, "entitlement_requests", 0) or 0),
-                                remaining_percentage=float(getattr(snap, "remaining_percentage", 0) or 0),
-                                overage=float(getattr(snap, "overage", 0) or 0),
-                                overage_allowed=bool(getattr(snap, "overage_allowed_with_exhausted_quota", False)),
-                                is_unlimited=bool(getattr(snap, "is_unlimited_entitlement", False)),
-                                usage_allowed_with_exhausted_quota=bool(getattr(snap, "usage_allowed_with_exhausted_quota", False)),
-                                reset_date=str(getattr(snap, "reset_date", "") or ""),
-                            )
-                            for key, snap in raw_snapshots.items()
-                        }
-                        tel.record_quota_snapshots(job_id, snapshots=parsed)
-                elif kind_str == "tool.execution_start":
-                    tool_id = data.tool_call_id or ""
-                    import json as _json
-                    import time as _time
-
-                    self._tool_start_times[tool_id] = _time.monotonic()
-                    # Buffer args for the combined transcript entry emitted on complete
-                    args_str: str | None = None
-                    if data.arguments is not None:
-                        try:
-                            args_str = (
-                                _json.dumps(data.arguments) if not isinstance(data.arguments, str) else data.arguments
-                            )
-                        except Exception:
-                            args_str = str(data.arguments)
-                    t_name = data.tool_name or data.mcp_tool_name or "tool"
-                    t_name_display = (
-                        f"{data.mcp_server_name}/{data.mcp_tool_name}"
-                        if data.mcp_server_name and data.mcp_tool_name
-                        else t_name
-                    )
-                    # Capture human-readable intent/title fields from the SDK if present
-                    tool_intent: str = getattr(data, "intention", None) or ""
-                    tool_title: str = getattr(data, "tool_title", None) or ""
-                    # Also extract description from arguments (SDK provides it for bash etc.)
-                    tool_description: str = ""
-                    if isinstance(data.arguments, dict):
-                        tool_description = str(data.arguments.get("description", ""))
-                    self._tool_call_buffer[tool_id] = {
-                        "tool_name": t_name_display,
-                        "tool_args": args_str or "",
-                        "turn_id": str(data.turn_id) if hasattr(data, "turn_id") and data.turn_id else "",
-                        "tool_intent": tool_intent or tool_description,
-                        "tool_title": tool_title,
-                    }
-                elif kind_str == "tool.execution_complete":
-                    tool_id = data.tool_call_id or ""
-                    import time as _time
-
-                    start = self._tool_start_times.pop(tool_id, _time.monotonic())
-                    dur = (_time.monotonic() - start) * 1000
-                    # Prefer the display name buffered at tool.execution_start
-                    buffered_name = self._tool_call_buffer.get(tool_id, {}).get("tool_name")
-                    resolved_name = buffered_name or data.tool_name or data.mcp_tool_name or "tool"
-                    tel.record_tool_call(
-                        job_id,
-                        tool_name=resolved_name,
-                        duration_ms=dur,
-                        success=bool(data.success) if data.success is not None else True,
-                    )
-                elif kind_str == "session.context_changed":
-                    tel.record_context_change(
-                        job_id,
-                        current_tokens=int(data.current_tokens or 0),
-                    )
-                elif kind_str == "session.compaction_complete":
-                    tel.record_compaction(
-                        job_id,
-                        pre_tokens=int(data.pre_compaction_tokens or 0),
-                        post_tokens=int(data.post_compaction_tokens or 0),
-                    )
-                    if data.post_compaction_tokens:
-                        tel.record_context_change(
-                            job_id,
-                            current_tokens=int(data.post_compaction_tokens),
-                        )
+                handler_name = self._TELEMETRY_DISPATCH.get(kind_str)
+                if handler_name:
+                    handler = getattr(self, handler_name)
+                    if kind_str == "assistant.usage":
+                        handler(data, job_id, tel, requested_model, _model_verified, queue)
+                    else:
+                        handler(data, job_id, tel)
                 elif kind_str == "session.truncation":
                     if data.token_limit:
-                        tel.record_context_change(
-                            job_id,
-                            window_size=int(data.token_limit),
-                        )
+                        tel.record_context_change(job_id, window_size=int(data.token_limit))
                 elif kind_str == "session.model_change":
                     if data.new_model:
                         tel.set_main_model(job_id, data.new_model)
@@ -417,163 +600,15 @@ class CopilotAdapter(AgentAdapterInterface):
                 elif kind_str == "user.message":
                     tel.record_message(job_id, role="operator")
                 elif kind_str == "session.shutdown":
-                    # Capture total premium requests consumed by this session
                     total_pr = getattr(data, "total_premium_requests", None)
                     if data and total_pr is not None:
                         tel.record_premium_requests(job_id, count=float(total_pr))
 
             # --- Emit log events for operational SDK events ---
-            # These show up in the LogsPanel and are persisted as log_line_emitted.
-            _log_msg: str | None = None
-            _log_level: str = "info"
-            if kind_str == "tool.execution_start" and data:
-                t_name = data.tool_name or data.mcp_tool_name or "tool"
-                if data.mcp_server_name and data.mcp_tool_name:
-                    t_name = f"{data.mcp_server_name}/{data.mcp_tool_name}"
-                _log_msg = f"Tool started: {t_name}"
-                _log_level = "debug"
-            elif kind_str == "tool.execution_complete" and data:
-                buffered_log_name = self._tool_call_buffer.get((data.tool_call_id or ""), {}).get("tool_name")
-                t_name = buffered_log_name or data.tool_name or data.mcp_tool_name or "tool"
-                ok = bool(data.success) if data.success is not None else True
-                _log_msg = f"Tool {'completed' if ok else 'failed'}: {t_name}"
-                _log_level = "info" if ok else "warn"
-            elif kind_str == "assistant.usage" and data:
-                in_tok = int(data.input_tokens or 0)
-                out_tok = int(data.output_tokens or 0)
-                model = data.model or ""
-                if model and requested_model and model != requested_model:
-                    _log_msg = (
-                        f"⚠ MODEL MISMATCH: requested {requested_model} but serving {model} ({in_tok}+{out_tok} tokens)"
-                    )
-                    _log_level = "error"
-                else:
-                    _log_msg = f"LLM call: {model} ({in_tok}+{out_tok} tokens)"
-                    _log_level = "debug"
-            elif kind_str == "session.compaction_complete" and data:
-                pre = int(data.pre_compaction_tokens or 0)
-                post = int(data.post_compaction_tokens or 0)
-                _log_msg = f"Context compacted: {pre} → {post} tokens"
-                _log_level = "warn"
-            elif kind_str == "session.model_change" and data:
-                _log_msg = f"Model changed to {data.new_model}"
-                _log_level = "info"
-
-            if _log_msg is not None:
-                from datetime import datetime as _dt
-
-                log_seq[0] += 1
-                queue.put_nowait(
-                    SessionEvent(
-                        kind=SessionEventKind.log,
-                        payload={
-                            "seq": log_seq[0],
-                            "timestamp": _dt.now(UTC).isoformat(),
-                            "level": _log_level,
-                            "message": _log_msg,
-                        },
-                    )
-                )
+            self._emit_log_event(kind_str, data, requested_model, queue, log_seq)
 
             # --- Bridge to SessionEvent queue ---
-            # Map SDK dot-notation event types to internal SessionEventKind.
-            # Events not in this map are silently ignored.
-            _sdk_kind_map: dict[str, SessionEventKind] = {
-                "session.task_complete": SessionEventKind.done,
-                "session.idle": SessionEventKind.done,
-                "session.shutdown": SessionEventKind.done,
-                "session.error": SessionEventKind.error,
-                "assistant.message": SessionEventKind.transcript,
-                "user.message": SessionEventKind.transcript,
-                # assistant.reasoning is intentionally NOT mapped — it duplicates
-                # the reasoning_text already embedded in assistant.message.
-                "tool.execution_complete": SessionEventKind.transcript,
-                "session.workspace_file_changed": SessionEventKind.file_changed,
-            }
-            kind = _sdk_kind_map.get(kind_str)
-            if kind is None:
-                return  # unrecognised SDK event – skip silently
-            try:
-                event_payload: dict[str, object] = {}
-                if kind == SessionEventKind.transcript:
-                    if kind_str == "assistant.message":
-                        content = (data.content or "") if data else ""
-                        # SDK emits empty assistant.message events for tool-dispatch
-                        # turns (content is just whitespace). Skip these — the tool
-                        # calls themselves are separate transcript events.
-                        if not content.strip():
-                            return
-                        event_payload = {
-                            "role": "agent",
-                            "content": content,
-                            "title": data.title if data else None,
-                            "turn_id": data.turn_id if data else None,
-                        }
-                    elif kind_str == "user.message":
-                        content = (data.content or data.message or "") if data else ""
-                        # SDK injects internal system_notification messages (e.g.
-                        # agent completion status) — suppress these from the
-                        # transcript since they are not real operator messages.
-                        if "<system_notification>" in content:
-                            return
-                        event_payload = {
-                            "role": "operator",
-                            "content": content,
-                        }
-                    elif kind_str == "tool.execution_complete":
-                        tool_id = (data.tool_call_id or "") if data else ""
-                        buffered = self._tool_call_buffer.pop(tool_id, {})
-                        tool_name = buffered.get(
-                            "tool_name",
-                            (data.tool_name or data.mcp_tool_name or "tool") if data else "tool",
-                        )
-                        # Drop SDK-internal tools (e.g. report_intent) from transcript
-                        if tool_name in ("report_intent",):
-                            return
-                        result_text = ""
-                        if data:
-                            result_obj = data.result
-                            if result_obj is not None and hasattr(result_obj, "content") and result_obj.content:
-                                parts = result_obj.content
-                                if isinstance(parts, list):
-                                    result_text = "\n".join(
-                                        str(c.text) if hasattr(c, "text") and c.text else str(c) for c in parts
-                                    )
-                                else:
-                                    result_text = str(parts)
-                            if not result_text and data.partial_output:
-                                result_text = data.partial_output
-                        from backend.services.tool_formatters import extract_tool_issue, format_tool_display
-
-                        tool_args_str = buffered.get("tool_args")
-                        success = bool(data.success) if data and data.success is not None else True
-                        tool_issue = extract_tool_issue(result_text) if not success else None
-                        event_payload = {
-                            "role": "tool_call",
-                            "content": tool_name,
-                            "tool_name": tool_name,
-                            "tool_args": tool_args_str,
-                            "tool_result": result_text,
-                            "tool_success": success,
-                            "tool_issue": tool_issue or ("Tool reported an issue" if not success else None),
-                            "turn_id": buffered.get("turn_id") or (data.turn_id if data else None),
-                            "tool_intent": buffered.get("tool_intent"),
-                            "tool_title": buffered.get("tool_title"),
-                            "tool_display": format_tool_display(
-                                tool_name,
-                                tool_args_str,
-                                tool_result=result_text or None,
-                                tool_success=success,
-                            ),
-                        }
-                else:
-                    event_payload = payload if isinstance(payload, dict) else {}
-                queue.put_nowait(SessionEvent(kind=kind, payload=event_payload))
-            except Exception:
-                log.warning("copilot_queue_put_failed", session_id=session_id)
-            if kind == SessionEventKind.done or kind == SessionEventKind.error:
-                with contextlib.suppress(Exception):
-                    queue.put_nowait(None)  # sentinel
+            self._bridge_to_session_queue(kind_str, data, payload, queue, session_id)
 
         session.on(_on_event)
         # Send initial prompt
