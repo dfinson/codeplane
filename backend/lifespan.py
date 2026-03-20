@@ -69,10 +69,6 @@ def _init_event_infrastructure(
     """Create event bus and SSE manager with persist-then-broadcast wiring."""
     event_bus = EventBus()
     sse_manager = SSEManager()
-    # TODO(Phase 5+): wire sse_manager.set_active_job_count() from
-    # JobService state-transition callbacks so selective streaming
-    # activates when >20 jobs are running concurrently.
-
     # Persist-then-broadcast subscriber: ensures event.db_id is set
     # (monotonic autoincrement) before SSE frames are built.
     async def _persist_and_broadcast(event: DomainEvent) -> None:
@@ -236,8 +232,6 @@ async def _init_optional_services(
         log.warning("claude_model_cache_failed", error=str(exc))
     cached_models_by_sdk["claude"] = claude_models
 
-    # Keep legacy flat cache (default SDK models) for backward compatibility
-    app.state.cached_models = copilot_models
     app.state.cached_models_by_sdk = cached_models_by_sdk
 
     # --- Voice service ---

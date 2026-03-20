@@ -10,10 +10,10 @@ from backend.api.jobs import router as jobs_router
 
 
 def _make_app(cached_models: list[dict[str, object]]) -> FastAPI:
-    """Minimal FastAPI app with cached_models wired into app.state."""
+    """Minimal FastAPI app with cached_models_by_sdk wired into app.state."""
     app = FastAPI()
     app.include_router(jobs_router, prefix="/api")
-    app.state.cached_models = cached_models
+    app.state.cached_models_by_sdk = {"copilot": cached_models}
     return app
 
 

@@ -179,7 +179,7 @@ async def app(
     application.state.utility_session = AsyncMock()
     application.state.platform_registry = Mock()
     application.state.voice_service = mock_voice_service
-    application.state.cached_models = []
+    application.state.cached_models_by_sdk = {}
     application.state.voice_max_bytes = 10 * 1024 * 1024
 
     # -- session dependency override (mirrors _lifespan) -------------------

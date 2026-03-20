@@ -314,11 +314,11 @@ async def list_models(
     sdk: Annotated[str | None, Query(description="SDK id (copilot | claude). Omit for default.")] = None,
 ) -> list[ModelInfoResponse]:
     """Return the model list for the requested SDK, cached at server startup."""
+    by_sdk: dict[str, list[dict[str, object]]] = getattr(request.app.state, "cached_models_by_sdk", {})
     if sdk is not None:
-        by_sdk: dict[str, list[dict[str, object]]] = getattr(request.app.state, "cached_models_by_sdk", {})
         models = by_sdk.get(sdk, [])
     else:
-        models = request.app.state.cached_models
+        models = by_sdk.get("copilot", [])
     return [ModelInfoResponse.model_validate(m) for m in models]
 
 
@@ -561,25 +561,8 @@ async def archive_job(
 ) -> None:
     """Archive a completed job (hide from Kanban board)."""
     svc = _make_job_service(session)
-    await svc.archive_job(job_id)
+    await svc.archive_job(job_id, event_bus=request.app.state.event_bus)
     await session.commit()
-
-    # Publish event
-    import uuid
-    from datetime import UTC, datetime
-
-    from backend.models.events import DomainEvent
-
-    event_bus = request.app.state.event_bus
-    await event_bus.publish(
-        DomainEvent(
-            event_id=f"evt-{uuid.uuid4().hex[:12]}",
-            job_id=job_id,
-            timestamp=datetime.now(UTC),
-            kind=DomainEventKind.job_archived,
-            payload={},
-        )
-    )
 
 
 @router.post("/jobs/{job_id}/unarchive", status_code=204)

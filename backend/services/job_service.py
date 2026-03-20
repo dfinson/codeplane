@@ -482,12 +482,26 @@ class JobService:
 
         return resolution, result.pr_url, result.conflict_files
 
-    async def archive_job(self, job_id: str) -> Job:
+    async def archive_job(self, job_id: str, event_bus: object | None = None) -> Job:
         """Archive a job (hide from Kanban board)."""
         job = await self.get_job(job_id)
         if job.state not in TERMINAL_STATES:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, cannot archive active jobs")
         await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+
+        if event_bus is not None:
+            from backend.models.events import DomainEvent, DomainEventKind
+
+            await event_bus.publish(
+                DomainEvent(
+                    event_id=DomainEvent.make_event_id(),
+                    job_id=job_id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.job_archived,
+                    payload={},
+                )
+            )
+
         return await self.get_job(job_id)
 
     async def unarchive_job(self, job_id: str) -> Job:
