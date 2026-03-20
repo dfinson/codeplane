@@ -192,15 +192,6 @@ export function fetchRepos(): Promise<RepoListResponse> {
   return request("/settings/repos");
 }
 
-export function fetchRepoDetail(repoPath: string): Promise<{
-  path: string;
-  originUrl: string | null;
-  baseBranch: string | null;
-  activeJobCount: number;
-}> {
-  return request(`/settings/repos/${encodeURIComponent(repoPath)}`);
-}
-
 export function registerRepo(source: string, cloneTo?: string): Promise<{ path: string; source: string; cloned: boolean }> {
   return request("/settings/repos", {
     method: "POST",
@@ -234,10 +225,6 @@ export function updateSettings(settings: Partial<Settings>): Promise<Settings> {
     method: "PUT",
     body: JSON.stringify(settings),
   });
-}
-
-export function cleanupWorktrees(): Promise<{ removed: number }> {
-  return request("/settings/cleanup-worktrees", { method: "POST" });
 }
 
 // --- Artifacts ---

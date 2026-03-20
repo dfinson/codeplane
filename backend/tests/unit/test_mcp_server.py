@@ -8,29 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.mcp.server import create_mcp_server
-from backend.models.domain import Job
 from backend.services.git_service import GitService
+from backend.tests.unit.conftest import make_job
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _make_job(**overrides: object) -> Job:
-    defaults: dict[str, object] = dict(
-        id="job-123",
-        repo="/test/repo",
-        prompt="Fix the bug",
-        state="running",
-        base_ref="main",
-        branch="fix/bug",
-        worktree_path="/test/repo/.codeplane-worktrees/fix-bug",
-        session_id=None,
-        pr_url=None,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-        completed_at=None,
-    )
-    defaults.update(overrides)
-    return Job(**defaults)
 
 
 def _make_approval(**overrides: object) -> MagicMock:
@@ -150,7 +131,7 @@ class TestMCPServerCreation:
 class TestJobTool:
     @pytest.mark.asyncio
     async def test_create_success(self, mcp_server) -> None:
-        job = _make_job(state="queued")
+        job = make_job(id="job-123", repo="/test/repo", state="queued")
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -171,7 +152,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_list(self, mcp_server) -> None:
-        jobs = [_make_job(), _make_job(id="job-456")]
+        jobs = [make_job(id="job-123", repo="/test/repo"), make_job(id="job-456", repo="/test/repo")]
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -186,7 +167,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_get_success(self, mcp_server) -> None:
-        job = _make_job()
+        job = make_job(id="job-123", repo="/test/repo")
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -220,7 +201,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_cancel(self, mcp_server) -> None:
-        job = _make_job(state="canceled")
+        job = make_job(id="job-123", repo="/test/repo", state="canceled")
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -234,7 +215,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_rerun(self, mcp_server) -> None:
-        job = _make_job(id="job-new", state="queued")
+        job = make_job(id="job-new", repo="/test/repo", state="queued")
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -337,7 +318,7 @@ class TestWorkspaceTool:
     @pytest.mark.asyncio
     async def test_list(self, mcp_server, tmp_path) -> None:
         (tmp_path / "hello.txt").write_text("hi")
-        job = _make_job(worktree_path=str(tmp_path))
+        job = make_job(id="job-123", repo="/test/repo", worktree_path=str(tmp_path))
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -354,7 +335,7 @@ class TestWorkspaceTool:
     @pytest.mark.asyncio
     async def test_read(self, mcp_server, tmp_path) -> None:
         (tmp_path / "readme.md").write_text("# Hello")
-        job = _make_job(worktree_path=str(tmp_path))
+        job = make_job(id="job-123", repo="/test/repo", worktree_path=str(tmp_path))
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),

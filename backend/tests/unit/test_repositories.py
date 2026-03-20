@@ -13,12 +13,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 from backend.models.db import Base
-from backend.models.domain import Artifact, Job
+from backend.models.domain import Artifact
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.persistence.artifact_repo import ArtifactRepository
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.job_repo import JobRepository
+from backend.tests.unit.conftest import make_job
 
 
 @pytest.fixture
@@ -36,29 +37,13 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
     await engine.dispose()
 
 
-def _make_job(job_id: str = "job-1", state: str = "running") -> Job:
-    now = datetime.now(UTC)
-    return Job(
-        id=job_id,
-        repo="/repos/test",
-        prompt="Fix the bug",
-        state=state,
-        base_ref="main",
-        branch="fix/bug",
-        worktree_path="/repos/test",
-        session_id=None,
-        created_at=now,
-        updated_at=now,
-    )
-
-
 # --- JobRepository tests ---
 
 
 @pytest.mark.asyncio
 async def test_job_create_and_get(session: AsyncSession) -> None:
     repo = JobRepository(session)
-    job = _make_job()
+    job = make_job(worktree_path="/repos/test")
     await repo.create(job)
     await session.commit()
 
@@ -80,9 +65,9 @@ async def test_job_get_returns_none_for_missing(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_job_list_all(session: AsyncSession) -> None:
     repo = JobRepository(session)
-    await repo.create(_make_job("job-1", "running"))
-    await repo.create(_make_job("job-2", "succeeded"))
-    await repo.create(_make_job("job-3", "failed"))
+    await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
     jobs = await repo.list()
@@ -92,9 +77,9 @@ async def test_job_list_all(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_job_list_filter_by_state(session: AsyncSession) -> None:
     repo = JobRepository(session)
-    await repo.create(_make_job("job-1", "running"))
-    await repo.create(_make_job("job-2", "succeeded"))
-    await repo.create(_make_job("job-3", "failed"))
+    await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
     jobs = await repo.list(state="running")
@@ -105,9 +90,9 @@ async def test_job_list_filter_by_state(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_job_list_filter_multi_state(session: AsyncSession) -> None:
     repo = JobRepository(session)
-    await repo.create(_make_job("job-1", "running"))
-    await repo.create(_make_job("job-2", "succeeded"))
-    await repo.create(_make_job("job-3", "failed"))
+    await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
     jobs = await repo.list(state="succeeded,failed")
@@ -118,7 +103,7 @@ async def test_job_list_filter_multi_state(session: AsyncSession) -> None:
 async def test_job_list_cursor_pagination(session: AsyncSession) -> None:
     repo = JobRepository(session)
     for i in range(5):
-        await repo.create(_make_job(f"job-{i}", "running"))
+        await repo.create(make_job(id=f"job-{i}", state="running", worktree_path="/repos/test"))
     await session.commit()
 
     # First page
@@ -141,7 +126,7 @@ async def test_job_list_cursor_pagination(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_job_update_state(session: AsyncSession) -> None:
     repo = JobRepository(session)
-    await repo.create(_make_job("job-1", "running"))
+    await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
     await session.commit()
 
     now = datetime.now(UTC)
@@ -161,7 +146,7 @@ async def test_job_update_state(session: AsyncSession) -> None:
 async def test_event_append_and_list(session: AsyncSession) -> None:
     # Create a job first (FK constraint)
     job_repo = JobRepository(session)
-    await job_repo.create(_make_job("job-1"))
+    await job_repo.create(make_job(id="job-1", worktree_path="/repos/test"))
     await session.commit()
 
     event_repo = EventRepository(session)
@@ -186,7 +171,7 @@ async def test_event_append_and_list(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_event_list_after_filters_by_id(session: AsyncSession) -> None:
     job_repo = JobRepository(session)
-    await job_repo.create(_make_job("job-1"))
+    await job_repo.create(make_job(id="job-1", worktree_path="/repos/test"))
     await session.commit()
 
     event_repo = EventRepository(session)
@@ -211,8 +196,8 @@ async def test_event_list_after_filters_by_id(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_event_list_after_scoped_to_job(session: AsyncSession) -> None:
     job_repo = JobRepository(session)
-    await job_repo.create(_make_job("job-1"))
-    await job_repo.create(_make_job("job-2"))
+    await job_repo.create(make_job(id="job-1", worktree_path="/repos/test"))
+    await job_repo.create(make_job(id="job-2", worktree_path="/repos/test"))
     await session.commit()
 
     event_repo = EventRepository(session)
@@ -236,7 +221,7 @@ async def test_event_list_after_scoped_to_job(session: AsyncSession) -> None:
 @pytest.mark.asyncio
 async def test_artifact_create_and_get(session: AsyncSession) -> None:
     job_repo = JobRepository(session)
-    await job_repo.create(_make_job("job-1"))
+    await job_repo.create(make_job(id="job-1", worktree_path="/repos/test"))
     await session.commit()
 
     artifact_repo = ArtifactRepository(session)
@@ -271,8 +256,8 @@ async def test_artifact_get_returns_none_for_missing(session: AsyncSession) -> N
 @pytest.mark.asyncio
 async def test_artifact_list_for_job(session: AsyncSession) -> None:
     job_repo = JobRepository(session)
-    await job_repo.create(_make_job("job-1"))
-    await job_repo.create(_make_job("job-2"))
+    await job_repo.create(make_job(id="job-1", worktree_path="/repos/test"))
+    await job_repo.create(make_job(id="job-2", worktree_path="/repos/test"))
     await session.commit()
 
     artifact_repo = ArtifactRepository(session)
