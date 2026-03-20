@@ -20,7 +20,7 @@ class JobState(StrEnum):
 
 
 # Terminal states have no further transitions
-TERMINAL_STATES: frozenset[str] = frozenset(
+TERMINAL_STATES: frozenset[JobState] = frozenset(
     {
         JobState.succeeded,
         JobState.failed,
@@ -29,7 +29,7 @@ TERMINAL_STATES: frozenset[str] = frozenset(
 )
 
 # Active states (job is occupying a worktree)
-ACTIVE_STATES: frozenset[str] = frozenset(
+ACTIVE_STATES: frozenset[JobState] = frozenset(
     {
         JobState.queued,
         JobState.running,
@@ -166,7 +166,7 @@ class Job:
     id: str
     repo: str
     prompt: str
-    state: str
+    state: JobState
     base_ref: str
     branch: str | None
     worktree_path: str | None
@@ -177,12 +177,12 @@ class Job:
     pr_url: str | None = None
     merge_status: str | None = None
     """Git merge operation outcome: ``not_merged`` | ``merged`` | ``conflict``."""
-    resolution: str | None = None
+    resolution: Resolution | None = None
     """User-facing job disposition (see :class:`Resolution`)."""
     archived_at: datetime | None = None
     title: str | None = None
     worktree_name: str | None = None
-    permission_mode: str = PermissionMode.auto
+    permission_mode: PermissionMode = PermissionMode.auto
     session_count: int = 1
     sdk_session_id: str | None = None
     model: str | None = None

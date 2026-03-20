@@ -18,6 +18,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import structlog
@@ -46,11 +47,21 @@ def _make_event_id() -> str:
     return f"evt-{uuid.uuid4().hex[:12]}"
 
 
+class MergeStatus(StrEnum):
+    """Outcome status for a merge-back attempt."""
+
+    merged = "merged"
+    conflict = "conflict"
+    pr_created = "pr_created"
+    skipped = "skipped"
+    error = "error"
+
+
 @dataclass
 class MergeResult:
     """Outcome of a merge-back attempt."""
 
-    status: str  # merged | conflict | pr_created | skipped | error
+    status: MergeStatus
     strategy: str | None = None  # ff_only | merge | pr
     pr_url: str | None = None
     conflict_files: list[str] | None = None
@@ -94,11 +105,11 @@ class MergeService:
         """
         if not branch:
             log.info("merge_skipped_no_branch", job_id=job_id)
-            return MergeResult(status="skipped", error="No branch")
+            return MergeResult(status=MergeStatus.skipped, error="No branch")
 
         if not _REF_PATTERN.match(branch) or not _REF_PATTERN.match(base_ref):
             log.warning("merge_skipped_invalid_refs", job_id=job_id, branch=branch, base_ref=base_ref)
-            return MergeResult(status="skipped", error="Invalid branch or base_ref")
+            return MergeResult(status=MergeStatus.skipped, error="Invalid branch or base_ref")
 
         strategy = self._config.strategy
 
@@ -180,7 +191,7 @@ class MergeService:
         await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
         await self._post_merge_cleanup(job_id, repo_path, None, branch)
         await self._update_merge_status(job_id, Resolution.merged)
-        return MergeResult(status=Resolution.merged, strategy="ff_only")
+        return MergeResult(status=MergeStatus.merged, strategy="ff_only")
 
     @contextlib.asynccontextmanager
     async def _preserved_worktree(
@@ -293,7 +304,7 @@ class MergeService:
             await self._publish_merge_completed(job_id, branch, base_ref, "merge")
             await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
             await self._update_merge_status(job_id, Resolution.merged)
-            return MergeResult(status=Resolution.merged, strategy="merge")
+            return MergeResult(status=MergeStatus.merged, strategy="merge")
 
         await self._publish_merge_conflict(
             job_id,
@@ -303,7 +314,7 @@ class MergeService:
             fallback="none",
         )
         await self._update_merge_status(job_id, Resolution.conflict)
-        return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
+        return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
     async def _get_conflict_file_list(self, repo_path: str, branch: str, base_ref: str) -> list[str] | None:
         """Probe for conflicting files using a no-commit merge that never creates a commit.
@@ -363,7 +374,7 @@ class MergeService:
         if self._platform_registry is None:
             log.info("pr_creation_skipped_no_registry", job_id=job_id)
             await self._update_merge_status(job_id, "not_merged")
-            return MergeResult(status="skipped", error="No platform registry")
+            return MergeResult(status=MergeStatus.skipped, error="No platform registry")
 
         adapter = await self._platform_registry.get_adapter(repo_path)
         pr_result = await adapter.create_pr(
@@ -377,11 +388,11 @@ class MergeService:
         if pr_result.ok:
             log.info("pr_created", job_id=job_id, pr_url=pr_result.url, platform=adapter.name)
             await self._update_merge_status(job_id, Resolution.pr_created, pr_url=pr_result.url)
-            return MergeResult(status=Resolution.pr_created, strategy="pr", pr_url=pr_result.url)
+            return MergeResult(status=MergeStatus.pr_created, strategy="pr", pr_url=pr_result.url)
 
         log.warning("pr_creation_failed", job_id=job_id, platform=adapter.name, error=pr_result.error)
         await self._update_merge_status(job_id, "not_merged")
-        return MergeResult(status="error", error=pr_result.error or "PR creation failed")
+        return MergeResult(status=MergeStatus.error, error=pr_result.error or "PR creation failed")
 
     async def _post_merge_cleanup(
         self,
@@ -497,14 +508,14 @@ class MergeService:
             return await self._discard(job_id, repo_path, worktree_path, branch)
 
         if not branch:
-            return MergeResult(status="error", error="No branch to resolve")
+            return MergeResult(status=MergeStatus.error, error="No branch to resolve")
 
         if not _REF_PATTERN.match(branch) or not _REF_PATTERN.match(base_ref):
-            return MergeResult(status="error", error="Invalid branch or base_ref")
+            return MergeResult(status=MergeStatus.error, error="Invalid branch or base_ref")
 
         if action == "create_pr":
             result = await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
-            if result.status == Resolution.pr_created:
+            if result.status == MergeStatus.pr_created:
                 await self._cleanup_worktree_only(job_id, repo_path, worktree_path)
             return result
 
@@ -514,7 +525,7 @@ class MergeService:
         if action == "smart_merge":
             return await self._operator_smart_merge(job_id, repo_path, worktree_path, branch, base_ref)
 
-        return MergeResult(status="error", error=f"Unknown action: {action}")
+        return MergeResult(status=MergeStatus.error, error=f"Unknown action: {action}")
 
     async def _preserve_diff_snapshot(
         self,
@@ -599,7 +610,7 @@ class MergeService:
                 await self._publish_merge_completed(job_id, branch, base_ref, "merge")
                 await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
                 await self._update_merge_status(job_id, Resolution.merged)
-                return MergeResult(status=Resolution.merged, strategy="merge")
+                return MergeResult(status=MergeStatus.merged, strategy="merge")
 
             await self._publish_merge_conflict(
                 job_id,
@@ -609,7 +620,7 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
-            return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
+            return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
     async def _operator_smart_merge(
         self,
@@ -631,7 +642,7 @@ class MergeService:
             await self._git.checkout(base_ref, cwd=repo_path)
         except GitError:
             log.warning("smart_merge_checkout_failed", job_id=job_id, base_ref=base_ref)
-            return MergeResult(status="error", error=f"Failed to checkout {base_ref}")
+            return MergeResult(status=MergeStatus.error, error=f"Failed to checkout {base_ref}")
 
         commit_range = f"{base_ref}..{branch}"
         try:
@@ -652,7 +663,7 @@ class MergeService:
                     branch=branch,
                     commit_range=commit_range,
                 )
-                return MergeResult(status="error", error="Cherry-pick failed without conflict markers; check git configuration or hooks")
+                return MergeResult(status=MergeStatus.error, error="Cherry-pick failed without conflict markers; check git configuration or hooks")
 
             log.info("smart_merge_conflict_detected", job_id=job_id, branch=branch)
             try:
@@ -667,13 +678,13 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
-            return MergeResult(status=Resolution.conflict, conflict_files=conflict_files)
+            return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
         log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
         await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
         await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
         await self._update_merge_status(job_id, Resolution.merged)
-        return MergeResult(status=Resolution.merged, strategy="cherry_pick")
+        return MergeResult(status=MergeStatus.merged, strategy="cherry_pick")
 
     async def _discard(
         self,
@@ -698,7 +709,7 @@ class MergeService:
             except GitError:
                 log.warning("branch_discard_failed", job_id=job_id, exc_info=True)
 
-        return MergeResult(status=Resolution.discarded)
+        return MergeResult(status=MergeStatus.skipped)
 
     async def _cleanup_worktree_only(
         self,

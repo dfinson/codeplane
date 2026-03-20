@@ -444,11 +444,14 @@ class JobService:
             prompt=job.prompt,
         )
 
+        from backend.services.merge_service import MergeStatus
+
         _STATUS_MAP = {
-            Resolution.merged: Resolution.merged,
-            Resolution.pr_created: Resolution.pr_created,
-            Resolution.discarded: Resolution.discarded,
-            Resolution.conflict: Resolution.conflict,
+            MergeStatus.merged: Resolution.merged,
+            MergeStatus.pr_created: Resolution.pr_created,
+            MergeStatus.conflict: Resolution.conflict,
+            MergeStatus.skipped: Resolution.unresolved,
+            MergeStatus.error: Resolution.unresolved,
         }
         resolution = _STATUS_MAP.get(result.status, Resolution.unresolved)
 
