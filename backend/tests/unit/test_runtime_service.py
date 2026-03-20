@@ -39,12 +39,14 @@ from backend.services.progress_tracking_service import (
     _count_similar_trailing_headlines,
     _headlines_are_similar,
 )
+from backend.config import (
+    build_session_config,
+    discover_mcp_servers,
+    resolve_protected_paths,
+)
 from backend.services.runtime_service import (
     RuntimeService,
     _AgentSession,
-    _build_session_config,
-    _discover_mcp_servers,
-    _resolve_protected_paths,
 )
 
 log = structlog.get_logger()
@@ -870,7 +872,7 @@ class TestAgentSession:
 
 class TestMCPDiscovery:
     def test_empty_when_no_files_exist(self, config: CPLConfig) -> None:
-        result = _discover_mcp_servers("/nonexistent/repo", config)
+        result = discover_mcp_servers("/nonexistent/repo", config)
         assert result == {}
 
     def test_reads_vscode_mcp_json(self, tmp_path: Path, config: CPLConfig) -> None:
@@ -887,7 +889,7 @@ class TestMCPDiscovery:
         }
         (mcp_dir / "mcp.json").write_text(json.dumps(mcp_json))
 
-        result = _discover_mcp_servers(str(tmp_path), config)
+        result = discover_mcp_servers(str(tmp_path), config)
         assert "myserver" in result
         assert result["myserver"].command == "npx"
         assert result["myserver"].args == ["-y", "@myserver/mcp"]
@@ -909,7 +911,7 @@ class TestMCPDiscovery:
         codeplane_yml = {"tools": {"mcp": {"disabled": ["remove"]}}}
         (tmp_path / ".codeplane.yml").write_text(yaml.dump(codeplane_yml))
 
-        result = _discover_mcp_servers(str(tmp_path), config)
+        result = discover_mcp_servers(str(tmp_path), config)
         assert "keep" in result
         assert "remove" not in result
 
@@ -919,7 +921,7 @@ class TestMCPDiscovery:
         (mcp_dir / "mcp.json").write_text("{invalid json")
 
         # Should not raise
-        result = _discover_mcp_servers(str(tmp_path), config)
+        result = discover_mcp_servers(str(tmp_path), config)
         assert result == {}
 
 
@@ -930,19 +932,19 @@ class TestMCPDiscovery:
 
 class TestProtectedPaths:
     def test_no_codeplane_yml(self) -> None:
-        result = _resolve_protected_paths("/nonexistent")
+        result = resolve_protected_paths("/nonexistent")
         assert result == []
 
     def test_reads_protected_paths(self, tmp_path: Path) -> None:
         codeplane_yml = {"protected_paths": ["src/config.py", "secrets/"]}
         (tmp_path / ".codeplane.yml").write_text(yaml.dump(codeplane_yml))
 
-        result = _resolve_protected_paths(str(tmp_path))
+        result = resolve_protected_paths(str(tmp_path))
         assert result == ["src/config.py", "secrets/"]
 
     def test_malformed_yaml_returns_empty(self, tmp_path: Path) -> None:
         (tmp_path / ".codeplane.yml").write_text(":::invalid:::")
-        result = _resolve_protected_paths(str(tmp_path))
+        result = resolve_protected_paths(str(tmp_path))
         assert result == []
 
 
@@ -955,14 +957,14 @@ class TestBuildSessionConfig:
     def test_uses_worktree_path_when_set(self, config: CPLConfig) -> None:
         job = _make_job()
         job.worktree_path = "/some/worktree"
-        result = _build_session_config(job, config)
+        result = build_session_config(job, config)
         assert result.workspace_path == "/some/worktree"
         assert result.prompt == job.prompt
 
     def test_falls_back_to_repo(self, config: CPLConfig) -> None:
         job = _make_job()
         job.worktree_path = None
-        result = _build_session_config(job, config)
+        result = build_session_config(job, config)
         assert result.workspace_path == job.repo
 
 

@@ -22,9 +22,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 
 from backend.models.domain import PermissionMode
+
+_log = structlog.get_logger()
 
 
 def _resolve_codeplane_dir() -> Path:
@@ -386,3 +389,144 @@ def init_config(path: Path | None = None) -> Path:
     if not path.exists():
         path.write_text(DEFAULT_CONFIG_YAML)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Session config builders — pure config/filesystem helpers
+# ---------------------------------------------------------------------------
+
+
+def discover_mcp_servers(repo_path: str, config: CPLConfig) -> dict[str, Any]:
+    """Discover MCP servers from .vscode/mcp.json and global config, respecting .codeplane.yml disabled list."""
+    import json as _json
+
+    from backend.models.domain import MCPServerConfig
+
+    servers: dict[str, MCPServerConfig] = {}
+
+    # 1. Global config: tools.mcp section
+    global_config_path = Path.home() / ".codeplane" / "config.yaml"
+    if global_config_path.exists():
+        try:
+            with open(global_config_path) as f:
+                raw = yaml.safe_load(f) or {}
+            tools_mcp = raw.get("tools", {}).get("mcp", {})
+            if isinstance(tools_mcp, dict):
+                for name, entry in tools_mcp.items():
+                    if name == "disabled" or not isinstance(entry, dict):
+                        continue
+                    servers[name] = MCPServerConfig(
+                        command=entry.get("command", ""),
+                        args=entry.get("args", []),
+                        env=entry.get("env"),
+                    )
+        except Exception:
+            _log.warning("mcp_global_config_read_failed", path=str(global_config_path))
+
+    # 2. Repo-level: .vscode/mcp.json (takes precedence over global)
+    mcp_json_path = Path(repo_path) / ".vscode" / "mcp.json"
+    if mcp_json_path.exists():
+        try:
+            with open(mcp_json_path) as f:
+                mcp_data = _json.load(f)
+            repo_servers = mcp_data.get("servers", {})
+            if isinstance(repo_servers, dict):
+                for name, entry in repo_servers.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    servers[name] = MCPServerConfig(
+                        command=entry.get("command", ""),
+                        args=entry.get("args", []),
+                        env=entry.get("env"),
+                    )
+        except Exception:
+            _log.warning("mcp_repo_config_read_failed", path=str(mcp_json_path))
+
+    # 3. Apply .codeplane.yml disabled list
+    codeplane_yml_path = Path(repo_path) / ".codeplane.yml"
+    if codeplane_yml_path.exists():
+        try:
+            with open(codeplane_yml_path) as f:
+                codeplane_config = yaml.safe_load(f) or {}
+            disabled = codeplane_config.get("tools", {}).get("mcp", {}).get("disabled", [])
+            if isinstance(disabled, list):
+                for name in disabled:
+                    servers.pop(str(name), None)
+        except Exception:
+            _log.warning("codeplane_yml_read_failed", path=str(codeplane_yml_path))
+
+    return servers
+
+
+def resolve_protected_paths(repo_path: str) -> list[str]:
+    """Read protected_paths from .codeplane.yml if present."""
+    codeplane_yml = Path(repo_path) / ".codeplane.yml"
+    if not codeplane_yml.exists():
+        return []
+    try:
+        with open(codeplane_yml) as f:
+            data = yaml.safe_load(f) or {}
+        paths = data.get("protected_paths", [])
+        return [str(p) for p in paths] if isinstance(paths, list) else []
+    except Exception:
+        _log.warning("protected_paths_read_failed", path=str(codeplane_yml), exc_info=True)
+        return []
+
+
+def resolve_permission_mode(repo_path: str) -> str | None:
+    """Read permission_mode from .codeplane.yml if present (per-repo override)."""
+    from backend.models.domain import PermissionMode as _PM
+
+    codeplane_yml = Path(repo_path) / ".codeplane.yml"
+    if not codeplane_yml.exists():
+        return None
+    try:
+        with open(codeplane_yml) as f:
+            data = yaml.safe_load(f) or {}
+        mode = data.get("permission_mode")
+        if mode and str(mode) in (_PM.auto, _PM.read_only, _PM.approval_required):
+            return str(mode)
+        return None
+    except Exception:
+        _log.warning("permission_mode_read_failed", path=str(codeplane_yml), exc_info=True)
+        return None
+
+
+def build_session_config(
+    job: Any,
+    config: CPLConfig,
+    permission_mode_override: str | None = None,
+) -> Any:
+    """Build a SessionConfig from a Job record and resolved config.
+
+    Permission mode priority: per-job override > .codeplane.yml > global config.
+    """
+    from backend.models.domain import PermissionMode as _PM
+    from backend.models.domain import SessionConfig
+
+    workspace = job.worktree_path or job.repo
+    mcp_servers = discover_mcp_servers(job.repo, config)
+    protected_paths = resolve_protected_paths(job.repo)
+
+    # Resolve permission_mode with priority chain
+    if permission_mode_override:
+        mode_str = permission_mode_override
+    else:
+        repo_mode = resolve_permission_mode(job.repo)
+        mode_str = repo_mode or config.runtime.permission_mode
+
+    try:
+        mode = _PM(mode_str)
+    except ValueError:
+        mode = _PM.auto
+
+    return SessionConfig(
+        workspace_path=workspace,
+        prompt=job.prompt,
+        job_id=job.id,
+        model=job.model,
+        sdk=job.sdk,
+        mcp_servers=mcp_servers,
+        protected_paths=protected_paths,
+        permission_mode=mode,
+    )
