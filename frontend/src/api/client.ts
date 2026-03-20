@@ -390,4 +390,14 @@ export async function transcribeAudio(audio: Blob): Promise<string> {
   return data.text;
 }
 
+export async function createTerminalSession(
+  cwd: string,
+  jobId: string,
+): Promise<{ id: string }> {
+  return request<{ id: string }>("/terminal/sessions", {
+    method: "POST",
+    body: JSON.stringify({ cwd, jobId }),
+  });
+}
+
 export { ApiError };

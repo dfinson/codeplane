@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
+import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts, createTerminalSession } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -101,13 +101,7 @@ export function JobDetailScreen() {
     }
 
     try {
-      const res = await fetch("/api/terminal/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd: job.worktreePath, jobId }),
-      });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await createTerminalSession(job.worktreePath, jobId);
       const session = {
         id: data.id,
         label: job.branch || jobId,

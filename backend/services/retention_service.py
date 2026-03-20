@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import delete, select
 
 from backend.config import CODEPLANE_DIR
-from backend.models.db import ArtifactRow, DiffSnapshotRow, JobRow
-from backend.models.domain import TERMINAL_STATES, JobState, Resolution
+from backend.persistence.artifact_repo import ArtifactRepository
+from backend.persistence.job_repo import JobRepository
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -79,23 +78,16 @@ class RetentionService:
     async def _cleanup_artifacts(self, cutoff: datetime) -> int:
         """Delete artifact files and metadata older than cutoff."""
         async with self._session_factory() as session:
-            # Find expired artifacts
-            stmt = select(ArtifactRow).where(ArtifactRow.created_at < cutoff)
-            result = await session.execute(stmt)
-            rows = list(result.scalars().all())
-
-            if not rows:
+            repo = ArtifactRepository(session)
+            expired = await repo.delete_expired(cutoff)
+            if not expired:
                 return 0
-
-            # Delete metadata rows first (orphan files are harmless; orphan rows cause errors)
-            artifact_ids = [str(row.id) for row in rows]
-            await session.execute(delete(ArtifactRow).where(ArtifactRow.id.in_(artifact_ids)))
             await session.commit()
 
             # Delete files from disk — only if under the expected artifacts directory
             artifacts_root = ARTIFACTS_DIR.resolve()
-            for row in rows:
-                disk_path = Path(str(row.disk_path)).resolve()
+            for artifact in expired:
+                disk_path = Path(artifact.disk_path).resolve()
                 if not disk_path.is_relative_to(artifacts_root):
                     log.warning("retention_artifact_path_outside_store", path=str(disk_path))
                     continue
@@ -104,8 +96,8 @@ class RetentionService:
 
             # Delete per-job artifact directories if empty
             job_dirs: set[Path] = set()
-            for row in rows:
-                job_dir = Path(str(row.disk_path)).resolve()
+            for artifact in expired:
+                job_dir = Path(artifact.disk_path).resolve()
                 if job_dir.is_relative_to(artifacts_root):
                     job_dirs.add(job_dir.parent)
 
@@ -113,49 +105,38 @@ class RetentionService:
                 if job_dir.exists() and not any(job_dir.iterdir()):
                     job_dir.rmdir()
 
-            log.info("retention_artifacts_cleaned", count=len(rows))
-            return len(rows)
+            log.info("retention_artifacts_cleaned", count=len(expired))
+            return len(expired)
 
     async def _cleanup_diff_snapshots(self, cutoff: datetime) -> int:
         """Delete diff snapshots for terminal-state jobs older than cutoff."""
         async with self._session_factory() as session:
-            # Find jobs in terminal states completed before cutoff
-            stmt = select(JobRow.id).where(
-                JobRow.state.in_(TERMINAL_STATES),
-                JobRow.completed_at < cutoff,
-            )
-            result = await session.execute(stmt)
-            job_ids = [str(row[0]) for row in result.all()]
-
-            if not job_ids:
+            job_repo = JobRepository(session)
+            terminal_jobs = await job_repo.list_terminal_before(cutoff)
+            if not terminal_jobs:
                 return 0
 
-            del_stmt = delete(DiffSnapshotRow).where(DiffSnapshotRow.job_id.in_(job_ids))
-            del_result = await session.execute(del_stmt)
-            count = del_result.rowcount  # type: ignore[attr-defined]
+            job_ids = [j.id for j in terminal_jobs]
+            count = await job_repo.delete_diff_snapshots_for_jobs(job_ids)
             await session.commit()
 
             log.info("retention_snapshots_cleaned", count=count)
-            return int(count)
+            return count
 
     async def _cleanup_worktrees(self, cutoff: datetime) -> int:
         """Remove worktree directories for terminal-state jobs older than cutoff."""
         async with self._session_factory() as session:
-            stmt = select(JobRow).where(
-                JobRow.state.in_(TERMINAL_STATES),
-                JobRow.completed_at < cutoff,
-                JobRow.worktree_path.isnot(None),
-            )
-            result = await session.execute(stmt)
-            rows = list(result.scalars().all())
-
-            if not rows:
+            job_repo = JobRepository(session)
+            terminal_jobs = await job_repo.list_terminal_before(cutoff)
+            if not terminal_jobs:
                 return 0
 
             count = 0
-            for row in rows:
-                wt_path = Path(str(row.worktree_path)).resolve()
-                repo_worktrees_dir = (Path(str(row.repo)) / self._worktrees_dirname).resolve()
+            for job in terminal_jobs:
+                if job.worktree_path is None:
+                    continue
+                wt_path = Path(job.worktree_path).resolve()
+                repo_worktrees_dir = (Path(job.repo) / self._worktrees_dirname).resolve()
                 if not str(wt_path).startswith(str(repo_worktrees_dir) + "/"):
                     log.warning("retention_worktree_outside_dir", path=str(wt_path))
                     continue
@@ -169,21 +150,16 @@ class RetentionService:
     async def _auto_archive_resolved_jobs(self, cutoff: datetime) -> int:
         """Auto-archive resolved jobs older than the cutoff."""
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(JobRow).where(
-                    JobRow.state == JobState.succeeded,
-                    JobRow.resolution.in_([Resolution.merged, Resolution.pr_created, Resolution.discarded]),
-                    JobRow.archived_at.is_(None),
-                    JobRow.completed_at < cutoff,
-                )
-            )
-            rows = result.scalars().all()
+            job_repo = JobRepository(session)
+            candidates = await job_repo.list_auto_archive_candidates(cutoff)
+            if not candidates:
+                return 0
+
             now = datetime.now(UTC)
-            count = 0
-            for row in rows:
-                row.archived_at = now  # type: ignore[assignment]
-                count += 1
+            job_ids = [j.id for j in candidates]
+            count = await job_repo.bulk_archive(job_ids, now)
             await session.commit()
+
             if count > 0:
                 log.info("auto_archived_resolved_jobs", count=count)
             return count

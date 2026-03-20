@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import and_, or_, select
 
-from backend.models.db import JobRow
+from backend.models.db import DiffSnapshotRow, JobRow
 from backend.models.domain import Job, JobState, PermissionMode, Resolution
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
+    import builtins
     from datetime import datetime
 
 
@@ -224,3 +225,45 @@ class JobRepository(BaseRepository):
             updates["branch"] = branch
         if updates:
             await self._update_row(job_id, **updates)
+
+    # ------------------------------------------------------------------
+    # Retention helpers
+    # ------------------------------------------------------------------
+
+    async def list_terminal_before(self, cutoff: datetime) -> builtins.list[Job]:
+        """Return terminal-state jobs completed before *cutoff*."""
+        from backend.models.domain import TERMINAL_STATES
+
+        stmt = select(JobRow).where(
+            JobRow.state.in_(TERMINAL_STATES),
+            JobRow.completed_at < cutoff,
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def list_auto_archive_candidates(self, cutoff: datetime) -> builtins.list[Job]:
+        """Return resolved jobs eligible for auto-archiving."""
+        stmt = select(JobRow).where(
+            JobRow.state == JobState.succeeded,
+            JobRow.resolution.in_([Resolution.merged, Resolution.pr_created, Resolution.discarded]),
+            JobRow.archived_at.is_(None),
+            JobRow.completed_at < cutoff,
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def bulk_archive(self, job_ids: builtins.list[str], archived_at: datetime) -> int:
+        """Set archived_at for multiple jobs at once. Returns count updated."""
+        count = 0
+        for jid in job_ids:
+            await self._update_row(jid, archived_at=archived_at)
+            count += 1
+        return count
+
+    async def delete_diff_snapshots_for_jobs(self, job_ids: builtins.list[str]) -> int:
+        """Delete all diff snapshots belonging to the given jobs. Returns count deleted."""
+        from sqlalchemy import delete
+
+        del_result = await self._session.execute(delete(DiffSnapshotRow).where(DiffSnapshotRow.job_id.in_(job_ids)))
+        await self._session.flush()
+        return int(del_result.rowcount)  # type: ignore[attr-defined]

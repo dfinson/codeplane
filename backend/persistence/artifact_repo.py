@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003 — used in cast() string arg
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from backend.models.db import ArtifactRow
 from backend.models.domain import Artifact
@@ -69,3 +69,20 @@ class ArtifactRepository(BaseRepository):
         if row is not None:
             row.size_bytes = size_bytes  # type: ignore[assignment]  # Column[int] vs int
             await self._session.flush()
+
+    async def delete_expired(self, cutoff: datetime) -> list[Artifact]:
+        """Find and delete artifact rows created before *cutoff*.
+
+        Returns the domain objects so the caller can clean up disk files.
+        """
+        stmt = select(ArtifactRow).where(ArtifactRow.created_at < cutoff)
+        result = await self._session.execute(stmt)
+        rows = list(result.scalars().all())
+        if not rows:
+            return []
+
+        domain_objects = [self._to_domain(r) for r in rows]
+        artifact_ids = [a.id for a in domain_objects]
+        await self._session.execute(delete(ArtifactRow).where(ArtifactRow.id.in_(artifact_ids)))
+        await self._session.flush()
+        return domain_objects
