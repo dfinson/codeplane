@@ -14,7 +14,6 @@ import asyncio
 import contextlib
 import re
 import shutil
-import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,10 +40,6 @@ log = structlog.get_logger()
 
 _REF_PATTERN = re.compile(r"^[a-zA-Z0-9/_.-]+$")
 _PR_TITLE_MAX_PROMPT_LEN = 80
-
-
-def _make_event_id() -> str:
-    return f"evt-{uuid.uuid4().hex[:12]}"
 
 
 class MergeStatus(StrEnum):
@@ -442,7 +437,7 @@ class MergeService:
     ) -> None:
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.merge_completed,
@@ -466,7 +461,7 @@ class MergeService:
     ) -> None:
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.merge_conflict,

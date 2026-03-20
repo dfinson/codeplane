@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypedDict
+import uuid
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -210,3 +211,8 @@ class DomainEvent:
     kind: DomainEventKind
     payload: EventPayload
     db_id: int | None = None  # autoincrement ID from EventRow; set after persistence
+
+    @staticmethod
+    def make_event_id() -> str:
+        """Generate a unique event ID."""
+        return f"evt-{uuid.uuid4().hex[:12]}"

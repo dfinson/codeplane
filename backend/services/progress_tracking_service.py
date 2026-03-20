@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -175,10 +174,6 @@ def _count_similar_trailing_headlines(history: list[str], headline: str) -> int:
     return count
 
 
-def _make_event_id() -> str:
-    return f"evt-{uuid.uuid4().hex[:12]}"
-
-
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -317,7 +312,7 @@ class ProgressTrackingService:
         try:
             await self._event_bus.publish(
                 DomainEvent(
-                    event_id=_make_event_id(),
+                    event_id=DomainEvent.make_event_id(),
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.agent_plan_updated,
@@ -423,7 +418,7 @@ class ProgressTrackingService:
 
                             await self._event_bus.publish(
                                 DomainEvent(
-                                    event_id=_make_event_id(),
+                                    event_id=DomainEvent.make_event_id(),
                                     job_id=job_id,
                                     timestamp=datetime.now(UTC),
                                     kind=DomainEventKind.progress_headline,
@@ -509,7 +504,7 @@ class ProgressTrackingService:
                             self._plan_last_steps[job_id] = clean_steps
                             await self._event_bus.publish(
                                 DomainEvent(
-                                    event_id=_make_event_id(),
+                                    event_id=DomainEvent.make_event_id(),
                                     job_id=job_id,
                                     timestamp=datetime.now(UTC),
                                     kind=DomainEventKind.agent_plan_updated,

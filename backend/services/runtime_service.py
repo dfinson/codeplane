@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -501,7 +500,7 @@ class RuntimeService:
             self._set_progress_terminal_state(job_id, JobState.succeeded)
             await self._event_bus.publish(
                 DomainEvent(
-                    event_id=_make_event_id(),
+                    event_id=DomainEvent.make_event_id(),
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.job_succeeded,
@@ -599,7 +598,7 @@ class RuntimeService:
 
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.approval_resolved,
@@ -681,7 +680,7 @@ class RuntimeService:
                     self._set_progress_terminal_state(job_id, JobState.canceled)
                     await self._event_bus.publish(
                         DomainEvent(
-                            event_id=_make_event_id(),
+                            event_id=DomainEvent.make_event_id(),
                             job_id=job_id,
                             timestamp=datetime.now(UTC),
                             kind=DomainEventKind.job_canceled,
@@ -784,7 +783,7 @@ class RuntimeService:
 
                 await self._event_bus.publish(
                     DomainEvent(
-                        event_id=_make_event_id(),
+                        event_id=DomainEvent.make_event_id(),
                         job_id=job_id,
                         timestamp=datetime.now(UTC),
                         kind=DomainEventKind.job_succeeded,
@@ -936,7 +935,7 @@ class RuntimeService:
         # Emit verification phase change
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.execution_phase_changed,
@@ -1001,7 +1000,7 @@ class RuntimeService:
                 session_id = self._session_ids.get(job_id, "")
                 await self._event_bus.publish(
                     DomainEvent(
-                        event_id=_make_event_id(),
+                        event_id=DomainEvent.make_event_id(),
                         job_id=job_id,
                         timestamp=datetime.now(UTC),
                         kind=DomainEventKind.session_heartbeat,
@@ -1048,7 +1047,7 @@ class RuntimeService:
         # without waiting for the SDK to echo it back.
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=now,
                 kind=DomainEventKind.transcript_updated,
@@ -1112,7 +1111,7 @@ class RuntimeService:
                 await session.commit()
             await self._event_bus.publish(
                 DomainEvent(
-                    event_id=_make_event_id(),
+                    event_id=DomainEvent.make_event_id(),
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.job_failed,
@@ -1177,7 +1176,7 @@ class RuntimeService:
             self._set_progress_terminal_state(job_id, JobState.failed)
             await self._event_bus.publish(
                 DomainEvent(
-                    event_id=_make_event_id(),
+                    event_id=DomainEvent.make_event_id(),
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.job_failed,
@@ -1490,7 +1489,7 @@ class RuntimeService:
         now = datetime.now(UTC)
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=now,
                 kind=DomainEventKind.session_resumed,
@@ -1506,7 +1505,7 @@ class RuntimeService:
         # _start_job will prevent the SDK echo from duplicating it.
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=now,
                 kind=DomainEventKind.transcript_updated,
@@ -1594,7 +1593,7 @@ class RuntimeService:
         """Publish a job state change event."""
         await self._event_bus.publish(
             DomainEvent(
-                event_id=_make_event_id(),
+                event_id=DomainEvent.make_event_id(),
                 job_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=DomainEventKind.job_state_changed,
@@ -1619,7 +1618,7 @@ class RuntimeService:
             # 'done' events are handled at the _run_job level
             return None
         return DomainEvent(
-            event_id=_make_event_id(),
+            event_id=DomainEvent.make_event_id(),
             job_id=job_id,
             timestamp=datetime.now(UTC),
             kind=kind,
@@ -1651,7 +1650,7 @@ class RuntimeService:
                 await session.commit()
             await self._event_bus.publish(
                 DomainEvent(
-                    event_id=_make_event_id(),
+                    event_id=DomainEvent.make_event_id(),
                     job_id=job.id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.job_failed,
@@ -1683,7 +1682,7 @@ class RuntimeService:
                             await session.commit()
                             await self._event_bus.publish(
                                 DomainEvent(
-                                    event_id=_make_event_id(),
+                                    event_id=DomainEvent.make_event_id(),
                                     job_id=job_id,
                                     timestamp=datetime.now(UTC),
                                     kind=DomainEventKind.job_canceled,
@@ -1704,7 +1703,3 @@ class RuntimeService:
     @property
     def is_shutting_down(self) -> bool:
         return self._shutting_down
-
-
-def _make_event_id() -> str:
-    return f"evt-{uuid.uuid4().hex[:12]}"
