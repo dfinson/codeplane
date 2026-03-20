@@ -218,6 +218,7 @@ class SummarizationService:
                 job_repo = JobRepository(session)
                 job = await job_repo.get(job_id)
             if job is None:
+                log.warning("session_snapshot_job_missing", job_id=job_id)
                 return
 
             async with self._session_factory() as session:
@@ -236,7 +237,7 @@ class SummarizationService:
                         if job.session_count in _recorded:
                             return  # already captured this session
                     except Exception:
-                        pass  # can't parse previous log — append anyway
+                        log.debug("session_log_parse_failed", job_id=job_id, exc_info=True)
 
                 # Build snapshot from events
                 transcript_events = await event_repo.list_by_job(job_id, kinds=[DomainEventKind.transcript_updated])

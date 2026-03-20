@@ -302,6 +302,7 @@ class CopilotAdapter(AgentAdapterInterface):
             try:
                 args_str = _json.dumps(data.arguments) if not isinstance(data.arguments, str) else data.arguments
             except Exception:
+                log.debug("tool_args_serialize_failed", tool_id=tool_id, exc_info=True)
                 args_str = str(data.arguments)
         t_name = data.tool_name or data.mcp_tool_name or "tool"
         t_name_display = (

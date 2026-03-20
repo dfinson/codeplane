@@ -141,9 +141,12 @@ class RetentionService:
                     log.warning("retention_worktree_outside_dir", path=str(wt_path))
                     continue
                 if wt_path.exists() and wt_path.is_dir():
-                    shutil.rmtree(wt_path, ignore_errors=True)
-                    count += 1
-                    log.info("retention_worktree_removed", path=str(wt_path))
+                    try:
+                        shutil.rmtree(wt_path)
+                        count += 1
+                        log.info("retention_worktree_removed", path=str(wt_path))
+                    except OSError:
+                        log.warning("retention_worktree_remove_failed", path=str(wt_path), exc_info=True)
 
             return count
 
