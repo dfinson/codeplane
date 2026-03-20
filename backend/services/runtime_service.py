@@ -11,6 +11,7 @@ Progress tracking (headline milestones and plan extraction) is delegated to
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import enum
 import re
 from datetime import UTC, datetime
@@ -71,6 +72,16 @@ class _EventAction(enum.Enum):
     skip = enum.auto()
     publish = enum.auto()
     abort = enum.auto()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _SessionAttemptResult:
+    """Outcome of a single ``_execute_session_attempt`` call."""
+
+    session_id: str | None = None
+    error_reason: str | None = None
+    made_progress: bool = False
+    downgrade: tuple[str, str] | None = None  # (requested, actual) model names
 
 
 if TYPE_CHECKING:
@@ -320,18 +331,55 @@ class RuntimeService:
         session_id: str | None = None
         error_reason: str | None = None
         try:
-            session_id, error_reason, made_resume_progress = await self._execute_session_attempt(
+            result = await self._execute_session_attempt(
                 job_id,
                 agent_session,
                 config,
                 worktree_path,
                 base_ref,
             )
+            session_id = result.session_id
+            error_reason = result.error_reason
 
-            if error_reason and config.resume_sdk_session_id and not made_resume_progress:
-                session_id, error_reason = await self._attempt_resume_fallback(
+            # Resume fallback: first attempt errored without progress on a resumed session
+            if error_reason and config.resume_sdk_session_id and not result.made_progress:
+                result = await self._attempt_resume_fallback(
                     job_id, config, worktree_path, base_ref,
                 )
+                session_id = result.session_id
+                error_reason = result.error_reason
+
+            # Model downgrade (from either attempt): finish diff, succeed with note, skip verify
+            if result.downgrade is not None:
+                requested, actual = result.downgrade
+                await self._finalize_diff_safe(job_id, worktree_path, base_ref)
+                reason = f"Model downgraded: requested {requested} but received {actual}"
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
+                    await svc.transition_state(job_id, JobState.succeeded, failure_reason=reason)
+                    from backend.persistence.job_repo import JobRepository
+
+                    job_repo = JobRepository(session)
+                    await job_repo.update_resolution(job_id, Resolution.unresolved)
+                    await session.commit()
+
+                self._set_progress_terminal_state(job_id, JobState.succeeded)
+                await self._event_bus.publish(
+                    DomainEvent(
+                        event_id=DomainEvent.make_event_id(),
+                        job_id=job_id,
+                        timestamp=datetime.now(UTC),
+                        kind=DomainEventKind.job_succeeded,
+                        payload={
+                            "resolution": Resolution.unresolved,
+                            "model_downgraded": True,
+                            "requested_model": requested,
+                            "actual_model": actual,
+                        },
+                    )
+                )
+                log.info("job_moved_to_signoff_model_downgrade", job_id=job_id)
+                return
 
             if error_reason:
                 # An error event was received during execution — finalize diff before failing
@@ -490,8 +538,8 @@ class RuntimeService:
         config: SessionConfig,
         worktree_path: str | None,
         base_ref: str | None,
-    ) -> tuple[str | None, str | None]:
-        """Try a fresh session after a failed resume, returning ``(session_id, error_reason)``."""
+    ) -> _SessionAttemptResult:
+        """Try a fresh session after a failed resume."""
         import dataclasses
 
         await self._clear_sdk_session_id(job_id)
@@ -499,7 +547,7 @@ class RuntimeService:
             fallback_prompt = await self._build_resume_handoff_prompt(job_id, config.prompt)
         except Exception:
             log.warning("resume_handoff_prompt_build_failed", job_id=job_id, exc_info=True)
-            return None, "Resume handoff prompt build failed"
+            return _SessionAttemptResult(error_reason="Resume handoff prompt build failed")
 
         log.warning(
             "resume_sdk_session_unusable_falling_back",
@@ -513,14 +561,14 @@ class RuntimeService:
             prompt=fallback_prompt,
             resume_sdk_session_id=None,
         )
-        session_id, error_reason, _ = await self._execute_session_attempt(
+        fallback_result = await self._execute_session_attempt(
             job_id,
             fallback_session,
             fallback_config,
             worktree_path,
             base_ref,
         )
-        return session_id, error_reason
+        return fallback_result
 
     async def _handle_job_canceled(
         self,
@@ -637,10 +685,11 @@ class RuntimeService:
         config: SessionConfig,
         worktree_path: str | None,
         base_ref: str | None,
-    ) -> tuple[str | None, str | None, bool]:
+    ) -> _SessionAttemptResult:
         session_id: str | None = None
         error_reason: str | None = None
         made_progress = False
+        downgrade: tuple[str, str] | None = None
 
         async for session_event in agent_session.execute(config, self._resolve_adapter(config.sdk)):
             made_progress = made_progress or _session_event_counts_as_resume_progress(session_event)
@@ -668,7 +717,7 @@ class RuntimeService:
                 self._session_ids[job_id] = session_id
                 await self._persist_sdk_session_id(job_id, session_id)
 
-            # Model downgrade handling (main loop only)
+            # Model downgrade: publish event, abort session, signal caller
             if domain_event.kind == DomainEventKind.model_downgraded:
                 requested = domain_event.payload.get("requested_model", "")
                 actual = domain_event.payload.get("actual_model", "")
@@ -683,33 +732,8 @@ class RuntimeService:
                     await agent_session.abort()
                 except Exception:
                     log.warning("agent_abort_on_downgrade_failed", job_id=job_id, exc_info=True)
-
-                reason = f"Model downgraded: requested {requested} but received {actual}"
-                async with self._session_factory() as session:
-                    svc = self._make_job_service(session)
-                    await svc.transition_state(job_id, JobState.succeeded, failure_reason=reason)
-                    from backend.persistence.job_repo import JobRepository
-
-                    job_repo = JobRepository(session)
-                    await job_repo.update_resolution(job_id, Resolution.unresolved)
-                    await session.commit()
-
-                await self._event_bus.publish(
-                    DomainEvent(
-                        event_id=DomainEvent.make_event_id(),
-                        job_id=job_id,
-                        timestamp=datetime.now(UTC),
-                        kind=DomainEventKind.job_succeeded,
-                        payload={
-                            "resolution": Resolution.unresolved,
-                            "model_downgraded": True,
-                            "requested_model": requested,
-                            "actual_model": actual,
-                        },
-                    )
-                )
-                log.info("job_moved_to_signoff_model_downgrade", job_id=job_id)
-                return session_id, None, True
+                downgrade = (requested, actual)
+                break
 
             # Progress tracking (main loop only)
             if domain_event.kind == DomainEventKind.transcript_updated and self._progress_tracking is not None:
@@ -720,7 +744,12 @@ class RuntimeService:
 
             await self._event_bus.publish(domain_event)
 
-        return session_id, error_reason, made_progress
+        return _SessionAttemptResult(
+            session_id=session_id,
+            error_reason=error_reason,
+            made_progress=made_progress,
+            downgrade=downgrade,
+        )
 
     async def _run_followup_turn(
         self,
