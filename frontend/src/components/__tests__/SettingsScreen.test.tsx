@@ -24,6 +24,9 @@ vi.mock("../AddRepoModal", () => ({
 import { fetchSettings, fetchRepos, updateSettings } from "../../api/client";
 import { SettingsScreen } from "../SettingsScreen";
 
+const effectiveVerifyPrompt = "Before this task is complete: identify and run this project's test suite.";
+const effectiveSelfReviewPrompt = "Review the changes you just made. Look at the full diff.";
+
 const defaultSettings = {
   maxConcurrentJobs: 2,
   permissionMode: "auto",
@@ -36,8 +39,8 @@ const defaultSettings = {
   verify: false,
   selfReview: false,
   maxTurns: 3,
-  verifyPrompt: "",
-  selfReviewPrompt: "",
+  verifyPrompt: effectiveVerifyPrompt,
+  selfReviewPrompt: effectiveSelfReviewPrompt,
 };
 
 beforeEach(() => {
@@ -99,6 +102,19 @@ describe("SettingsScreen", () => {
     );
     await waitFor(() => {
       expect(screen.getByText("Verification")).toBeInTheDocument();
+    });
+  });
+
+  it("populates effective verification prompts", async () => {
+    render(
+      <MemoryRouter>
+        <SettingsScreen />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue(effectiveVerifyPrompt)).toBeInTheDocument();
+      expect(screen.getByDisplayValue(effectiveSelfReviewPrompt)).toBeInTheDocument();
     });
   });
 

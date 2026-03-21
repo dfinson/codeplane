@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs, suggestNames } from "../api/client";
+import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, suggestNames } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
@@ -17,6 +17,11 @@ function sdkStatusDescription(sdk: SDKInfo): string | undefined {
   if (!sdk.enabled) return sdk.hint || "Not installed";
   if (sdk.status === "not_configured") return sdk.hint || "Not authenticated";
   return undefined;
+}
+
+function pickDefaultModelId(models: Array<{ value: string; isDefault: boolean }>): string | null {
+  const flagged = models.find((item) => item.isDefault);
+  return flagged?.value ?? models[0]?.value ?? null;
 }
 
 export function JobCreationScreen() {
@@ -47,23 +52,39 @@ export function JobCreationScreen() {
     setModelsLoading(true);
     fetchModels(sdkId)
       .then((m) => {
-        setModels(
-          m
-            .map((x) => ({
-              value: String(x.id ?? x.name ?? ""),
-              label: String(x.name ?? x.id ?? "unknown"),
-            }))
-            .filter((x) => x.value),
-        );
+        const mapped = m
+          .map((x) => ({
+            value: String(x.id ?? x.name ?? ""),
+            label: String(x.name ?? x.id ?? "unknown"),
+            isDefault: Boolean(
+              (typeof x.default === "boolean" && x.default) ||
+              (typeof x.isDefault === "boolean" && x.isDefault) ||
+              (typeof x.is_default === "boolean" && x.is_default),
+            ),
+          }))
+          .filter((x) => x.value);
+        setModels(mapped.map(({ value, label }) => ({ value, label })));
+        setModel((prev) => {
+          if (prev && mapped.some((item) => item.value === prev)) return prev;
+          return pickDefaultModelId(mapped);
+        });
       })
       .catch((err) => {
         console.error("Failed to fetch models", err);
         setModels([]);
+        setModel(null);
       })
       .finally(() => setModelsLoading(false));
   }, []);
 
   useEffect(() => {
+    fetchSettings()
+      .then((settings) => {
+        setPermissionMode(settings.permissionMode as PermissionMode);
+        setVerify(settings.verify);
+        setSelfReview(settings.selfReview);
+      })
+      .catch(() => toast.error("Failed to load settings"));
     fetchRepos()
       .then((r) => {
         const items = r.items.map((p) => ({ value: p, label: p.split("/").pop() ?? p }));
@@ -231,6 +252,35 @@ export function JobCreationScreen() {
             </div>
           </div>
 
+          {showSdkSelector && (
+            <Combobox
+              label="Agent SDK"
+              placeholder="Select SDK…"
+              items={enabledSdks.map((s) => ({
+                value: s.id,
+                label: s.name,
+                disabled: s.status !== "ready",
+                description: sdkStatusDescription(s),
+              }))}
+              value={sdk}
+              onChange={handleSdkChange}
+            />
+          )}
+
+          {sdkNotReady && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 -mt-1">
+              {currentSdkInfo.hint || `${currentSdkInfo.name} is not authenticated.`}
+            </p>
+          )}
+
+          <Combobox
+            label="Model"
+            placeholder={modelsLoading ? "Loading…" : models.length === 0 ? "No models available" : "Select model…"}
+            items={models}
+            value={model}
+            onChange={setModel}
+          />
+
           <hr className="border-border" />
 
           <button
@@ -244,36 +294,6 @@ export function JobCreationScreen() {
 
           {showAdvanced && (
             <div className="flex flex-col gap-3">
-              {showSdkSelector && (
-                <Combobox
-                  label="Agent SDK"
-                  placeholder="Select SDK…"
-                  items={enabledSdks.map((s) => ({
-                    value: s.id,
-                    label: s.name,
-                    disabled: s.status !== "ready",
-                    description: sdkStatusDescription(s),
-                  }))}
-                  value={sdk}
-                  onChange={handleSdkChange}
-                />
-              )}
-
-              {sdkNotReady && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-1">
-                  {currentSdkInfo.hint || `${currentSdkInfo.name} is not authenticated.`}
-                </p>
-              )}
-
-              <Combobox
-                label="Model"
-                placeholder={modelsLoading ? "Loading…" : models.length === 0 ? "No models available" : "Default"}
-                items={models}
-                value={model}
-                onChange={setModel}
-                clearable
-              />
-
               <div className="flex flex-col gap-1.5">
                 <Label>Base Reference</Label>
                 <Input

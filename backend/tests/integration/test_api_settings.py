@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from backend.api.settings import _get_config
 from backend.config import CPLConfig
+from backend.services.runtime_service import DEFAULT_SELF_REVIEW_PROMPT, DEFAULT_VERIFY_PROMPT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,6 +80,18 @@ class TestGetSettings:
         assert isinstance(data["cleanupWorktree"], bool)
         assert isinstance(data["artifactRetentionDays"], int)
         assert isinstance(data["verify"], bool)
+
+    @pytest.mark.asyncio
+    async def test_returns_effective_default_verification_prompts(
+        self, client: AsyncClient, app: FastAPI
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+
+        resp = await client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["verifyPrompt"] == DEFAULT_VERIFY_PROMPT
+        assert data["selfReviewPrompt"] == DEFAULT_SELF_REVIEW_PROMPT
 
 
 class TestUpdateSettings:

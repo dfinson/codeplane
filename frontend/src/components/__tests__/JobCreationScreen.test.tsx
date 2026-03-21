@@ -33,6 +33,10 @@ vi.mock("../AddRepoModal", () => ({
   AddRepoModal: () => null,
 }));
 
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 // Mock Combobox to render a simple select
 vi.mock("../ui/combobox", () => ({
   Combobox: ({ label, items, value, onChange }: any) => (
@@ -55,6 +59,20 @@ vi.mock("../ui/combobox", () => ({
 import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings } from "../../api/client";
 import { JobCreationScreen } from "../JobCreationScreen";
 
+async function renderScreen() {
+  render(
+    <MemoryRouter>
+      <JobCreationScreen />
+    </MemoryRouter>,
+  );
+
+  await waitFor(() => {
+    expect(fetchSettings).toHaveBeenCalled();
+    expect(fetchRepos).toHaveBeenCalled();
+    expect(fetchSDKs).toHaveBeenCalled();
+  });
+}
+
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual("react-router-dom");
@@ -64,7 +82,10 @@ vi.mock("react-router-dom", async () => {
 beforeEach(() => {
   vi.mocked(createJob).mockReset();
   vi.mocked(fetchRepos).mockResolvedValue({ items: ["/repos/my-app"] } as any);
-  vi.mocked(fetchModels).mockResolvedValue([]);
+  vi.mocked(fetchModels).mockResolvedValue([
+    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+    { id: "gpt-5.4", name: "GPT-5.4", default: true },
+  ]);
   vi.mocked(fetchSDKs).mockResolvedValue({ default: "copilot", sdks: [] });
   vi.mocked(fetchSettings).mockResolvedValue({
     maxConcurrentJobs: 2,
@@ -86,67 +107,75 @@ beforeEach(() => {
 
 describe("JobCreationScreen", () => {
   it("renders New Job heading", async () => {
-    render(
-      <MemoryRouter>
-        <JobCreationScreen />
-      </MemoryRouter>,
-    );
+    await renderScreen();
     expect(screen.getByText("New Job")).toBeInTheDocument();
   });
 
   it("renders Repository label", async () => {
-    render(
-      <MemoryRouter>
-        <JobCreationScreen />
-      </MemoryRouter>,
-    );
-    await waitFor(() => {
-      expect(screen.getByText("Repository")).toBeInTheDocument();
-    });
+    await renderScreen();
+    expect(screen.getByText("Repository")).toBeInTheDocument();
   });
 
   it("renders Create Job button", async () => {
-    render(
-      <MemoryRouter>
-        <JobCreationScreen />
-      </MemoryRouter>,
-    );
+    await renderScreen();
     expect(screen.getByText("Create Job")).toBeInTheDocument();
   });
 
-  it("renders permission mode buttons", () => {
-    render(
-      <MemoryRouter>
-        <JobCreationScreen />
-      </MemoryRouter>,
-    );
+  it("renders permission mode buttons", async () => {
+    await renderScreen();
     expect(screen.getByText("Full Auto")).toBeInTheDocument();
     expect(screen.getByText("Review & Approve")).toBeInTheDocument();
-    expect(screen.getByText("Observe Only")).toBeInTheDocument();
+  });
+
+  it("renders model selection in the main form", async () => {
+    await renderScreen();
+    expect(screen.getByText("Model")).toBeInTheDocument();
+    expect(screen.queryByText("Advanced options")).toBeInTheDocument();
   });
 
   it("submits a job", async () => {
     vi.mocked(createJob).mockResolvedValueOnce({ id: "j-new" } as any);
-    render(
-      <MemoryRouter>
-        <JobCreationScreen />
-      </MemoryRouter>,
-    );
+    await renderScreen();
 
-    // Wait for repos to load
-    await waitFor(() => {
-      expect(fetchRepos).toHaveBeenCalled();
-    });
-
-    // Fill prompt
     const textarea = screen.getByTestId("prompt-input");
     fireEvent.change(textarea, { target: { value: "Fix the bug" } });
 
-    // Click Create Job
     fireEvent.click(screen.getByText("Create Job"));
 
     await waitFor(() => {
       expect(createJob).toHaveBeenCalled();
+    });
+  });
+
+  it("uses the configured permission mode by default", async () => {
+    vi.mocked(createJob).mockResolvedValueOnce({ id: "j-auto" } as any);
+
+    await renderScreen();
+
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Ship it" } });
+    fireEvent.click(screen.getByText("Create Job"));
+
+    await waitFor(() => {
+      expect(createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ permission_mode: "auto" }),
+      );
+    });
+  });
+
+  it("uses the SDK's actual default model", async () => {
+    vi.mocked(createJob).mockResolvedValueOnce({ id: "j-model" } as any);
+
+    await renderScreen();
+
+    expect(screen.getByTestId("combo-Model")).toHaveValue("gpt-5.4");
+
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Use the default model" } });
+    fireEvent.click(screen.getByText("Create Job"));
+
+    await waitFor(() => {
+      expect(createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "gpt-5.4" }),
+      );
     });
   });
 });

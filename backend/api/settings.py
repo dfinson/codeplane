@@ -34,6 +34,7 @@ from backend.models.api_schemas import (
 )
 from backend.services.git_service import GitError, GitService
 from backend.services.platform_adapter import PlatformRegistry, detect_platform
+from backend.services.runtime_service import DEFAULT_SELF_REVIEW_PROMPT, DEFAULT_VERIFY_PROMPT
 
 router = APIRouter(tags=["settings"], route_class=DishkaRoute)
 
@@ -59,8 +60,8 @@ def _config_to_response(config: CPLConfig) -> SettingsResponse:
         verify=config.verification.verify,
         self_review=config.verification.self_review,
         max_turns=config.verification.max_turns,
-        verify_prompt=config.verification.verify_prompt,
-        self_review_prompt=config.verification.self_review_prompt,
+        verify_prompt=config.verification.verify_prompt or DEFAULT_VERIFY_PROMPT,
+        self_review_prompt=config.verification.self_review_prompt or DEFAULT_SELF_REVIEW_PROMPT,
     )
 
 

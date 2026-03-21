@@ -127,11 +127,13 @@ export function App() {
 
         <button
           onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
-          className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          className="hidden sm:flex min-w-56 items-center justify-between gap-3 rounded-lg border border-border bg-background/70 px-4 py-2 text-sm text-muted-foreground shadow-sm transition-colors hover:text-foreground hover:bg-accent"
         >
-          <Search size={12} />
-          <span>Search…</span>
-          <kbd className="text-xs border border-border rounded px-1 py-0.5 font-mono">⌘K</kbd>
+          <span className="flex items-center gap-2">
+            <Search size={14} />
+            <span>Search…</span>
+          </span>
+          <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs">⌘K</kbd>
         </button>
 
         <div className="flex items-center gap-1 opacity-[0.78]">
