@@ -7,7 +7,9 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
-import { useStore } from "../store";
+import { fetchJob } from "../api/client";
+import { enrichJob, useStore } from "../store";
+import type { JobSummary } from "../store";
 
 /** Reconnection parameters per SPEC §3.5 */
 const INITIAL_DELAY_MS = 1000;
@@ -99,7 +101,28 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
             // Defer to a macrotask so this Zustand set() never lands in the
             // same microtask checkpoint as React's useSyncExternalStore flush.
             // See comment on onopen above for the full explanation of #185.
-            setTimeout(() => dispatchSSEEvent(eventType, data), 0);
+            setTimeout(async () => {
+              // If a state change arrives for a job not yet in the store
+              // (e.g. created on another device), fetch the full job from the
+              // REST API and insert it before dispatching the state update so
+              // it appears on the Kanban board without a page refresh.
+              if (eventType === "job_state_changed") {
+                const payload = data as Record<string, unknown>;
+                const jobId = payload.jobId as string | undefined;
+                if (jobId && !useStore.getState().jobs[jobId]) {
+                  try {
+                    const job = await fetchJob(jobId);
+                    useStore.setState((state) => ({
+                      jobs: { ...state.jobs, [job.id]: enrichJob(job as unknown as JobSummary) },
+                    }));
+                  } catch {
+                    // Job may not be readable yet; the state change dispatch
+                    // below will be a no-op for unknown jobs, which is safe.
+                  }
+                }
+              }
+              dispatchSSEEvent(eventType, data);
+            }, 0);
           } catch {
             // Ignore unparseable events
           }
