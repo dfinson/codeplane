@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock, Check } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
-import ReactDiffViewer, { DiffMethod } from "react-diff-viewer-continued";
 import { toast } from "sonner";
 import { useStore, selectJobDiffs } from "../store";
 import { fetchJobDiff, sendOperatorMessage, resumeJob } from "../api/client";
@@ -43,64 +42,6 @@ const STATUS_ICON_CLASS: Record<string, string> = {
   renamed: "text-yellow-400",
 };
 
-const MOBILE_DIFF_MAX_LINES = 3000;
-
-function MobileDiffView({ oldValue, newValue }: { oldValue: string; newValue: string }) {
-  const [showFull, setShowFull] = useState(false);
-  const prevOldRef = useRef(oldValue);
-
-  // Reset truncation when file changes
-  if (prevOldRef.current !== oldValue) {
-    prevOldRef.current = oldValue;
-    if (showFull) setShowFull(false);
-  }
-
-  const totalLines = Math.max(oldValue.split("\n").length, newValue.split("\n").length);
-  const truncated = !showFull && totalLines > MOBILE_DIFF_MAX_LINES;
-  const displayOld = truncated ? oldValue.split("\n").slice(0, MOBILE_DIFF_MAX_LINES).join("\n") : oldValue;
-  const displayNew = truncated ? newValue.split("\n").slice(0, MOBILE_DIFF_MAX_LINES).join("\n") : newValue;
-
-  return (
-    <div className="overflow-auto h-full text-xs">
-      <ReactDiffViewer
-        oldValue={displayOld || ""}
-        newValue={displayNew || ""}
-        splitView={false}
-        useDarkTheme={true}
-        compareMethod={DiffMethod.LINES}
-        styles={{
-          variables: {
-            dark: {
-              diffViewerBackground: "transparent",
-              addedBackground: "rgba(16, 185, 129, 0.15)",
-              removedBackground: "rgba(239, 68, 68, 0.15)",
-              wordAddedBackground: "rgba(16, 185, 129, 0.3)",
-              wordRemovedBackground: "rgba(239, 68, 68, 0.3)",
-              addedGutterBackground: "rgba(16, 185, 129, 0.1)",
-              removedGutterBackground: "rgba(239, 68, 68, 0.1)",
-              gutterBackground: "transparent",
-              codeFoldBackground: "transparent",
-              emptyLineBackground: "transparent",
-              codeFoldGutterBackground: "transparent",
-            },
-          },
-          contentText: { fontSize: "12px", lineHeight: "1.5" },
-        }}
-        hideLineNumbers={false}
-      />
-      {truncated && (
-        <div className="sticky bottom-0 flex justify-center py-3 bg-gradient-to-t from-card via-card to-transparent">
-          <button
-            onClick={() => setShowFull(true)}
-            className="px-4 py-2 rounded-md bg-accent text-sm font-medium text-foreground hover:bg-accent/80 transition-colors"
-          >
-            Show all {totalLines.toLocaleString()} lines
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function guessLanguage(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -380,27 +321,23 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
               <Spinner />
             </div>
           ) : selectedFile ? (
-            isMobile ? (
-              <MobileDiffView oldValue={original} newValue={modified} />
-            ) : (
-              <DiffEditor
-                original={original}
-                modified={modified}
-                language={guessLanguage(selectedFile.path)}
-                theme="vs-dark"
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  renderSideBySide: true,
-                  scrollBeyondLastLine: false,
-                  fontSize: 13,
-                  lineNumbersMinChars: 3,
-                  glyphMargin: false,
-                  lineDecorationsWidth: 4,
-                  folding: true,
-                }}
-              />
-            )
+            <DiffEditor
+              original={original}
+              modified={modified}
+              language={guessLanguage(selectedFile.path)}
+              theme="vs-dark"
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                renderSideBySide: !isMobile,
+                scrollBeyondLastLine: false,
+                fontSize: isMobile ? 12 : 13,
+                lineNumbersMinChars: 3,
+                glyphMargin: false,
+                lineDecorationsWidth: 4,
+                folding: true,
+              }}
+            />
           ) : null}
         </div>
       </div>
