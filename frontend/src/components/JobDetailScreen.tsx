@@ -211,12 +211,12 @@ export function JobDetailScreen() {
     toast.success("Job canceled");
   }, [jobId]);
 
-  const handleRerun = useCallback(async () => {
+  const handleResume = useCallback(async () => {
     if (!jobId) return;
     setActionLoading(true);
     try {
       const result = await rerunJob(jobId);
-      toast.success(`Rerun: ${result.id}`);
+      toast.success(`Resumed: ${result.id}`);
       navigate(`/jobs/${result.id}`);
     } catch (e) { toast.error(String(e)); }
     finally { setActionLoading(false); }
@@ -280,7 +280,7 @@ export function JobDetailScreen() {
   }
 
   const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
-  const canRetry = job.state === "failed";
+  const canResume = job.state === "failed";
   const isRunning = job.state === "running";
   const needsResolution =
     job.state === "succeeded" &&
@@ -324,10 +324,10 @@ export function JobDetailScreen() {
                 Cancel
               </Button>
             )}
-            {canRetry && (
-              <Button size="sm" variant="outline" loading={actionLoading} onClick={handleRerun}>
+            {canResume && (
+              <Button size="sm" variant="outline" loading={actionLoading} onClick={handleResume}>
                 <RotateCcw size={14} />
-                Retry
+                Resume
               </Button>
             )}
             {needsResolution && hasChanges && (

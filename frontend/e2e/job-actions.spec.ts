@@ -1,7 +1,7 @@
 /**
  * E2E tests: Job action buttons.
  *
- * Covers cancel, retry (rerun), send message, and archive actions
+ * Covers cancel, resume (rerun), send message, and archive actions
  * from the job detail screen.
  */
 
@@ -149,8 +149,8 @@ test.describe("Cancel Running Job", () => {
   });
 });
 
-test.describe("Retry Failed Job", () => {
-  test("retry button calls POST /api/jobs/job-1/rerun", async ({ page }) => {
+test.describe("Resume Failed Job", () => {
+  test("resume button calls POST /api/jobs/job-1/rerun", async ({ page }) => {
     const failedJob = makeJob({ state: "failed", failureReason: "Out of memory" });
     await setupJobDetailMocks(page, failedJob);
 
@@ -189,23 +189,23 @@ test.describe("Retry Failed Job", () => {
     await page.goto("/jobs/job-1");
     await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
 
-    const retryBtn = page.locator("button", { hasText: "Retry" });
-    await expect(retryBtn).toBeVisible();
-    await retryBtn.click();
+    const resumeBtn = page.locator("button", { hasText: "Resume" });
+    await expect(resumeBtn).toBeVisible();
+    await resumeBtn.click();
 
     // Should navigate to the new job
     await expect(page).toHaveURL(/\/jobs\/job-2/, { timeout: 10_000 });
     expect(rerunCalled).toBe(true);
   });
 
-  test("retry button is hidden for running jobs", async ({ page }) => {
+  test("resume button is hidden for running jobs", async ({ page }) => {
     const runningJob = makeJob({ state: "running" });
     await setupJobDetailMocks(page, runningJob);
 
     await page.goto("/jobs/job-1");
     await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.locator("button", { hasText: "Retry" })).toBeHidden();
+    await expect(page.locator("button", { hasText: "Resume" })).toBeHidden();
   });
 });
 
