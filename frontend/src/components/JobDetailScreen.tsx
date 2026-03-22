@@ -60,7 +60,7 @@ export function JobDetailScreen() {
     const measure = () => {
       const rect = el.getBoundingClientRect();
       const available = window.innerHeight - rect.top - 16; // 16px bottom margin
-      setLiveHeight(Math.max(available, 400));
+      setLiveHeight(Math.max(available, window.innerHeight * 0.6));
     };
 
     measure();
@@ -574,10 +574,10 @@ export function JobDetailScreen() {
 
       {tab === "live" && (
         <div ref={liveContainerRef} className="flex flex-col" style={liveHeight ? { height: liveHeight } : { height: 'calc(100vh - 13rem)' }}>
-          <div className="flex-1 min-h-[24rem]">
+          <div className="flex-1 min-h-0">
             <TranscriptPanel jobId={jobId} interactive jobState={job.state} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
-          <div className="overflow-y-auto max-h-[40vh] space-y-4 mt-4 shrink-0">
+          <div className="overflow-y-auto max-h-[25vh] space-y-4 mt-4 shrink-0">
             <PlanPanel jobId={jobId} />
             <ExecutionTimeline jobId={jobId} />
             <MetricsPanel jobId={jobId} isRunning={isRunning} />
