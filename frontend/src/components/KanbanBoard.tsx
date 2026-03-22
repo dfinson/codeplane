@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Search, ArrowDownUp } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectSignoffJobs, selectActiveJobs, selectAttentionJobs } from "../store";
@@ -54,17 +55,8 @@ export function KanbanBoard() {
   const [sortOpen, setSortOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFilterKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
-      e.preventDefault();
-      filterInputRef.current?.focus();
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("keydown", handleFilterKeyDown);
-    return () => window.removeEventListener("keydown", handleFilterKeyDown);
-  }, [handleFilterKeyDown]);
+  // "/" focuses the filter input (disabled automatically when an input is already focused)
+  useHotkeys("/", () => filterInputRef.current?.focus(), { preventDefault: true });
 
   const process = (jobs: JobSummary[]) => sortJobs(filterJobs(jobs, query), sort);
 

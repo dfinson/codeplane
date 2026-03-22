@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useMatch } from "react-router-dom";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { useStore } from "../store";
 import { formatJobTerminalLabel } from "../lib/terminalLabels";
@@ -35,16 +36,7 @@ export function CommandPalette() {
   const currentJob = currentJobId ? jobsMap[currentJobId] : null;
 
   // Ctrl/Cmd+K toggles the palette
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setOpen((prev) => !prev);
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useHotkeys("ctrl+k,meta+k", () => setOpen((prev) => !prev), { enableOnFormTags: true, preventDefault: true });
 
   // Allow the header trigger button to open the palette
   useEffect(() => {
