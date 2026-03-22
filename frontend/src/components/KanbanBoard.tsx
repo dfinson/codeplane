@@ -11,8 +11,8 @@ export function KanbanBoard() {
   return (
     <div className="grid grid-cols-3 gap-3 h-[calc(100vh-140px)] max-lg:grid-cols-2 max-sm:hidden">
       <KanbanColumn title={KANBAN_COLUMNS.IN_PROGRESS} jobs={activeJobs} />
-      <KanbanColumn title={KANBAN_COLUMNS.NEEDS_REVIEW} jobs={signoffJobs} />
-      <KanbanColumn title={KANBAN_COLUMNS.NEEDS_ATTENTION} jobs={attentionJobs} />
+      <KanbanColumn title={KANBAN_COLUMNS.AWAITING_INPUT} jobs={signoffJobs} />
+      <KanbanColumn title={KANBAN_COLUMNS.FAILED} jobs={attentionJobs} />
     </div>
   );
 }

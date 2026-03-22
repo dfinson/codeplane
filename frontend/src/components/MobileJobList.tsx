@@ -9,8 +9,8 @@ import type { KanbanColumn } from "../constants/kanban";
 
 const TABS = [
   KANBAN_COLUMNS.IN_PROGRESS,
-  KANBAN_COLUMNS.NEEDS_REVIEW,
-  KANBAN_COLUMNS.NEEDS_ATTENTION,
+  KANBAN_COLUMNS.AWAITING_INPUT,
+  KANBAN_COLUMNS.FAILED,
 ] as const;
 
 function filterForTab(jobs: Record<string, JobSummary>, tab: KanbanColumn): JobSummary[] {
@@ -19,14 +19,14 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: KanbanColumn): JobS
       switch (tab) {
         case KANBAN_COLUMNS.IN_PROGRESS:
           return !j.archivedAt && (j.state === "queued" || j.state === "running");
-        case KANBAN_COLUMNS.NEEDS_REVIEW:
+        case KANBAN_COLUMNS.AWAITING_INPUT:
           return (
             !j.archivedAt &&
             (j.state === "waiting_for_approval" ||
               j.state === "succeeded" ||
               j.state === "canceled")
           );
-        case KANBAN_COLUMNS.NEEDS_ATTENTION:
+        case KANBAN_COLUMNS.FAILED:
           return !j.archivedAt && j.state === "failed";
         default:
           return false;
@@ -48,8 +48,8 @@ export function MobileJobList() {
       <div className="flex rounded-lg bg-muted p-1 mb-4 gap-0.5">
         {TABS.map((t) => {
           const label =
-            t === KANBAN_COLUMNS.NEEDS_REVIEW && pendingCount > 0
-              ? `${KANBAN_COLUMNS.NEEDS_REVIEW} (${pendingCount})`
+            t === KANBAN_COLUMNS.AWAITING_INPUT && pendingCount > 0
+              ? `${KANBAN_COLUMNS.AWAITING_INPUT} (${pendingCount})`
               : t;
           return (
             <button
@@ -83,7 +83,7 @@ export function MobileJobList() {
                 </div>
               );
             }
-            if (tab === KANBAN_COLUMNS.NEEDS_REVIEW) {
+            if (tab === KANBAN_COLUMNS.AWAITING_INPUT) {
               return (
                 <div className="flex flex-col items-center gap-3 px-4 py-6">
                   <div className="rounded-full bg-emerald-500/10 p-3">
@@ -91,12 +91,12 @@ export function MobileJobList() {
                   </div>
                   <div className="text-center">
                     <p className="text-sm font-medium text-muted-foreground">All caught up</p>
-                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing needs your review right now</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing is waiting for your input</p>
                   </div>
                 </div>
               );
             }
-            if (tab === KANBAN_COLUMNS.NEEDS_ATTENTION) {
+            if (tab === KANBAN_COLUMNS.FAILED) {
               return (
                 <div className="flex flex-col items-center gap-3 px-4 py-6">
                   <div className="rounded-full bg-emerald-500/10 p-3">
