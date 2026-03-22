@@ -8,6 +8,15 @@ AUTO             — approve everything within the current worktree.
 READ_ONLY        — approve reads and grep/find; deny everything else.
 APPROVAL_REQUIRED — approve read_file; require approval for shells
                     (except grep/find), URL fetches, and writes.
+
+Hard blocks
+-----------
+Regardless of mode or trust level, the following operations are ALWAYS
+routed to the operator for explicit approval and can never be bypassed:
+
+* ``git reset --hard`` — destructive history rewrite that discards all
+  uncommitted changes and moves HEAD.  An agent must never run this
+  without a human story and explicit sign-off.
 """
 
 from __future__ import annotations
@@ -35,6 +44,33 @@ class PolicyDecision(StrEnum):
 # Read-only shell commands that are always safe.
 # Covers Unix (grep, ls, cat …), Windows cmd (dir, findstr, where …),
 # and PowerShell cmdlets (Get-ChildItem, Select-String …).
+# ---------------------------------------------------------------------------
+# Hard-blocked commands — always require explicit operator approval,
+# regardless of permission mode or trust level.
+# ---------------------------------------------------------------------------
+
+# Matches `git reset --hard` in any reasonable shell command string, including
+# compound commands joined with &&, || or ;.  Both orderings are covered:
+#   git reset --hard HEAD
+#   git reset HEAD --hard
+#   cd /repo && git reset --hard origin/main
+_GIT_RESET_HARD_RE = re.compile(
+    r"\bgit\s+reset\b[^|;&\n]*?\s--hard\b"  # --hard after  reset [flags/ref]
+    r"|\bgit\s+reset\s+--hard\b",  # --hard immediately after reset
+    re.IGNORECASE,
+)
+
+
+def is_git_reset_hard(command: str) -> bool:
+    """Return True if *command* contains a ``git reset --hard`` invocation.
+
+    This is used to enforce the platform-level hard block: no agent may run
+    ``git reset --hard`` without explicit operator approval, regardless of
+    the active permission mode or whether the job has been trusted.
+    """
+    return bool(_GIT_RESET_HARD_RE.search(command))
+
+
 _READONLY_SHELL_RE = re.compile(
     r"^\s*("
     # Unix
@@ -206,6 +242,11 @@ def _evaluate(
     read_only: bool | None = None,
 ) -> PolicyDecision:
     """Core dispatcher: look up (mode, kind) in the rule table and resolve."""
+    # Hard block: git reset --hard always requires operator sign-off, period.
+    # This check runs before mode logic and trust grants so it cannot be bypassed.
+    if kind == "shell" and full_command_text and is_git_reset_hard(full_command_text):
+        return _ASK
+
     rule = _RULES.get((mode, kind))
     if rule is None:
         default = _MODE_DEFAULTS.get(mode, _ASK)

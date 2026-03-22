@@ -72,6 +72,9 @@ class ApprovalRow(Base):
     requested_at = Column(TZDateTime, nullable=False)
     resolved_at = Column(TZDateTime, nullable=True)
     resolution = Column(String, nullable=True)
+    # Hard-blocked operations (e.g. git reset --hard) set this to True so that
+    # blanket trust grants cannot auto-resolve them.
+    requires_explicit_approval = Column(Boolean, nullable=False, server_default="0")
 
 
 class ArtifactRow(Base):

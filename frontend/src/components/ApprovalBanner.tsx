@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ShieldQuestion, ShieldCheck } from "lucide-react";
+import { ShieldQuestion, ShieldCheck, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectApprovals } from "../store";
 import { resolveApproval, trustJob } from "../api/client";
@@ -15,6 +15,11 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
   const pending = Object.values(approvals).filter(
     (a) => a.jobId === jobId && !a.resolvedAt,
   );
+
+  // Approvals that require explicit operator sign-off (e.g. git reset --hard)
+  // cannot be auto-resolved by the trust mechanism.
+  const hasExplicitPending = pending.some((a) => a.requiresExplicitApproval);
+  const autoResolvableCount = pending.filter((a) => !a.requiresExplicitApproval).length;
 
   const handleResolve = useCallback(
     async (approvalId: string, resolution: "approved" | "rejected") => {
@@ -51,27 +56,49 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
         <div className="flex items-center justify-between rounded-lg border border-orange-500/40 bg-orange-500/10 px-4 py-2">
           <span className="text-sm text-orange-300">
             {pending.length} pending approval{pending.length !== 1 ? "s" : ""}
+            {hasExplicitPending && autoResolvableCount > 0 && (
+              <span className="text-orange-400/70"> ({autoResolvableCount} auto-approvable)</span>
+            )}
           </span>
-          <Button
-            size="sm"
-            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
-            loading={trusting}
-            onClick={handleTrustSession}
-          >
-            <ShieldCheck size={14} />
-            Approve All
-          </Button>
+          {autoResolvableCount > 0 && (
+            <Button
+              size="sm"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+              loading={trusting}
+              onClick={handleTrustSession}
+            >
+              <ShieldCheck size={14} />
+              Approve All
+            </Button>
+          )}
         </div>
       )}
       {pending.map((a) => (
         <div
           key={a.id}
-          className="rounded-lg border border-orange-500/40 bg-orange-500/10 p-4"
+          className={
+            a.requiresExplicitApproval
+              ? "rounded-lg border border-red-500/50 bg-red-500/10 p-4"
+              : "rounded-lg border border-orange-500/40 bg-orange-500/10 p-4"
+          }
         >
           <div className="flex items-center gap-2 mb-2">
-            <ShieldQuestion size={16} className="text-orange-400 shrink-0" />
-            <span className="text-sm font-semibold text-orange-300">Approval Required</span>
+            {a.requiresExplicitApproval ? (
+              <TriangleAlert size={16} className="text-red-400 shrink-0" />
+            ) : (
+              <ShieldQuestion size={16} className="text-orange-400 shrink-0" />
+            )}
+            <span
+              className={`text-sm font-semibold ${a.requiresExplicitApproval ? "text-red-300" : "text-orange-300"}`}
+            >
+              {a.requiresExplicitApproval ? "⚠️ Explicit Approval Required" : "Approval Required"}
+            </span>
           </div>
+          {a.requiresExplicitApproval && (
+            <p className="text-xs text-red-400/80 mb-2 font-medium">
+              This operation cannot be auto-approved via &ldquo;Approve All&rdquo;. You must approve it individually.
+            </p>
+          )}
           <p className="text-sm text-foreground mb-2">{a.description}</p>
           {a.proposedAction && (
             <pre className="text-xs bg-background border border-border rounded p-2 mb-3 overflow-x-auto font-mono">

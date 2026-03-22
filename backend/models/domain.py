@@ -206,6 +206,10 @@ class Approval:
     requested_at: datetime
     resolved_at: datetime | None = None
     resolution: str | None = None
+    # When True this approval was triggered by a hard-blocked operation (e.g.
+    # git reset --hard) and MUST NOT be auto-resolved by a blanket trust grant.
+    # The operator must explicitly click Approve for each occurrence.
+    requires_explicit_approval: bool = False
 
 
 @dataclass

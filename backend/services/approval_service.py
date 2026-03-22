@@ -39,6 +39,9 @@ class ApprovalService:
         self._session_factory = session_factory
         self._pending_futures: dict[str, asyncio.Future[str]] = {}
         self._approval_to_job: dict[str, str] = {}  # approval_id → job_id
+        # approval_ids that require explicit operator approval and must not be
+        # auto-resolved by a blanket trust grant (e.g. git reset --hard).
+        self._explicit_approval_ids: set[str] = set()
         # Trust state is intentionally ephemeral (in-memory only). A server
         # restart resets all trust grants, which is the safer default: the
         # operator must re-trust after a restart rather than having stale
@@ -55,8 +58,16 @@ class ApprovalService:
         job_id: str,
         description: str,
         proposed_action: str | None = None,
+        *,
+        requires_explicit_approval: bool = False,
     ) -> Approval:
-        """Persist a new approval request and create an in-memory future for it."""
+        """Persist a new approval request and create an in-memory future for it.
+
+        When *requires_explicit_approval* is True the approval will never be
+        auto-resolved by a blanket trust grant — the operator must explicitly
+        click Approve for each occurrence.  Use this for hard-blocked operations
+        such as ``git reset --hard``.
+        """
         approval_id = str(uuid.uuid4())
         now = datetime.now(UTC)
         approval = Approval(
@@ -65,6 +76,7 @@ class ApprovalService:
             description=description,
             proposed_action=proposed_action,
             requested_at=now,
+            requires_explicit_approval=requires_explicit_approval,
         )
         async with self._session_factory() as session:
             repo = self._make_repo(session)
@@ -76,11 +88,14 @@ class ApprovalService:
         future: asyncio.Future[str] = loop.create_future()
         self._pending_futures[approval_id] = future
         self._approval_to_job[approval_id] = job_id
+        if requires_explicit_approval:
+            self._explicit_approval_ids.add(approval_id)
 
         log.info(
             "approval_created",
             approval_id=approval_id,
             job_id=job_id,
+            requires_explicit_approval=requires_explicit_approval,
         )
         return approval
 
@@ -102,6 +117,7 @@ class ApprovalService:
         # Resolve the in-memory future so the runtime unblocks
         future = self._pending_futures.pop(approval_id, None)
         self._approval_to_job.pop(approval_id, None)
+        self._explicit_approval_ids.discard(approval_id)
         if future is not None and not future.done():
             future.set_result(resolution)
 
@@ -142,6 +158,7 @@ class ApprovalService:
         for aid in to_remove:
             fut = self._pending_futures.pop(aid, None)
             self._approval_to_job.pop(aid, None)
+            self._explicit_approval_ids.discard(aid)
             if fut is not None and not fut.done():
                 fut.cancel()
 
@@ -152,16 +169,23 @@ class ApprovalService:
     async def trust_job(self, job_id: str) -> int:
         """Mark a job as trusted and approve all its pending requests.
 
+        Approvals that were created with *requires_explicit_approval=True*
+        (e.g. ``git reset --hard``) are intentionally skipped — those must
+        always be resolved by the operator individually.
+
         Returns the number of approvals that were auto-resolved.
         """
         self._trusted_jobs.add(job_id)
 
-        # Resolve all pending futures for this job
+        # Resolve all pending futures for this job, skipping explicit ones.
         resolved_count = 0
         pending_ids = [
             aid
             for aid, jid in self._approval_to_job.items()
-            if jid == job_id and aid in self._pending_futures and not self._pending_futures[aid].done()
+            if jid == job_id
+            and aid in self._pending_futures
+            and not self._pending_futures[aid].done()
+            and aid not in self._explicit_approval_ids
         ]
         for aid in pending_ids:
             try:

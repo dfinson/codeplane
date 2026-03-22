@@ -29,6 +29,7 @@ class ApprovalRepository(BaseRepository):
             requested_at=cast("datetime", row.requested_at),
             resolved_at=cast("datetime | None", row.resolved_at),
             resolution=cast("str | None", row.resolution),
+            requires_explicit_approval=cast("bool", row.requires_explicit_approval or False),
         )
 
     async def create(self, approval: Approval) -> Approval:
@@ -41,6 +42,7 @@ class ApprovalRepository(BaseRepository):
             requested_at=approval.requested_at,
             resolved_at=approval.resolved_at,
             resolution=approval.resolution,
+            requires_explicit_approval=approval.requires_explicit_approval,
         )
         self._session.add(row)
         await self._session.flush()

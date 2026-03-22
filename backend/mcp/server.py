@@ -386,6 +386,7 @@ def _register_approval_tool(mcp: FastMCP) -> None:
                     requested_at=a.requested_at,
                     resolved_at=a.resolved_at,
                     resolution=a.resolution,
+                    requires_explicit_approval=a.requires_explicit_approval,
                 ).model_dump(mode="json")
                 for a in approvals
             ]
@@ -414,6 +415,7 @@ def _register_approval_tool(mcp: FastMCP) -> None:
                 requested_at=a.requested_at,
                 resolved_at=a.resolved_at,
                 resolution=a.resolution,
+                requires_explicit_approval=a.requires_explicit_approval,
             ).model_dump(mode="json")
 
         return {"error": f"Unknown action: {action}. Use: list, resolve"}

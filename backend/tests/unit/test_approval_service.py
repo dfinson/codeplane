@@ -156,3 +156,50 @@ class TestCleanupJob:
         # job-2 should be unaffected
         assert a3.id in svc._pending_futures
         assert not svc._pending_futures[a3.id].done()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_explicit_approval_ids(self, svc: ApprovalService) -> None:
+        a1 = await svc.create_request("job-1", "git reset --hard?", requires_explicit_approval=True)
+        assert a1.id in svc._explicit_approval_ids
+        svc.cleanup_job("job-1")
+        assert a1.id not in svc._explicit_approval_ids
+
+
+class TestTrustJob:
+    @pytest.mark.asyncio
+    async def test_trust_job_resolves_normal_approvals(self, svc: ApprovalService) -> None:
+        a1 = await svc.create_request("job-1", "Normal action?")
+        resolved = await svc.trust_job("job-1")
+        assert resolved == 1
+        future = svc._pending_futures.get(a1.id)
+        assert future is None  # resolved and removed
+
+    @pytest.mark.asyncio
+    async def test_trust_job_skips_explicit_approvals(self, svc: ApprovalService) -> None:
+        """git reset --hard (requires_explicit_approval=True) must NOT be auto-resolved by trust."""
+        a_normal = await svc.create_request("job-1", "Normal action?")
+        a_explicit = await svc.create_request(
+            "job-1", "git reset --hard HEAD", requires_explicit_approval=True
+        )
+        resolved = await svc.trust_job("job-1")
+
+        # Only the normal approval should have been auto-resolved
+        assert resolved == 1
+        assert svc._pending_futures.get(a_normal.id) is None  # resolved
+        assert a_explicit.id in svc._pending_futures  # still pending
+        assert not svc._pending_futures[a_explicit.id].done()
+
+    @pytest.mark.asyncio
+    async def test_trust_job_marks_job_as_trusted(self, svc: ApprovalService) -> None:
+        await svc.trust_job("job-1")
+        assert svc.is_trusted("job-1")
+
+    @pytest.mark.asyncio
+    async def test_explicit_approval_stored_on_domain_object(self, svc: ApprovalService) -> None:
+        a = await svc.create_request("job-1", "Hard reset", requires_explicit_approval=True)
+        assert a.requires_explicit_approval is True
+
+    @pytest.mark.asyncio
+    async def test_normal_approval_not_explicit(self, svc: ApprovalService) -> None:
+        a = await svc.create_request("job-1", "Regular action?")
+        assert a.requires_explicit_approval is False
