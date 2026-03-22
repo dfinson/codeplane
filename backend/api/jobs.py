@@ -31,7 +31,7 @@ from backend.models.api_schemas import (
 )
 from backend.models.events import DomainEventKind
 from backend.services.event_bus import EventBus
-from backend.services.job_service import JobService
+from backend.services.job_service import JobService, ProgressPreview
 from backend.services.merge_service import MergeService
 from backend.services.naming_service import NamingService
 from backend.services.runtime_service import RuntimeService
@@ -45,7 +45,7 @@ from backend.models.domain import JobState, PermissionMode, Resolution
 router = APIRouter(tags=["jobs"], route_class=DishkaRoute)
 
 
-def _job_to_response(job: Job) -> JobResponse:
+def _job_to_response(job: Job, progress_preview: ProgressPreview | None = None) -> JobResponse:
     """Map a domain Job to a JobResponse."""
     return JobResponse(
         id=job.id,
@@ -64,6 +64,8 @@ def _job_to_response(job: Job) -> JobResponse:
         resolution=job.resolution,
         archived_at=job.archived_at,
         failure_reason=job.failure_reason,
+        progress_headline=progress_preview.headline if progress_preview is not None else None,
+        progress_summary=progress_preview.summary if progress_preview is not None else None,
         model=job.model,
         worktree_name=job.worktree_name,
         verify=job.verify,
@@ -162,8 +164,9 @@ async def list_jobs(
         cursor=cursor,
         archived=archived,
     )
+    progress_by_job = await svc.list_latest_progress_previews([job.id for job in jobs])
     return JobListResponse(
-        items=[_job_to_response(j) for j in jobs],
+        items=[_job_to_response(j, progress_by_job.get(j.id)) for j in jobs],
         cursor=next_cursor,
         has_more=has_more,
     )
@@ -176,7 +179,8 @@ async def get_job(
 ) -> JobResponse:
     """Get full job detail."""
     job = await svc.get_job(job_id)
-    return _job_to_response(job)
+    progress_preview = await svc.get_latest_progress_preview(job_id)
+    return _job_to_response(job, progress_preview)
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
@@ -265,11 +269,11 @@ async def continue_job(
 @router.post("/jobs/{job_id}/resume", response_model=JobResponse)
 async def resume_job(
     job_id: str,
-    body: ResumeJobRequest,
     runtime_service: FromDishka[RuntimeService],
+    body: ResumeJobRequest | None = None,
 ) -> JobResponse:
-    """Resume a completed/failed/canceled job in-place with a new instruction."""
-    job = await runtime_service.resume_job(job_id, body.instruction)
+    """Resume a completed/failed/canceled job in-place, optionally with extra instruction."""
+    job = await runtime_service.resume_job(job_id, body.instruction if body is not None else None)
     return _job_to_response(job)
 
 
@@ -516,7 +520,7 @@ async def resolve_job(
         await runtime_service.resume_job(job_id, conflict_prompt)
         return ResolveJobResponse(resolution="agent_merge")
 
-    resolution, pr_url, conflict_files_result = await svc.execute_resolve(
+    resolution, pr_url, conflict_files_result, error = await svc.execute_resolve(
         job=job,
         action=body.action,
         merge_service=merge_service,
@@ -528,6 +532,7 @@ async def resolve_job(
         resolution=resolution,
         pr_url=pr_url,
         conflict_files=conflict_files_result,
+        error=error,
     )
 
 

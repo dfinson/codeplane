@@ -126,4 +126,20 @@ describe("JobCard", () => {
     );
     expect(screen.getByText("fix/auth-bug")).toBeInTheDocument();
   });
+
+  it("shows persisted preview for succeeded jobs", () => {
+    render(
+      <MemoryRouter>
+        <JobCard
+          job={makeJob({
+            state: "succeeded",
+            progressHeadline: "Audit and improve keyboard shortcuts",
+            progressSummary: "Reviewed the shortcut map and captured follow-up changes for the final pass.",
+          })}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Audit and improve keyboard shortcuts")).toBeInTheDocument();
+    expect(screen.getByText(/Reviewed the shortcut map/)).toBeInTheDocument();
+  });
 });

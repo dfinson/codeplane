@@ -118,6 +118,19 @@ class TestBuildSSEData:
         assert parsed["toolSuccess"] is False
         assert parsed["toolIssue"] == "oldString not found"
 
+    def test_job_resolved_includes_error(self) -> None:
+        event = _make_event(
+            kind=DomainEventKind.job_resolved,
+            payload={
+                "resolution": "unresolved",
+                "error": "Cherry-pick failed without conflict markers; check git configuration or hooks",
+            },
+        )
+        result = _build_sse_data(event, "job_resolved")
+        parsed = json.loads(result)
+        assert parsed["resolution"] == "unresolved"
+        assert parsed["error"] == "Cherry-pick failed without conflict markers; check git configuration or hooks"
+
 
 # --- SSEConnection tests ---
 

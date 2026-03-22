@@ -330,11 +330,11 @@ export function continueJob(
 
 export function resumeJob(
   jobId: string,
-  instruction: string,
+  instruction?: string,
 ): Promise<{ id: string; state: string; branch: string | null; worktreePath: string | null; createdAt: string; updatedAt: string }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ instruction }),
+    body: JSON.stringify(instruction?.trim() ? { instruction } : {}),
   });
 }
 
@@ -343,7 +343,7 @@ export function resumeJob(
 export function resolveJob(
   jobId: string,
   action: "merge" | "smart_merge" | "create_pr" | "discard" | "agent_merge",
-): Promise<{ resolution: string; prUrl?: string | null; conflictFiles?: string[] | null }> {
+): Promise<{ resolution: string; prUrl?: string | null; conflictFiles?: string[] | null; error?: string | null }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/resolve`, {
     method: "POST",
     body: JSON.stringify({ action }),

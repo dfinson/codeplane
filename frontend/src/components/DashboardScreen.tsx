@@ -13,6 +13,7 @@ const SKELETON_DELAY_MS = 500;
 
 export function DashboardScreen() {
   const navigate = useNavigate();
+  const hasJobs = useStore((state) => Object.keys(state.jobs).length > 0);
   const [loading, setLoading] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(false);
 
@@ -34,7 +35,7 @@ export function DashboardScreen() {
     return () => clearTimeout(timer);
   }, []);
 
-  if (loading && showSkeleton) return <KanbanSkeleton />;
+  if (loading && (!hasJobs || showSkeleton)) return <KanbanSkeleton />;
 
   return (
     <div>

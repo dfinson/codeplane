@@ -12,6 +12,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, selectJobTranscript, selectApprovals } from "../store";
 import type { TranscriptEntry, ApprovalRequest } from "../store";
 import { sendOperatorMessage, resumeJob, continueJob, pauseJob, resolveApproval } from "../api/client";
+import { SdkIcon } from "./SdkBadge";
 import { MicButton } from "./VoiceButton";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
@@ -464,13 +465,21 @@ function ToolGroupSection({ calls }: { calls: TranscriptEntry[] }) {
 // Agent turn (reasoning + tool chips + message)
 // ---------------------------------------------------------------------------
 
-function AgentTurn({ turn, isLast }: { turn: AgentTurnData; isLast?: boolean }) {
+function AgentTurn({
+  turn,
+  sdk,
+  isLast,
+}: {
+  turn: AgentTurnData;
+  sdk?: string;
+  isLast?: boolean;
+}) {
   const msg = turn.message;
   const ts = msg?.timestamp ?? turn.firstTimestamp;
   return (
     <div className="flex gap-2">
       <div className="w-6 h-6 rounded-full bg-blue-900/50 flex items-center justify-center shrink-0 mt-1">
-        <Bot size={14} />
+        <SdkIcon sdk={sdk} size={14} fallback={<Bot size={14} />} />
       </div>
       <div className="flex-1 min-w-0 space-y-0.5">
         {turn.reasoning && <ReasoningBlock entry={turn.reasoning} />}
@@ -587,6 +596,7 @@ function InlineApprovalCard({ approval }: { approval: ApprovalRequest }) {
 
 export function TranscriptPanel({
   jobId,
+  sdk,
   interactive,
   pausable,
   jobState,
@@ -596,6 +606,7 @@ export function TranscriptPanel({
   promptTimestamp,
 }: {
   jobId: string;
+  sdk?: string;
   interactive?: boolean;
   pausable?: boolean;
   jobState?: string;
@@ -784,7 +795,7 @@ export function TranscriptPanel({
                   )}
 
                   {item.type === "turn" && (
-                    <AgentTurn turn={item.turn} isLast={virtualRow.index === displayItems.length - 1} />
+                    <AgentTurn sdk={sdk} turn={item.turn} isLast={virtualRow.index === displayItems.length - 1} />
                   )}
 
                   {item.type === "approval" && (

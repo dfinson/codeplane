@@ -68,7 +68,7 @@ Launch automated coding tasks against real repositories, watch everything the ag
 - **Approval gating** — Intercept and approve or reject risky actions before they execute
 - **Operator intervention** — Send messages, cancel, or rerun jobs at any time
 - **Workspace isolation** — Git worktrees for concurrent job execution
-- **Remote access** — Tailscale Funnel exposes the UI over HTTPS for phone/remote control
+- **Remote access** — Dev Tunnels exposes the UI over HTTPS for phone/remote control
 - **Voice input** — Speak prompts and instructions into the browser
 - **Merge & PR** — Auto-merge or create a pull request on job completion
 - **MCP server** — Expose CodePlane as MCP tools for agent-to-agent orchestration
@@ -110,7 +110,7 @@ Or step by step:
 uv sync                       # install backend dependencies
 cd frontend && npm ci && cd ..
 uv run cpl up                 # start server (localhost:8080)
-uv run cpl up --remote        # start with remote access via Tailscale Funnel
+uv run cpl up --remote        # start with remote access via Dev Tunnels
 uv run cpl up --dev           # skip frontend build (backend-only work)
 ```
 

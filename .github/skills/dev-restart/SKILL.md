@@ -53,6 +53,6 @@ python tools/dev_restart.py
 
 ## What to do if it fails
 
-- **Build failure**: The server is already stopped. Fix the build error, then re-run the script (or start manually with `cpl up --tunnel --password aerosonic101`).
+- **Build failure**: The server is already stopped. Fix the build error, then re-run the script (or start manually with `cpl up --remote --password aerosonic101`).
 - **Server didn't become healthy**: Check CodePlane logs for startup errors.
 - **A session failed to resume**: Resume it from the CodePlane UI or via `POST /api/jobs/{id}/resume`.

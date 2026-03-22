@@ -40,6 +40,7 @@ from collections import defaultdict
 from pathlib import Path
 from string import Template
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 from starlette.requests import Request  # noqa: TC002
@@ -190,6 +191,51 @@ def _get_login_html() -> str:
     return _LOGIN_HTML
 
 
+def _header_indicates_https(value: str | None) -> bool:
+    """Return True when a forwarded header value indicates HTTPS transport."""
+    if not value:
+        return False
+
+    for part in value.split(","):
+        normalized = part.strip().lower()
+        if not normalized:
+            continue
+        if normalized == "https":
+            return True
+        if "proto=https" in normalized:
+            return True
+    return False
+
+
+def _origin_uses_https(value: str | None) -> bool:
+    """Return True when an Origin/Referer header points at an HTTPS URL."""
+    if not value:
+        return False
+
+    with __import__("contextlib").suppress(ValueError):
+        return urlparse(value).scheme.lower() == "https"
+    return False
+
+
+def _is_https_request(request: Request) -> bool:
+    """Best-effort HTTPS detection for deployments behind a tunnel relay."""
+    if request.url.scheme == "https":
+        return True
+
+    headers = request.headers
+    if _header_indicates_https(headers.get("x-forwarded-proto")):
+        return True
+    if _header_indicates_https(headers.get("forwarded")):
+        return True
+    if _origin_uses_https(headers.get("origin")):
+        return True
+    if _origin_uses_https(headers.get("referer")):
+        return True
+
+    host = (headers.get("x-forwarded-host") or headers.get("host") or "").split(":", 1)[0].lower()
+    return host.endswith(".devtunnels.ms")
+
+
 async def authenticate_login_request(request: Request) -> Response:
     """Handle POST /api/auth/login — validate password, set cookie."""
     ip = request.client.host if request.client else "unknown"
@@ -212,14 +258,12 @@ async def authenticate_login_request(request: Request) -> Response:
     token = _create_session_token()
     log.info("auth_login_success", client_ip=ip)
     response = JSONResponse({"ok": True})
-    # Detect HTTPS: check scheme or x-forwarded-proto (set by tunnel infra)
-    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
         httponly=True,
         samesite="lax",
-        secure=is_https,
+        secure=_is_https_request(request),
         max_age=86400,  # 24 hours
         path="/",
     )

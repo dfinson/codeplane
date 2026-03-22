@@ -11,9 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.models.db import EventRow
 from backend.services.job_service import JobNotFoundError, StateConflictError
 
 if TYPE_CHECKING:
@@ -133,6 +136,31 @@ class TestJobsCrud:
         ids = [j["id"] for j in data["items"]]
         assert jid in ids
 
+    async def test_list_jobs_includes_latest_progress_preview(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        jid = await seed_job(state="succeeded", job_id="preview-1")
+        async with session_factory() as session:
+            session.add(
+                EventRow(
+                    event_id=f"evt-{uuid4().hex}",
+                    job_id=jid,
+                    kind="ProgressHeadline",
+                    timestamp=datetime.now(UTC),
+                    payload='{"headline":"Audit keyboard shortcuts","summary":"Reviewed existing shortcuts and documented follow-up changes."}',
+                )
+            )
+            await session.commit()
+
+        resp = await client.get("/api/jobs")
+        data = resp.json()
+        preview_job = next(job for job in data["items"] if job["id"] == jid)
+        assert preview_job["progressHeadline"] == "Audit keyboard shortcuts"
+        assert preview_job["progressSummary"] == "Reviewed existing shortcuts and documented follow-up changes."
+
     async def test_list_jobs_state_filter(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         await seed_job(state="running", job_id="run-1")
         await seed_job(state="succeeded", job_id="succ-1")
@@ -179,6 +207,30 @@ class TestJobsCrud:
         assert data["id"] == jid
         assert data["state"] == "running"
         assert data["repo"] == "/test/repo"
+
+    async def test_get_job_includes_latest_progress_preview(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        jid = await seed_job(state="succeeded", job_id="get-preview-1")
+        async with session_factory() as session:
+            session.add(
+                EventRow(
+                    event_id=f"evt-{uuid4().hex}",
+                    job_id=jid,
+                    kind="ProgressHeadline",
+                    timestamp=datetime.now(UTC),
+                    payload='{"headline":"Finalize shortcut audit","summary":"Captured the last validation pass before handoff."}',
+                )
+            )
+            await session.commit()
+
+        resp = await client.get(f"/api/jobs/{jid}")
+        data = resp.json()
+        assert data["progressHeadline"] == "Finalize shortcut audit"
+        assert data["progressSummary"] == "Captured the last validation pass before handoff."
 
     async def test_get_job_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/jobs/nonexistent")
@@ -368,10 +420,39 @@ class TestJobControl:
         )
         assert resp.status_code == 409
 
-    async def test_resume_missing_instruction(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
+    async def test_resume_missing_instruction(self, client: AsyncClient, seed_job: SeedJobFn, mock_runtime_service: AsyncMock) -> None:
         jid = await seed_job(state="failed", job_id="resume-bad")
+        fake_job = MagicMock()
+        fake_job.id = jid
+        fake_job.repo = "/test/repo"
+        fake_job.prompt = "Test prompt"
+        fake_job.title = None
+        fake_job.state = "running"
+        fake_job.base_ref = "main"
+        fake_job.worktree_path = "/tmp/wt"
+        fake_job.branch = "fix/branch"
+        fake_job.permission_mode = None
+        fake_job.created_at = datetime.now(UTC)
+        fake_job.updated_at = datetime.now(UTC)
+        fake_job.completed_at = None
+        fake_job.pr_url = None
+        fake_job.merge_status = None
+        fake_job.resolution = None
+        fake_job.archived_at = None
+        fake_job.failure_reason = None
+        fake_job.model = None
+        fake_job.worktree_name = None
+        fake_job.verify = None
+        fake_job.self_review = None
+        fake_job.max_turns = None
+        fake_job.verify_prompt = None
+        fake_job.self_review_prompt = None
+        mock_runtime_service.resume_job.return_value = fake_job
+
         resp = await client.post(f"/api/jobs/{jid}/resume", json={})
-        assert resp.status_code == 422
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "running"
+        mock_runtime_service.resume_job.assert_called_once_with(jid, None)
 
     # ── Models ──
 
@@ -523,6 +604,24 @@ class TestJobResolution:
         data = resp.json()
         assert data["resolution"] == "conflict"
         assert "src/main.py" in data["conflictFiles"]
+
+    async def test_resolve_error_returns_unresolved_with_error(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        mock_merge_service: AsyncMock,
+    ) -> None:
+        jid = await seed_job(state="succeeded", job_id="resolve-error")
+        mock_merge_service.resolve_job.return_value = FakeMergeResult(
+            status="error",
+            error="Cherry-pick failed without conflict markers; check git configuration or hooks",
+        )
+
+        resp = await client.post(f"/api/jobs/{jid}/resolve", json={"action": "smart_merge"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["resolution"] == "unresolved"
+        assert data["error"] == "Cherry-pick failed without conflict markers; check git configuration or hooks"
 
     async def test_resolve_with_agent_resumes_conflict_job(
         self,

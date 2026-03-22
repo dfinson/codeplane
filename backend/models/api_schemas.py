@@ -146,7 +146,7 @@ class SendMessageRequest(CamelModel):
 
 
 class ResumeJobRequest(CamelModel):
-    instruction: str = Field(min_length=1, max_length=50_000)
+    instruction: str | None = Field(default=None, max_length=50_000)
 
 
 class ContinueJobRequest(CamelModel):
@@ -240,6 +240,8 @@ class JobResponse(CamelModel):
     """User-facing job disposition — see :class:`~backend.models.domain.Resolution`."""
     archived_at: datetime | None = None
     failure_reason: str | None = None
+    progress_headline: str | None = None
+    progress_summary: str | None = None
     model: str | None = None
     sdk: str = "copilot"
     worktree_name: str | None = None
@@ -479,6 +481,7 @@ class ResolveJobResponse(CamelModel):
     resolution: Resolution | ResolutionAction
     pr_url: str | None = None
     conflict_files: list[str] | None = None
+    error: str | None = None
 
 
 class JobFailedPayload(CamelModel):
@@ -505,6 +508,7 @@ class JobResolvedPayload(CamelModel):
     resolution: Resolution
     pr_url: str | None = None
     conflict_files: list[str] | None = None
+    error: str | None = None
     timestamp: datetime
 
 

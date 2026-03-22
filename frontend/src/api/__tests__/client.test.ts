@@ -235,9 +235,10 @@ describe("rerunJob", () => {
 
 describe("resolveJob", () => {
   it("resolves a job with merge", async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({ resolution: "merged" }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ resolution: "merged", error: null }));
     const result = await resolveJob("j-1", "merge");
     expect(result.resolution).toBe("merged");
+    expect(result.error).toBeNull();
     const body = JSON.parse(getFirstFetchInit().body as string);
     expect(body.action).toBe("merge");
   });
@@ -285,6 +286,13 @@ describe("resumeJob", () => {
     expect(result.state).toBe("running");
     const body = JSON.parse(getFirstFetchInit().body as string);
     expect(body.instruction).toBe("Continue");
+  });
+
+  it("resumes a job without requiring extra instruction", async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ id: "j-1", state: "running", branch: null, worktreePath: null, createdAt: "2025-01-01", updatedAt: "2025-01-01" }));
+    await resumeJob("j-1");
+    const body = JSON.parse(getFirstFetchInit().body as string);
+    expect(body).toEqual({});
   });
 });
 

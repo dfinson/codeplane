@@ -115,7 +115,7 @@ class TestPreflightCheck:
     @patch("backend.services.setup_service._check_command")
     def test_optional_missing_still_ok(self, mock_check) -> None:
         def side_effect(cmd: str):
-            if cmd == "tailscale":
+            if cmd == "devtunnel":
                 return (False, None)
             return (True, "v1.0")
 
@@ -129,7 +129,7 @@ class TestPreflightCheck:
 
         results = verify_requirements(include_optional_dependencies=False)
 
-        assert all(r.label != "Tailscale" for r in results)
+        assert all(r.label != "Dev Tunnels CLI" for r in results)
 
 
 class TestCheckPort:

@@ -108,6 +108,7 @@ export interface ResolveJobResponse {
   resolution: string;
   prUrl?: string | null;
   conflictFiles?: string[] | null;
+  error?: string | null;
 }
 
 // --- Artifact types ---

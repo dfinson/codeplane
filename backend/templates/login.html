@@ -26,12 +26,20 @@
     font-size: 14px; font-family: inherit;
   }
   input:focus { outline: none; border-color: #58a6ff; }
+  input:disabled {
+    opacity: 0.7;
+    cursor: wait;
+  }
   button {
     width: 100%; margin-top: 16px; padding: 10px; background: #238636;
     border: 1px solid #2ea043; border-radius: 6px; color: #fff;
     font-size: 14px; font-weight: 500; cursor: pointer;
   }
   button:hover { background: #2ea043; }
+  button:disabled {
+    opacity: 0.7;
+    cursor: wait;
+  }
   .error { color: #f85149; font-size: 13px; margin-top: 12px; text-align: center; display: none; }
   .error.show { display: block; }
 </style>
@@ -43,18 +51,48 @@
   <p class="subtitle">Enter the password printed in your terminal</p>
   <form id="login-form">
     <label for="password">Password</label>
-    <input type="password" id="password" name="password" autofocus autocomplete="current-password" />
-    <button type="submit">Sign in</button>
+    <input type="password" id="password" name="password" autofocus autocomplete="current-password" autocapitalize="none" autocorrect="off" enterkeyhint="go" spellcheck="false" />
+    <button type="submit" id="submit-button">Sign in</button>
     <p class="error" id="error"></p>
   </form>
 </div>
 <script>
   const form = document.getElementById("login-form");
   const pw = document.getElementById("password");
+  const submitButton = document.getElementById("submit-button");
   const err = document.getElementById("error");
+
+  function showError(message) {
+    err.textContent = message;
+    err.className = "error show";
+  }
+
+  function setSubmitting(isSubmitting) {
+    pw.disabled = isSubmitting;
+    submitButton.disabled = isSubmitting;
+    submitButton.textContent = isSubmitting ? "Signing in..." : "Sign in";
+  }
+
+  function focusPassword() {
+    pw.focus({ preventScroll: true });
+  }
+
+  window.addEventListener("load", () => {
+    focusPassword();
+  });
+
+  pw.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    form.requestSubmit(submitButton);
+  });
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     err.className = "error";
+    setSubmitting(true);
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
@@ -65,14 +103,15 @@
         window.location.href = "/";
       } else {
         const data = await res.json();
-        err.textContent = data.detail || "Invalid password";
-        err.className = "error show";
+        showError(data.detail || "Invalid password");
         pw.value = "";
-        pw.focus();
+        focusPassword();
       }
     } catch {
-      err.textContent = "Connection failed";
-      err.className = "error show";
+      showError("Connection failed");
+      focusPassword();
+    } finally {
+      setSubmitting(false);
     }
   });
 </script>

@@ -57,7 +57,7 @@ beforeEach(() => {
 
 describe("dispatchSSEEvent — additional events", () => {
   it("handles job_succeeded with prUrl and resolution", () => {
-    useStore.setState({ jobs: { "job-1": makeJob() } });
+    useStore.setState({ jobs: { "job-1": makeJob({ progressHeadline: "Audit", progressSummary: "Reviewing shortcuts" }) } });
     useStore.getState().dispatchSSEEvent("job_succeeded", {
       jobId: "job-1",
       prUrl: "https://github.com/pr/1",
@@ -69,6 +69,8 @@ describe("dispatchSSEEvent — additional events", () => {
     expect(job.prUrl).toBe("https://github.com/pr/1");
     expect(job.resolution).toBe("merged");
     expect(job.failureReason).toBeNull();
+    expect(job.progressHeadline).toBe("Audit");
+    expect(job.progressSummary).toBe("Reviewing shortcuts");
   });
 
   it("handles job_succeeded with model downgrade", () => {
@@ -92,7 +94,7 @@ describe("dispatchSSEEvent — additional events", () => {
   });
 
   it("handles job_failed", () => {
-    useStore.setState({ jobs: { "job-1": makeJob() } });
+    useStore.setState({ jobs: { "job-1": makeJob({ progressHeadline: "Audit", progressSummary: "Reviewing shortcuts" }) } });
     useStore.getState().dispatchSSEEvent("job_failed", {
       jobId: "job-1",
       reason: "Timeout",
@@ -100,7 +102,8 @@ describe("dispatchSSEEvent — additional events", () => {
     const job = selectJobs(useStore.getState())["job-1"]!;
     expect(job.state).toBe("failed");
     expect(job.failureReason).toBe("Timeout");
-    expect(job.progressHeadline).toBeNull();
+    expect(job.progressHeadline).toBe("Audit");
+    expect(job.progressSummary).toBe("Reviewing shortcuts");
   });
 
   it("handles job_failed with default reason", () => {
@@ -143,6 +146,18 @@ describe("dispatchSSEEvent — additional events", () => {
     });
     const job = selectJobs(useStore.getState())["job-1"]!;
     expect(job.conflictFiles).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("stores unresolved job_resolved errors", () => {
+    useStore.setState({ jobs: { "job-1": makeJob({ state: "succeeded" }) } });
+    useStore.getState().dispatchSSEEvent("job_resolved", {
+      jobId: "job-1",
+      resolution: "unresolved",
+      error: "Cherry-pick failed without conflict markers; check git configuration or hooks",
+    });
+    const job = selectJobs(useStore.getState())["job-1"]!;
+    expect(job.resolution).toBe("unresolved");
+    expect(job.resolutionError).toBe("Cherry-pick failed without conflict markers; check git configuration or hooks");
   });
 
   it("ignores job_resolved for unknown job", () => {
@@ -208,6 +223,7 @@ describe("dispatchSSEEvent — additional events", () => {
     });
     const job = selectJobs(useStore.getState())["job-1"]!;
     expect(job.progressHeadline).toBe("Analyzing code");
+    expect(job.progressSummary).toBe("Looking at files");
     const timeline = selectJobTimeline("job-1")(useStore.getState());
     expect(timeline).toHaveLength(1);
     const firstEntry = timeline[0];

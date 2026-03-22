@@ -43,7 +43,7 @@ The system provides visibility into execution progress, code changes, logs, arti
 
 Operators can intervene at any time by sending instructions, approving risky actions, canceling runs, or rerunning failed tasks.
 
-The interface can be accessed locally or remotely through Tailscale Funnel, allowing jobs to be monitored and controlled from another device such as a phone.
+The interface can be accessed locally or remotely through Dev Tunnels, allowing jobs to be monitored and controlled from another device such as a phone.
 
 CodePlane turns autonomous coding agents into something observable, controllable, and safe to operate.
 
@@ -56,7 +56,7 @@ CodePlane turns autonomous coding agents into something observable, controllable
 | Approval gating | Intercept and approve or reject risky actions before they execute |
 | Operator intervention | Send messages, cancel, or rerun jobs at any time |
 | Workspace isolation | Every job gets its own isolated worktree under `.codeplane-worktrees/` |
-| Remote access | Tailscale Funnel exposes the UI over HTTPS for phone/remote control |
+| Remote access | Dev Tunnels exposes the UI over HTTPS for phone/remote control |
 | Voice input | Speak prompts, operator instructions, and terminal commands into the browser |
 | Artifact inspection | Browse files, diffs, and produced outputs from every job |
 | Integrated terminal | PTY-backed terminal sessions with optional AI agent assistance |
@@ -95,7 +95,7 @@ CodePlane is a two-tier application.
 | Agent runtime | Pluggable SDK adapters behind `AgentAdapterInterface`; ships with Copilot SDK and Claude Agent SDK |
 | Workspace isolation | Git worktrees |
 | Voice transcription | faster-whisper |
-| Remote access | Tailscale Funnel (HTTPS) |
+| Remote access | Dev Tunnels (HTTPS) |
 | State management | Zustand |
 | UI primitives | Radix UI (headless) |
 | Diff / code viewer | Monaco Editor (`@monaco-editor/react`) |
@@ -1016,22 +1016,20 @@ Developer Machine
 ├── Global config (~/.codeplane/config.yaml)
 ├── Application logs (~/.codeplane/logs/)
 ├── Local git repositories (/repos/...)
-└── Tailscale Funnel (HTTPS tunnel for remote access)
+└── Dev Tunnels (HTTPS tunnel for remote access)
 ```
 
 In production mode, the backend serves the built React frontend as static files. Only one port (`8080`) is exposed. The Vite dev server on port `5173` is used only during frontend development.
 
 ### 7.1 Tunnel
 
-Tailscale Funnel exposes the local application over HTTPS, enabling remote access from phones and other devices.
+Dev Tunnels exposes the local application over HTTPS, enabling remote access from phones and other devices.
 
-- Requires Tailscale installed and running on the machine
-- Exposes the local port over HTTPS at `https://{machine}.{tailnet}.ts.net`
-- Stable URL — persists across restarts
-- Access is restricted to devices on the operator's Tailnet (mesh VPN), plus Funnel for external HTTPS access
-- No public-internet brute-force surface when used without Funnel (Tailnet-only access)
+- Requires the `devtunnel` CLI installed and authenticated on the machine
+- Exposes the local port over HTTPS at `https://{tunnel}-{port}.{region}.devtunnels.ms`
+- Tunnel URLs are provisioned by the Dev Tunnels relay
 - Password auth is always enabled when tunneling — remote access requires the password printed in the startup banner
-- HTTPS is enforced by the Tailscale infrastructure
+- HTTPS is enforced by the Dev Tunnels relay
 - The backend enforces CORS to prevent cross-origin abuse from other browser tabs
 
 ### 7.2 Startup
@@ -1049,7 +1047,7 @@ This command:
 3. Runs restart recovery (see Section 6.6)
 4. Loads the faster-whisper model (if voice is enabled)
 5. Starts the FastAPI server
-6. Optionally starts Tailscale Funnel
+6. Optionally starts Dev Tunnels
 
 ### 7.3 CLI
 
@@ -1072,7 +1070,7 @@ cpl = "backend.main:cli"
 |---|---|
 | `cpl up` | Start the server |
 | `cpl up --port 9090` | Start on a custom port |
-| `cpl up --remote` | Start with Tailscale Funnel for remote access |
+| `cpl up --remote` | Start with Dev Tunnels for remote access |
 | `cpl up --dev` | Start in development mode (CORS allows localhost:5173) |
 | `cpl init` | Create `~/.codeplane/config.yaml` with defaults |
 | `cpl version` | Print version |
@@ -2641,13 +2639,13 @@ CodePlane uses **password-based authentication** for remote access and **localho
 
 1. **Localhost binding**: The backend binds to `127.0.0.1` by default, making it accessible only from the local machine. Localhost requests bypass password auth entirely.
 2. **Password auth for remote access**: When `--remote` is used, a password is required. It is set explicitly (`--password`, `CPL_TUNNEL_PASSWORD` env var / `.env`) or auto-generated. Remote clients must authenticate via the login page; sessions use httpOnly cookies with 24h expiry.
-3. **Tailscale network-level auth**: Only devices on the operator's Tailnet can reach the server. This provides device-level identity verification on top of the password.
+3. **Tunnel relay transport**: Remote traffic reaches the server through a Dev Tunnel relay URL. Password authentication remains the application-level access control.
 
 This means:
 
 - Local access requires no credentials
 - Remote access requires the password printed in the operator's terminal
-- Tailscale adds network-level access control (only your devices can reach it)
+- Dev Tunnels provides the HTTPS relay path; application access is still gated by password auth
 - Rate limiting (5 attempts/min/IP) protects the login endpoint against brute-force
 - If the server is intentionally bound to `0.0.0.0` (e.g., for LAN access), a startup warning is emitted noting that no authentication is enforced
 
@@ -2683,11 +2681,11 @@ SSE connections are capped at `max_sse_connections` (default: 5) to prevent reso
 
 ### 21.7 Tunnel Security
 
-When Tailscale Funnel is active:
+When Dev Tunnels is active:
 
-- Access is restricted to devices on the operator's Tailnet. Funnel additionally enables HTTPS access from outside the Tailnet, protected by password auth.
-- The Tailscale MagicDNS URL is stable and does not need to be kept secret — network-level identity prevents unauthorized access
-- HTTPS is enforced by Tailscale infrastructure
+- Remote clients connect through the `devtunnels.ms` relay URL, protected by password auth
+- Tunnel URLs should be treated as sensitive operational details even though password auth is mandatory
+- HTTPS is enforced by the Dev Tunnels relay
 - Password auth is mandatory
 - Session cookies are set with `Secure; HttpOnly; SameSite=Lax`
 - Rate limiting prevents brute-force attacks on the login endpoint

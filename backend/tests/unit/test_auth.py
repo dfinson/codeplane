@@ -252,6 +252,32 @@ class TestHandleLogin:
         assert b"secure" in raw_headers[b"set-cookie"].lower()
 
     @pytest.mark.asyncio
+    async def test_login_https_via_forwarded_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _reset_auth_state(monkeypatch)
+        auth.set_password("pw")
+        req = _make_request(
+            json_body={"password": "pw"},
+            headers={"forwarded": "for=203.0.113.8;proto=https;host=example.devtunnels.ms"},
+        )
+        resp = await auth.authenticate_login_request(req)
+        assert resp.status_code == 200
+        raw_headers = dict(resp.raw_headers)
+        assert b"secure" in raw_headers[b"set-cookie"].lower()
+
+    @pytest.mark.asyncio
+    async def test_login_https_via_devtunnel_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _reset_auth_state(monkeypatch)
+        auth.set_password("pw")
+        req = _make_request(
+            json_body={"password": "pw"},
+            headers={"host": "codeplane-8080.usw2.devtunnels.ms"},
+        )
+        resp = await auth.authenticate_login_request(req)
+        assert resp.status_code == 200
+        raw_headers = dict(resp.raw_headers)
+        assert b"secure" in raw_headers[b"set-cookie"].lower()
+
+    @pytest.mark.asyncio
     async def test_wrong_password_records_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _reset_auth_state(monkeypatch)
         auth.set_password("correct")

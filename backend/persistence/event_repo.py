@@ -6,7 +6,7 @@ import json
 from datetime import datetime  # noqa: TC003 — used in cast() string arg
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.models.db import EventRow
 from backend.models.events import DomainEvent, DomainEventKind
@@ -74,3 +74,37 @@ class EventRepository(BaseRepository):
         )
         result = await self._session.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def get_latest_progress_preview(self, job_id: str) -> tuple[str, str] | None:
+        """Return the latest progress headline and summary for a job, if present."""
+        previews = await self.list_latest_progress_previews([job_id])
+        return previews.get(job_id)
+
+    async def list_latest_progress_previews(self, job_ids: list[str]) -> dict[str, tuple[str, str]]:
+        """Return the latest progress headline and summary for each requested job."""
+        if not job_ids:
+            return {}
+
+        latest_ids = (
+            select(
+                EventRow.job_id.label("job_id"),
+                func.max(EventRow.id).label("latest_id"),
+            )
+            .where(EventRow.job_id.in_(job_ids))
+            .where(EventRow.kind == DomainEventKind.progress_headline.value)
+            .group_by(EventRow.job_id)
+            .subquery()
+        )
+
+        stmt = select(EventRow).join(latest_ids, EventRow.id == latest_ids.c.latest_id)
+        result = await self._session.execute(stmt)
+
+        previews: dict[str, tuple[str, str]] = {}
+        for row in result.scalars().all():
+            job_id = cast("str", row.job_id)
+            payload = json.loads(cast("str", row.payload))
+            previews[job_id] = (
+                str(payload.get("headline", "")).strip(),
+                str(payload.get("summary", "")).strip(),
+            )
+        return previews

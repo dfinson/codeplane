@@ -140,6 +140,7 @@ class JobResolvedPayloadDict(TypedDict, total=False):
     resolution: str  # Overall job disposition (not the git merge outcome)
     pr_url: str | None
     conflict_files: list[str] | None
+    error: str | None
 
 
 class JobTitleUpdatedPayloadDict(TypedDict, total=False):

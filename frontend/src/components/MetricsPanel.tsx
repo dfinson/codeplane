@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
-  BookOpen, CheckCircle, XCircle, DollarSign, Zap,
+  BarChart3, BookOpen, CheckCircle, XCircle, Zap,
 } from "lucide-react";
 import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
 import { Badge } from "./ui/badge";
@@ -143,7 +143,7 @@ function CostSection({ data }: { data: TelemetryData }) {
   return (
     <div>
       <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-3">
-        {isCopilot ? <Zap size={12} className="text-yellow-400" /> : <DollarSign size={12} className="text-green-400" />}
+        {isCopilot ? <Zap size={12} className="text-yellow-400" /> : <BarChart3 size={12} className="text-green-400" />}
         {isCopilot ? "Premium Requests" : "Cost"}
       </h4>
 
@@ -465,7 +465,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
         className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-border hover:bg-accent/30 transition-colors text-left"
       >
         {collapsed ? <ChevronRight size={14} className="text-muted-foreground shrink-0" /> : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
-        <DollarSign size={14} className="text-muted-foreground shrink-0" />
+        <BarChart3 size={14} className="text-muted-foreground shrink-0" />
         <span className="text-sm font-semibold text-muted-foreground">Metrics</span>
         {headerStats && (
           <span className="text-xs text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>

@@ -20,6 +20,9 @@ vi.mock("../KanbanBoard", () => ({
 vi.mock("../MobileJobList", () => ({
   MobileJobList: () => <div data-testid="mobile-job-list">MobileJobList</div>,
 }));
+vi.mock("../KanbanSkeleton", () => ({
+  KanbanSkeleton: () => <div data-testid="kanban-skeleton">KanbanSkeleton</div>,
+}));
 
 function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
   return {
@@ -52,6 +55,37 @@ beforeEach(() => {
 });
 
 describe("DashboardScreen", () => {
+  it("shows the skeleton immediately on a cold load before jobs arrive", () => {
+    vi.mocked(fetchJobs).mockReturnValueOnce(new Promise(() => {}) as any);
+
+    render(
+      <MemoryRouter>
+        <DashboardScreen />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId("kanban-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("kanban-board")).not.toBeInTheDocument();
+  });
+
+  it("keeps the existing board visible during a refresh when jobs are already loaded", () => {
+    useStore.setState({
+      jobs: {
+        existing: makeJob({ id: "existing" }),
+      },
+    });
+    vi.mocked(fetchJobs).mockReturnValueOnce(new Promise(() => {}) as any);
+
+    render(
+      <MemoryRouter>
+        <DashboardScreen />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId("kanban-board")).toBeInTheDocument();
+    expect(screen.queryByTestId("kanban-skeleton")).not.toBeInTheDocument();
+  });
+
   it("renders Jobs heading", async () => {
     vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
     render(
