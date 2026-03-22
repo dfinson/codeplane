@@ -621,6 +621,7 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
+            await self._update_merge_status(job_id, Resolution.conflict)
             return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
     async def _operator_smart_merge(
@@ -711,6 +712,7 @@ class MergeService:
                     fallback="none",
                     pr_url=None,
                 )
+                await self._update_merge_status(job_id, Resolution.conflict)
                 return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
             log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)

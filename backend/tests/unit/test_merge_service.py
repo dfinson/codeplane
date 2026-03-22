@@ -502,6 +502,158 @@ class TestFalsePositiveConflicts:
 
 
 # ---------------------------------------------------------------------------
+# Operator-initiated merge (resolve_job action="merge" / action="smart_merge")
+# ---------------------------------------------------------------------------
+
+
+class TestOperatorMerge:
+    async def test_operator_merge_conflict_persists_merge_status(
+        self,
+        tmp_path: Path,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+    ) -> None:
+        """resolve_job(action='merge') conflict must persist merge_status=conflict in DB."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _branch_with_change(repo, "cpl/job-1", "README.md", "# Branch\n")
+
+        # Conflicting change on main
+        (repo / "README.md").write_text("# Main\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "conflict on main")
+
+        service = _make_service(event_bus, session_factory)
+        await _insert_job(session_factory, _make_job(str(repo)))
+
+        published: list[DomainEvent] = []
+
+        async def _collect(e: DomainEvent) -> None:
+            published.append(e)
+
+        event_bus.subscribe(_collect)
+
+        result = await service.resolve_job(
+            job_id="job-1",
+            action="merge",
+            repo_path=str(repo),
+            worktree_path=None,
+            branch="cpl/job-1",
+            base_ref="main",
+            prompt="test",
+        )
+
+        assert result.status == "conflict"
+        assert result.conflict_files
+
+        conflict_events = [e for e in published if e.kind == DomainEventKind.merge_conflict]
+        assert len(conflict_events) == 1
+
+        # merge_status must be persisted in the DB
+        async with session_factory() as session:
+            job = await JobRepository(session).get("job-1")
+        assert job is not None
+        assert job.merge_status == "conflict"
+
+        # Main worktree must not be left in a broken state
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert out.stdout.strip() == "", f"Main worktree is dirty after conflict: {out.stdout!r}"
+
+    async def test_operator_smart_merge_conflict_persists_merge_status(
+        self,
+        tmp_path: Path,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+    ) -> None:
+        """resolve_job(action='smart_merge') conflict must persist merge_status=conflict in DB."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _branch_with_change(repo, "cpl/job-1", "README.md", "# Branch\n")
+
+        # Conflicting change on main
+        (repo / "README.md").write_text("# Main\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "conflict on main")
+
+        service = _make_service(event_bus, session_factory)
+        await _insert_job(session_factory, _make_job(str(repo)))
+
+        published: list[DomainEvent] = []
+
+        async def _collect2(e: DomainEvent) -> None:
+            published.append(e)
+
+        event_bus.subscribe(_collect2)
+
+        result = await service.resolve_job(
+            job_id="job-1",
+            action="smart_merge",
+            repo_path=str(repo),
+            worktree_path=None,
+            branch="cpl/job-1",
+            base_ref="main",
+            prompt="test",
+        )
+
+        assert result.status == "conflict"
+        assert result.conflict_files
+
+        conflict_events = [e for e in published if e.kind == DomainEventKind.merge_conflict]
+        assert len(conflict_events) == 1
+
+        # merge_status must be persisted in the DB
+        async with session_factory() as session:
+            job = await JobRepository(session).get("job-1")
+        assert job is not None
+        assert job.merge_status == "conflict"
+
+    async def test_operator_merge_success_persists_merged(
+        self,
+        tmp_path: Path,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+    ) -> None:
+        """resolve_job(action='merge') success must persist merge_status=merged in DB."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_repo(repo)
+        _branch_with_change(repo, "cpl/job-1", "feature.py", "x = 1\n")
+
+        # Diverge main so a real merge commit is needed
+        (repo / "other.py").write_text("# other\n")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-m", "diverge main")
+
+        service = _make_service(event_bus, session_factory)
+        await _insert_job(session_factory, _make_job(str(repo)))
+
+        result = await service.resolve_job(
+            job_id="job-1",
+            action="merge",
+            repo_path=str(repo),
+            worktree_path=None,
+            branch="cpl/job-1",
+            base_ref="main",
+            prompt="test",
+        )
+
+        assert result.status == "merged"
+
+        async with session_factory() as session:
+            job = await JobRepository(session).get("job-1")
+        assert job is not None
+        assert job.merge_status == "merged"
+
+
+# ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 
