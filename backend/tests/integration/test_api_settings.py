@@ -176,6 +176,7 @@ class TestGetRepoDetail:
         assert data["path"] == "/test/repo"
         assert data["originUrl"] is not None
         assert data["baseBranch"] == "main"
+        assert data["currentBranch"] == "feature/my-branch"
         assert "platform" in data
 
     @pytest.mark.asyncio

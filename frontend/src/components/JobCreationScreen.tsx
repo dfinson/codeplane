@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, suggestNames } from "../api/client";
+import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, fetchRepoDetail, suggestNames } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
@@ -30,6 +30,7 @@ export function JobCreationScreen() {
   const [repo, setRepo] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [baseRef, setBaseRef] = useState("");
+  const [baseRefEdited, setBaseRefEdited] = useState(false);
   const [branch, setBranch] = useState("");
   const [branchEdited, setBranchEdited] = useState(false);
   const [model, setModel] = useState<string | null>(null);
@@ -129,6 +130,17 @@ export function JobCreationScreen() {
       if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
     };
   }, [prompt, branchEdited]);
+
+  useEffect(() => {
+    if (!repo || baseRefEdited) return;
+    fetchRepoDetail(repo)
+      .then((detail) => {
+        if (!baseRefEdited) setBaseRef(detail.currentBranch ?? detail.baseBranch ?? "");
+      })
+      .catch(() => {
+        // silently ignore — user can type a base ref manually
+      });
+  }, [repo, baseRefEdited]);
 
   const handleSdkChange = useCallback((newSdk: string | null) => {
     const resolved = newSdk ?? defaultSdk;
@@ -304,7 +316,10 @@ export function JobCreationScreen() {
                 <Input
                   placeholder="e.g., main"
                   value={baseRef}
-                  onChange={(e) => setBaseRef(e.currentTarget.value)}
+                  onChange={(e) => {
+                    setBaseRef(e.currentTarget.value);
+                    setBaseRefEdited(e.currentTarget.value !== "");
+                  }}
                 />
               </div>
               <div className="flex flex-col gap-1.5">

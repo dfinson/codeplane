@@ -131,17 +131,21 @@ async def get_repo_detail(
 
     origin_url: str | None = None
     base_branch: str | None = None
+    current_branch: str | None = None
     with contextlib.suppress(GitError):
         raw_url = await git.get_origin_url(resolved)
         if raw_url:
             origin_url = GitService.strip_url_credentials(raw_url)
     with contextlib.suppress(GitError):
         base_branch = await git.get_default_branch(resolved)
+    with contextlib.suppress(GitError):
+        current_branch = await git.get_current_branch(cwd=resolved)
 
     return RepoDetailResponse(
         path=resolved,
         origin_url=origin_url,
         base_branch=base_branch,
+        current_branch=current_branch,
         platform=detect_platform(origin_url),
     )
 

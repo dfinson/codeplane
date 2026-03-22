@@ -339,6 +339,7 @@ class RepoDetailResponse(CamelModel):
     path: str
     origin_url: str | None = None
     base_branch: str | None = None
+    current_branch: str | None = None
     active_job_count: int = 0
     platform: str | None = None
 
