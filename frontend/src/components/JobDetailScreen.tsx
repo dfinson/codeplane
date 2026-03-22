@@ -211,14 +211,17 @@ export function JobDetailScreen() {
       const refreshedJob = action === "agent_merge"
         ? null
         : await fetchJob(jobId).catch(() => null);
+      const refreshedSummary = refreshedJob
+        ? enrichJob(refreshedJob as JobSummary)
+        : null;
       const conflictLike =
         res.resolution === "conflict" ||
-        (refreshedJob?.mergeStatus ?? null) === "conflict" ||
+        (refreshedSummary?.mergeStatus ?? null) === "conflict" ||
         ((res.conflictFiles?.length ?? 0) > 0) ||
-        ((refreshedJob?.conflictFiles?.length ?? 0) > 0);
+        ((refreshedSummary?.conflictFiles?.length ?? 0) > 0);
       useStore.setState((s) => {
         const existing = s.jobs[jobId];
-        const baseJob = refreshedJob ? enrichJob(refreshedJob as JobSummary) : existing;
+        const baseJob = refreshedSummary ?? existing;
         if (!baseJob) return {};
         const nextJob = action === "agent_merge"
           ? {
