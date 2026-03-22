@@ -48,7 +48,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const isFailed = job.state === "failed";
   return (
     <button
-      className="w-full text-left rounded-lg border border-border bg-background p-3 cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent overflow-hidden"
+      className="w-full shrink-0 text-left rounded-lg border border-border bg-background p-3 cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent overflow-hidden"
       onClick={() => navigate(`/jobs/${job.id}`)}
     >
       <div className="flex justify-between items-start gap-2 mb-1.5">

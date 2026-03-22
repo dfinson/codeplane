@@ -26,7 +26,7 @@ export const KanbanColumn = memo(function KanbanColumn({
         </span>
       </div>
 
-      <div className="flex flex-col gap-2 flex-1 overflow-y-auto p-2">
+      <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto p-2">
         {jobs.length === 0 ? (
           (() => {
             if (title === "In Progress") {
