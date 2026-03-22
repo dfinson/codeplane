@@ -438,18 +438,37 @@ async def get_job_telemetry(
 ) -> dict[str, object]:
     """Get telemetry data for a job run.
 
-    Returns a dict rather than a typed model because the telemetry shape
-    is defined by the TelemetryCollector and varies by SDK.
+    Returns in-memory live telemetry when available.  Falls back to the
+    persisted snapshot (written at session end) so metrics are always
+    visible even after backend restarts or for archived / terminal jobs.
     """
-    from backend.services.telemetry import collector
+    from backend.services.telemetry import TelemetryCollector, collector
 
     tel = collector.get(job_id)
-    if tel is None:
-        return {"jobId": job_id, "available": False}
 
     from backend.persistence.job_repo import JobRepository
+    from backend.persistence.metrics_repo import MetricsRepository
 
-    job_row = await JobRepository(session).get(job_id)
+    job_repo = JobRepository(session)
+
+    if tel is None:
+        # Try loading from the persisted job_metrics snapshot.
+        snapshot = await MetricsRepository(session).load_snapshot(job_id)
+        if snapshot:
+            # Reconstruct a transient JobTelemetry so we can call to_dict()
+            # which produces the camelCase API shape.
+            temp = TelemetryCollector()
+            temp.start_job(job_id)
+            temp.restore_from_snapshot(job_id, snapshot)
+            temp.end_job(job_id)
+            temp_tel = temp.get(job_id)
+            if temp_tel is not None:
+                job_row = await job_repo.get(job_id)
+                sdk = job_row.sdk if job_row else ""
+                return {**temp_tel.to_dict(), "sdk": sdk, "available": True}
+        return {"jobId": job_id, "available": False}
+
+    job_row = await job_repo.get(job_id)
     sdk = job_row.sdk if job_row else ""
     return {**tel.to_dict(), "sdk": sdk, "available": True}
 

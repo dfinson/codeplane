@@ -36,6 +36,7 @@ class DomainEventKind(StrEnum):
     tool_group_summary = "ToolGroupSummary"
     agent_plan_updated = "AgentPlanUpdated"
     execution_phase_changed = "ExecutionPhaseChanged"
+    telemetry_updated = "TelemetryUpdated"
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,10 @@ class ExecutionPhasePayloadDict(TypedDict, total=False):
     phase: str
 
 
+class TelemetryUpdatedPayloadDict(TypedDict, total=False):
+    job_id: str
+
+
 # Union of all known payload shapes.  Used as the DomainEvent.payload type so
 # consumers get useful type information.  The ``dict[str, Any]`` fallback
 # covers event kinds whose payload is not yet formally typed.
@@ -199,6 +204,7 @@ EventPayload = (
     | ToolGroupSummaryPayloadDict
     | AgentPlanUpdatedPayloadDict
     | ExecutionPhasePayloadDict
+    | TelemetryUpdatedPayloadDict
     | dict[str, Any]
 )
 

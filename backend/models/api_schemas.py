@@ -549,6 +549,11 @@ class AgentPlanPayload(CamelModel):
     timestamp: datetime
 
 
+class TelemetryUpdatedPayload(CamelModel):
+    job_id: str
+    timestamp: datetime
+
+
 class SnapshotPayload(CamelModel):
     jobs: list[JobResponse]
     pending_approvals: list[ApprovalResponse]

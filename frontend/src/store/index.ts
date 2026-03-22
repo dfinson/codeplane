@@ -224,6 +224,9 @@ interface AppState {
   diffs: Record<string, DiffFileModel[]>; // keyed by jobId
   timelines: Record<string, TimelineEntry[]>; // keyed by jobId
   plans: Record<string, PlanStep[]>; // keyed by jobId
+  /** Monotonically-increasing counter per job, bumped on each telemetry_updated
+   * SSE event. Components watching this trigger a telemetry re-fetch. */
+  telemetryVersions: Record<string, number>; // keyed by jobId
 
   // Terminal state
   terminalDrawerOpen: boolean;
@@ -260,7 +263,8 @@ export const useStore = create<AppState>((set, get) => ({
   diffs: {},
   timelines: {},
   plans: {},
-  connectionStatus: "connecting",
+  telemetryVersions: {},
+  connectionStatus: "reconnecting",
   reconnectAttempt: 0,
 
   // Terminal state
@@ -697,6 +701,15 @@ export const useStore = create<AppState>((set, get) => ({
           }));
           return {
             plans: { ...state.plans, [jobId]: typed },
+          };
+        }
+
+        case "telemetry_updated": {
+          // Increment the per-job version counter so MetricsPanel re-fetches.
+          const jobId = payload.jobId as string;
+          const prev = state.telemetryVersions[jobId] ?? 0;
+          return {
+            telemetryVersions: { ...state.telemetryVersions, [jobId]: prev + 1 },
           };
         }
 

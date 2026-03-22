@@ -32,6 +32,7 @@ from backend.models.api_schemas import (
     SessionHeartbeatPayload,
     SessionResumedPayload,
     SnapshotPayload,
+    TelemetryUpdatedPayload,
     ToolGroupSummaryPayload,
     TranscriptPayload,
 )
@@ -70,6 +71,7 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
     DomainEventKind.model_downgraded: "model_downgraded",
     DomainEventKind.tool_group_summary: "tool_group_summary",
     DomainEventKind.agent_plan_updated: "agent_plan_updated",
+    DomainEventKind.telemetry_updated: "telemetry_updated",
 }
 
 # State implied by each domain event kind (for job_state_changed payloads)
@@ -351,6 +353,12 @@ _SSE_PAYLOAD_REGISTRY: dict[str, tuple[type, FieldMap] | _BuilderFn] = {
         {
             "turn_id": ("turn_id", ""),
             "summary": ("summary", ""),
+            "timestamp": ("timestamp", _TS_EVENT),
+        },
+    ),
+    "telemetry_updated": (
+        TelemetryUpdatedPayload,
+        {
             "timestamp": ("timestamp", _TS_EVENT),
         },
     ),

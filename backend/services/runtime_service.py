@@ -308,7 +308,9 @@ class RuntimeService:
             if self._utility_session is not None:
                 await self._utility_session.notify_job_started()
 
-        # Start telemetry tracking
+        # Start telemetry tracking — restore from DB snapshot first so
+        # accumulated metrics from prior sessions carry forward even after a
+        # backend restart.
         from backend.services.telemetry import collector as tel
 
         had_in_memory = tel.get(job_id) is not None
@@ -454,11 +456,23 @@ class RuntimeService:
             tel_snapshot = tel.get(job_id)
             if tel_snapshot is not None:
                 try:
-                    async with self._session_factory() as session:
-                        from backend.persistence.metrics_repo import MetricsRepository
+                    from backend.persistence.metrics_repo import MetricsRepository as _MR
 
-                        await MetricsRepository(session).save_snapshot(job_id, tel_snapshot.to_snapshot())
+                    async with self._session_factory() as session:
+                        await _MR(session).save_snapshot(job_id, tel_snapshot.to_snapshot())
                         await session.commit()
+
+                    # Signal clients that final telemetry is available so the
+                    # frontend re-fetches and shows the persisted cumulative totals.
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=DomainEvent.make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.telemetry_updated,
+                            payload={"job_id": job_id},
+                        )
+                    )
                 except Exception:
                     log.warning("metrics_persist_failed", job_id=job_id, exc_info=True)
             heartbeat_task.cancel()

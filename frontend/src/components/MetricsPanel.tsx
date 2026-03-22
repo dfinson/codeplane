@@ -9,6 +9,7 @@ import { Badge } from "./ui/badge";
 import { Progress } from "./ui/progress";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
+import { useStore } from "../store";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -337,33 +338,27 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
   const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
 
-  // Fetch telemetry on mount and when jobId changes.
+  // Subscribe to the per-job telemetry version counter — bumped whenever a
+  // telemetry_updated SSE event arrives (e.g. when a session ends).
+  const telemetryVersion = useStore((s) => s.telemetryVersions[jobId] ?? 0);
+
+  // Fetch telemetry:
+  //   • on mount
+  //   • when the job stops running (isRunning flip)
+  //   • when a telemetry_updated SSE event arrives (telemetryVersion bump)
+  //   • every 5 s while running (for live duration / accumulating totals)
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    fetchJobTelemetry(jobId)
-      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
-      .catch(() => { if (!cancelled) { setData({ available: false }); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [jobId]);
-
-  // Re-fetch when the job transitions from running → stopped to get final telemetry.
-  const prevRunningRef = useRef(isRunning);
-  useEffect(() => {
-    // Reset ref when jobId changes so a new job doesn't incorrectly trigger a re-fetch.
-    prevRunningRef.current = isRunning;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
-  useEffect(() => {
-    if (prevRunningRef.current && !isRunning) {
-      setLoading(true);
+    const doFetch = () => {
       fetchJobTelemetry(jobId)
-        .then((d) => setData(d))
-        .catch(() => setData({ available: false }))
-        .finally(() => setLoading(false));
-    }
-    prevRunningRef.current = isRunning;
-  }, [isRunning, jobId]);
+        .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
+        .catch(() => { if (!cancelled) { setData((prev) => prev ?? { available: false }); setLoading(false); } });
+    };
+    doFetch();
+    if (!isRunning) return () => { cancelled = true; };
+    const interval = setInterval(doFetch, 5_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [jobId, isRunning, telemetryVersion]);
 
   // Load agent_summary artifacts once on mount and when job stops
   useEffect(() => {

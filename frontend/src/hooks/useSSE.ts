@@ -93,6 +93,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "tool_group_summary",
         "merge_completed",
         "merge_conflict",
+        "telemetry_updated",
       ];
 
       for (const eventType of eventTypes) {
