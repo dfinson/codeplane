@@ -634,61 +634,90 @@ class MergeService:
         """Cherry-pick the job branch's commits onto base_ref (no merge commit).
 
         Strategy:
-        1. Checkout base_ref in the main worktree.
-        2. Cherry-pick the range base_ref..branch onto HEAD.
-        3. On success: cleanup worktree/branch → merged.
-        4. On conflict: abort, collect conflict files → conflict (no PR fallback).
+        1. Auto-commit any uncommitted agent changes in the worktree.
+        2. Checkout base_ref in the main worktree.
+        3. Cherry-pick the range base_ref..branch onto HEAD.
+        4. On success: cleanup worktree/branch → merged.
+        5. On conflict: abort, collect conflict files → conflict (no PR fallback).
         """
+        # Auto-commit any uncommitted changes so cherry-pick sees them
+        commit_cwd = worktree_path or repo_path
         try:
-            await self._git.checkout(base_ref, cwd=repo_path)
+            committed = await self._git.auto_commit(
+                cwd=commit_cwd,
+                message=f"CodePlane: agent changes for {job_id}",
+            )
+            if committed:
+                log.info("smart_merge_auto_committed", job_id=job_id, cwd=commit_cwd)
         except GitError:
-            log.warning("smart_merge_checkout_failed", job_id=job_id, base_ref=base_ref)
-            return MergeResult(status=MergeStatus.error, error=f"Failed to checkout {base_ref}")
+            log.warning("smart_merge_auto_commit_failed", job_id=job_id, exc_info=True)
 
-        commit_range = f"{base_ref}..{branch}"
-        try:
-            await self._git.cherry_pick(commit_range, cwd=repo_path)
-        except GitError:
-            # Check for actual conflict markers BEFORE aborting — abort removes them.
-            conflict_files = await self._git.get_conflict_files(cwd=repo_path)
-            await self._git.cherry_pick_abort(cwd=repo_path)
+        lock = self._repo_locks.setdefault(repo_path, asyncio.Lock())
+        async with lock:
+            return await self._operator_smart_merge_locked(
+                job_id, repo_path, worktree_path, branch, base_ref,
+            )
 
-            if not conflict_files:
-                # Cherry-pick failed but left no conflict markers → not a real
-                # merge conflict (e.g. hook failure, missing git identity, or
-                # the commit range was already applied).  Return an error so the
-                # job stays in "unresolved" and the user can retry or create a PR.
-                log.warning(
-                    "smart_merge_failed_no_conflict_markers",
-                    job_id=job_id,
-                    branch=branch,
-                    commit_range=commit_range,
-                )
-                return MergeResult(
-                    status=MergeStatus.error,
-                    error="Cherry-pick failed without conflict markers; check git configuration or hooks",
-                )
-
-            log.info("smart_merge_conflict_detected", job_id=job_id, branch=branch)
+    async def _operator_smart_merge_locked(
+        self,
+        job_id: str,
+        repo_path: str,
+        worktree_path: str | None,
+        branch: str,
+        base_ref: str,
+    ) -> MergeResult:
+        """Cherry-pick onto base_ref (lock must be held)."""
+        async with self._preserved_worktree(repo_path, job_id, "smart_merge"):
             try:
                 await self._git.checkout(base_ref, cwd=repo_path)
             except GitError:
-                log.warning("smart_merge_checkout_base_failed", job_id=job_id, exc_info=True)
-            await self._publish_merge_conflict(
-                job_id,
-                branch,
-                base_ref,
-                conflict_files,
-                fallback="none",
-                pr_url=None,
-            )
-            return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
+                log.warning("smart_merge_checkout_failed", job_id=job_id, base_ref=base_ref)
+                return MergeResult(status=MergeStatus.error, error=f"Failed to checkout {base_ref}")
 
-        log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
-        await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
-        await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-        await self._update_merge_status(job_id, Resolution.merged)
-        return MergeResult(status=MergeStatus.merged, strategy="cherry_pick")
+            commit_range = f"{base_ref}..{branch}"
+            try:
+                await self._git.cherry_pick(commit_range, cwd=repo_path)
+            except GitError:
+                # Check for actual conflict markers BEFORE aborting — abort removes them.
+                conflict_files = await self._git.get_conflict_files(cwd=repo_path)
+                await self._git.cherry_pick_abort(cwd=repo_path)
+
+                if not conflict_files:
+                    # Cherry-pick failed but left no conflict markers → not a real
+                    # merge conflict (e.g. hook failure, missing git identity, or
+                    # the commit range was already applied).  Return an error so the
+                    # job stays in "unresolved" and the user can retry or create a PR.
+                    log.warning(
+                        "smart_merge_failed_no_conflict_markers",
+                        job_id=job_id,
+                        branch=branch,
+                        commit_range=commit_range,
+                    )
+                    return MergeResult(
+                        status=MergeStatus.error,
+                        error="Cherry-pick failed without conflict markers; check git configuration or hooks",
+                    )
+
+                log.info("smart_merge_conflict_detected", job_id=job_id, branch=branch)
+                try:
+                    await self._git.checkout(base_ref, cwd=repo_path)
+                except GitError:
+                    log.warning("smart_merge_checkout_base_failed", job_id=job_id, exc_info=True)
+                await self._publish_merge_conflict(
+                    job_id,
+                    branch,
+                    base_ref,
+                    conflict_files,
+                    fallback="none",
+                    pr_url=None,
+                )
+                return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
+
+            log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
+            await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
+            await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
+            await self._update_merge_status(job_id, Resolution.merged)
+            return MergeResult(status=MergeStatus.merged, strategy="cherry_pick")
 
     async def _discard(
         self,

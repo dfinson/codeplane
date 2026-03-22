@@ -220,6 +220,22 @@ export function JobDetailScreen() {
     setResolveLoading(action);
     try {
       const res = await resolveJob(jobId, action);
+      // Optimistically update the store so the card re-renders immediately
+      useStore.setState((s) => {
+        const existing = s.jobs[jobId];
+        if (!existing) return s;
+        return {
+          jobs: {
+            ...s.jobs,
+            [jobId]: {
+              ...existing,
+              resolution: res.resolution,
+              prUrl: res.prUrl ?? existing.prUrl,
+              conflictFiles: res.conflictFiles ?? existing.conflictFiles,
+            },
+          },
+        };
+      });
       if (res.prUrl) {
         toast.success("PR created", {
           description: res.prUrl,
