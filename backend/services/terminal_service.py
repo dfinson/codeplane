@@ -1,8 +1,7 @@
 """Interactive terminal session management via PTY.
 
-Provides server-managed shell sessions that can be attached to from the
-browser via WebSocket.  Each session spawns a real PTY process and streams
-I/O through asyncio's event loop using ``add_reader`` on the master FD.
+Cross-platform: uses the POSIX pty/fcntl/termios stack on Linux/macOS and
+pywinpty (ConPTY) on Windows.
 
 Sessions may optionally be tagged with a ``job_id`` so they are automatically
 cleaned up when the associated job's worktree is removed.
@@ -12,18 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import os
-import pty
 import re
 import secrets
 import shutil
-import signal
 import struct
 import subprocess  # noqa: S404
-import termios
+import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -31,6 +27,26 @@ if TYPE_CHECKING:
     from fastapi import WebSocket
 
 log = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Platform-specific imports
+# ---------------------------------------------------------------------------
+
+if sys.platform == "win32":
+    try:
+        from winpty import PtyProcess as _WinPtyProcess
+    except ImportError as _e:
+        raise ImportError(
+            "pywinpty is required for terminal support on Windows. "
+            "Install it with: pip install pywinpty"
+        ) from _e
+    _SIGWINCH: int | None = None
+else:
+    import fcntl
+    import pty
+    import signal
+    import termios
+    _SIGWINCH = signal.SIGWINCH
 
 # ANSI sequences stripped from scrollback before replay to avoid garbled output
 # on reconnect (borrowed from TermBeam's sanitizeForReplay).
@@ -54,7 +70,15 @@ def _sanitize_for_replay(buf: str) -> str:
 
 
 def _detect_shell() -> str:
-    """Auto-detect the user's preferred shell."""
+    """Auto-detect the preferred shell for the current platform."""
+    if sys.platform == "win32":
+        # Prefer PowerShell 7 (pwsh), then PowerShell 5, then cmd
+        for candidate in ("pwsh", "powershell", "cmd"):
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+        return "cmd.exe"
+    # POSIX: respect $SHELL, then fall back through common paths
     shell = os.environ.get("SHELL")
     if shell and os.path.isfile(shell):
         return shell
@@ -66,19 +90,25 @@ def _detect_shell() -> str:
 
 @dataclass
 class PtySession:
-    """A single PTY session with its process, FDs, and attached clients."""
+    """A single PTY session with its process, FDs, and attached clients.
+
+    ``master_fd`` is the POSIX PTY master file descriptor; it is set to ``-1``
+    on Windows where it is not used.  ``process`` is a ``subprocess.Popen``
+    instance on POSIX or a ``winpty.PtyProcess`` instance on Windows.
+    """
 
     id: str
-    master_fd: int
-    process: subprocess.Popen  # type: ignore[type-arg]
+    master_fd: int  # -1 on Windows
+    process: Any    # subprocess.Popen (POSIX) | winpty.PtyProcess (Windows)
     shell: str
     cwd: str
     job_id: str | None = None
     clients: set[WebSocket] = field(default_factory=set)
     scrollback: str = ""
     scrollback_limit: int = 500 * 1024  # bytes
-    _exit_task: asyncio.Task | None = field(default=None, repr=False)  # type: ignore[type-arg]
-    _zdotdir: str | None = field(default=None, repr=False)  # temp dir for zsh ZDOTDIR, cleaned up on exit
+    _exit_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _zdotdir: str | None = field(default=None, repr=False)
+    _win_reader_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     def append_scrollback(self, data: str) -> None:
         """Append data to the scrollback buffer, trimming if over limit."""
@@ -130,7 +160,6 @@ class TerminalService:
 
         shell = shell or self._default_shell
         if not os.path.isfile(shell):
-            # Try resolving via PATH
             resolved = shutil.which(shell)
             if resolved:
                 shell = resolved
@@ -143,40 +172,63 @@ class TerminalService:
 
         session_id = secrets.token_hex(16)
 
+        if sys.platform == "win32":
+            session = self._create_session_windows(session_id, shell, cwd, job_id, cols, rows)
+        else:
+            session = self._create_session_posix(session_id, shell, cwd, job_id, cols, rows)
+
+        self._sessions[session_id] = session
+
+        session._exit_task = asyncio.create_task(
+            self._watch_exit(session_id),
+            name=f"terminal-exit-{session_id[:8]}",
+        )
+        if sys.platform == "win32":
+            session._win_reader_task = asyncio.create_task(
+                self._windows_reader(session_id),
+                name=f"terminal-reader-{session_id[:8]}",
+            )
+
+        log.info(
+            "terminal_session_created",
+            session_id=session_id,
+            shell=shell,
+            cwd=cwd,
+            job_id=job_id,
+            pid=session.process.pid,
+        )
+        return session
+
+    def _create_session_posix(
+        self,
+        session_id: str,
+        shell: str,
+        cwd: str,
+        job_id: str | None,
+        cols: int,
+        rows: int,
+    ) -> PtySession:
+        """Spawn a PTY session using the POSIX pty/fcntl/termios stack."""
+        import tempfile
+
         master_fd, slave_fd = pty.openpty()
 
-        # Set initial terminal size before spawning
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
         env = {**os.environ, "TERM": "xterm-256color", "CODEPLANE_TERMINAL": "1"}
 
-        # Set a compact prompt that shows only the immediate directory name.
-        # We use the unicode ellipsis (…) so the prompt stays short on mobile.
-        # Setting PS1 directly in the environment is not reliable because
-        # interactive shells source ~/.bashrc / ~/.zshrc which reset PS1.
-        # We use shell-specific hooks that fire AFTER rc files are sourced.
-        import tempfile
-
         shell_name = os.path.basename(shell)
         zdotdir: str | None = None
         if shell_name == "bash":
-            # PROMPT_COMMAND is evaluated before every prompt, after .bashrc,
-            # so it always overrides whatever PS1 the user's rc file set.
             env["PROMPT_COMMAND"] = r'PS1="…$(basename "$PWD") \$ "'
         elif shell_name in ("sh", "dash"):
-            # POSIX sh/dash don't support PROMPT_COMMAND; use ENV instead.
-            # ENV is sourced on every interactive shell startup (after /etc/profile).
-            # We write a tiny script to a temp file and point ENV at it.
             zdotdir = tempfile.mkdtemp(prefix="codeplane_sh_")
             env_script = os.path.join(zdotdir, ".shrc")
             with open(env_script, "w") as _f:
                 _f.write('PS1="…$(basename "$PWD") $ "\n')
             env["ENV"] = env_script
         elif shell_name == "zsh":
-            # For zsh, create a temp ZDOTDIR whose .zshrc sources the real
-            # ~/.zshrc then overrides PROMPT, ensuring our compact prompt
-            # survives user config without removing aliases or functions.
             zdotdir = tempfile.mkdtemp(prefix="codeplane_zsh_")
             real_zshrc = os.path.expanduser("~/.zshrc")
             zshrc_lines = [
@@ -205,10 +257,8 @@ class TerminalService:
                 shutil.rmtree(zdotdir, ignore_errors=True)
             raise
 
-        # Parent no longer needs the slave FD
         os.close(slave_fd)
 
-        # Set master to non-blocking for asyncio
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
@@ -222,26 +272,53 @@ class TerminalService:
             scrollback_limit=self._scrollback_limit,
             _zdotdir=zdotdir,
         )
-        self._sessions[session_id] = session
 
-        # Wire up asyncio reader for PTY output
+        assert self._loop is not None
         self._loop.add_reader(master_fd, self._on_pty_readable, session_id)
+        return session
 
-        # Monitor for process exit
-        session._exit_task = asyncio.create_task(
-            self._watch_exit(session_id),
-            name=f"terminal-exit-{session_id[:8]}",
+    def _create_session_windows(
+        self,
+        session_id: str,
+        shell: str,
+        cwd: str,
+        job_id: str | None,
+        cols: int,
+        rows: int,
+    ) -> PtySession:
+        """Spawn a PTY session using the Windows ConPTY backend (pywinpty)."""
+        env = {**os.environ, "CODEPLANE_TERMINAL": "1"}
+
+        # Compact prompt injection per shell type.
+        shell_name = os.path.basename(shell).lower().removesuffix(".exe")
+
+        if shell_name in ("pwsh", "powershell"):
+            # -NoExit keeps the shell interactive after running the -Command block.
+            # We define a custom prompt() function that shows only the leaf dir.
+            prompt_fn = r"function prompt { '…' + (Split-Path -Leaf (Get-Location)) + '> ' }"
+            argv = [shell, "-NoExit", "-Command", prompt_fn]
+        else:
+            # cmd.exe: PROMPT env var supports $P (full path) but not basename.
+            # Prefix with the ellipsis as a visual cue; full path is acceptable here.
+            env["PROMPT"] = "…$P$G "
+            argv = [shell]
+
+        proc = _WinPtyProcess.spawn(  # type: ignore[possibly-undefined]
+            argv,
+            dimensions=(rows, cols),
+            env=env,
+            cwd=cwd,
         )
 
-        log.info(
-            "terminal_session_created",
-            session_id=session_id,
+        return PtySession(
+            id=session_id,
+            master_fd=-1,   # not used on Windows
+            process=proc,
             shell=shell,
             cwd=cwd,
             job_id=job_id,
-            pid=proc.pid,
+            scrollback_limit=self._scrollback_limit,
         )
-        return session
 
     def get_session(self, session_id: str) -> PtySession | None:
         return self._sessions.get(session_id)
@@ -286,7 +363,10 @@ class TerminalService:
         if session is None:
             return
         try:
-            os.write(session.master_fd, data)
+            if sys.platform == "win32":
+                session.process.write(data.decode("utf-8", errors="replace"))
+            else:
+                os.write(session.master_fd, data)
         except OSError:
             log.warning("terminal_write_failed", session_id=session_id)
 
@@ -296,9 +376,13 @@ class TerminalService:
         if session is None:
             return
         try:
-            winsize = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(session.master_fd, termios.TIOCSWINSZ, winsize)
-            os.kill(session.process.pid, signal.SIGWINCH)
+            if sys.platform == "win32":
+                session.process.setwinsize(rows, cols)
+            else:
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                fcntl.ioctl(session.master_fd, termios.TIOCSWINSZ, winsize)  # type: ignore[possibly-undefined]
+                if _SIGWINCH is not None:
+                    os.kill(session.process.pid, _SIGWINCH)
         except OSError:
             log.warning("terminal_resize_failed", session_id=session_id)
 
@@ -319,11 +403,11 @@ class TerminalService:
         log.info("terminal_service_shutdown", sessions_killed=len(session_ids))
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal — POSIX
     # ------------------------------------------------------------------
 
     def _on_pty_readable(self, session_id: str) -> None:
-        """Callback fired by asyncio when the PTY master FD has data."""
+        """Callback fired by asyncio when the POSIX PTY master FD has data."""
         session = self._sessions.get(session_id)
         if session is None:
             return
@@ -337,7 +421,6 @@ class TerminalService:
         text = data.decode("utf-8", errors="replace")
         session.append_scrollback(text)
 
-        # Fan-out to all attached WebSocket clients
         if session.clients:
             import json
 
@@ -351,55 +434,108 @@ class TerminalService:
             for ws in dead:
                 session.clients.discard(ws)
 
-    async def _watch_exit(self, session_id: str) -> None:
-        """Monitor for PTY process exit and clean up."""
+    # ------------------------------------------------------------------
+    # Internal — Windows
+    # ------------------------------------------------------------------
+
+    async def _windows_reader(self, session_id: str) -> None:
+        """Async reader loop for a Windows ConPTY session.
+
+        Runs a blocking ``proc.read()`` call in a thread executor and fans
+        output out to all attached WebSocket clients, mirroring the behaviour
+        of ``_on_pty_readable`` on POSIX.
+        """
+        import json
+
         session = self._sessions.get(session_id)
         if session is None:
             return
-        exit_code = await asyncio.to_thread(session.process.wait)
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                raw = await loop.run_in_executor(None, session.process.read, 65536)
+            except EOFError:
+                break
+            except Exception:
+                break
+            if not raw:
+                await asyncio.sleep(0.01)
+                continue
+            text = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            session.append_scrollback(text)
+            if session.clients:
+                msg = json.dumps({"type": "output", "data": text})
+                dead_ws: list[WebSocket] = []
+                for ws in list(session.clients):
+                    try:
+                        asyncio.ensure_future(ws.send_text(msg))
+                    except Exception:
+                        dead_ws.append(ws)
+                for ws in dead_ws:
+                    session.clients.discard(ws)
+
+    # ------------------------------------------------------------------
+    # Internal — shared
+    # ------------------------------------------------------------------
+
+    async def _watch_exit(self, session_id: str) -> None:
+        """Monitor for PTY process exit and notify clients."""
+        import json
+
+        session = self._sessions.get(session_id)
+        if session is None:
+            return
+
+        if sys.platform == "win32":
+            # winpty.PtyProcess has no blocking wait(); poll isalive() in a thread.
+            def _poll_until_dead() -> int:
+                import time
+                while session.process.isalive():
+                    time.sleep(0.2)
+                return getattr(session.process, "exitstatus", None) or 0
+
+            exit_code = await asyncio.to_thread(_poll_until_dead)
+        else:
+            exit_code = await asyncio.to_thread(session.process.wait)
+
         log.info("terminal_session_exited", session_id=session_id, exit_code=exit_code)
 
-        # Notify clients
         if session.clients:
-            import json
-
             msg = json.dumps({"type": "exit", "code": exit_code})
             for ws in list(session.clients):
                 with contextlib.suppress(Exception):
                     await ws.send_text(msg)
 
-        # Clean up
         self._sessions.pop(session_id, None)
-        if self._loop:
+        if sys.platform != "win32" and self._loop:
             with contextlib.suppress(Exception):
                 self._loop.remove_reader(session.master_fd)
-        with contextlib.suppress(OSError):
-            os.close(session.master_fd)
+            with contextlib.suppress(OSError):
+                os.close(session.master_fd)
 
     async def _cleanup_session(self, session: PtySession) -> None:
-        """Kill the process and close FDs for a session."""
-        # Cancel exit watcher
-        if session._exit_task and not session._exit_task.done():
-            session._exit_task.cancel()
-
-        # Remove reader
-        if self._loop:
-            with contextlib.suppress(Exception):
-                self._loop.remove_reader(session.master_fd)
-
-        # Kill the process
-        try:
-            session.process.kill()
-            await asyncio.to_thread(session.process.wait)
-        except (OSError, ProcessLookupError):
-            pass
-
-        # Close FD
-        with contextlib.suppress(OSError):
-            os.close(session.master_fd)
-
-        # Notify clients
+        """Kill the process and release all resources for a session."""
         import json
+
+        # Cancel background tasks
+        for task in filter(None, [session._exit_task, session._win_reader_task]):
+            if not task.done():
+                task.cancel()
+
+        if sys.platform == "win32":
+            with contextlib.suppress(Exception):
+                session.process.close(force=True)
+        else:
+            if self._loop:
+                with contextlib.suppress(Exception):
+                    self._loop.remove_reader(session.master_fd)
+            try:
+                session.process.kill()
+                await asyncio.to_thread(session.process.wait)
+            except (OSError, ProcessLookupError):
+                pass
+            with contextlib.suppress(OSError):
+                os.close(session.master_fd)
 
         msg = json.dumps({"type": "exit", "code": -1})
         for ws in list(session.clients):
@@ -409,7 +545,6 @@ class TerminalService:
 
         log.info("terminal_session_cleaned_up", session_id=session.id, pid=session.process.pid)
 
-        # Remove temp ZDOTDIR created for zsh compact-prompt injection
         if session._zdotdir:
             with contextlib.suppress(Exception):
                 shutil.rmtree(session._zdotdir, ignore_errors=True)

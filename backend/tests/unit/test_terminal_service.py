@@ -6,10 +6,15 @@ import json
 import os
 import signal
 import struct
-import termios
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+try:
+    import termios  # POSIX only
+except ImportError:
+    termios = None  # type: ignore[assignment]
 
 from backend.services.terminal_service import (
     PtySession,
@@ -17,6 +22,9 @@ from backend.services.terminal_service import (
     _detect_shell,
     _sanitize_for_replay,
 )
+
+# Mark that skips an entire test class on Windows (POSIX PTY not available)
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY not available on Windows")
 
 # ------------------------------------------------------------------
 # Helpers
@@ -82,6 +90,7 @@ class TestSanitizeForReplay:
         assert _sanitize_for_replay("") == ""
 
 
+@posix_only
 class TestDetectShell:
     @patch.dict(os.environ, {"SHELL": "/bin/zsh"})
     @patch("os.path.isfile", return_value=True)
@@ -160,6 +169,7 @@ class TestTerminalServiceInit:
         assert svc._scrollback_limit == 100 * 1024
 
 
+@posix_only
 class TestCreateSession:
     @patch("backend.services.terminal_service.asyncio.create_task")
     @patch("backend.services.terminal_service.fcntl.fcntl", return_value=0)
@@ -336,6 +346,7 @@ class TestListSessions:
         assert entry["clients"] == 0
 
 
+@posix_only
 class TestKillSession:
     @pytest.mark.asyncio
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -364,6 +375,7 @@ class TestKillSession:
         assert result is False
 
 
+@posix_only
 class TestKillSessionsForJob:
     @pytest.mark.asyncio
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -396,6 +408,7 @@ class TestKillSessionsForJob:
         assert count == 0
 
 
+@posix_only
 class TestWrite:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.write")
@@ -422,6 +435,7 @@ class TestWrite:
         svc.write("s1", b"data")
 
 
+@posix_only
 class TestResize:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.kill")
@@ -470,6 +484,7 @@ class TestGetScrollback:
         assert svc.get_scrollback("nope") == ""
 
 
+@posix_only
 class TestShutdown:
     @pytest.mark.asyncio
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -490,6 +505,7 @@ class TestShutdown:
         assert len(svc.sessions) == 0
 
 
+@posix_only
 class TestOnPtyReadable:
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
     @patch("backend.services.terminal_service.os.read", return_value=b"hello output")
@@ -561,6 +577,7 @@ class TestOnPtyReadable:
         assert ws not in session.clients
 
 
+@posix_only
 class TestWatchExit:
     @pytest.mark.asyncio
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -607,6 +624,7 @@ class TestWatchExit:
         assert msg["code"] == 0
 
 
+@posix_only
 class TestCleanupSession:
     @pytest.mark.asyncio
     @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
@@ -697,3 +715,115 @@ class TestCleanupSession:
             await svc._cleanup_session(session)
 
         mock_loop.remove_reader.assert_called_with(42)
+
+
+# ------------------------------------------------------------------
+# Windows-specific tests (mock pywinpty; run on all platforms)
+# ------------------------------------------------------------------
+
+windows_pty = pytest.mark.skipif(sys.platform != "win32", reason="Windows ConPTY tests")
+
+
+def _make_win_proc(pid: int = 99999) -> MagicMock:
+    """Mock of winpty.PtyProcess."""
+    proc = MagicMock()
+    proc.pid = pid
+    proc.isalive.return_value = False
+    proc.exitstatus = 0
+    proc.read.side_effect = EOFError
+    proc.write = MagicMock()
+    proc.setwinsize = MagicMock()
+    proc.close = MagicMock()
+    return proc
+
+
+class TestWindowsTerminalService:
+    """Tests for the Windows ConPTY code paths, mocking winpty.PtyProcess.
+
+    These tests run on all platforms by patching sys.platform and the
+    winpty PtyProcess import so the POSIX branch is never entered.
+    """
+
+    def _make_win_session(self, session_id: str = "win1", pid: int = 99999, **kwargs) -> PtySession:
+        return PtySession(
+            id=session_id,
+            master_fd=-1,
+            process=_make_win_proc(pid),
+            shell="pwsh",
+            cwd="C:\\Users\\user",
+            **kwargs,
+        )
+
+    @patch("backend.services.terminal_service.shutil.which", side_effect=lambda x: f"C:\\Windows\\{x}.exe" if x == "pwsh" else None)
+    def test_detect_shell_windows_returns_pwsh(self, mock_which: MagicMock) -> None:
+        with patch("backend.services.terminal_service.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            result = _detect_shell()
+        assert result == "C:\\Windows\\pwsh.exe"
+
+    @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
+    def test_write_windows_decodes_bytes(self, mock_detect: MagicMock) -> None:
+        svc = TerminalService()
+        session = self._make_win_session()
+        svc._sessions["win1"] = session
+
+        with patch("backend.services.terminal_service.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            svc.write("win1", b"hello\n")
+
+        session.process.write.assert_called_once_with("hello\n")
+
+    @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
+    def test_resize_windows_calls_setwinsize(self, mock_detect: MagicMock) -> None:
+        svc = TerminalService()
+        session = self._make_win_session()
+        svc._sessions["win1"] = session
+
+        with patch("backend.services.terminal_service.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            svc.resize("win1", cols=80, rows=24)
+
+        session.process.setwinsize.assert_called_once_with(24, 80)
+
+    @pytest.mark.asyncio
+    @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
+    async def test_cleanup_windows_calls_close(self, mock_detect: MagicMock) -> None:
+        svc = TerminalService()
+        session = self._make_win_session()
+        session._exit_task = None
+
+        with patch("backend.services.terminal_service.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            await svc._cleanup_session(session)
+
+        session.process.close.assert_called_once_with(force=True)
+
+    @pytest.mark.asyncio
+    @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
+    async def test_windows_reader_breaks_on_eof(self, mock_detect: MagicMock) -> None:
+        svc = TerminalService()
+        session = self._make_win_session()
+        svc._sessions["win1"] = session
+        # proc.read raises EOFError immediately
+        session.process.read.side_effect = EOFError
+
+        # Should complete without raising
+        await svc._windows_reader("win1")
+
+    @pytest.mark.asyncio
+    @patch("backend.services.terminal_service._detect_shell", return_value="/bin/bash")
+    async def test_windows_reader_fans_out_to_clients(self, mock_detect: MagicMock) -> None:
+        svc = TerminalService()
+        session = self._make_win_session()
+        ws = AsyncMock()
+        session.clients.add(ws)
+        svc._sessions["win1"] = session
+
+        # First read returns data, second raises EOFError to stop the loop
+        session.process.read.side_effect = ["hello output", EOFError()]
+
+        with patch("backend.services.terminal_service.asyncio.ensure_future") as mock_ef:
+            await svc._windows_reader("win1")
+
+        mock_ef.assert_called_once()
+        assert "hello output" in session.scrollback

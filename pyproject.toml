@@ -29,6 +29,8 @@ dependencies = [
     "questionary>=2.0,<3",
     # MCP server
     "mcp>=1.9,<2",
+    # Windows ConPTY terminal backend (POSIX uses the stdlib pty module)
+    "pywinpty>=2.0 ; sys_platform == 'win32'",
     # QR code
     "qrcode>=7.0,<9",
     # Voice
@@ -83,7 +85,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "copilot.*", "mcp.*", "qrcode.*", "questionary.*"]
+module = ["faster_whisper.*", "copilot.*", "mcp.*", "qrcode.*", "questionary.*", "winpty.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
