@@ -754,7 +754,10 @@ class TestWindowsTerminalService:
             **kwargs,
         )
 
-    @patch("backend.services.terminal_service.shutil.which", side_effect=lambda x: f"C:\\Windows\\{x}.exe" if x == "pwsh" else None)
+    @patch(
+        "backend.services.terminal_service.shutil.which",
+        side_effect=lambda x: f"C:\\Windows\\{x}.exe" if x == "pwsh" else None,
+    )
     def test_detect_shell_windows_returns_pwsh(self, mock_which: MagicMock) -> None:
         with patch("backend.services.terminal_service.sys") as mock_sys:
             mock_sys.platform = "win32"
@@ -918,10 +921,11 @@ class TestWindowsTerminalService:
             mock_sys.platform = "win32"
             svc = TerminalService()
             svc._loop = MagicMock()
-            session = svc.create_session(cwd="C:\\repos\\project", shell="cmd.exe")
+            svc.create_session(cwd="C:\\repos\\project", shell="cmd.exe")
 
         spawn_call = mock_win_proc_class.spawn.call_args
-        env_passed = spawn_call[1].get("env") or spawn_call[0][2] if len(spawn_call[0]) > 2 else spawn_call[1].get("env", {})
+        # spawn() is called as spawn(argv, dimensions=..., env=..., cwd=...)
+        env_passed = spawn_call[1].get("env", {})
         # Verify PROMPT is set in env passed to spawn
         assert "PROMPT" in env_passed
         assert env_passed["PROMPT"].startswith("…")
@@ -937,7 +941,6 @@ class TestWindowsTerminalService:
         svc._sessions["s1"] = session
 
         close_calls: list[int] = []
-        original_close = os.close
 
         def _tracking_close(fd: int) -> None:
             close_calls.append(fd)
