@@ -68,8 +68,13 @@ import {
   suggestNames,
 } from "../../api/client";
 import { JobCreationScreen } from "../JobCreationScreen";
+import { useStore } from "../../store";
 
 async function renderScreen() {
+  // Simulate App.tsx calling initSdksAndModels on mount, so the store is
+  // pre-populated with SDK + model data before the component renders.
+  await useStore.getState().initSdksAndModels();
+
   render(
     <MemoryRouter>
       <JobCreationScreen />
@@ -79,7 +84,6 @@ async function renderScreen() {
   await waitFor(() => {
     expect(fetchSettings).toHaveBeenCalled();
     expect(fetchRepos).toHaveBeenCalled();
-    expect(fetchSDKs).toHaveBeenCalled();
   });
 }
 
@@ -119,6 +123,16 @@ beforeEach(() => {
     worktreeName: "fix-the-bug",
   } as any);
   mockNavigate.mockReset();
+
+  // Reset the store's SDK/model catalogue so each test starts fresh
+  useStore.setState({
+    sdks: [],
+    defaultSdk: null,
+    sdksLoading: true,
+    modelsBySdk: {},
+    defaultModelBySdk: {},
+    modelsLoadingBySdk: {},
+  });
 });
 
 describe("JobCreationScreen", () => {
