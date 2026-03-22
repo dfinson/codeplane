@@ -190,9 +190,6 @@ class TerminalService:
         if len(self._sessions) >= self._max_sessions:
             raise RuntimeError(f"Maximum terminal sessions ({self._max_sessions}) reached")
 
-        if self._loop is None:
-            self._loop = asyncio.get_event_loop()
-
         shell = shell or self._default_shell
         if not os.path.isfile(shell):
             resolved = shutil.which(shell)
@@ -204,6 +201,9 @@ class TerminalService:
         cwd = cwd or os.path.expanduser("~")
         if not os.path.isdir(cwd):
             raise ValueError(f"Working directory does not exist: {cwd}")
+
+        if self._loop is None:
+            self._loop = asyncio.get_event_loop()
 
         session_id = secrets.token_hex(16)
 

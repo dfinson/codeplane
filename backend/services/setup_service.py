@@ -417,13 +417,15 @@ def _get_env_persistence_instructions(var_name: str, value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def verify_requirements(*, port: int | None = None) -> list[CheckResult]:
+def verify_requirements(*, port: int | None = None, include_optional_dependencies: bool = True) -> list[CheckResult]:
     """Run all preflight checks and return structured results.
 
     Parameters
     ----------
     port:
         If given, also checks whether the port is available.
+    include_optional_dependencies:
+        Whether to include optional tools like Tailscale in the dependency list.
     """
     results: list[CheckResult] = []
 
@@ -445,6 +447,8 @@ def verify_requirements(*, port: int | None = None) -> list[CheckResult]:
 
     # --- System dependencies ---
     for dep in DEPENDENCIES:
+        if not include_optional_dependencies and not dep.required:
+            continue
         found, version = _check_command(dep.command)
         if found:
             results.append(CheckResult(dep.name, CheckStatus.passed, version or "installed", category="deps"))
@@ -747,7 +751,7 @@ def validate_preflight(port: int) -> bool:
     On warnings, pauses to let the user fix issues or continue.
     """
     config = load_config()
-    results = verify_requirements(port=port)
+    results = verify_requirements(port=port, include_optional_dependencies=False)
 
     _console.print()
     _console.print("  [bold]Preflight[/bold]")
@@ -796,7 +800,7 @@ def validate_preflight(port: int) -> bool:
                 _remember_skipped_warning(w, config.runtime.default_sdk)
 
         # Re-check for any remaining hard failures after fixes
-        results = verify_requirements(port=port)
+        results = verify_requirements(port=port, include_optional_dependencies=False)
         if any(r.status == CheckStatus.fail for r in results):
             _console.print()
             _console.print("  [red bold]Cannot start — fix the errors above.[/red bold]")

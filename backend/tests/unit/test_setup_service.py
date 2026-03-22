@@ -123,6 +123,14 @@ class TestPreflightCheck:
         results = verify_requirements()
         assert not any(r.status == CheckStatus.fail for r in results)
 
+    @patch("backend.services.setup_service._check_command")
+    def test_optional_dependencies_can_be_omitted(self, mock_check) -> None:
+        mock_check.return_value = (True, "v1.0")
+
+        results = verify_requirements(include_optional_dependencies=False)
+
+        assert all(r.label != "Tailscale" for r in results)
+
 
 class TestCheckPort:
     @patch("backend.services.setup_service.socket.has_ipv6", False)
