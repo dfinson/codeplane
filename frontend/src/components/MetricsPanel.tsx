@@ -466,7 +466,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
       >
         {collapsed ? <ChevronRight size={14} className="text-muted-foreground shrink-0" /> : <ChevronDown size={14} className="text-muted-foreground shrink-0" />}
         <DollarSign size={14} className="text-muted-foreground shrink-0" />
-        <span className="text-sm font-semibold text-muted-foreground">Cost Metrics</span>
+        <span className="text-sm font-semibold text-muted-foreground">Metrics</span>
         {headerStats && (
           <span className="text-xs text-muted-foreground ml-auto hidden sm:block">{headerStats}</span>
         )}
