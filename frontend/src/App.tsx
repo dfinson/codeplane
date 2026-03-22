@@ -101,14 +101,28 @@ export function App() {
     (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "`") {
         e.preventDefault();
-        toggleTerminalDrawer();
+        if (!terminalDrawerOpen) {
+          // Drawer is closed — open it
+          toggleTerminalDrawer();
+        } else {
+          // Drawer is open — close only if focus is already inside the terminal,
+          // otherwise just bring focus to the terminal (xterm textarea/canvas)
+          const active = document.activeElement;
+          const terminalEl = document.querySelector(".xterm-helper-textarea, .xterm canvas");
+          const focusedInTerminal = terminalEl && (active === terminalEl || terminalEl.contains(active));
+          if (focusedInTerminal) {
+            toggleTerminalDrawer();
+          } else {
+            (terminalEl as HTMLElement | null)?.focus();
+          }
+        }
       }
       if ((e.metaKey || e.ctrlKey) && e.key === "n") {
         e.preventDefault();
         navigate("/jobs/new");
       }
     },
-    [toggleTerminalDrawer, navigate],
+    [toggleTerminalDrawer, terminalDrawerOpen, navigate],
   );
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

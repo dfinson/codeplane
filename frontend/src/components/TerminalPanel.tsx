@@ -95,10 +95,13 @@ export function TerminalPanel({ sessionId, onExit, className }: TerminalPanelPro
   // Bridge terminal <-> WebSocket
   useTerminalSocket({ terminal, sessionId, onExit });
 
-  // Re-fit when sessionId changes (might be switching sessions)
+  // Re-fit and focus when sessionId changes (switching sessions or first mount)
   useEffect(() => {
     if (fitAddonRef.current) {
-      requestAnimationFrame(() => fitAddonRef.current?.fit());
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        termRef.current?.focus();
+      });
     }
   }, [sessionId]);
 

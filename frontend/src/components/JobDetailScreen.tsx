@@ -85,6 +85,8 @@ export function JobDetailScreen() {
   // Open a new terminal session in the drawer, scoped to this job's worktree.
   // Each click intentionally creates a new session — multiple sessions per job are supported.
   const createTerminalSession = useStore((s) => s.createTerminalSession);
+  const terminalSessions = useStore((s) => s.terminalSessions);
+  const jobTerminalCount = Object.values(terminalSessions).filter((s) => s.jobId === jobId).length;
 
   const handleOpenJobTerminal = useCallback(() => {
     if (!job?.worktreePath || !jobId) return;
@@ -527,33 +529,29 @@ export function JobDetailScreen() {
         <CompleteJobDialog job={job} open onClose={() => setCompleteOpen(false)} onArchived={() => navigate("/")} />
       )}
 
-      <Tabs value={tab} onValueChange={(v) => {
-        if (v === "terminal") {
-          handleOpenJobTerminal();
-          return; // Open drawer, don't switch the in-page tab
-        }
-        setTab(v);
-      }} className="mb-4">
+      <Tabs value={tab} onValueChange={setTab} className="mb-4">
         <div className="flex items-center gap-2">
           <TabsList className="overflow-x-auto">
-            {isMobile ? (
-              <>
-                <TabsTrigger value="live">Live</TabsTrigger>
-                <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
-                <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
-                {hasWorktree && <TabsTrigger value="terminal"><TerminalSquare size={13} className="mr-1.5" />Terminal</TabsTrigger>}
-                {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
-              </>
-            ) : (
-              <>
-                <TabsTrigger value="live">Live</TabsTrigger>
-                <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
-                <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
-                {hasWorktree && <TabsTrigger value="terminal"><TerminalSquare size={13} className="mr-1.5" />Terminal</TabsTrigger>}
-                {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
-              </>
-            )}
+            <TabsTrigger value="live">Live</TabsTrigger>
+            <TabsTrigger value="files"><FolderTree size={13} className="mr-1.5" />Files</TabsTrigger>
+            <TabsTrigger value="diff"><GitBranch size={13} className="mr-1.5" />Changes</TabsTrigger>
+            {hasArtifacts && <TabsTrigger value="artifacts">Artifacts</TabsTrigger>}
           </TabsList>
+
+          {hasWorktree && (
+            <Tooltip content={jobTerminalCount > 0 ? `Open new terminal (${jobTerminalCount} open)` : "Open terminal in worktree"}>
+              <button
+                onClick={handleOpenJobTerminal}
+                className="flex items-center gap-1.5 px-2.5 h-9 rounded-md border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+              >
+                <TerminalSquare size={13} />
+                <span>Terminal</span>
+                {jobTerminalCount > 0 && (
+                  <span className="ml-0.5 text-[10px] font-semibold text-primary">×{jobTerminalCount}</span>
+                )}
+              </button>
+            </Tooltip>
+          )}
         </div>
       </Tabs>
 

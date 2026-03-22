@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useMatch } from "react-router-dom";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { useStore } from "../store";
 import {
@@ -27,6 +27,11 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const jobsMap = useStore((s) => s.jobs);
   const jobs = useMemo(() => Object.values(jobsMap), [jobsMap]);
+
+  // Detect if we're inside a job detail view
+  const jobMatch = useMatch("/jobs/:jobId");
+  const currentJobId = jobMatch?.params?.jobId ?? null;
+  const currentJob = currentJobId ? jobsMap[currentJobId] : null;
 
   // Ctrl/Cmd+K toggles the palette
   useEffect(() => {
@@ -73,16 +78,33 @@ export function CommandPalette() {
         action: () => navigate("/settings"),
         keywords: ["config", "preferences", "options"],
       },
+      // Context-aware terminal entries: show job terminal first when inside a job view
+      ...(currentJob?.worktreePath && currentJobId
+        ? [
+            {
+              id: "terminal-job",
+              label: `Terminal — ${currentJob.branch || currentJob.worktreePath.split("/").pop() || currentJobId}`,
+              description: "Open new terminal in this job's worktree",
+              icon: <TerminalSquare className="h-4 w-4" />,
+              action: () => {
+                const { createTerminalSession } = useStore.getState();
+                const label = currentJob.branch || currentJob.worktreePath!.split("/").pop() || currentJobId;
+                createTerminalSession({ cwd: currentJob.worktreePath!, label, jobId: currentJobId });
+              },
+              keywords: ["console", "shell", "cli", "worktree"],
+            },
+          ]
+        : []),
       {
-        id: "terminal",
-        label: "Toggle Terminal",
-        description: "Open or close the terminal drawer",
+        id: "terminal-home",
+        label: "Terminal — home",
+        description: "Open new terminal in home directory",
         icon: <TerminalSquare className="h-4 w-4" />,
-        action: () => useStore.getState().toggleTerminalDrawer(),
-        keywords: ["console", "shell", "cli"],
+        action: () => useStore.getState().createTerminalSession(),
+        keywords: ["console", "shell", "cli", "home"],
       },
     ],
-    [navigate],
+    [navigate, currentJob, currentJobId],
   );
 
   const jobItems: PaletteItem[] = useMemo(

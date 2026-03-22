@@ -782,16 +782,34 @@ export const useStore = create<AppState>((set, get) => ({
         return;
       }
       const data = await res.json();
+
+      const baseLabel = opts?.label || data.cwd?.split("/").pop() || "Terminal";
+
+      // Auto-number duplicate labels so tabs are distinguishable (e.g. "main ×2")
+      const existingLabels = Object.values(get().terminalSessions).map((s) => s.label);
+      const collision = existingLabels.filter(
+        (l) => l === baseLabel || l?.startsWith(baseLabel + " ×"),
+      ).length;
+      const label = collision > 0 ? `${baseLabel} ×${collision + 1}` : baseLabel;
+
       const session: TerminalSession = {
         id: data.id,
-        label: opts?.label || data.cwd?.split("/").pop() || "Terminal",
+        label,
         cwd: data.cwd,
         jobId: data.jobId ?? opts?.jobId,
       };
+
+      // On mobile, auto-maximise the drawer when opening a job terminal
+      const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+      const drawerHeight = isMobile
+        ? Math.floor(window.innerHeight * 0.9)
+        : get().terminalDrawerHeight;
+
       set((s) => ({
         terminalSessions: { ...s.terminalSessions, [session.id]: session },
         activeTerminalTab: session.id,
         terminalDrawerOpen: true,
+        terminalDrawerHeight: drawerHeight,
       }));
     } catch (e) {
       console.error("[terminal] Error creating session:", e);

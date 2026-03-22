@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, X, Minus, Maximize2, TerminalSquare } from "lucide-react";
+import { Plus, X, Minus, Maximize2, TerminalSquare, GitBranch } from "lucide-react";
 import { TerminalPanel } from "./TerminalPanel";
 import { useStore } from "../store";
 import { useShallow } from "zustand/react/shallow";
@@ -114,6 +114,9 @@ export function TerminalDrawer() {
             }`}
           >
             <TerminalSquare size={12} />
+            {session.jobId && (
+              <GitBranch size={9} className="text-muted-foreground/60 shrink-0 -mr-0.5" />
+            )}
             <span className="max-w-[120px] truncate">
               {session.label || session.cwd?.split("/").pop() || "Terminal"}
             </span>
