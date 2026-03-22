@@ -53,9 +53,9 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
     >
       <div className="flex justify-between items-start gap-2 mb-1.5">
         {job.title ? (
-          <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.title}>{job.title}</span>
+          <span className="text-sm font-semibold text-primary flex-1 min-w-0 break-words" title={job.title}>{job.title}</span>
         ) : (
-          <span className="text-sm font-semibold text-primary min-w-0 break-words" title={job.id}>{job.id}</span>
+          <span className="text-sm font-semibold text-primary flex-1 min-w-0 break-words" title={job.id}>{job.id}</span>
         )}
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
           {job.resolution && <ResolutionBadge resolution={job.resolution} />}

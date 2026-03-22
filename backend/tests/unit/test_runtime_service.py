@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -29,6 +30,7 @@ from backend.config import (
 from backend.models.db import Base
 from backend.models.domain import (
     Job,
+    Resolution,
     JobState,
     SessionConfig,
     SessionEvent,
@@ -228,6 +230,8 @@ async def _create_db_job(
             created_at=job.created_at,
             updated_at=job.updated_at,
             completed_at=job.completed_at,
+            pr_url=job.pr_url,
+            merge_status=job.merge_status,
         )
         session.add(row)
         await session.commit()
@@ -586,6 +590,124 @@ class TestJobLifecycle:
 
 
 class TestResumeFallback:
+    async def test_conflict_resume_auto_merges_back_after_agent_success(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> None:
+        merge_service = AsyncMock()
+
+        async def _resolve_job(**kwargs: object):
+            from types import SimpleNamespace
+
+            from backend.persistence.job_repo import JobRepository
+
+            async with session_factory() as session:
+                repo = JobRepository(session)
+                await repo.update_merge_status("job-1", Resolution.merged)
+                await session.commit()
+
+            return SimpleNamespace(status="merged", pr_url=None, conflict_files=None)
+
+        merge_service.resolve_job.side_effect = _resolve_job
+
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter(delay=0.0)),
+            config=config,
+            merge_service=merge_service,
+        )
+
+        published: list[DomainEvent] = []
+
+        async def _collect(event: DomainEvent) -> None:
+            published.append(event)
+
+        event_bus.subscribe(_collect)
+
+        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        job.branch = "cpl/job-1"
+        job.completed_at = datetime.now(UTC)
+        job.resolution = Resolution.conflict
+        job.merge_status = Resolution.conflict
+        await _create_db_job(session_factory, job)
+
+        resumed = await runtime.resume_job(job.id, "resolve the merge conflict")
+        assert resumed.state == JobState.running
+
+        await asyncio.sleep(0.2)
+
+        merge_service.resolve_job.assert_awaited_once()
+
+        async with session_factory() as session:
+            from backend.persistence.job_repo import JobRepository
+
+            repo = JobRepository(session)
+            row = await repo.get(job.id)
+            assert row is not None
+            assert row.state == JobState.succeeded
+            assert row.resolution == Resolution.merged
+            assert row.merge_status == Resolution.merged
+
+        succeeded_events = [event for event in published if event.kind == DomainEventKind.job_succeeded]
+        assert succeeded_events
+        assert succeeded_events[-1].payload["resolution"] == Resolution.merged
+        assert succeeded_events[-1].payload["merge_status"] == Resolution.merged
+
+        await runtime.shutdown()
+
+    async def test_resume_restores_terminal_state_when_startup_fails(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter()),
+            config=config,
+        )
+
+        published: list[DomainEvent] = []
+
+        async def _collect(event: DomainEvent) -> None:
+            published.append(event)
+
+        event_bus.subscribe(_collect)
+
+        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        job.completed_at = datetime.now(UTC)
+        job.session_count = 4
+        job.resolution = Resolution.unresolved
+        await _create_db_job(session_factory, job)
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("startup failed")
+
+        monkeypatch.setattr(runtime, "start_or_enqueue", _boom)
+
+        with pytest.raises(RuntimeError, match="startup failed"):
+            await runtime.resume_job(job.id, "continue")
+
+        async with session_factory() as session:
+            from backend.persistence.job_repo import JobRepository
+
+            repo = JobRepository(session)
+            row = await repo.get(job.id)
+            assert row is not None
+            assert row.state == JobState.succeeded
+            assert row.session_count == 4
+            assert row.resolution == Resolution.unresolved
+            assert row.completed_at is not None
+
+        assert [event.kind for event in published] == []
+
+        await runtime.shutdown()
+
     async def test_resume_falls_back_to_handoff_when_native_resume_errors_immediately(
         self,
         session_factory: async_sessionmaker[AsyncSession],

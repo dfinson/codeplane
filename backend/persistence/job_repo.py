@@ -179,7 +179,13 @@ class JobRepository(BaseRepository):
             updates["pr_url"] = pr_url
         await self._update_row(job_id, **updates)
 
-    async def reset_for_resume(self, job_id: str, new_session_count: int) -> None:
+    async def reset_for_resume(
+        self,
+        job_id: str,
+        new_session_count: int,
+        *,
+        merge_status: str | None = None,
+    ) -> None:
         """Reset a terminal job back to running state for resumption."""
         from datetime import UTC, datetime
 
@@ -192,8 +198,37 @@ class JobRepository(BaseRepository):
             resolution=None,
             failure_reason=None,
             archived_at=None,
-            merge_status=None,
+            merge_status=merge_status,
             pr_url=None,
+            updated_at=datetime.now(UTC),
+        )
+
+    async def restore_after_failed_resume(
+        self,
+        job_id: str,
+        *,
+        previous_state: JobState,
+        previous_session_count: int,
+        completed_at: datetime | None,
+        resolution: str | None,
+        failure_reason: str | None,
+        archived_at: datetime | None,
+        merge_status: str | None,
+        pr_url: str | None,
+    ) -> None:
+        """Restore the persisted job row when resume setup fails before execution starts."""
+        from datetime import UTC, datetime
+
+        await self._update_row(
+            job_id,
+            state=previous_state,
+            completed_at=completed_at,
+            session_count=previous_session_count,
+            resolution=resolution,
+            failure_reason=failure_reason,
+            archived_at=archived_at,
+            merge_status=merge_status,
+            pr_url=pr_url,
             updated_at=datetime.now(UTC),
         )
 

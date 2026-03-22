@@ -333,6 +333,7 @@ class RuntimeService:
         # Resolve worktree_path and base_ref for diff calculations
         worktree_path: str | None = None
         base_ref: str | None = None
+        post_conflict_merge_requested = False
         try:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
@@ -340,6 +341,7 @@ class RuntimeService:
             if job is not None:
                 worktree_path = job.worktree_path or job.repo
                 base_ref = job.base_ref
+                post_conflict_merge_requested = job.merge_status == Resolution.conflict
         except Exception:
             log.warning("diff_job_lookup_failed", job_id=job_id, exc_info=True)
 
@@ -412,19 +414,53 @@ class RuntimeService:
             # Run optional verify / self-review follow-up turns
             await self._run_verify_review(job_id, config, session_id, worktree_path, base_ref)
 
-            # Always go to sign-off: leave resolution to operator
             final_resolution = Resolution.unresolved
-            log.info("job_awaiting_sign_off", job_id=job_id)
+            final_pr_url: str | None = None
+            final_merge_status: str | None = None
 
             # Strategy completed normally → succeeded
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.transition_state(job_id, JobState.succeeded)
-                from backend.persistence.job_repo import JobRepository
 
-                job_repo = JobRepository(session)
-                await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
+                if post_conflict_merge_requested and self._merge_service is not None:
+                    current_job = await svc.get_job(job_id)
+                    if current_job is None:
+                        raise ValueError(f"Job {job_id} not found before post-conflict merge")
+
+                    log.info("job_attempting_post_conflict_merge", job_id=job_id)
+                    final_resolution, final_pr_url, _ = await svc.execute_resolve(
+                        job=current_job,
+                        action="merge",
+                        merge_service=self._merge_service,
+                        event_bus=self._event_bus,
+                    )
+                else:
+                    from backend.persistence.job_repo import JobRepository
+
+                    job_repo = JobRepository(session)
+                    await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
+                    if post_conflict_merge_requested and self._merge_service is None:
+                        log.warning("post_conflict_merge_unavailable", job_id=job_id)
+
                 await session.commit()
+
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                updated_job = await svc.get_job(job_id)
+            if updated_job is not None:
+                final_merge_status = updated_job.merge_status
+                final_pr_url = updated_job.pr_url
+
+            if final_resolution == Resolution.unresolved:
+                log.info("job_awaiting_sign_off", job_id=job_id)
+            else:
+                log.info(
+                    "job_completed_with_resolution",
+                    job_id=job_id,
+                    resolution=final_resolution,
+                    merge_status=final_merge_status,
+                )
 
             self._set_progress_terminal_state(job_id, JobState.succeeded)
             await self._event_bus.publish(
@@ -433,13 +469,18 @@ class RuntimeService:
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=DomainEventKind.job_succeeded,
-                    payload={"resolution": final_resolution},
+                    payload={
+                        "resolution": final_resolution,
+                        "merge_status": final_merge_status,
+                        "pr_url": final_pr_url,
+                    },
                 )
             )
             log.info(
                 "job_succeeded",
                 job_id=job_id,
                 resolution=final_resolution,
+                merge_status=final_merge_status,
             )
         except asyncio.CancelledError:
             log.info("job_canceled_by_task", job_id=job_id)
@@ -1299,6 +1340,20 @@ class RuntimeService:
             if job.state not in TERMINAL_STATES:
                 raise StateConflictError(f"Job {job_id} is not in a terminal state (current: {job.state}).")
 
+            previous_state = job.state
+            previous_session_count = job.session_count
+            previous_completed_at = job.completed_at
+            previous_resolution = job.resolution
+            previous_failure_reason = job.failure_reason
+            previous_archived_at = job.archived_at
+            previous_merge_status = job.merge_status
+            previous_pr_url = job.pr_url
+            resume_merge_status = (
+                Resolution.conflict
+                if previous_merge_status == Resolution.conflict or previous_resolution == Resolution.conflict
+                else None
+            )
+
             # Ensure worktree still exists; re-create from branch if missing
             if job.worktree_path and job.worktree_path != job.repo:
                 wt = Path(job.worktree_path)
@@ -1331,10 +1386,37 @@ class RuntimeService:
                 )
                 resume_sdk_session_id = None
 
-            await job_repo.reset_for_resume(job_id, new_session_count)
+            await job_repo.reset_for_resume(job_id, new_session_count, merge_status=resume_merge_status)
             await session.commit()
 
-        # Publish session_resumed event
+        # Reload job and start execution
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            job = await job_repo.get(job_id)
+        if job is None:
+            raise ValueError(f"Job {job_id} not found after resume reset")
+
+        try:
+            await self.start_or_enqueue(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
+        except Exception:
+            async with self._session_factory() as session:
+                job_repo = JobRepository(session)
+                await job_repo.restore_after_failed_resume(
+                    job_id,
+                    previous_state=previous_state,
+                    previous_session_count=previous_session_count,
+                    completed_at=previous_completed_at,
+                    resolution=previous_resolution,
+                    failure_reason=previous_failure_reason,
+                    archived_at=previous_archived_at,
+                    merge_status=previous_merge_status,
+                    pr_url=previous_pr_url,
+                )
+                await session.commit()
+            raise
+
+        # Publish session_resumed only after startup succeeds so callers do not
+        # see a false-positive resume when task initialization fails.
         now = datetime.now(UTC)
         await self._event_bus.publish(
             DomainEvent(
@@ -1349,9 +1431,6 @@ class RuntimeService:
                 },
             )
         )
-        # Publish the operator's instruction as a transcript entry so it
-        # appears in the chat trace.  The echo-suppression registered in
-        # _start_job will prevent the SDK echo from duplicating it.
         await self._event_bus.publish(
             DomainEvent(
                 event_id=DomainEvent.make_event_id(),
@@ -1367,14 +1446,6 @@ class RuntimeService:
                 },
             )
         )
-
-        # Reload job and start execution
-        async with self._session_factory() as session:
-            job_repo = JobRepository(session)
-            job = await job_repo.get(job_id)
-        if job is None:
-            raise ValueError(f"Job {job_id} not found after resume reset")
-        await self.start_or_enqueue(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
 
         async with self._session_factory() as session:
             job_repo = JobRepository(session)

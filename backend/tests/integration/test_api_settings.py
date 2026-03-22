@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from backend.api.settings import _get_config
 from backend.config import CPLConfig
+from backend.services.git_service import GitError
 from backend.services.runtime_service import DEFAULT_SELF_REVIEW_PROMPT, DEFAULT_VERIFY_PROMPT
 
 if TYPE_CHECKING:
@@ -176,6 +177,7 @@ class TestGetRepoDetail:
         assert data["path"] == "/test/repo"
         assert data["originUrl"] is not None
         assert data["baseBranch"] == "main"
+        assert data["currentBranch"] == "feature/my-branch"
         assert "platform" in data
 
     @pytest.mark.asyncio
@@ -184,6 +186,30 @@ class TestGetRepoDetail:
 
         resp = await client.get("/api/settings/repos//not/registered")
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_detached_head_returns_head_string(
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        mock_git_service.get_current_branch.return_value = "HEAD"
+
+        resp = await client.get("/api/settings/repos//test/repo")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["currentBranch"] == "HEAD"
+
+    @pytest.mark.asyncio
+    async def test_current_branch_git_error_returns_none(
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        mock_git_service.get_current_branch.side_effect = GitError("detached HEAD")
+
+        resp = await client.get("/api/settings/repos//test/repo")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["currentBranch"] is None
 
 
 class TestRegisterRepo:

@@ -1170,6 +1170,8 @@ export interface components {
             originUrl?: string | null;
             /** Basebranch */
             baseBranch?: string | null;
+            /** Currentbranch */
+            currentBranch?: string | null;
             /**
              * Activejobcount
              * @default 0

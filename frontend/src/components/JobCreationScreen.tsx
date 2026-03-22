@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, suggestNames } from "../api/client";
+import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, fetchRepoDetail, suggestNames } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
@@ -30,6 +30,7 @@ export function JobCreationScreen() {
   const [repo, setRepo] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [baseRef, setBaseRef] = useState("");
+  const [baseRefEdited, setBaseRefEdited] = useState(false);
   const [branch, setBranch] = useState("");
   const [branchEdited, setBranchEdited] = useState(false);
   const [model, setModel] = useState<string | null>(null);
@@ -114,21 +115,36 @@ export function JobCreationScreen() {
       setBranch("");
       return;
     }
+    let cancelled = false;
     branchDebounceRef.current = setTimeout(() => {
       setBranchSuggesting(true);
       suggestNames(prompt)
         .then((names) => {
-          if (!branchEdited) setBranch(names.branchName);
+          if (!cancelled) setBranch(names.branchName);
         })
         .catch(() => {
           // silently ignore — user can type a branch name manually
         })
-        .finally(() => setBranchSuggesting(false));
+        .finally(() => { if (!cancelled) setBranchSuggesting(false); });
     }, 1500);
     return () => {
+      cancelled = true;
       if (branchDebounceRef.current) clearTimeout(branchDebounceRef.current);
     };
   }, [prompt, branchEdited]);
+
+  useEffect(() => {
+    if (!repo || baseRefEdited) return;
+    let cancelled = false;
+    fetchRepoDetail(repo)
+      .then((detail) => {
+        if (!cancelled) setBaseRef((detail.currentBranch !== "HEAD" ? detail.currentBranch : null) ?? detail.baseBranch ?? "");
+      })
+      .catch(() => {
+        toast.warning("Could not fetch repo details — set Base Reference manually if needed.");
+      });
+    return () => { cancelled = true; };
+  }, [repo, baseRefEdited]);
 
   const handleSdkChange = useCallback((newSdk: string | null) => {
     const resolved = newSdk ?? defaultSdk;
@@ -190,7 +206,11 @@ export function JobCreationScreen() {
               placeholder="Select a repository…"
               items={repos}
               value={repo}
-              onChange={setRepo}
+              onChange={(newRepo) => {
+                setRepo(newRepo);
+                setBaseRef("");
+                setBaseRefEdited(false);
+              }}
               className="flex-1"
             />
             <Button
@@ -214,6 +234,8 @@ export function JobCreationScreen() {
                 return [...prev, { value: path, label }];
               });
               setRepo(path);
+              setBaseRef("");
+              setBaseRefEdited(false);
             }}
           />
 
@@ -304,7 +326,10 @@ export function JobCreationScreen() {
                 <Input
                   placeholder="e.g., main"
                   value={baseRef}
-                  onChange={(e) => setBaseRef(e.currentTarget.value)}
+                  onChange={(e) => {
+                    setBaseRef(e.currentTarget.value);
+                    setBaseRefEdited(true);
+                  }}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -315,7 +340,7 @@ export function JobCreationScreen() {
                     value={branch}
                     onChange={(e) => {
                       setBranch(e.currentTarget.value);
-                      setBranchEdited(e.currentTarget.value !== "");
+                      setBranchEdited(true);
                     }}
                   />
                 </div>

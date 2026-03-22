@@ -14,6 +14,7 @@ import type {
   HealthResponse,
   Job,
   JobListResponse,
+  RepoDetailResponse,
   RepoListResponse,
   SDKListResponse,
   Settings,
@@ -190,6 +191,10 @@ export function fetchJobTelemetry(jobId: string): Promise<{
 
 export function fetchRepos(): Promise<RepoListResponse> {
   return request("/settings/repos");
+}
+
+export function fetchRepoDetail(repoPath: string): Promise<RepoDetailResponse> {
+  return request(`/settings/repos/${encodeURIComponent(repoPath)}`);
 }
 
 export function registerRepo(source: string, cloneTo?: string): Promise<{ path: string; source: string; cloned: boolean }> {

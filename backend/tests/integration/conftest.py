@@ -95,6 +95,7 @@ def mock_git_service() -> AsyncMock:
     svc = AsyncMock(spec=GitService)
     svc.validate_repo.return_value = True
     svc.get_default_branch.return_value = "main"
+    svc.get_current_branch.return_value = "feature/my-branch"
     svc.create_worktree.return_value = ("/tmp/test-worktree", "fix/test-branch")
     svc.cleanup_worktrees.return_value = 0
     svc.get_origin_url.return_value = "https://github.com/test/repo.git"
