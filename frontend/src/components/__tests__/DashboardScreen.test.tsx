@@ -52,34 +52,34 @@ beforeEach(() => {
 });
 
 describe("DashboardScreen", () => {
-  it("renders Jobs heading", () => {
+  it("renders Jobs heading", async () => {
     vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
     render(
       <MemoryRouter>
         <DashboardScreen />
       </MemoryRouter>,
     );
-    expect(screen.getByText("Jobs")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Jobs")).toBeInTheDocument());
   });
 
-  it("renders New Job button", () => {
+  it("renders New Job button", async () => {
     vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
     render(
       <MemoryRouter>
         <DashboardScreen />
       </MemoryRouter>,
     );
-    expect(screen.getByText("New Job")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("New Job")).toBeInTheDocument());
   });
 
-  it("renders KanbanBoard", () => {
+  it("renders KanbanBoard", async () => {
     vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
     render(
       <MemoryRouter>
         <DashboardScreen />
       </MemoryRouter>,
     );
-    expect(screen.getByTestId("kanban-board")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("kanban-board")).toBeInTheDocument());
   });
 
   it("fetches jobs on mount", async () => {

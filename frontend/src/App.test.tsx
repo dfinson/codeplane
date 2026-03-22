@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { useStore } from "./store";
 import { App } from "./App";
@@ -64,7 +64,7 @@ describe("App", () => {
   it("shows reconnecting status", () => {
     useStore.setState({ connectionStatus: "reconnecting" });
     renderApp();
-    expect(screen.getByText("connecting")).toBeInTheDocument();
+    expect(screen.getByText("Reconnecting\u2026")).toBeInTheDocument();
   });
 
   it("routes / to DashboardScreen", () => {
@@ -72,24 +72,24 @@ describe("App", () => {
     expect(screen.getByTestId("dashboard")).toBeInTheDocument();
   });
 
-  it("routes /jobs/new to JobCreationScreen", () => {
+  it("routes /jobs/new to JobCreationScreen", async () => {
     renderApp("/jobs/new");
-    expect(screen.getByTestId("job-creation")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("job-creation")).toBeInTheDocument());
   });
 
-  it("routes /jobs/:jobId to JobDetailScreen", () => {
+  it("routes /jobs/:jobId to JobDetailScreen", async () => {
     renderApp("/jobs/job-42");
-    expect(screen.getByTestId("job-detail")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("job-detail")).toBeInTheDocument());
   });
 
-  it("routes /settings to SettingsScreen", () => {
+  it("routes /settings to SettingsScreen", async () => {
     renderApp("/settings");
-    expect(screen.getByTestId("settings")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("settings")).toBeInTheDocument());
   });
 
-  it("routes /history to HistoryScreen", () => {
+  it("routes /history to HistoryScreen", async () => {
     renderApp("/history");
-    expect(screen.getByTestId("history")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("history")).toBeInTheDocument());
   });
 
   it("toggles terminal drawer on button click", () => {

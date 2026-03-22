@@ -141,6 +141,7 @@ export function App() {
             <button
               onClick={toggleTerminalDrawer}
               aria-label="Toggle terminal"
+              title={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}
               className={`p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md transition-colors ${
                 terminalDrawerOpen
                   ? "text-foreground bg-accent"
@@ -154,6 +155,7 @@ export function App() {
             <Link
               to="/history"
               aria-label="Job history"
+              title="Job History"
               className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
             >
               <History size={16} />

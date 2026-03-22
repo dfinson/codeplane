@@ -85,6 +85,9 @@ describe("ApprovalBanner", () => {
     useStore.setState({ approvals: { "apr-1": makeApproval() } });
     render(<ApprovalBanner jobId="job-1" />);
     fireEvent.click(screen.getByText("Reject"));
+    // Reject now opens a ConfirmDialog — click the confirm button inside it
+    const confirmBtn = await screen.findByRole("button", { name: "Reject" });
+    fireEvent.click(confirmBtn);
     await waitFor(() => {
       expect(resolveApproval).toHaveBeenCalledWith("apr-1", "rejected");
     });
