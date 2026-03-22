@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { useStore } from "../../store";
 import type { JobSummary } from "../../store";
@@ -66,7 +66,8 @@ vi.mock("../ui/confirm-dialog", () => ({
   ConfirmDialog: () => null,
 }));
 
-import { fetchJob } from "../../api/client";
+import { toast } from "sonner";
+import { fetchJob, fetchJobDiff, resolveJob } from "../../api/client";
 import { JobDetailScreen } from "../JobDetailScreen";
 
 function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
@@ -93,6 +94,9 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
 
 beforeEach(() => {
   vi.mocked(fetchJob).mockReset();
+  vi.mocked(fetchJobDiff).mockReset();
+  vi.mocked(resolveJob).mockReset();
+  vi.mocked(fetchJobDiff).mockResolvedValue([]);
   useStore.setState({
     jobs: {},
     approvals: {},
@@ -166,7 +170,81 @@ describe("JobDetailScreen", () => {
     );
 
     const transcriptPanel = await screen.findByTestId("transcript-panel");
-    expect(transcriptPanel.parentElement).toHaveClass("flex-1", "min-h-[22rem]");
-    expect(transcriptPanel.parentElement?.parentElement).toHaveClass("md:h-[calc(100vh-15rem)]", "md:min-h-[42rem]");
+    expect(transcriptPanel.parentElement).toHaveClass("h-[80dvh]", "min-h-[22rem]");
+    expect(transcriptPanel.parentElement?.parentElement).toHaveClass("flex", "flex-col", "gap-4");
+  });
+
+  it("reconciles the canonical job after merge so resolution controls disappear", async () => {
+    useStore.setState({
+      jobs: {
+        "job-1": makeJob({ resolution: "unresolved", mergeStatus: "not_merged" }),
+      },
+    });
+
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({ resolution: "unresolved", mergeStatus: "not_merged" }) as any,
+    );
+    vi.mocked(fetchJobDiff).mockResolvedValueOnce([
+      { path: "feature.ts", status: "modified", additions: 3, deletions: 1, hunks: [] },
+    ] as any);
+    vi.mocked(resolveJob).mockResolvedValueOnce({ resolution: "merged", conflictFiles: null, prUrl: null } as any);
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({ resolution: "merged", mergeStatus: "merged", updatedAt: "2025-01-01T03:00:00Z" }) as any,
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/jobs/job-1"]}>
+        <Routes>
+          <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
+
+    await waitFor(() => {
+      expect(resolveJob).toHaveBeenCalledWith("job-1", "smart_merge");
+    });
+
+    await waitFor(() => {
+      expect(useStore.getState().jobs["job-1"]?.resolution).toBe("merged");
+      expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Complete & Archive" })).toBeInTheDocument();
+    });
+  });
+
+  it("surfaces unresolved smart-merge results instead of reporting a false success", async () => {
+    useStore.setState({
+      jobs: {
+        "job-1": makeJob({ resolution: "unresolved", mergeStatus: "not_merged" }),
+      },
+    });
+
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({ resolution: "unresolved", mergeStatus: "not_merged" }) as any,
+    );
+    vi.mocked(fetchJobDiff).mockResolvedValueOnce([
+      { path: "feature.ts", status: "modified", additions: 3, deletions: 1, hunks: [] },
+    ] as any);
+    vi.mocked(resolveJob).mockResolvedValueOnce({ resolution: "unresolved", conflictFiles: null, prUrl: null } as any);
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({ resolution: "unresolved", mergeStatus: "not_merged", updatedAt: "2025-01-01T03:00:00Z" }) as any,
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/jobs/job-1"]}>
+        <Routes>
+          <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Merge did not complete");
+      expect(useStore.getState().jobs["job-1"]?.resolution).toBe("unresolved");
+      expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+    });
   });
 });

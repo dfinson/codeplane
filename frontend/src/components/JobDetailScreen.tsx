@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
+import { useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, FolderGit2, GitBranch, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
@@ -44,33 +44,6 @@ export function JobDetailScreen() {
   const hasChanges = diffs.length > 0;
   const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
   const [hasArtifacts, setHasArtifacts] = useState(false);
-
-  // Measure available height for the Live tab using ResizeObserver
-  const liveContainerRef = useRef<HTMLDivElement>(null);
-  const [liveHeight, setLiveHeight] = useState<number | null>(null);
-
-  useEffect(() => {
-    const el = liveContainerRef.current;
-    if (!el) return;
-
-    const measure = () => {
-      // On desktop, let the page scroll naturally — no fixed height needed
-      if (window.innerWidth >= 768) { setLiveHeight(null); return; }
-      const rect = el.getBoundingClientRect();
-      const available = window.innerHeight - rect.top - 16; // 16px bottom margin
-      setLiveHeight(Math.max(available, window.innerHeight * 0.6));
-    };
-
-    measure();
-
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    window.addEventListener("resize", measure);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [tab]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -216,20 +189,32 @@ export function JobDetailScreen() {
     setResolveLoading(action);
     try {
       const res = await resolveJob(jobId, action);
+      const refreshedJob = action === "agent_merge"
+        ? null
+        : await fetchJob(jobId).catch(() => null);
       useStore.setState((s) => {
         const existing = s.jobs[jobId];
-        if (!existing) return {};
+        const baseJob = refreshedJob ? enrichJob(refreshedJob as JobSummary) : existing;
+        if (!baseJob) return {};
         const nextJob = action === "agent_merge"
           ? {
-              ...existing,
+              ...baseJob,
               state: "running",
-              conflictFiles: res.conflictFiles ?? existing.conflictFiles,
+              resolution: null,
+              archivedAt: null,
+              conflictFiles: res.conflictFiles ?? baseJob.conflictFiles,
             }
           : {
-              ...existing,
+              ...baseJob,
               resolution: res.resolution,
-              prUrl: res.prUrl ?? existing.prUrl,
-              conflictFiles: res.conflictFiles ?? existing.conflictFiles,
+              prUrl: res.prUrl ?? baseJob.prUrl,
+              conflictFiles: res.conflictFiles ?? baseJob.conflictFiles,
+              mergeStatus:
+                res.resolution === "merged"
+                  ? "merged"
+                  : res.resolution === "conflict"
+                    ? "conflict"
+                    : baseJob.mergeStatus,
             };
         return {
           jobs: {
@@ -245,8 +230,16 @@ export function JobDetailScreen() {
         });
       } else if (action === "agent_merge") {
         toast.success("Resolving with agent…");
+      } else if (res.resolution === "merged") {
+        toast.success("Merged");
+      } else if (res.resolution === "pr_created") {
+        toast.success("PR created");
+      } else if (res.resolution === "discarded") {
+        toast.success("Discarded");
+      } else if (res.resolution === "conflict") {
+        toast.error("Merge conflict detected");
       } else {
-        toast.success(action === "merge" || action === "smart_merge" ? "Merged" : action === "create_pr" ? "PR created" : "Discarded");
+        toast.error("Merge did not complete");
       }
     } catch (e) { toast.error(String(e)); }
     finally { setResolveLoading(null); }
@@ -557,15 +550,11 @@ export function JobDetailScreen() {
       </Tabs>
 
       {tab === "live" && (
-        <div
-          ref={liveContainerRef}
-          className="flex flex-col md:h-[calc(100vh-15rem)] md:min-h-[42rem]"
-          style={liveHeight ? { height: liveHeight } : undefined}
-        >
-          <div className="flex-1 min-h-[22rem]">
+        <div className="flex flex-col gap-4">
+          <div className="h-[80dvh] min-h-[22rem]">
             <TranscriptPanel jobId={jobId} sdk={job.sdk} interactive jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
-          <div className="overflow-y-auto max-h-[35vh] space-y-4 mt-4 shrink-0 md:max-h-[18rem] md:pb-2">
+          <div className="overflow-y-auto max-h-[35vh] space-y-4 shrink-0 md:max-h-[18rem] md:pb-2">
             <PlanPanel jobId={jobId} />
             <ExecutionTimeline jobId={jobId} />
             <MetricsPanel jobId={jobId} isRunning={isRunning} />
