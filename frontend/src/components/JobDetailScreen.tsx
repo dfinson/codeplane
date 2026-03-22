@@ -224,15 +224,22 @@ export function JobDetailScreen() {
       useStore.setState((s) => {
         const existing = s.jobs[jobId];
         if (!existing) return s;
-        return {
-          jobs: {
-            ...s.jobs,
-            [jobId]: {
+        const nextJob = action === "agent_merge"
+          ? {
+              ...existing,
+              state: "running",
+              conflictFiles: res.conflictFiles ?? existing.conflictFiles,
+            }
+          : {
               ...existing,
               resolution: res.resolution,
               prUrl: res.prUrl ?? existing.prUrl,
               conflictFiles: res.conflictFiles ?? existing.conflictFiles,
-            },
+            };
+        return {
+          jobs: {
+            ...s.jobs,
+            [jobId]: nextJob,
           },
         };
       });

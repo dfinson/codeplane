@@ -179,7 +179,13 @@ class JobRepository(BaseRepository):
             updates["pr_url"] = pr_url
         await self._update_row(job_id, **updates)
 
-    async def reset_for_resume(self, job_id: str, new_session_count: int) -> None:
+    async def reset_for_resume(
+        self,
+        job_id: str,
+        new_session_count: int,
+        *,
+        merge_status: str | None = None,
+    ) -> None:
         """Reset a terminal job back to running state for resumption."""
         from datetime import UTC, datetime
 
@@ -192,7 +198,7 @@ class JobRepository(BaseRepository):
             resolution=None,
             failure_reason=None,
             archived_at=None,
-            merge_status=None,
+            merge_status=merge_status,
             pr_url=None,
             updated_at=datetime.now(UTC),
         )

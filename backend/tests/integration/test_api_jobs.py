@@ -524,6 +524,25 @@ class TestJobResolution:
         assert data["resolution"] == "conflict"
         assert "src/main.py" in data["conflictFiles"]
 
+    async def test_resolve_with_agent_resumes_conflict_job(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        mock_runtime_service: AsyncMock,
+    ) -> None:
+        jid = await seed_job(
+            state="succeeded",
+            job_id="resolve-agent",
+            branch="cpl/resolve-agent",
+            resolution="conflict",
+            merge_status="conflict",
+        )
+
+        resp = await client.post(f"/api/jobs/{jid}/resolve", json={"action": "agent_merge"})
+        assert resp.status_code == 200
+        assert resp.json()["resolution"] == "agent_merge"
+        mock_runtime_service.resume_job.assert_called_once()
+
     # ── Resolve: not succeeded → 409 ──
 
     async def test_resolve_not_succeeded(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
