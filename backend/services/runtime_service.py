@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.config import CPLConfig
+    from backend.persistence.job_repo import JobRepository
     from backend.services.adapter_registry import AdapterRegistry
     from backend.services.agent_adapter import AgentAdapterInterface
     from backend.services.approval_service import ApprovalService
@@ -589,7 +590,7 @@ class RuntimeService:
                         raise ValueError(f"Job {job_id} not found before post-conflict merge")
 
                     log.info("job_attempting_post_conflict_merge", job_id=job_id)
-                    resolved, final_pr_url, _ = await svc.execute_resolve(
+                    resolved, final_pr_url, _, _ = await svc.execute_resolve(
                         job=current_job,
                         action="merge",
                         merge_service=self._merge_service,
