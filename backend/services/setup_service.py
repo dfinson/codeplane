@@ -138,18 +138,14 @@ DEPENDENCIES: list[Dependency] = [
         },
     ),
     Dependency(
-        name="Tailscale",
-        command="tailscale",
-        url="https://tailscale.com/download",
+        name="Dev Tunnels CLI",
+        command="devtunnel",
+        url="https://aka.ms/devtunnels/cli",
         required=False,
         install_instructions={
-            "linux": "curl -fsSL https://tailscale.com/install.sh | sh",
-            "darwin": "brew install --cask tailscale",
-            "windows": "winget install Tailscale.Tailscale",
-        },
-        auto_install_cmd={
-            "linux": ["bash", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
-            "darwin": ["brew", "install", "--cask", "tailscale"],
+            "linux": "Install from https://aka.ms/devtunnels/cli",
+            "darwin": "Install from https://aka.ms/devtunnels/cli",
+            "windows": "Install from https://aka.ms/devtunnels/cli",
         },
     ),
 ]
@@ -425,7 +421,7 @@ def verify_requirements(*, port: int | None = None, include_optional_dependencie
     port:
         If given, also checks whether the port is available.
     include_optional_dependencies:
-        Whether to include optional tools like Tailscale in the dependency list.
+        Whether to include optional tools like the Dev Tunnels CLI in the dependency list.
     """
     results: list[CheckResult] = []
 
@@ -896,7 +892,7 @@ def execute_setup_wizard() -> None:
     _console.print()
     _console.print("  Quick start:")
     _console.print("    [cyan]cpl up[/cyan]                   Start the server")
-    _console.print("    [cyan]cpl up --tunnel[/cyan]          Start with remote access")
+    _console.print("    [cyan]cpl up --remote[/cyan]          Start with remote access")
     _console.print("    [cyan]cpl up --dev[/cyan]             Start in dev mode (hot-reload)")
     _console.print("    [cyan]cpl doctor[/cyan]               Check everything without starting")
     _console.print()

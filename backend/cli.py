@@ -17,6 +17,7 @@ from backend.app_factory import create_app
 from backend.config import load_config
 from backend.logging_config import setup_logging
 from backend.persistence.database import run_migrations
+from backend.services.tunnel_service import RemoteProvider, TunnelHandle, TunnelStartError, start_remote_access, validate_remote_provider
 
 log = structlog.get_logger()
 
@@ -72,7 +73,7 @@ def _build_frontend() -> bool:
 @click.option("--host", default=None, help="Bind host (default: from config or 127.0.0.1)")
 @click.option("--port", default=None, type=int, help="Bind port (default: from config or 8080)")
 @click.option("--dev", is_flag=True, help="Dev mode: skip frontend build")
-@click.option("--remote", is_flag=True, help="Enable remote access via Tailscale Funnel")
+@click.option("--remote", is_flag=True, help="Enable remote access via Dev Tunnels")
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--skip-preflight", is_flag=True, help="Skip preflight checks")
@@ -97,18 +98,10 @@ def up(
         if not validate_preflight(port):
             raise SystemExit(1)
 
-    # Check Tailscale availability when --remote is requested
     if remote:
-        import shutil
-
-        if not shutil.which("tailscale"):
-            click.secho(
-                "ERROR: 'tailscale' is not installed. Remote access requires Tailscale.\n"
-                "  Install: https://tailscale.com/download\n"
-                "  Or run: cpl setup",
-                fg="red",
-                err=True,
-            )
+        error = validate_remote_provider(RemoteProvider.devtunnel)
+        if error:
+            click.secho(error, fg="red", err=True)
             raise SystemExit(1)
 
     # Password logic: auto-generate for tunnel, allow explicit, block unsafe combos
@@ -168,200 +161,24 @@ def up(
         )
 
     tunnel_origin: str | None = None
-    tunnel_proc = None
-    tunnel_watchdog: _TunnelWatchdog | None = None
+    tunnel_handle: TunnelHandle | None = None
 
     if remote:
-        tunnel_origin, tunnel_proc = _start_tunnel(port)
+        try:
+            tunnel_handle = start_remote_access(RemoteProvider.devtunnel, port=port)
+        except TunnelStartError as exc:
+            click.secho(f"ERROR: {exc}", fg="red", err=True)
+            raise SystemExit(1) from exc
+        tunnel_origin = tunnel_handle.origin
 
     app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
-
-    if remote and tunnel_origin and tunnel_proc:
-        tunnel_watchdog = _TunnelWatchdog(
-            tunnel_url=tunnel_origin,
-            port=port,
-            proc=tunnel_proc,
-        )
-        tunnel_watchdog.start()
 
     try:
         _print_startup_banner(host, port, dev, tunnel_origin, effective_password)
         uvicorn.run(app, host=host, port=port)
     finally:
-        if tunnel_watchdog is not None:
-            tunnel_watchdog.stop()
-        if tunnel_proc is not None:
-            tunnel_proc.terminate()
-        # Also terminate the watchdog's proc if it was swapped during a restart
-        if tunnel_watchdog is not None and tunnel_watchdog.proc is not tunnel_proc:
-            tunnel_watchdog.proc.terminate()
-
-
-# ---------------------------------------------------------------------------
-# Tunnel watchdog — restart Tailscale Funnel when the connection drops
-# ---------------------------------------------------------------------------
-
-
-class _TunnelWatchdog:
-    """Background thread that pings the Tailscale Funnel URL and restarts
-    the process when the connection goes stale.
-    """
-
-    _CHECK_INTERVAL = 10  # seconds between health checks
-    _FAIL_THRESHOLD = 2  # consecutive failures before restart
-    _HTTP_TIMEOUT = 5  # seconds per health check request
-
-    def __init__(self, *, tunnel_url: str, port: int, proc: Any) -> None:
-        self.tunnel_url = tunnel_url
-        self.port = port
-        self.proc = proc
-        self._stop_event: Any = __import__("threading").Event()
-        self._thread: Any = None
-
-    def start(self) -> None:
-        import threading
-
-        self._thread = threading.Thread(target=self._run, daemon=True, name="tunnel-watchdog")
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-
-    def _health_ok(self) -> bool:
-        """Return True if the tunnel is forwarding traffic."""
-        import urllib.error
-        import urllib.request
-
-        try:
-            req = urllib.request.Request(
-                f"{self.tunnel_url}/api/health",
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=self._HTTP_TIMEOUT) as resp:  # noqa: S310
-                return bool(resp.status == 200)
-        except Exception:
-            return False
-
-    def _restart_host(self) -> None:
-        """Kill the current tailscale funnel process and start a fresh one."""
-        import subprocess
-
-        log.debug("tunnel_watchdog_restarting")
-
-        import contextlib
-
-        try:
-            self.proc.terminate()
-            self.proc.wait(timeout=5)
-        except Exception:
-            with contextlib.suppress(Exception):
-                self.proc.kill()
-
-        proc = subprocess.Popen(
-            ["tailscale", "funnel", str(self.port)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        import time
-
-        time.sleep(2)
-
-        self.proc = proc
-        log.debug("tunnel_watchdog_restarted")
-
-    def _run(self) -> None:
-        # Give the tunnel a grace period to fully initialize
-        if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
-            return
-
-        consecutive_failures = 0
-
-        while not self._stop_event.is_set():
-            if self._health_ok():
-                if consecutive_failures > 0:
-                    log.debug("tunnel_watchdog_recovered", failures=consecutive_failures)
-                consecutive_failures = 0
-            else:
-                consecutive_failures += 1
-                log.debug(
-                    "tunnel_watchdog_check_failed",
-                    consecutive=consecutive_failures,
-                    threshold=self._FAIL_THRESHOLD,
-                )
-                if consecutive_failures >= self._FAIL_THRESHOLD:
-                    self._restart_host()
-                    consecutive_failures = 0
-                    # Extra grace period after restart
-                    if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
-                        return
-
-            if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
-                return
-
-
-def _start_tunnel(port: int) -> tuple[str | None, Any]:
-    """Start Tailscale Funnel on *port*.
-
-    Serves the port over HTTPS at ``https://{machine}.{tailnet}.ts.net``.
-    Requires Tailscale to be running and Funnel to be enabled in the admin.
-    """
-    import subprocess
-
-    try:
-        # Discover the machine's Tailscale FQDN
-        status_result = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if status_result.returncode != 0:
-            click.secho("ERROR: 'tailscale status' failed. Is Tailscale running?", fg="red", err=True)
-            return None, None
-
-        import json
-
-        status = json.loads(status_result.stdout)
-        dns_name: str = status.get("Self", {}).get("DNSName", "")
-        if not dns_name:
-            click.secho("ERROR: Could not determine Tailscale DNS name.", fg="red", err=True)
-            return None, None
-        # DNSName has a trailing dot — strip it
-        dns_name = dns_name.rstrip(".")
-        tunnel_url = f"https://{dns_name}"
-
-        # Start `tailscale funnel {port}` — runs in foreground, exposes the port
-        proc = subprocess.Popen(
-            ["tailscale", "funnel", str(port)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        # Give it a moment to bind; check it hasn't exited immediately
-        import time
-
-        time.sleep(2)
-        if proc.poll() is not None:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            click.secho(f"ERROR: tailscale funnel exited immediately: {stderr}", fg="red", err=True)
-            return None, None
-
-        log.debug("tunnel_started", url=tunnel_url, provider="tailscale")
-        return tunnel_url, proc
-    except FileNotFoundError:
-        click.secho(
-            "ERROR: 'tailscale' CLI not found. Install from https://tailscale.com/download",
-            fg="red",
-            err=True,
-        )
-        return None, None
-    except subprocess.TimeoutExpired:
-        log.warning("tunnel_setup_timeout", provider="tailscale")
-        return None, None
+        if tunnel_handle is not None:
+            tunnel_handle.close()
 
 
 # ---------------------------------------------------------------------------

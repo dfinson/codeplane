@@ -563,7 +563,7 @@ export function JobDetailScreen() {
           style={liveHeight ? { height: liveHeight } : undefined}
         >
           <div className="flex-1 min-h-[22rem]">
-            <TranscriptPanel jobId={jobId} interactive jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
+            <TranscriptPanel jobId={jobId} sdk={job.sdk} interactive jobState={job.state} resolution={job.resolution} archivedAt={job.archivedAt} pausable={isRunning} prompt={job.prompt} promptTimestamp={job.createdAt} />
           </div>
           <div className="overflow-y-auto max-h-[35vh] space-y-4 mt-4 shrink-0 md:max-h-[18rem] md:pb-2">
             <PlanPanel jobId={jobId} />
