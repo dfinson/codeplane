@@ -34,6 +34,8 @@ from backend.services.progress_tracking_service import ProgressTrackingService
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from backend.persistence.job_repo import JobRepository
+
 
 class _AgentSession:
     """Thin wrapper around the adapter for a single running agent session."""
@@ -589,7 +591,7 @@ class RuntimeService:
                         raise ValueError(f"Job {job_id} not found before post-conflict merge")
 
                     log.info("job_attempting_post_conflict_merge", job_id=job_id)
-                    resolved, final_pr_url, _ = await svc.execute_resolve(
+                    resolved, final_pr_url, _, _ = await svc.execute_resolve(
                         job=current_job,
                         action="merge",
                         merge_service=self._merge_service,

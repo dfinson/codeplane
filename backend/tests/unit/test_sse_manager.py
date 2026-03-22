@@ -452,6 +452,7 @@ class TestSSEManager:
 
         event_repo = AsyncMock()
         event_repo.list_after.return_value = events
+        event_repo.list_latest_progress_previews.return_value = {}
 
         job_repo = AsyncMock()
         job_repo.list.return_value = [_make_job_domain()]
@@ -486,6 +487,7 @@ class TestSSEManager:
 
         event_repo = AsyncMock()
         event_repo.list_after.return_value = events
+        event_repo.list_latest_progress_previews.return_value = {}
 
         job_repo = AsyncMock()
         job_repo.list.return_value = [_make_job_domain()]
@@ -611,6 +613,7 @@ class TestSSEManager:
 
         event_repo = AsyncMock()
         event_repo.list_after.return_value = events
+        event_repo.list_latest_progress_previews.return_value = {}
 
         job_repo = AsyncMock()
         job_repo.get.return_value = _make_job_domain("job-1")
@@ -688,6 +691,7 @@ class TestSSEManager:
 
         event_repo = AsyncMock()
         event_repo.list_after.return_value = events
+        event_repo.list_latest_progress_previews.return_value = {}
 
         job_repo = AsyncMock()
         job_repo.get.return_value = _make_job_domain("job-1")

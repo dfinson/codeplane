@@ -609,7 +609,7 @@ class TestResumeFallback:
                 await repo.update_merge_status("job-1", Resolution.merged)
                 await session.commit()
 
-            return SimpleNamespace(status="merged", pr_url=None, conflict_files=None)
+            return SimpleNamespace(status="merged", pr_url=None, conflict_files=None, error=None)
 
         merge_service.resolve_job.side_effect = _resolve_job
 
