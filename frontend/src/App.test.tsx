@@ -106,7 +106,7 @@ describe("App", () => {
   it("toggles terminal drawer on Ctrl+` shortcut", async () => {
     await renderApp();
     expect(useStore.getState().terminalDrawerOpen).toBe(false);
-    fireEvent.keyDown(window, { key: "`", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "`", ctrlKey: true });
     expect(useStore.getState().terminalDrawerOpen).toBe(true);
   });
 
