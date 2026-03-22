@@ -10,11 +10,13 @@ vi.mock("../../api/client", () => ({
   fetchModels: vi.fn(),
   fetchSDKs: vi.fn(),
   fetchSettings: vi.fn(),
+  fetchRepoDetail: vi.fn(),
+  suggestNames: vi.fn(),
 }));
 
 // Mock sonner toast
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
 
 // Mock VoiceButton to avoid audio deps
@@ -56,7 +58,15 @@ vi.mock("../ui/combobox", () => ({
   ),
 }));
 
-import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings } from "../../api/client";
+import {
+  createJob,
+  fetchModels,
+  fetchRepoDetail,
+  fetchRepos,
+  fetchSDKs,
+  fetchSettings,
+  suggestNames,
+} from "../../api/client";
 import { JobCreationScreen } from "../JobCreationScreen";
 
 async function renderScreen() {
@@ -87,6 +97,7 @@ beforeEach(() => {
     { id: "gpt-5.4", name: "GPT-5.4", default: true },
   ]);
   vi.mocked(fetchSDKs).mockResolvedValue({ default: "copilot", sdks: [] });
+  vi.mocked(fetchRepoDetail).mockResolvedValue({ currentBranch: "main", baseBranch: "main" } as any);
   vi.mocked(fetchSettings).mockResolvedValue({
     maxConcurrentJobs: 2,
     permissionMode: "auto",
@@ -101,6 +112,11 @@ beforeEach(() => {
     maxTurns: 3,
     verifyPrompt: "",
     selfReviewPrompt: "",
+  } as any);
+  vi.mocked(suggestNames).mockResolvedValue({
+    title: "Fix the bug",
+    branchName: "fix-the-bug",
+    worktreeName: "fix-the-bug",
   } as any);
   mockNavigate.mockReset();
 });

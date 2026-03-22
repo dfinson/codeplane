@@ -1,20 +1,5 @@
 import { memo, type ReactElement } from "react";
-import { siGithubcopilot, siClaude } from "simple-icons";
-
-function SimpleIcon({ icon, size }: { icon: { path: string }; size: number }): ReactElement {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-      style={{ display: "inline", flexShrink: 0 }}
-    >
-      <path d={icon.path} />
-    </svg>
-  );
-}
+import { Brain, Bot } from "lucide-react";
 
 type SdkIconComponent = (props: { size: number }) => ReactElement;
 
@@ -26,13 +11,13 @@ const SDK_CONFIG: Record<
     label: "GitHub Copilot",
     className:
       "bg-violet-500/15 text-violet-600 border-violet-500/30 dark:text-violet-400",
-    Icon: ({ size }) => <SimpleIcon icon={siGithubcopilot} size={size} />,
+    Icon: ({ size }) => <Bot size={size} strokeWidth={2.2} />,
   },
   claude: {
     label: "Claude Code",
     className:
       "bg-orange-500/15 text-orange-600 border-orange-500/30 dark:text-orange-400",
-    Icon: ({ size }) => <SimpleIcon icon={siClaude} size={size} />,
+    Icon: ({ size }) => <Brain size={size} strokeWidth={2.2} />,
   },
 };
 

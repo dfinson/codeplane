@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,

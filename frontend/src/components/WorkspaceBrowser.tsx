@@ -252,8 +252,9 @@ export default function WorkspaceBrowser({ jobId }: Props) {
     coll.set(buildAddedDecorations(diffFile, totalLines));
   }, [selected, diffMap, fileContent]);
 
-  const handleEditorMount: OnMount = useCallback((ed) => {
+  const handleEditorMount: OnMount = useCallback((ed, mc) => {
     editorRef.current = ed;
+    monacoRef.current = mc;
     decorationsRef.current = ed.createDecorationsCollection([]);
     // Apply immediately if diff data is already available
     const diffFile = selected ? diffMap.get(selected) : undefined;
@@ -419,11 +420,6 @@ export default function WorkspaceBrowser({ jobId }: Props) {
                   glyphMargin: false,
                   lineDecorationsWidth: 4,
                   folding: true,
-                }}
-                onMount={(ed, mc) => {
-                  editorRef.current = ed;
-                  monacoRef.current = mc;
-                  applyDiffDecorations();
                 }}
               />
             )}

@@ -4,9 +4,7 @@ import { toast } from "sonner";
 import WaveSurfer from "wavesurfer.js";
 import RecordPlugin from "wavesurfer.js/dist/plugins/record.esm.js";
 import { transcribeAudio } from "../api/client";
-import { cn } from "../lib/utils";
 import { Textarea } from "./ui/textarea";
-import { Spinner } from "./ui/spinner";
 import { Tooltip } from "./ui/tooltip";
 import { useIsMobile } from "../hooks/useIsMobile";
 
