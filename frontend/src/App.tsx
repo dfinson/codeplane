@@ -1,4 +1,5 @@
-import { Component, type ReactNode, Suspense, lazy, useEffect, useCallback } from "react";
+import { Component, type ReactNode, Suspense, lazy } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
 import { Settings, History, TerminalSquare, Search } from "lucide-react";
 import { CommandPalette } from "./components/CommandPalette";
@@ -97,41 +98,30 @@ export function App() {
   const sessionCount = useStore((s) => Object.keys(s.terminalSessions).length);
 
   // Global keyboard shortcuts
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "`") {
-        e.preventDefault();
-        if (!terminalDrawerOpen) {
-          // Drawer is closed — open it
+  useHotkeys(
+    "ctrl+`",
+    () => {
+      if (!terminalDrawerOpen) {
+        toggleTerminalDrawer();
+      } else {
+        const active = document.activeElement;
+        const terminalEl = document.querySelector(".xterm-helper-textarea, .xterm canvas");
+        const focusedInTerminal = terminalEl && (active === terminalEl || terminalEl.contains(active));
+        if (focusedInTerminal) {
           toggleTerminalDrawer();
         } else {
-          // Drawer is open — close only if focus is already inside the terminal,
-          // otherwise just bring focus to the terminal (xterm textarea/canvas)
-          const active = document.activeElement;
-          const terminalEl = document.querySelector(".xterm-helper-textarea, .xterm canvas");
-          const focusedInTerminal = terminalEl && (active === terminalEl || terminalEl.contains(active));
-          if (focusedInTerminal) {
-            toggleTerminalDrawer();
-          } else {
-            (terminalEl as HTMLElement | null)?.focus();
-          }
+          (terminalEl as HTMLElement | null)?.focus();
         }
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
-        e.preventDefault();
-        navigate("/jobs/new");
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        navigate("/settings");
-      }
     },
-    [toggleTerminalDrawer, terminalDrawerOpen, navigate],
+    { enableOnFormTags: true, preventDefault: true, useKey: true },
+    [terminalDrawerOpen, toggleTerminalDrawer],
   );
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
+  useHotkeys("alt+n", () => navigate("/jobs/new"), { preventDefault: true });
+  useHotkeys("ctrl+comma,meta+comma", () => navigate("/settings"), {
+    enableOnFormTags: true,
+    preventDefault: true,
+  });
 
   return (
     <div className="flex flex-col h-screen overflow-x-hidden">

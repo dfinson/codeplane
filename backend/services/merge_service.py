@@ -55,7 +55,10 @@ def _classify_cherry_pick_failure(exc: GitError) -> str:
     """Map cherry-pick failures without conflict markers to a user-facing error."""
     combined_message = "\n".join(part for part in (str(exc), exc.stderr) if part).lower()
     if any(pattern in combined_message for pattern in _CHERRY_PICK_ALREADY_APPLIED_PATTERNS):
-        return "Cherry-pick stopped because one or more branch commits are already present on the base branch; rebase the branch or create a PR"
+        return (
+            "Cherry-pick stopped because one or more branch commits are already present on the base branch;"
+            " rebase the branch or create a PR"
+        )
     return "Cherry-pick failed without conflict markers; check git configuration or hooks"
 
 

@@ -206,6 +206,13 @@ export default function WorkspaceBrowser({ jobId }: Props) {
     return map;
   }, [diffs]);
 
+  // Always-current refs so handleEditorMount can read the latest selected/diffMap
+  // without being invalidated by a stale closure (handleEditorMount deps are []).
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const diffMapRef = useRef(diffMap);
+  diffMapRef.current = diffMap;
+
   const changedDirs = useMemo(() => {
     const dirs = new Set<string>();
     for (const d of diffs) {
@@ -221,7 +228,9 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   useEffect(() => {
     const ed = editorRef.current;
     const coll = decorationsRef.current;
-    if (!ed || !coll) return;
+    // ed.getModel() returns null when the editor has been disposed (e.g. the
+    // loading spinner unmounted a previous editor but the ref was not cleared).
+    if (!ed || !coll || !ed.getModel()) return;
 
     const diffFile = selected ? diffMap.get(selected) : undefined;
     if (!diffFile) {
@@ -235,14 +244,12 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   const handleEditorMount: OnMount = useCallback((ed) => {
     editorRef.current = ed;
     decorationsRef.current = ed.createDecorationsCollection([]);
-    // Apply immediately if diff data is already available
-    const diffFile = selected ? diffMap.get(selected) : undefined;
+    // Use always-current refs so we never read stale selected/diffMap values.
+    const diffFile = selectedRef.current ? diffMapRef.current.get(selectedRef.current) : undefined;
     if (diffFile) {
       const totalLines = ed.getModel()?.getLineCount() ?? 0;
       decorationsRef.current.set(buildAddedDecorations(diffFile, totalLines));
     }
-  // selected and diffMap are intentionally captured at mount time
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
