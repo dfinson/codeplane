@@ -40,6 +40,7 @@ export interface JobSummary {
   conflictFiles?: string[] | null;
   failureReason?: string | null;
   progressHeadline?: string | null;
+  progressSummary?: string | null;
   model?: string | null;
   modelDowngraded?: boolean;
   requestedModel?: string | null;
@@ -433,7 +434,6 @@ export const useStore = create<AppState>((set, get) => ({
                   ...(resolution && { resolution }),
                   ...(mergeStatus && { mergeStatus }),
                   failureReason: null,
-                  progressHeadline: null,
                   ...(modelDowngraded && { modelDowngraded, requestedModel, actualModel }),
                 },
               },
@@ -457,7 +457,6 @@ export const useStore = create<AppState>((set, get) => ({
                   ...existing,
                   state: "failed",
                   failureReason: reason,
-                  progressHeadline: null,
                 },
               },
               ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
@@ -571,6 +570,8 @@ export const useStore = create<AppState>((set, get) => ({
             resolution: null,
             conflictFiles: null,
             failureReason: null,
+            progressHeadline: null,
+            progressSummary: null,
             archivedAt: null,
             modelDowngraded: false,
             requestedModel: null,
@@ -659,6 +660,7 @@ export const useStore = create<AppState>((set, get) => ({
                 [jobId]: {
                   ...existing,
                   progressHeadline: headline,
+                  progressSummary: summary,
                 },
               },
               timelines: { ...state.timelines, [jobId]: newTimeline },

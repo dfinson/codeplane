@@ -240,6 +240,8 @@ class JobResponse(CamelModel):
     """User-facing job disposition — see :class:`~backend.models.domain.Resolution`."""
     archived_at: datetime | None = None
     failure_reason: str | None = None
+    progress_headline: str | None = None
+    progress_summary: str | None = None
     model: str | None = None
     sdk: str = "copilot"
     worktree_name: str | None = None

@@ -9,6 +9,7 @@ vi.mock("../../api/client", () => ({
   fetchJob: vi.fn(),
   cancelJob: vi.fn(),
   rerunJob: vi.fn(),
+  resumeJob: vi.fn(),
   fetchJobTranscript: vi.fn().mockResolvedValue([]),
   fetchJobTimeline: vi.fn().mockResolvedValue([]),
   fetchJobDiff: vi.fn().mockResolvedValue([]),
@@ -67,7 +68,7 @@ vi.mock("../ui/confirm-dialog", () => ({
 }));
 
 import { toast } from "sonner";
-import { fetchJob, fetchJobDiff, resolveJob } from "../../api/client";
+import { fetchJob, fetchJobDiff, resolveJob, rerunJob, resumeJob } from "../../api/client";
 import { JobDetailScreen } from "../JobDetailScreen";
 
 function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
@@ -245,6 +246,46 @@ describe("JobDetailScreen", () => {
       expect(toast.error).toHaveBeenCalledWith("Merge did not complete");
       expect(useStore.getState().jobs["job-1"]?.resolution).toBe("unresolved");
       expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+    });
+  });
+
+  it("resumes the existing failed job instead of rerunning a new one", async () => {
+    useStore.setState({
+      jobs: {
+        "job-1": makeJob({ state: "failed", resolution: null, mergeStatus: "not_merged" }),
+      },
+    });
+
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({ state: "failed", resolution: null, mergeStatus: "not_merged" }) as any,
+    );
+    vi.mocked(resumeJob).mockResolvedValueOnce({
+      id: "job-1",
+      state: "running",
+      branch: "fix/bug",
+      worktreePath: "/repos/test/.cpl-worktrees/job-1",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T02:00:00Z",
+    } as any);
+
+    render(
+      <MemoryRouter initialEntries={["/jobs/job-1"]}>
+        <Routes>
+          <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    fireEvent.change(await screen.findByPlaceholderText("Describe what should happen next"), {
+      target: { value: "Continue fixing the diff highlighting." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Resume Job" }));
+
+    await waitFor(() => {
+      expect(resumeJob).toHaveBeenCalledWith("job-1", "Continue fixing the diff highlighting.");
+      expect(rerunJob).not.toHaveBeenCalled();
+      expect(useStore.getState().jobs["job-1"]?.state).toBe("running");
     });
   });
 });

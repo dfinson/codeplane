@@ -100,6 +100,12 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
+_SERVER_RESTART_RECOVERY_INSTRUCTION = (
+    "The CodePlane server restarted while this job was in progress. "
+    "Resume this existing job in place from the current worktree and prior context. "
+    "Do not start over or create a duplicate job."
+)
+
 # Heartbeat configuration
 _HEARTBEAT_INTERVAL_S = 30
 _HEARTBEAT_WARNING_S = 90
@@ -173,6 +179,9 @@ class RuntimeService:
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_starts: dict[str, tuple[str | None, str | None]] = {}
+        self._queued_override_prompts: dict[str, str] = {}
+        self._queued_resume_session_ids: dict[str, str] = {}
         # Contents to suppress when the SDK echoes them back (already published locally)
         self._echo_suppress: dict[str, set[str]] = {}
         # Progress tracking (headline milestones + plan extraction)
@@ -231,6 +240,15 @@ class RuntimeService:
             return
         async with self._dequeue_lock:
             if self.running_count >= self.max_concurrent:
+                if job.state == JobState.queued:
+                    if override_prompt is not None:
+                        self._queued_override_prompts[job.id] = override_prompt
+                    if resume_sdk_session_id is not None:
+                        self._queued_resume_session_ids[job.id] = resume_sdk_session_id
+                else:
+                    self._pending_starts[job.id] = (override_prompt, resume_sdk_session_id)
+                    log.info("job_waiting_for_capacity", job_id=job.id, state=job.state, running=self.running_count)
+                    return
                 # Job is already queued from create_job; only transition if needed
                 if job.state != JobState.queued:
                     async with self._session_factory() as session:
@@ -242,6 +260,140 @@ class RuntimeService:
                 return
 
             await self._start_job(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
+
+    async def _ensure_resumable_worktree(self, job_repo: JobRepository, job: Job) -> Job:
+        """Ensure a job has a usable worktree before resuming or recovering it."""
+        from pathlib import Path
+
+        from backend.services.git_service import GitError, GitService
+        from backend.services.job_service import StateConflictError
+
+        if not job.worktree_path or job.worktree_path == job.repo:
+            return job
+
+        wt = Path(job.worktree_path)
+        if wt.exists():
+            return job
+
+        if not job.branch:
+            raise StateConflictError(
+                f"Job {job.id} cannot be resumed because its worktree is missing "
+                "and no branch is available to restore it."
+            )
+
+        git = GitService(self._config)
+        try:
+            new_wt = await git.reattach_worktree(job.repo, job.id, job.branch)
+            await job_repo.update_worktree_path(job.id, new_wt)
+            job.worktree_path = new_wt
+            log.info("worktree_reattached", job_id=job.id, path=new_wt)
+            return job
+        except GitError as exc:
+            raise StateConflictError(
+                f"Job {job.id} cannot be resumed because its worktree could not be restored: {exc}"
+            ) from exc
+
+    async def _recover_active_job(
+        self,
+        job_id: str,
+        *,
+        instruction: str = _SERVER_RESTART_RECOVERY_INSTRUCTION,
+    ) -> Job:
+        """Restart an active job after backend restart without marking it failed."""
+        from backend.persistence.job_repo import JobRepository
+        from backend.services.job_service import JobNotFoundError, StateConflictError
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            job = await job_repo.get(job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job {job_id} does not exist.")
+            if job.state not in (JobState.running, JobState.waiting_for_approval):
+                raise StateConflictError(
+                    f"Job {job_id} is not active and cannot be recovered (current: {job.state})."
+                )
+
+            previous_state = job.state
+            previous_session_count = job.session_count
+            previous_completed_at = job.completed_at
+            previous_resolution = job.resolution
+            previous_failure_reason = job.failure_reason
+            previous_archived_at = job.archived_at
+            previous_merge_status = job.merge_status
+            previous_pr_url = job.pr_url
+
+            job = await self._ensure_resumable_worktree(job_repo, job)
+
+            new_session_count = job.session_count + 1
+            if job.sdk_session_id:
+                override_prompt = instruction
+                resume_sdk_session_id: str | None = job.sdk_session_id
+            else:
+                override_prompt = await self._build_resume_handoff_prompt_for_job(
+                    session,
+                    job,
+                    instruction,
+                    new_session_count,
+                )
+                resume_sdk_session_id = None
+
+            await job_repo.reset_for_recovery(job_id, new_session_count, new_state=JobState.running)
+            await session.commit()
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            reloaded = await job_repo.get(job_id)
+        if reloaded is None:
+            raise ValueError(f"Job {job_id} not found after recovery reset")
+
+        try:
+            await self.start_or_enqueue(
+                reloaded,
+                override_prompt=override_prompt,
+                resume_sdk_session_id=resume_sdk_session_id,
+            )
+        except Exception:
+            async with self._session_factory() as session:
+                job_repo = JobRepository(session)
+                await job_repo.restore_after_failed_resume(
+                    job_id,
+                    previous_state=previous_state,
+                    previous_session_count=previous_session_count,
+                    completed_at=previous_completed_at,
+                    resolution=previous_resolution,
+                    failure_reason=previous_failure_reason,
+                    archived_at=previous_archived_at,
+                    merge_status=previous_merge_status,
+                    pr_url=previous_pr_url,
+                )
+                await session.commit()
+            raise
+
+        if previous_state == JobState.waiting_for_approval:
+            await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
+
+        now = datetime.now(UTC)
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=DomainEvent.make_event_id(),
+                job_id=job_id,
+                timestamp=now,
+                kind=DomainEventKind.session_resumed,
+                payload={
+                    "session_number": new_session_count,
+                    "instruction": instruction,
+                    "timestamp": now.isoformat(),
+                    "reason": "process_restarted",
+                },
+            )
+        )
+
+        async with self._session_factory() as session:
+            job_repo = JobRepository(session)
+            final_job = await job_repo.get(job_id)
+        if final_job is None:
+            raise ValueError(f"Job {job_id} not found after recovery start")
+        return final_job
 
     async def _start_job(
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
@@ -560,6 +712,9 @@ class RuntimeService:
         self._last_activity.pop(job_id, None)
         self._session_ids.pop(job_id, None)
         self._echo_suppress.pop(job_id, None)
+        self._pending_starts.pop(job_id, None)
+        self._queued_override_prompts.pop(job_id, None)
+        self._queued_resume_session_ids.pop(job_id, None)
         if self._utility_session is not None:
             await self._utility_session.notify_job_ended()
         if self._approval_service is not None:
@@ -1081,10 +1236,10 @@ class RuntimeService:
           update hasn't reached the client yet.  The DB state will already be
           terminal, so we can resume directly.
 
-        * **Orphaned non-terminal job** — the server restarted (or crashed)
-          before ``recover_on_startup`` ran, leaving the DB in ``running`` or
-          ``waiting_for_approval`` with no live task.  We fail the job first so
-          that ``resume_job`` can restart it cleanly.
+                * **Orphaned non-terminal job** — the server restarted (or crashed)
+                    before ``recover_on_startup`` ran, leaving the DB in ``running`` or
+                    ``waiting_for_approval`` with no live task.  We recover it in place
+                    instead of creating a synthetic failure transition.
 
         Returns ``True`` if the resume was successfully initiated, ``False`` if
         the job does not exist.
@@ -1101,29 +1256,18 @@ class RuntimeService:
             return False
 
         if job.state not in TERMINAL_STATES:
-            # Orphaned non-terminal job — mark it failed so resume_job() can proceed.
+            # Orphaned non-terminal job — recover it in place.
             log.warning(
                 "send_message_orphaned_non_terminal",
                 job_id=job_id,
                 state=job.state,
             )
-            async with self._session_factory() as session:
-                svc = self._make_job_service(session)
-                await svc.transition_state(
-                    job_id,
-                    JobState.failed,
-                    failure_reason="Orphaned: no active session (server restart?)",
-                )
-                await session.commit()
-            await self._event_bus.publish(
-                DomainEvent(
-                    event_id=DomainEvent.make_event_id(),
-                    job_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=DomainEventKind.job_failed,
-                    payload={"reason": "orphaned"},
-                )
-            )
+            try:
+                await self._recover_active_job(job_id, instruction=message)
+            except Exception:
+                log.warning("send_message_auto_resume_failed", job_id=job_id, exc_info=True)
+                return False
+            return True
 
         log.info("send_message_auto_resume", job_id=job_id)
         try:
@@ -1162,12 +1306,34 @@ class RuntimeService:
             if self.running_count >= self.max_concurrent:
                 return
             try:
+                if self._pending_starts:
+                    job_id, (override_prompt, resume_sdk_session_id) = next(iter(self._pending_starts.items()))
+                    self._pending_starts.pop(job_id, None)
+                    async with self._session_factory() as session:
+                        from backend.persistence.job_repo import JobRepository
+
+                        job = await JobRepository(session).get(job_id)
+                    if job is not None:
+                        await self._start_job(
+                            job,
+                            override_prompt=override_prompt,
+                            resume_sdk_session_id=resume_sdk_session_id,
+                        )
+                    return
+
                 async with self._session_factory() as session:
                     svc = self._make_job_service(session)
                     queued_jobs = await svc.list_jobs(state=JobState.queued, limit=1)
                     jobs, _, _ = queued_jobs
                 if jobs:
-                    await self._start_job(jobs[0])
+                    job = jobs[0]
+                    override_prompt = self._queued_override_prompts.pop(job.id, None)
+                    resume_sdk_session_id = self._queued_resume_session_ids.pop(job.id, None)
+                    await self._start_job(
+                        job,
+                        override_prompt=override_prompt,
+                        resume_sdk_session_id=resume_sdk_session_id,
+                    )
             except Exception:
                 log.error("dequeue_failed", exc_info=True)
 
@@ -1327,11 +1493,8 @@ class RuntimeService:
         intact, no summarization cost). Fallback: use LLM-generated session summary when the
         SDK session is no longer available (daemon restart, session expired, etc.).
         """
-        from pathlib import Path
-
         from backend.models.domain import TERMINAL_STATES
         from backend.persistence.job_repo import JobRepository
-        from backend.services.git_service import GitError, GitService
         from backend.services.job_service import JobNotFoundError, StateConflictError
 
         async with self._session_factory() as session:
@@ -1362,25 +1525,7 @@ class RuntimeService:
                 else None
             )
 
-            # Ensure worktree still exists; re-create from branch if missing
-            if job.worktree_path and job.worktree_path != job.repo:
-                wt = Path(job.worktree_path)
-                if not wt.exists():
-                    if not job.branch:
-                        raise StateConflictError(
-                            f"Job {job_id} cannot be resumed because its worktree is missing "
-                            "and no branch is available to restore it."
-                        )
-                    git = GitService(self._config)
-                    try:
-                        new_wt = await git.reattach_worktree(job.repo, job.id, job.branch)
-                        await job_repo.update_worktree_path(job_id, new_wt)
-                        job.worktree_path = new_wt
-                        log.info("worktree_reattached", job_id=job_id, path=new_wt)
-                    except GitError as exc:
-                        raise StateConflictError(
-                            f"Job {job_id} cannot be resumed because its worktree could not be restored: {exc}"
-                        ) from exc
+            job = await self._ensure_resumable_worktree(job_repo, job)
 
             new_session_count = job.session_count + 1
 
@@ -1561,11 +1706,11 @@ class RuntimeService:
         )
 
     async def recover_on_startup(self) -> None:
-        """Recover from a previous crash: fail orphaned running jobs, re-enqueue queued ones."""
+        """Recover from a previous crash by restarting active jobs and re-enqueueing queued ones."""
         orphaned_jobs: list[tuple[Job, JobState]] = []
         async with self._session_factory() as session:
             svc = self._make_job_service(session)
-            # Fail jobs that were 'running' or 'waiting_for_approval' — we can't reconnect
+            # Recover jobs that were already in progress before the backend restart.
             for state in (JobState.running, JobState.waiting_for_approval):
                 jobs, _, _ = await svc.list_jobs(state=state, limit=10000)
                 orphaned_jobs.extend((job, state) for job in jobs)
@@ -1575,23 +1720,7 @@ class RuntimeService:
 
         for job, state in orphaned_jobs:
             log.warning("recovering_orphaned_job", job_id=job.id, state=state)
-            async with self._session_factory() as session:
-                svc = self._make_job_service(session)
-                await svc.transition_state(
-                    job.id,
-                    JobState.failed,
-                    failure_reason="Server restarted while job was running",
-                )
-                await session.commit()
-            await self._event_bus.publish(
-                DomainEvent(
-                    event_id=DomainEvent.make_event_id(),
-                    job_id=job.id,
-                    timestamp=datetime.now(UTC),
-                    kind=DomainEventKind.job_failed,
-                    payload={"reason": "process_restarted"},
-                )
-            )
+            await self._recover_active_job(job.id)
 
         for job in queued_jobs:
             await self.start_or_enqueue(job)

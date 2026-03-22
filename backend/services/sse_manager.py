@@ -559,12 +559,16 @@ class SSEManager:
         if needs_snapshot:
             # Build and send snapshot (scoped to conn.job_id if set)
             from backend.models.api_schemas import JobResponse
+            from backend.persistence.event_repo import EventRepository
 
             if conn.job_id is not None:
                 single = await job_repo.get(conn.job_id)
                 fetched_jobs = [single] if single else []
             else:
                 fetched_jobs = [j for j in await job_repo.list(limit=10000) if j.archived_at is None]
+
+            event_repo = EventRepository(session)
+            progress_by_job = await event_repo.list_latest_progress_previews([j.id for j in fetched_jobs])
 
             job_responses = [
                 JobResponse(
@@ -584,6 +588,8 @@ class SSEManager:
                     resolution=j.resolution,
                     archived_at=j.archived_at,
                     failure_reason=j.failure_reason,
+                    progress_headline=progress_by_job.get(j.id, (None, None))[0],
+                    progress_summary=progress_by_job.get(j.id, (None, None))[1],
                     model=j.model,
                 )
                 for j in fetched_jobs

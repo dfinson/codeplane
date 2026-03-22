@@ -11,9 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.models.db import EventRow
 from backend.services.job_service import JobNotFoundError, StateConflictError
 
 if TYPE_CHECKING:
@@ -133,6 +136,31 @@ class TestJobsCrud:
         ids = [j["id"] for j in data["items"]]
         assert jid in ids
 
+    async def test_list_jobs_includes_latest_progress_preview(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        jid = await seed_job(state="succeeded", job_id="preview-1")
+        async with session_factory() as session:
+            session.add(
+                EventRow(
+                    event_id=f"evt-{uuid4().hex}",
+                    job_id=jid,
+                    kind="ProgressHeadline",
+                    timestamp=datetime.now(UTC),
+                    payload='{"headline":"Audit keyboard shortcuts","summary":"Reviewed existing shortcuts and documented follow-up changes."}',
+                )
+            )
+            await session.commit()
+
+        resp = await client.get("/api/jobs")
+        data = resp.json()
+        preview_job = next(job for job in data["items"] if job["id"] == jid)
+        assert preview_job["progressHeadline"] == "Audit keyboard shortcuts"
+        assert preview_job["progressSummary"] == "Reviewed existing shortcuts and documented follow-up changes."
+
     async def test_list_jobs_state_filter(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         await seed_job(state="running", job_id="run-1")
         await seed_job(state="succeeded", job_id="succ-1")
@@ -179,6 +207,30 @@ class TestJobsCrud:
         assert data["id"] == jid
         assert data["state"] == "running"
         assert data["repo"] == "/test/repo"
+
+    async def test_get_job_includes_latest_progress_preview(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        jid = await seed_job(state="succeeded", job_id="get-preview-1")
+        async with session_factory() as session:
+            session.add(
+                EventRow(
+                    event_id=f"evt-{uuid4().hex}",
+                    job_id=jid,
+                    kind="ProgressHeadline",
+                    timestamp=datetime.now(UTC),
+                    payload='{"headline":"Finalize shortcut audit","summary":"Captured the last validation pass before handoff."}',
+                )
+            )
+            await session.commit()
+
+        resp = await client.get(f"/api/jobs/{jid}")
+        data = resp.json()
+        assert data["progressHeadline"] == "Finalize shortcut audit"
+        assert data["progressSummary"] == "Captured the last validation pass before handoff."
 
     async def test_get_job_not_found(self, client: AsyncClient) -> None:
         resp = await client.get("/api/jobs/nonexistent")

@@ -203,6 +203,26 @@ class JobRepository(BaseRepository):
             updated_at=datetime.now(UTC),
         )
 
+    async def reset_for_recovery(
+        self,
+        job_id: str,
+        new_session_count: int,
+        *,
+        new_state: JobState = JobState.running,
+    ) -> None:
+        """Prepare an active job for process-restart recovery without failing it."""
+        from datetime import UTC, datetime
+
+        await self._update_row(
+            job_id,
+            state=new_state,
+            completed_at=None,
+            session_id=None,
+            session_count=new_session_count,
+            failure_reason=None,
+            updated_at=datetime.now(UTC),
+        )
+
     async def restore_after_failed_resume(
         self,
         job_id: str,

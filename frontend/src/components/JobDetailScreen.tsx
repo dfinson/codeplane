@@ -6,7 +6,7 @@ import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
 import { formatJobTerminalLabel } from "../lib/terminalLabels";
-import { fetchJob, cancelJob, rerunJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts } from "../api/client";
+import { fetchJob, cancelJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts, resumeJob } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -20,6 +20,8 @@ import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { JobDetailSkeleton } from "./JobDetailSkeleton";
 import { Tooltip } from "./ui/tooltip";
 import { ConfirmDialog } from "./ui/confirm-dialog";
+import { Textarea } from "./ui/textarea";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 
 const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
 const DiffViewer = lazy(() => import("./DiffViewer"));
@@ -39,6 +41,8 @@ export function JobDetailScreen() {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeInstruction, setResumeInstruction] = useState("");
   const [tab, setTab] = useState("live");
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
@@ -174,15 +178,36 @@ export function JobDetailScreen() {
   }, [jobId]);
 
   const handleResume = useCallback(async () => {
-    if (!jobId) return;
+    if (!jobId || !resumeInstruction.trim()) return;
     setActionLoading(true);
     try {
-      const result = await rerunJob(jobId);
+      const result = await resumeJob(jobId, resumeInstruction.trim());
+      useStore.setState((state) => {
+        const existing = state.jobs[jobId];
+        if (!existing) return state;
+        return {
+          ...state,
+          jobs: {
+            ...state.jobs,
+            [jobId]: {
+              ...existing,
+              state: result.state,
+              branch: result.branch,
+              worktreePath: result.worktreePath,
+              updatedAt: result.updatedAt,
+              completedAt: null,
+              archivedAt: null,
+            },
+          },
+        };
+      });
+      setResumeOpen(false);
+      setResumeInstruction("");
       toast.success(`Resumed: ${result.id}`);
-      navigate(`/jobs/${result.id}`);
+      navigate(`/jobs/${jobId}`);
     } catch (e) { toast.error(String(e)); }
     finally { setActionLoading(false); }
-  }, [jobId, navigate]);
+  }, [jobId, navigate, resumeInstruction]);
 
   const handleResolve = useCallback(async (action: "merge" | "smart_merge" | "create_pr" | "discard" | "agent_merge") => {
     if (!jobId) return;
@@ -307,7 +332,7 @@ export function JobDetailScreen() {
               </Button>
             )}
             {canResume && (
-              <Button size="sm" variant="outline" loading={actionLoading} onClick={handleResume}>
+              <Button size="sm" variant="outline" loading={actionLoading} onClick={() => setResumeOpen(true)}>
                 <RotateCcw size={14} />
                 Resume
               </Button>
@@ -444,6 +469,42 @@ export function JobDetailScreen() {
         <div className="rounded-md border border-border bg-background p-3 mt-3">
           <p className="text-sm whitespace-pre-wrap leading-relaxed text-foreground">{job.prompt}</p>
         </div>
+
+        <Dialog open={resumeOpen} onOpenChange={(open) => {
+          setResumeOpen(open);
+          if (!open && !actionLoading) {
+            setResumeInstruction("");
+          }
+        }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Resume Job</DialogTitle>
+              <DialogDescription>
+                Resume this failed job in place. Add instructions so the agent can continue from the existing job instead of creating a duplicate.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-3">
+              <Textarea
+                autoFocus
+                rows={6}
+                value={resumeInstruction}
+                onChange={(event) => setResumeInstruction(event.target.value)}
+                placeholder="Describe what should happen next"
+              />
+              <p className="text-xs text-muted-foreground">
+                This keeps the same job ID, branch, and worktree.
+              </p>
+            </DialogBody>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setResumeOpen(false)} disabled={actionLoading}>
+                Cancel
+              </Button>
+              <Button onClick={handleResume} loading={actionLoading} disabled={!resumeInstruction.trim()}>
+                Resume Job
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Model downgrade banner */}
         {job.modelDowngraded && (

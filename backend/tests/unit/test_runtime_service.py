@@ -548,7 +548,7 @@ class TestJobLifecycle:
         session_factory: async_sessionmaker[AsyncSession],
         config: CPLConfig,
     ) -> None:
-        """send_message on a job in 'running' state with no live session fails it then resumes."""
+        """send_message on a job in 'running' state with no live session recovers it in place."""
         published: list[DomainEvent] = []
 
         async def _collect(e: DomainEvent) -> None:
@@ -567,8 +567,7 @@ class TestJobLifecycle:
         await asyncio.sleep(0.5)
 
         kinds = [e.kind for e in published]
-        # Job should have been failed first (orphaned), then session_resumed
-        assert DomainEventKind.job_failed in kinds
+        assert DomainEventKind.job_failed not in kinds
         assert DomainEventKind.session_resumed in kinds
 
         # DB should end in a terminal state (succeeded after the resumed run)
@@ -904,7 +903,7 @@ class TestResumeFallback:
 
 
 class TestRecovery:
-    async def test_recover_fails_orphaned_running_jobs(
+    async def test_recover_restarts_orphaned_running_jobs(
         self,
         runtime: RuntimeService,
         event_bus: EventBus,
@@ -922,6 +921,7 @@ class TestRecovery:
         await _create_db_job(session_factory, job)
 
         await runtime.recover_on_startup()
+        await asyncio.sleep(0.5)
 
         async with session_factory() as session:
             from backend.persistence.job_repo import JobRepository
@@ -929,14 +929,13 @@ class TestRecovery:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.failed
+            assert row.state == JobState.succeeded
 
-        # Should have published a job_failed event
-        failed_events = [e for e in published if e.kind == DomainEventKind.job_failed]
-        assert len(failed_events) == 1
-        assert failed_events[0].payload["reason"] == "process_restarted"
+        resumed_events = [e for e in published if e.kind == DomainEventKind.session_resumed]
+        assert len(resumed_events) == 1
+        assert resumed_events[0].payload["reason"] == "process_restarted"
 
-    async def test_recover_commits_state_before_publishing_failure_event(
+    async def test_recover_commits_running_state_before_publishing_resume_event(
         self,
         runtime: RuntimeService,
         event_bus: EventBus,
@@ -945,7 +944,9 @@ class TestRecovery:
     ) -> None:
         observed_states: list[str] = []
 
-        async def _assert_failed_state_visible(_event: DomainEvent) -> None:
+        async def _assert_running_state_visible(event: DomainEvent) -> None:
+            if event.kind != DomainEventKind.session_resumed:
+                return
             async with session_factory() as session:
                 from backend.persistence.job_repo import JobRepository
 
@@ -954,14 +955,14 @@ class TestRecovery:
                 assert row is not None
                 observed_states.append(row.state)
 
-        event_bus.subscribe(_assert_failed_state_visible)
+        event_bus.subscribe(_assert_running_state_visible)
 
         job = _make_job(job_id="job-1", repo=config.repos[0], state=JobState.running)
         await _create_db_job(session_factory, job)
 
         await runtime.recover_on_startup()
 
-        assert observed_states == [JobState.failed]
+        assert observed_states == [JobState.running]
 
     async def test_recover_restarts_queued_jobs(
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
@@ -1299,6 +1300,38 @@ class TestRecoveryCapacity:
 
         # Should only start max_concurrent (2), not all 3
         assert runtime.running_count == runtime.max_concurrent
+
+    async def test_recover_preserves_resume_context_for_queued_active_jobs(
+        self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
+    ) -> None:
+        """Active jobs recovered under capacity pressure should keep their resume context while waiting for capacity."""
+        slow_adapter = FakeAgentAdapter(delay=5.0)
+        runtime._adapter_registry._fake = slow_adapter
+
+        for job_id in ("active-1", "active-2", "active-3"):
+            job = _make_job(job_id=job_id, repo=config.repos[0], state=JobState.running)
+            job.sdk_session_id = f"sdk-{job_id}"
+            await _create_db_job(session_factory, job)
+
+        await runtime.recover_on_startup()
+        await asyncio.sleep(0.1)
+
+        pending_job_id, pending_entry = next(iter(runtime._pending_starts.items()))
+
+        async with session_factory() as session:
+            from backend.persistence.job_repo import JobRepository
+
+            repo = JobRepository(session)
+            row = await repo.get(pending_job_id)
+            assert row is not None
+            assert row.state == JobState.running
+            assert row.session_count == 2
+
+        assert pending_entry[0] is not None
+        assert pending_entry[0].startswith(
+            "The CodePlane server restarted while this job was in progress."
+        )
+        assert pending_entry[1] == f"sdk-{pending_job_id}"
 
 
 class TestJobStateChangedEvent:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,6 +47,12 @@ class JobNotFoundError(Exception):
 
 class StateConflictError(Exception):
     """Raised when a job action conflicts with its current state."""
+
+
+@dataclass(frozen=True)
+class ProgressPreview:
+    headline: str
+    summary: str
 
 
 class JobService:
@@ -124,6 +131,25 @@ class JobService:
         if self._event_repo is None:
             raise RuntimeError("JobService was created without an event_repo")
         return await self._event_repo.list_by_job(job_id, kinds, limit=limit)
+
+    async def get_latest_progress_preview(self, job_id: str) -> ProgressPreview | None:
+        """Return the latest persisted progress milestone for a job."""
+        if self._event_repo is None:
+            raise RuntimeError("JobService was created without an event_repo")
+        preview = await self._event_repo.get_latest_progress_preview(job_id)
+        if preview is None:
+            return None
+        return ProgressPreview(headline=preview[0], summary=preview[1])
+
+    async def list_latest_progress_previews(self, job_ids: list[str]) -> dict[str, ProgressPreview]:
+        """Return the latest persisted progress milestone for each requested job."""
+        if self._event_repo is None:
+            raise RuntimeError("JobService was created without an event_repo")
+        previews = await self._event_repo.list_latest_progress_previews(job_ids)
+        return {
+            job_id: ProgressPreview(headline=headline, summary=summary)
+            for job_id, (headline, summary) in previews.items()
+        }
 
     def validate_repo(self, repo: str) -> str:
         """Validate a repo path is in the allowlist. Returns resolved path."""

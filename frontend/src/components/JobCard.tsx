@@ -44,6 +44,14 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const navigate = useNavigate();
   const repoName = job.repo.split("/").pop() ?? job.repo;
   const timeline = useStore(selectJobTimeline(job.id));
+  const latestTimelineEntry = timeline[timeline.length - 1];
+  const activeTimelineEntry = timeline.find((entry) => entry.active) ?? latestTimelineEntry;
+  const previewHeadline = job.state === "running"
+    ? activeTimelineEntry?.headline ?? job.progressHeadline ?? null
+    : job.progressHeadline ?? latestTimelineEntry?.headline ?? null;
+  const previewSummary = job.state === "running"
+    ? activeTimelineEntry?.summary ?? job.progressSummary ?? ""
+    : job.progressSummary ?? latestTimelineEntry?.summary ?? "";
 
   const isFailed = job.state === "failed";
   return (
@@ -78,24 +86,13 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
         <SdkBadge sdk={job.sdk} size="sm" />
       </div>
 
-      {(job.state === "running" && timeline.length > 0) || job.progressHeadline ? (
+      {previewHeadline ? (
         <div className="text-xs leading-snug text-foreground/70 mb-2">
-          {job.state === "running" && timeline.length > 0 ? (
-            (() => {
-              const active = timeline.find((e) => e.active) ?? timeline[timeline.length - 1];
-              return (
-                <>
-                  <p className="italic text-primary/70 line-clamp-1">{active!.headline}</p>
-                  {active?.summary && (
-                    <p className="text-xs text-muted-foreground/70 mt-0.5 line-clamp-2">
-                      {active.summary}
-                    </p>
-                  )}
-                </>
-              );
-            })()
-          ) : (
-            <p className="italic text-primary/70 line-clamp-2">{job.progressHeadline}</p>
+          <p className="italic text-primary/70 line-clamp-1">{previewHeadline}</p>
+          {previewSummary && (
+            <p className="text-xs text-muted-foreground/70 mt-0.5 line-clamp-2">
+              {previewSummary}
+            </p>
           )}
         </div>
       ) : null}
