@@ -121,6 +121,10 @@ export function App() {
         e.preventDefault();
         navigate("/jobs/new");
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        navigate("/settings");
+      }
     },
     [toggleTerminalDrawer, terminalDrawerOpen, navigate],
   );
@@ -176,10 +180,10 @@ export function App() {
               <History size={16} />
             </Link>
           </Tooltip>
-          <Tooltip content="Settings">
+          <Tooltip content="Settings (⌘,)">
             <Link
               to="/settings"
-              aria-label="Settings"
+              aria-label="Settings (⌘,)"
               className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
             >
               <Settings size={16} />

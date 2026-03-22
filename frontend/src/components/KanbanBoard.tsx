@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { Search, ArrowDownUp } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectSignoffJobs, selectActiveJobs, selectAttentionJobs } from "../store";
@@ -52,6 +52,19 @@ export function KanbanBoard() {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("newest");
   const [sortOpen, setSortOpen] = useState(false);
+  const filterInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFilterKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+      e.preventDefault();
+      filterInputRef.current?.focus();
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleFilterKeyDown);
+    return () => window.removeEventListener("keydown", handleFilterKeyDown);
+  }, [handleFilterKeyDown]);
 
   const process = (jobs: JobSummary[]) => sortJobs(filterJobs(jobs, query), sort);
 
@@ -71,11 +84,23 @@ export function KanbanBoard() {
         <div className="relative flex-1">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <Input
+            ref={filterInputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setQuery("");
+                filterInputRef.current?.blur();
+              }
+            }}
             placeholder="Filter active jobs…"
-            className="pl-8 h-8 text-sm"
+            className="pl-8 pr-8 h-8 text-sm"
           />
+          {!query && (
+            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
+              /
+            </kbd>
+          )}
         </div>
         <div className="relative">
           <Button

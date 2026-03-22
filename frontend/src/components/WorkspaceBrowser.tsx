@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { fetchWorkspaceFiles, fetchWorkspaceFile } from "../api/client";
 import { useStore, selectJobDiffs } from "../store";
-import type { DiffFileModel, DiffHunkModel } from "../api/types";
+import type { DiffFileModel } from "../api/types";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
@@ -147,24 +147,6 @@ function isMarkdown(path: string): boolean {
   return path.split(".").pop()?.toLowerCase() === "md";
 }
 
-/** Maps 1-based new-file line numbers to "addition" for lines that were added in the diff. */
-function buildLineTypeMap(hunks: DiffHunkModel[]): Set<number> {
-  const additions = new Set<number>();
-  for (const hunk of hunks) {
-    let newLine = hunk.newStart;
-    for (const line of hunk.lines) {
-      if (line.type === "addition") {
-        additions.add(newLine);
-        newLine++;
-      } else if (line.type === "context") {
-        newLine++;
-      }
-      // deletion lines don't appear in the new file — don't advance newLine
-    }
-  }
-  return additions;
-}
-
 interface Props {
   jobId: string;
 }
@@ -173,12 +155,12 @@ interface Props {
 function buildAddedDecorations(
   diffFile: DiffFileModel,
   totalLines: number,
-): { range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }; options: { isWholeLine: boolean; className: string } }[] {
+): { range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number }; options: { isWholeLine: boolean; className: string; linesDecorationsClassName: string } }[] {
   if (diffFile.status === "added") {
     // Every line in the file is new
     return Array.from({ length: totalLines }, (_, i) => ({
       range: { startLineNumber: i + 1, startColumn: 1, endLineNumber: i + 1, endColumn: 1 },
-      options: { isWholeLine: true, className: "diff-added-line" },
+      options: { isWholeLine: true, className: "diff-add-line", linesDecorationsClassName: "diff-add-decoration" },
     }));
   }
 
@@ -189,7 +171,7 @@ function buildAddedDecorations(
       if (line.type === "addition") {
         decorations.push({
           range: { startLineNumber: newLine, startColumn: 1, endLineNumber: newLine, endColumn: 1 },
-          options: { isWholeLine: true, className: "diff-added-line" },
+          options: { isWholeLine: true, className: "diff-add-line", linesDecorationsClassName: "diff-add-decoration" },
         });
         newLine++;
       } else if (line.type === "context") {
@@ -213,8 +195,6 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   // Monaco editor refs for diff decoration management
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editorRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const monacoRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const decorationsRef = useRef<any>(null);
 
@@ -252,9 +232,8 @@ export default function WorkspaceBrowser({ jobId }: Props) {
     coll.set(buildAddedDecorations(diffFile, totalLines));
   }, [selected, diffMap, fileContent]);
 
-  const handleEditorMount: OnMount = useCallback((ed, mc) => {
+  const handleEditorMount: OnMount = useCallback((ed) => {
     editorRef.current = ed;
-    monacoRef.current = mc;
     decorationsRef.current = ed.createDecorationsCollection([]);
     // Apply immediately if diff data is already available
     const diffFile = selected ? diffMap.get(selected) : undefined;
@@ -272,38 +251,6 @@ export default function WorkspaceBrowser({ jobId }: Props) {
       .catch((err) => console.error("Failed to fetch workspace files", err))
       .finally(() => setLoading(false));
   }, [jobId]);
-
-  const applyDiffDecorations = useCallback(() => {
-    const ed = editorRef.current;
-    const mc = monacoRef.current;
-    if (!ed || !mc) return;
-
-    if (decorationsRef.current) {
-      decorationsRef.current.clear();
-      decorationsRef.current = null;
-    }
-
-    const fileDiff = selected ? diffMap.get(selected) : undefined;
-    if (!fileDiff?.hunks?.length) return;
-
-    const additions = buildLineTypeMap(fileDiff.hunks);
-    if (additions.size === 0) return;
-
-    const decorations = Array.from(additions).map((lineNum) => ({
-      range: new mc.Range(lineNum, 1, lineNum, 1),
-      options: {
-        isWholeLine: true,
-        className: "diff-add-line",
-        linesDecorationsClassName: "diff-add-decoration",
-      },
-    }));
-
-    decorationsRef.current = ed.createDecorationsCollection(decorations);
-  }, [selected, diffMap]);
-
-  useEffect(() => {
-    applyDiffDecorations();
-  }, [applyDiffDecorations]);
 
   const handleSelect = useCallback(async (path: string) => {
     setSelected(path);

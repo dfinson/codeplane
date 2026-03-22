@@ -14,13 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.models.db import EventRow
 from backend.services.job_service import JobNotFoundError, StateConflictError
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from .conftest import SeedJobFn
 
@@ -150,7 +150,10 @@ class TestJobsCrud:
                     job_id=jid,
                     kind="ProgressHeadline",
                     timestamp=datetime.now(UTC),
-                    payload='{"headline":"Audit keyboard shortcuts","summary":"Reviewed existing shortcuts and documented follow-up changes."}',
+                    payload=(
+                        '{"headline":"Audit keyboard shortcuts",'
+                        '"summary":"Reviewed existing shortcuts and documented follow-up changes."}'
+                    ),
                 )
             )
             await session.commit()
@@ -222,7 +225,10 @@ class TestJobsCrud:
                     job_id=jid,
                     kind="ProgressHeadline",
                     timestamp=datetime.now(UTC),
-                    payload='{"headline":"Finalize shortcut audit","summary":"Captured the last validation pass before handoff."}',
+                    payload=(
+                        '{"headline":"Finalize shortcut audit",'
+                        '"summary":"Captured the last validation pass before handoff."}'
+                    ),
                 )
             )
             await session.commit()
@@ -420,7 +426,12 @@ class TestJobControl:
         )
         assert resp.status_code == 409
 
-    async def test_resume_missing_instruction(self, client: AsyncClient, seed_job: SeedJobFn, mock_runtime_service: AsyncMock) -> None:
+    async def test_resume_missing_instruction(
+        self,
+        client: AsyncClient,
+        seed_job: SeedJobFn,
+        mock_runtime_service: AsyncMock,
+    ) -> None:
         jid = await seed_job(state="failed", job_id="resume-bad")
         fake_job = MagicMock()
         fake_job.id = jid
