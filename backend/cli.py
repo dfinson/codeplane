@@ -7,7 +7,6 @@ doctor) along with tunnel management and startup helpers.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import click
 import structlog
@@ -17,7 +16,13 @@ from backend.app_factory import create_app
 from backend.config import load_config
 from backend.logging_config import setup_logging
 from backend.persistence.database import run_migrations
-from backend.services.tunnel_service import RemoteProvider, TunnelHandle, TunnelStartError, start_remote_access, validate_remote_provider
+from backend.services.tunnel_service import (
+    RemoteProvider,
+    TunnelHandle,
+    TunnelStartError,
+    start_remote_access,
+    validate_remote_provider,
+)
 
 log = structlog.get_logger()
 
