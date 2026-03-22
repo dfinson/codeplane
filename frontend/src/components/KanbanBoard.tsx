@@ -106,8 +106,8 @@ export function KanbanBoard() {
       {/* Board */}
       <div className="grid grid-cols-3 gap-3 flex-1 min-h-0 max-lg:grid-cols-2">
         <KanbanColumn title={KANBAN_COLUMNS.IN_PROGRESS} jobs={filteredActive} />
-        <KanbanColumn title={KANBAN_COLUMNS.NEEDS_REVIEW} jobs={filteredSignoff} />
-        <KanbanColumn title={KANBAN_COLUMNS.NEEDS_ATTENTION} jobs={filteredAttention} />
+        <KanbanColumn title={KANBAN_COLUMNS.AWAITING_INPUT} jobs={filteredSignoff} />
+        <KanbanColumn title={KANBAN_COLUMNS.FAILED} jobs={filteredAttention} />
       </div>
     </div>
   );

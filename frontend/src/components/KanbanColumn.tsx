@@ -42,7 +42,7 @@ export const KanbanColumn = memo(function KanbanColumn({
                 </div>
               );
             }
-            if (title === "Needs Review") {
+            if (title === "Awaiting Input") {
               return (
                 <div className="flex flex-col items-center gap-3 px-4 py-6">
                   <div className="rounded-full bg-emerald-500/10 p-3">
@@ -50,12 +50,12 @@ export const KanbanColumn = memo(function KanbanColumn({
                   </div>
                   <div className="text-center">
                     <p className="text-sm font-medium text-muted-foreground">All caught up</p>
-                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing needs your review right now</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing is waiting for your input</p>
                   </div>
                 </div>
               );
             }
-            if (title === "Needs Attention") {
+            if (title === "Failed") {
               return (
                 <div className="flex flex-col items-center gap-3 px-4 py-6">
                   <div className="rounded-full bg-emerald-500/10 p-3">

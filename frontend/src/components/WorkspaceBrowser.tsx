@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import { fetchWorkspaceFiles, fetchWorkspaceFile } from "../api/client";
 import { useStore, selectJobDiffs } from "../store";
-import type { DiffFileModel } from "../api/types";
+import type { DiffFileModel, DiffHunkModel } from "../api/types";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
@@ -146,6 +146,7 @@ function getLanguageFromPath(path: string): string {
 function isMarkdown(path: string): boolean {
   return path.split(".").pop()?.toLowerCase() === "md";
 }
+
 
 interface Props {
   jobId: string;
@@ -346,7 +347,11 @@ export default function WorkspaceBrowser({ jobId }: Props) {
           <div className="flex-1 overflow-hidden">
             {isMobile ? (
               <Suspense fallback={<div className="flex items-center justify-center h-full"><Spinner /></div>}>
-                <MobileSyntaxView content={fileContent || ""} language={getLanguageFromPath(selected)} />
+                <MobileSyntaxView
+                  content={fileContent || ""}
+                  language={getLanguageFromPath(selected)}
+                  diffHunks={diffMap.get(selected)?.hunks}
+                />
               </Suspense>
             ) : (
               <Editor

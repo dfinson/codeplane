@@ -319,7 +319,8 @@ export function SettingsScreen() {
               placeholder="You are a helpful coding assistant..."
               value={settings.verifyPrompt}
               onChange={(e) => patch({ verifyPrompt: e.target.value })}
-              rows={3}
+              rows={4}
+              autoResize
             />
             <p className="text-xs text-muted-foreground">Instructions prepended to every verification session. Leave empty to use the default.</p>
           </div>
@@ -329,7 +330,8 @@ export function SettingsScreen() {
               placeholder="Review the diff for potential issues..."
               value={settings.selfReviewPrompt}
               onChange={(e) => patch({ selfReviewPrompt: e.target.value })}
-              rows={3}
+              rows={4}
+              autoResize
             />
             <p className="text-xs text-muted-foreground">Instructions prepended to every self-review session. Leave empty to use the default.</p>
           </div>

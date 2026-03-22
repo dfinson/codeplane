@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, GitBranch, FolderGit2, TerminalSquare, ChevronDown } from "lucide-react";
+import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, GitBranch, FolderGit2, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
@@ -46,7 +46,6 @@ export function JobDetailScreen() {
   const hasChanges = diffs.length > 0;
   const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
   const [hasArtifacts, setHasArtifacts] = useState(false);
-  const [metaExpanded, setMetaExpanded] = useState(false);
   const isMobile = useIsMobile();
 
   // Measure available height for the Live tab using ResizeObserver
@@ -425,38 +424,21 @@ export function JobDetailScreen() {
           <p className="text-sm italic text-primary/70 mb-3">{job.progressHeadline}</p>
         )}
 
-        {(!isMobile || metaExpanded) ? (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-6 gap-y-2 text-sm mb-3">
-            {[
-              ["Branch", job.branch ?? "—"],
-              ["Base", job.baseRef],
-              ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
-              ...(job.sdk && job.sdk !== "copilot" ? [["SDK", job.sdk]] : []),
-              ["Created", new Date(job.createdAt).toLocaleString()],
-              ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
-            ].map(([label, value]) => (
-              <div key={label}>
-                <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wide">{label}</p>
-                <p className="text-sm break-all">{value}</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <span>{job.repo}</span>
-            <span>·</span>
-            <span className="font-mono text-xs">{job.branch || "main"}</span>
-          </div>
-        )}
-        {isMobile && (
-          <button
-            onClick={() => setMetaExpanded(!metaExpanded)}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-1"
-          >
-            <ChevronDown className={cn("h-3 w-3 transition-transform", metaExpanded && "rotate-180")} />
-            {metaExpanded ? "Less" : "More details"}
-          </button>
-        )}
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-6 gap-y-2 text-sm mb-3">
+          {[
+            ["Branch", job.branch ?? "—"],
+            ["Base", job.baseRef],
+            ["Worktree", job.worktreePath ? job.worktreePath.split("/").pop() ?? job.worktreePath : "—"],
+            ...(job.sdk && job.sdk !== "copilot" ? [["SDK", job.sdk]] : []),
+            ["Created", new Date(job.createdAt).toLocaleString()],
+            ...(job.completedAt ? [["Completed", new Date(job.completedAt).toLocaleString()]] : []),
+          ].map(([label, value]) => (
+            <div key={label}>
+              <p className="text-xs text-muted-foreground uppercase font-semibold tracking-wide">{label}</p>
+              <p className="text-sm break-all">{value}</p>
+            </div>
+          ))}
+        </div>
 
         {job.prUrl && (
           <a

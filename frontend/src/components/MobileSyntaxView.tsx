@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import type { DiffHunkModel } from "../api/types";
 
 const MOBILE_MAX_LINES = 2000;
 
 interface MobileSyntaxViewProps {
   content: string;
   language: string;
+  diffHunks?: DiffHunkModel[];
 }
 
-export default function MobileSyntaxView({ content, language }: MobileSyntaxViewProps) {
+export default function MobileSyntaxView({ content, language, diffHunks }: MobileSyntaxViewProps) {
   const [showFull, setShowFull] = useState(false);
   const prevContentRef = useRef(content);
 
@@ -19,6 +21,23 @@ export default function MobileSyntaxView({ content, language }: MobileSyntaxView
       setShowFull(false);
     }
   }, [content]);
+
+  const addedLines = useMemo(() => {
+    const set = new Set<number>();
+    if (!diffHunks?.length) return set;
+    for (const hunk of diffHunks) {
+      let newLine = hunk.newStart;
+      for (const line of hunk.lines) {
+        if (line.type === "addition") {
+          set.add(newLine);
+          newLine++;
+        } else if (line.type === "context") {
+          newLine++;
+        }
+      }
+    }
+    return set;
+  }, [diffHunks]);
 
   const lines = content.split("\n");
   const truncated = !showFull && lines.length > MOBILE_MAX_LINES;
@@ -38,6 +57,19 @@ export default function MobileSyntaxView({ content, language }: MobileSyntaxView
         }}
         showLineNumbers
         lineNumberStyle={{ minWidth: "2.5em", paddingRight: "1em", color: "rgba(255,255,255,0.3)" }}
+        wrapLines
+        lineProps={(lineNumber) => {
+          if (addedLines.has(lineNumber as number)) {
+            return {
+              style: {
+                display: "block",
+                backgroundColor: "rgba(16, 185, 129, 0.12)",
+                borderLeft: "3px solid #10b981",
+              },
+            };
+          }
+          return { style: { display: "block" } };
+        }}
       >
         {displayContent}
       </SyntaxHighlighter>
