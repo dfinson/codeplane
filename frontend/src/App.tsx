@@ -95,6 +95,11 @@ export function App() {
   const toggleTerminalDrawer = useStore((s) => s.toggleTerminalDrawer);
   const terminalDrawerOpen = useStore((s) => s.terminalDrawerOpen);
   const sessionCount = useStore((s) => Object.keys(s.terminalSessions).length);
+  const initSdksAndModels = useStore((s) => s.initSdksAndModels);
+
+  useEffect(() => {
+    initSdksAndModels();
+  }, [initSdksAndModels]);
 
   // Global keyboard shortcuts
   const handleKeyDown = useCallback(

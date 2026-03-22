@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchModels, fetchSDKs, fetchSettings, fetchRepoDetail, suggestNames } from "../api/client";
+import { createJob, fetchRepos, fetchSettings, fetchRepoDetail, suggestNames } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
+import { useStore } from "../store";
 import { PromptWithVoice } from "./VoiceButton";
 import { AddRepoModal } from "./AddRepoModal";
 import { Button } from "./ui/button";
@@ -19,13 +20,18 @@ function sdkStatusDescription(sdk: SDKInfo): string | undefined {
   return undefined;
 }
 
-function pickDefaultModelId(models: Array<{ value: string; isDefault: boolean }>): string | null {
-  const flagged = models.find((item) => item.isDefault);
-  return flagged?.value ?? models[0]?.value ?? null;
-}
-
 export function JobCreationScreen() {
   const navigate = useNavigate();
+
+  // SDK + model data from the central store
+  const sdks = useStore((s) => s.sdks);
+  const defaultSdk = useStore((s) => s.defaultSdk);
+  const sdksLoading = useStore((s) => s.sdksLoading);
+  const modelsBySdk = useStore((s) => s.modelsBySdk);
+  const defaultModelBySdk = useStore((s) => s.defaultModelBySdk);
+  const modelsLoadingBySdk = useStore((s) => s.modelsLoadingBySdk);
+  const loadModelsForSdk = useStore((s) => s.loadModelsForSdk);
+
   const [repos, setRepos] = useState<{ value: string; label: string }[]>([]);
   const [repo, setRepo] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -34,50 +40,32 @@ export function JobCreationScreen() {
   const [branch, setBranch] = useState("");
   const [branchEdited, setBranchEdited] = useState(false);
   const [model, setModel] = useState<string | null>(null);
-  const [models, setModels] = useState<{ value: string; label: string }[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>("approval_required");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [sdk, setSdk] = useState<string>("copilot");
-  const [sdks, setSdks] = useState<SDKInfo[]>([]);
-  const [defaultSdk, setDefaultSdk] = useState<string>("copilot");
+  const [sdk, setSdk] = useState<string | null>(null);
   const [verify, setVerify] = useState(false);
   const [selfReview, setSelfReview] = useState(false);
   const [branchSuggesting, setBranchSuggesting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadModels = useCallback((sdkId: string) => {
-    setModelsLoading(true);
-    fetchModels(sdkId)
-      .then((m) => {
-        const mapped = m
-          .map((x) => ({
-            value: String(x.id ?? x.name ?? ""),
-            label: String(x.name ?? x.id ?? "unknown"),
-            isDefault: Boolean(
-              (typeof x.default === "boolean" && x.default) ||
-              (typeof x.isDefault === "boolean" && x.isDefault) ||
-              (typeof x.is_default === "boolean" && x.is_default),
-            ),
-          }))
-          .filter((x) => x.value);
-        setModels(mapped.map(({ value, label }) => ({ value, label })));
-        setModel((prev) => {
-          if (prev && mapped.some((item) => item.value === prev)) return prev;
-          return pickDefaultModelId(mapped);
-        });
-      })
-      .catch((err) => {
-        console.error("Failed to fetch models", err);
-        setModels([]);
-        setModel(null);
-      })
-      .finally(() => setModelsLoading(false));
-  }, []);
+  // Resolve the active SDK — default to what the store says once it's loaded
+  const activeSdk = sdk ?? defaultSdk ?? "copilot";
+  const models = modelsBySdk[activeSdk] ?? [];
+  const modelsLoading = sdksLoading || (modelsLoadingBySdk[activeSdk] ?? (modelsBySdk[activeSdk] === undefined));
+
+  // Sync the selected model whenever the active SDK's model list becomes available
+  useEffect(() => {
+    const sdkModels = modelsBySdk[activeSdk];
+    if (sdkModels === undefined) return;
+    setModel((prev) => {
+      if (prev && sdkModels.some((m) => m.value === prev)) return prev;
+      return defaultModelBySdk[activeSdk] ?? null;
+    });
+  }, [activeSdk, modelsBySdk, defaultModelBySdk]);
 
   useEffect(() => {
     fetchSettings()
@@ -98,15 +86,7 @@ export function JobCreationScreen() {
         setRepo((prev) => prev ?? items[0]?.value ?? null);
       })
       .catch(() => toast.error("Failed to load repos"));
-    fetchSDKs()
-      .then((r) => {
-        setSdks(r.sdks);
-        setDefaultSdk(r.default);
-        setSdk(r.default);
-        loadModels(r.default);
-      })
-      .catch((err) => console.error("Failed to fetch SDKs", err));
-  }, [loadModels]);
+  }, []);
 
   useEffect(() => {
     if (branchEdited) return;
@@ -147,11 +127,11 @@ export function JobCreationScreen() {
   }, [repo, baseRefEdited]);
 
   const handleSdkChange = useCallback((newSdk: string | null) => {
-    const resolved = newSdk ?? defaultSdk;
+    const resolved = newSdk ?? defaultSdk ?? activeSdk;
     setSdk(resolved);
     setModel(null);
-    loadModels(resolved);
-  }, [defaultSdk, loadModels]);
+    loadModelsForSdk(resolved);
+  }, [defaultSdk, activeSdk, loadModelsForSdk]);
 
   const validateField = useCallback((field: string, value: string) => {
     setErrors(prev => {
@@ -176,7 +156,7 @@ export function JobCreationScreen() {
         branch: branch || undefined,
         permission_mode: permissionMode,
         model: model || undefined,
-        sdk: sdk !== defaultSdk ? sdk : undefined,
+        sdk: activeSdk !== defaultSdk ? activeSdk : undefined,
         verify: verify ?? undefined,
         self_review: selfReview ?? undefined,
       });
@@ -187,11 +167,11 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, sdk, defaultSdk, verify, selfReview]);
+  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, activeSdk, defaultSdk, verify, selfReview]);
 
   const enabledSdks = sdks.filter((s) => s.enabled);
   const showSdkSelector = enabledSdks.length > 1;
-  const currentSdkInfo = sdks.find((s) => s.id === sdk);
+  const currentSdkInfo = sdks.find((s) => s.id === activeSdk);
   const sdkNotReady = currentSdkInfo && currentSdkInfo.status !== "ready";
 
   return (
@@ -289,7 +269,7 @@ export function JobCreationScreen() {
                 disabled: s.status !== "ready",
                 description: sdkStatusDescription(s),
               }))}
-              value={sdk}
+              value={activeSdk}
               onChange={handleSdkChange}
             />
           )}
