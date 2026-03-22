@@ -228,7 +228,9 @@ export default function WorkspaceBrowser({ jobId }: Props) {
   useEffect(() => {
     const ed = editorRef.current;
     const coll = decorationsRef.current;
-    if (!ed || !coll) return;
+    // ed.getModel() returns null when the editor has been disposed (e.g. the
+    // loading spinner unmounted a previous editor but the ref was not cleared).
+    if (!ed || !coll || !ed.getModel()) return;
 
     const diffFile = selected ? diffMap.get(selected) : undefined;
     if (!diffFile) {
