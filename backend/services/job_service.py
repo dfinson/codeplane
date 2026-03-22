@@ -455,7 +455,6 @@ class JobService:
         job: Job,
         action: str,
         merge_service: Any,
-        event_bus: Any | None = None,
     ) -> tuple[str, str | None, list[str] | None, str | None]:
         """Execute merge/PR/discard resolution and persist the outcome.
 
@@ -497,53 +496,56 @@ class JobService:
         # Persist resolution
         await self._job_repo.update_resolution(job.id, resolution, pr_url=result.pr_url)
 
-        # Publish event
-        if event_bus is not None:
-            import uuid as _uuid
-
-            from backend.models.events import DomainEvent, DomainEventKind
-
-            payload: dict[str, object] = {"resolution": resolution}
-            if result.pr_url:
-                payload["pr_url"] = result.pr_url
-            if result.conflict_files:
-                payload["conflict_files"] = result.conflict_files
-            if result.error:
-                payload["error"] = result.error
-
-            await event_bus.publish(
-                DomainEvent(
-                    event_id=f"evt-{_uuid.uuid4().hex[:12]}",
-                    job_id=job.id,
-                    timestamp=datetime.now(UTC),
-                    kind=DomainEventKind.job_resolved,
-                    payload=payload,
-                )
-            )
-
         return resolution, result.pr_url, result.conflict_files, result.error
 
-    async def archive_job(self, job_id: str, event_bus: Any | None = None) -> Job:
+    def build_job_resolved_event(
+        self,
+        job_id: str,
+        resolution: str,
+        *,
+        pr_url: str | None = None,
+        conflict_files: list[str] | None = None,
+        error: str | None = None,
+    ) -> DomainEvent:
+        """Build a job_resolved event for publication after the caller commits."""
+        from backend.models.events import DomainEvent, DomainEventKind
+
+        payload: dict[str, object] = {"resolution": resolution}
+        if pr_url:
+            payload["pr_url"] = pr_url
+        if conflict_files:
+            payload["conflict_files"] = conflict_files
+        if error:
+            payload["error"] = error
+
+        return DomainEvent(
+            event_id=DomainEvent.make_event_id(),
+            job_id=job_id,
+            timestamp=datetime.now(UTC),
+            kind=DomainEventKind.job_resolved,
+            payload=payload,
+        )
+
+    async def archive_job(self, job_id: str) -> Job:
         """Archive a job (hide from Kanban board)."""
         job = await self.get_job(job_id)
         if job.state not in TERMINAL_STATES:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, cannot archive active jobs")
         await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
 
-        if event_bus is not None:
-            from backend.models.events import DomainEvent, DomainEventKind
-
-            await event_bus.publish(
-                DomainEvent(
-                    event_id=DomainEvent.make_event_id(),
-                    job_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=DomainEventKind.job_archived,
-                    payload={},
-                )
-            )
-
         return await self.get_job(job_id)
+
+    def build_job_archived_event(self, job_id: str) -> DomainEvent:
+        """Build a job_archived event for publication after the caller commits."""
+        from backend.models.events import DomainEvent, DomainEventKind
+
+        return DomainEvent(
+            event_id=DomainEvent.make_event_id(),
+            job_id=job_id,
+            timestamp=datetime.now(UTC),
+            kind=DomainEventKind.job_archived,
+            payload={},
+        )
 
     async def unarchive_job(self, job_id: str) -> Job:
         """Unarchive a job (show on Kanban board again)."""

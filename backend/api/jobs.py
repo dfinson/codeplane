@@ -524,9 +524,17 @@ async def resolve_job(
         job=job,
         action=body.action,
         merge_service=merge_service,
-        event_bus=event_bus,
     )
     await session.commit()
+    await event_bus.publish(
+        svc.build_job_resolved_event(
+            job.id,
+            resolution,
+            pr_url=pr_url,
+            conflict_files=conflict_files_result,
+            error=error,
+        )
+    )
 
     return ResolveJobResponse(
         resolution=resolution,
@@ -544,8 +552,9 @@ async def archive_job(
     event_bus: FromDishka[EventBus],
 ) -> None:
     """Archive a completed job (hide from Kanban board)."""
-    await svc.archive_job(job_id, event_bus=event_bus)
+    await svc.archive_job(job_id)
     await session.commit()
+    await event_bus.publish(svc.build_job_archived_event(job_id))
 
 
 @router.post("/jobs/{job_id}/unarchive", status_code=204)

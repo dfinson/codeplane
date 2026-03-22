@@ -580,6 +580,7 @@ class RuntimeService:
             final_resolution = Resolution.unresolved
             final_pr_url: str | None = None
             final_merge_status: str | None = None
+            resolution_event = None
 
             # Strategy completed normally → succeeded
             async with self._session_factory() as session:
@@ -596,9 +597,13 @@ class RuntimeService:
                         job=current_job,
                         action="merge",
                         merge_service=self._merge_service,
-                        event_bus=self._event_bus,
                     )
                     final_resolution = cast("Resolution", resolved)
+                    resolution_event = svc.build_job_resolved_event(
+                        job_id,
+                        resolved,
+                        pr_url=final_pr_url,
+                    )
                 else:
                     from backend.persistence.job_repo import JobRepository
 
@@ -608,6 +613,9 @@ class RuntimeService:
                         log.warning("post_conflict_merge_unavailable", job_id=job_id)
 
                 await session.commit()
+
+            if resolution_event is not None:
+                await self._event_bus.publish(resolution_event)
 
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
