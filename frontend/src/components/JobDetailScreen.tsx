@@ -29,12 +29,15 @@ const TerminalPanel = lazy(() =>
 );
 import { useStore as useTerminalStore } from "../store";
 
+const SKELETON_DELAY_MS = 500;
+
 export function JobDetailScreen() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const jobs = useStore(selectJobs);
   const job: JobSummary | undefined = jobId ? jobs[jobId] : undefined;
   const [loading, setLoading] = useState(!job);
+  const [showSkeleton, setShowSkeleton] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [resolveLoading, setResolveLoading] = useState<string | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
@@ -116,6 +119,12 @@ export function JobDetailScreen() {
   // Open a job-scoped SSE connection for full event streaming (no suppression
   // even when >20 active jobs). Closed automatically when navigating away.
   useSSE(jobId);
+
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setTimeout(() => setShowSkeleton(true), SKELETON_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     if (!jobId) { setLoading(false); return; }
@@ -257,7 +266,7 @@ export function JobDetailScreen() {
 
   if (!jobId) return null;
 
-  if (loading) return <JobDetailSkeleton />;
+  if (loading && showSkeleton) return <JobDetailSkeleton />;
 
   if (!job) {
     return (
