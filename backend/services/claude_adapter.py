@@ -26,6 +26,7 @@ from backend.models.domain import (
     SessionEventKind,
 )
 from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface
+from backend.services.permission_policy import is_git_reset_hard
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -108,8 +109,8 @@ class ClaudeAdapter(AgentAdapterInterface):
             return
         try:
             async with self._session_factory() as session:
-                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
                 from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
                 if fn_name == "increment":
                     await TelemetrySummaryRepo(session).increment(**kwargs)
@@ -177,6 +178,58 @@ class ClaudeAdapter(AgentAdapterInterface):
         ) -> PermissionResultAllow | PermissionResultDeny:
             mode = config.permission_mode
             job_id = self._session_to_job.get(session_id)
+
+            # ----------------------------------------------------------------
+            # Hard block: git reset --hard always requires explicit operator
+            # approval — no trust bypass, no auto mode bypass, ever.
+            # ----------------------------------------------------------------
+            _shell_cmd = input_data.get("command", "") or "" if tool_name == "Bash" else ""
+            if _shell_cmd and is_git_reset_hard(_shell_cmd):
+                if self._approval_service is None or job_id is None:
+                    log.error(
+                        "git_reset_hard_blocked_no_infra",
+                        tool=tool_name,
+                        command=_shell_cmd[:200],
+                    )
+                    return PermissionResultDeny(
+                        message=(
+                            "git reset --hard requires operator approval"
+                            " but no approval infrastructure is available"
+                        )
+                    )
+
+                description = (
+                    "⚠️ git reset --hard — this will discard ALL uncommitted changes and "
+                    f"move HEAD: {_summarize_tool_input(tool_name, input_data)}"
+                )
+                approval = await self._approval_service.create_request(
+                    job_id=job_id,
+                    description=description,
+                    proposed_action=json.dumps(input_data, default=str)[:_TOOL_ACTION_MAX],
+                    requires_explicit_approval=True,
+                )
+                self._enqueue(
+                    session_id,
+                    SessionEvent(
+                        kind=SessionEventKind.approval_request,
+                        payload={
+                            "description": description,
+                            "proposed_action": json.dumps(input_data, default=str)[:_TOOL_ACTION_MAX],
+                            "approval_id": approval.id,
+                            "requires_explicit_approval": True,
+                        },
+                    ),
+                )
+                log.warning(
+                    "git_reset_hard_awaiting_operator",
+                    approval_id=approval.id,
+                    job_id=job_id,
+                    command=_shell_cmd[:200],
+                )
+                resolution = await self._approval_service.wait_for_resolution(approval.id)
+                if resolution == "approved":
+                    return PermissionResultAllow()
+                return PermissionResultDeny(message="Operator denied git reset --hard")
 
             # Check trust
             if self._approval_service is not None and job_id and self._approval_service.is_trusted(job_id):
@@ -299,14 +352,11 @@ class ClaudeAdapter(AgentAdapterInterface):
         job_id = self._session_to_job.get(session_id)
 
         # Lock in the main model from the first AssistantMessage that carries one
-        if job_id and model:
-            from backend.services import telemetry as tel
-
-            if job_id not in self._job_main_models:
-                self._job_main_models[job_id] = model
-                self._schedule_db_write(
-                    self._db_write("set_model", job_id=job_id, model=model)
-                )
+        if job_id and model and job_id not in self._job_main_models:
+            self._job_main_models[job_id] = model
+            self._schedule_db_write(
+                self._db_write("set_model", job_id=job_id, model=model)
+            )
 
         for block in content_blocks:
             if isinstance(block, TextBlock):
@@ -422,7 +472,12 @@ class ClaudeAdapter(AgentAdapterInterface):
         if job_id:
             from backend.services import telemetry as tel
 
-            attrs = {"job_id": job_id, "sdk": "claude", "tool_name": tool_name, "success": success}
+            attrs: dict[str, str | bool] = {
+                "job_id": job_id,
+                "sdk": "claude",
+                "tool_name": tool_name,
+                "success": bool(success),
+            }
             tel.tool_duration.record(duration_ms, attrs)
 
             self._schedule_db_write(self._db_write(

@@ -16,7 +16,7 @@ import dataclasses
 import enum
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import structlog
 
@@ -514,9 +514,9 @@ class RuntimeService:
                 await self._utility_session.notify_job_started()
 
         # Start telemetry tracking — init OTEL spans and SQLite summary row.
-        from backend.services import telemetry as tel
-
         import time as _time
+
+        from backend.services import telemetry as tel
 
         tel.start_job_span(job_id, sdk=config.sdk, model=config.model or "")
 

@@ -280,6 +280,9 @@ class ApprovalResponse(CamelModel):
     requested_at: datetime
     resolved_at: datetime | None
     resolution: ApprovalResolution | None
+    # True when this approval was triggered by a hard-blocked operation (e.g.
+    # git reset --hard) that cannot be auto-resolved by a trust grant.
+    requires_explicit_approval: bool = False
 
 
 class ArtifactResponse(CamelModel):
@@ -424,6 +427,7 @@ class ApprovalRequestedPayload(CamelModel):
     description: str
     proposed_action: str | None = None
     timestamp: datetime
+    requires_explicit_approval: bool = False
 
 
 class ApprovalResolvedPayload(CamelModel):

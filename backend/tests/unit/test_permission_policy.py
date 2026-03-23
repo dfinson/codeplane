@@ -18,7 +18,92 @@ from backend.services.permission_policy import (
     evaluate_approval_required,
     evaluate_auto,
     evaluate_read_only,
+    is_git_reset_hard,
 )
+
+# ---------------------------------------------------------------------------
+# is_git_reset_hard
+# ---------------------------------------------------------------------------
+
+
+class TestIsGitResetHard:
+    """is_git_reset_hard must detect all common git reset --hard patterns."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset --hard",
+            "git reset --hard HEAD",
+            "git reset --hard HEAD~1",
+            "git reset --hard origin/main",
+            "git reset HEAD --hard",
+            "  git reset --hard  ",
+            "cd /repo && git reset --hard HEAD",
+            "git fetch origin && git reset --hard origin/main",
+            "GIT reset --hard HEAD",  # case-insensitive
+        ],
+    )
+    def test_detects_git_reset_hard(self, cmd: str) -> None:
+        assert is_git_reset_hard(cmd), f"Expected detection for: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset HEAD",
+            "git reset --soft HEAD",
+            "git reset --mixed HEAD",
+            "git status",
+            "git checkout -- .",
+            "echo 'git reset --hard' is dangerous",  # inside a quoted string — we still detect it
+            "grep 'hard' file.txt",
+            "git reset",
+        ],
+    )
+    def test_ignores_non_hard_reset(self, cmd: str) -> None:
+        # The grep/echo lines contain the text but we verify the non-reset lines are not matched.
+        # Note: "echo 'git reset --hard'" would be caught — that is intentional and conservative.
+        if "git reset --hard" in cmd.lower():
+            return  # conservative detection is expected; skip
+        assert not is_git_reset_hard(cmd), f"Expected no detection for: {cmd!r}"
+
+
+# ---------------------------------------------------------------------------
+# Hard-block: git reset --hard always asks regardless of permission mode
+# ---------------------------------------------------------------------------
+
+
+class TestGitResetHardHardBlock:
+    """Regardless of permission mode, git reset --hard must return PolicyDecision.ask."""
+
+    @pytest.mark.parametrize("evaluate_fn", [evaluate_auto, evaluate_read_only, evaluate_approval_required])
+    def test_git_reset_hard_always_asks(self, tmp_path: Path, evaluate_fn) -> None:
+        result = evaluate_fn(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git reset --hard HEAD",
+        )
+        assert result == PolicyDecision.ask, (
+            f"{evaluate_fn.__name__} returned {result!r} instead of 'ask' for git reset --hard"
+        )
+
+    @pytest.mark.parametrize("evaluate_fn", [evaluate_auto, evaluate_read_only, evaluate_approval_required])
+    def test_git_reset_hard_compound_command_always_asks(self, tmp_path: Path, evaluate_fn) -> None:
+        result = evaluate_fn(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git fetch && git reset --hard origin/main",
+        )
+        assert result == PolicyDecision.ask
+
+    def test_normal_shell_auto_mode_still_approves(self, tmp_path: Path) -> None:
+        """Confirm the hard-block only fires for git reset --hard, not all shell commands."""
+        result = evaluate_auto(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git status",
+        )
+        assert result == PolicyDecision.approve
+
 
 # ---------------------------------------------------------------------------
 # PolicyDecision enum

@@ -20,6 +20,7 @@ from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapter
 from backend.services.permission_policy import (
     PolicyDecision,
     evaluate,
+    is_git_reset_hard,
 )
 
 if TYPE_CHECKING:
@@ -83,8 +84,8 @@ class CopilotAdapter(AgentAdapterInterface):
             return
         try:
             async with self._session_factory() as session:
-                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
                 from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
                 if fn_name == "increment":
                     await TelemetrySummaryRepo(session).increment(**kwargs)
@@ -126,6 +127,55 @@ class CopilotAdapter(AgentAdapterInterface):
         kind_val = request.kind.value if request.kind else "unknown"
         mode = config.permission_mode
         sid = invocation.get("session_id", "")
+
+        # ----------------------------------------------------------------
+        # Hard block: git reset --hard always requires explicit operator
+        # approval — no trust bypass, no auto mode bypass, ever.
+        # ----------------------------------------------------------------
+        if kind_val == "shell" and request.full_command_text and is_git_reset_hard(request.full_command_text):
+            approval_service = self._approval_service
+            job_id = self._session_to_job.get(sid)
+
+            if approval_service is None or job_id is None:
+                log.error(
+                    "git_reset_hard_blocked_no_infra",
+                    command=request.full_command_text[:200],
+                )
+                return _Result(kind="denied-interactively-by-user")
+
+            description = (
+                "⚠️ git reset --hard — this will discard ALL uncommitted changes and "
+                f"move HEAD: {request.full_command_text}"
+            )
+            approval = await approval_service.create_request(
+                job_id=job_id,
+                description=description,
+                proposed_action=request.full_command_text,
+                requires_explicit_approval=True,
+            )
+            event_queue = self._queues.get(sid)
+            if event_queue is not None:
+                event_queue.put_nowait(
+                    SessionEvent(
+                        kind=SessionEventKind.approval_request,
+                        payload={
+                            "description": description,
+                            "proposed_action": request.full_command_text,
+                            "approval_id": approval.id,
+                            "requires_explicit_approval": True,
+                        },
+                    )
+                )
+            log.warning(
+                "git_reset_hard_awaiting_operator",
+                approval_id=approval.id,
+                job_id=job_id,
+                command=request.full_command_text[:200],
+            )
+            resolution = await approval_service.wait_for_resolution(approval.id)
+            if resolution == "approved":
+                return _Result(kind="approved")
+            return _Result(kind="denied-interactively-by-user")
 
         # --- Check if operator has trusted this job session ---
         approval_service = self._approval_service

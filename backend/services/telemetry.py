@@ -18,6 +18,7 @@ Adapters import the instruments and call them with standard OTEL attributes::
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
@@ -33,15 +34,15 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 _memory_reader = InMemoryMetricReader()
 _span_exporter = InMemorySpanExporter()
 
-_metric_readers: list = [_memory_reader]
+_metric_readers: list[Any] = [_memory_reader]
 
 _endpoint = os.environ.get("OTEL_EXPORTER_ENDPOINT", "")
 if _endpoint:
     try:
-        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (  # type: ignore[import-not-found]
             OTLPMetricExporter,
         )
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-not-found]
             OTLPSpanExporter,
         )
         from opentelemetry.sdk.metrics.export import (
@@ -56,7 +57,7 @@ if _endpoint:
 else:
     _otlp_span_processor = None
 
-meter_provider = MeterProvider(metric_readers=_metric_readers)  # type: ignore[arg-type]
+meter_provider = MeterProvider(metric_readers=_metric_readers)
 tracer_provider = TracerProvider()
 tracer_provider.add_span_processor(SimpleSpanProcessor(_span_exporter))
 if _otlp_span_processor is not None:

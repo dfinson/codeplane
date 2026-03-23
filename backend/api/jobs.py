@@ -601,10 +601,8 @@ async def get_job_telemetry(
     # Parse quota JSON if present
     quota_snapshots = None
     if summary.get("quota_json"):
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             quota_snapshots = json.loads(summary["quota_json"])
-        except (json.JSONDecodeError, TypeError):
-            pass
 
     # Compute derived fields
     input_tok = summary.get("input_tokens", 0)

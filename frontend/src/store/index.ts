@@ -63,6 +63,7 @@ export interface ApprovalRequest {
   requestedAt: string;
   resolvedAt: string | null;
   resolution: string | null;
+  requiresExplicitApproval: boolean;
 }
 
 export interface LogLine {
@@ -492,6 +493,7 @@ export const useStore = create<AppState>((set, get) => ({
             requestedAt: (payload.timestamp as string) ?? new Date().toISOString(),
             resolvedAt: null,
             resolution: null,
+            requiresExplicitApproval: (payload.requiresExplicitApproval as boolean) ?? false,
           };
           return {
             approvals: { ...state.approvals, [approval.id]: approval },

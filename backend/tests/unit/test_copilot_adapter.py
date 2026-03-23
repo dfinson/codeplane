@@ -629,7 +629,9 @@ class TestEventTelemetry:
             mock_cr.add.assert_called_once_with(10, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
             mock_cw.add.assert_called_once_with(5, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
             mock_cost.add.assert_called_once_with(0.002, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
-            mock_dur.record.assert_called_once_with(1500.0, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o", "is_subagent": False})
+            mock_dur.record.assert_called_once_with(
+                1500.0, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o", "is_subagent": False}
+            )
 
     @pytest.mark.asyncio
     async def test_assistant_usage_model_mismatch(self, adapter: CopilotAdapter) -> None:
@@ -1350,3 +1352,113 @@ class TestToolResultExtraction:
         ]
         assert len(transcripts) == 1
         assert transcripts[0].payload["tool_result"] == "plain string result"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _handle_permission_request — git reset --hard hard block
+# ---------------------------------------------------------------------------
+
+
+class TestHandlePermissionRequestGitResetHard:
+    """_handle_permission_request must block git reset --hard regardless of mode/trust."""
+
+    _SESSION_ID = "test-session-1"
+
+    def _make_adapter_with_approval(self) -> tuple[CopilotAdapter, MagicMock]:
+        approval_service = MagicMock()
+        approval_service.is_trusted = MagicMock(return_value=False)
+        adapter = CopilotAdapter(approval_service=approval_service)
+        # Register session→job so job_id is not None inside the handler
+        adapter.set_job_id(self._SESSION_ID, "job-1")
+        return adapter, approval_service
+
+    def _make_request(self, cmd: str) -> _FakePermissionRequest:
+        return _FakePermissionRequest(kind="shell", full_command_text=cmd)
+
+    def _invocation(self) -> dict[str, str]:
+        return {"session_id": self._SESSION_ID}
+
+    @pytest.mark.asyncio
+    async def test_git_reset_hard_requires_approval_in_auto_mode(self) -> None:
+        adapter, approval_service = self._make_adapter_with_approval()
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        approval = MagicMock()
+        approval.id = "apr-1"
+        approval_service.create_request = AsyncMock(return_value=approval)
+        approval_service.wait_for_resolution = AsyncMock(return_value="approved")
+
+        result = await adapter._handle_permission_request(
+            self._make_request("git reset --hard HEAD"),
+            self._invocation(),
+            config,
+        )
+        assert result.kind == "approved"
+        approval_service.create_request.assert_called_once()
+        call_kwargs = approval_service.create_request.call_args.kwargs
+        assert call_kwargs["requires_explicit_approval"] is True
+
+    @pytest.mark.asyncio
+    async def test_git_reset_hard_cannot_be_bypassed_by_trust(self) -> None:
+        """Trust grant must NOT bypass the git reset --hard block."""
+        adapter, approval_service = self._make_adapter_with_approval()
+        approval_service.is_trusted = MagicMock(return_value=True)  # trusted job
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        approval = MagicMock()
+        approval.id = "apr-trust"
+        approval_service.create_request = AsyncMock(return_value=approval)
+        approval_service.wait_for_resolution = AsyncMock(return_value="approved")
+
+        result = await adapter._handle_permission_request(
+            self._make_request("git reset --hard origin/main"),
+            self._invocation(),
+            config,
+        )
+        # Still routes to approval even though job is trusted
+        assert result.kind == "approved"
+        approval_service.create_request.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_git_reset_hard_rejected_by_operator(self) -> None:
+        adapter, approval_service = self._make_adapter_with_approval()
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        approval = MagicMock()
+        approval.id = "apr-2"
+        approval_service.create_request = AsyncMock(return_value=approval)
+        approval_service.wait_for_resolution = AsyncMock(return_value="rejected")
+
+        result = await adapter._handle_permission_request(
+            self._make_request("git reset --hard HEAD"),
+            self._invocation(),
+            config,
+        )
+        assert result.kind == "denied-interactively-by-user"
+
+    @pytest.mark.asyncio
+    async def test_git_reset_hard_denied_when_no_infra(self) -> None:
+        adapter = CopilotAdapter(approval_service=None)
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        result = await adapter._handle_permission_request(
+            self._make_request("git reset --hard HEAD"),
+            {"session_id": ""},
+            config,
+        )
+        assert result.kind == "denied-interactively-by-user"
+
+    @pytest.mark.asyncio
+    async def test_normal_shell_in_auto_mode_not_affected(self) -> None:
+        """Regular shell commands in auto mode still go through normal path."""
+        adapter, approval_service = self._make_adapter_with_approval()
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        result = await adapter._handle_permission_request(
+            self._make_request("git status"),
+            self._invocation(),
+            config,
+        )
+        # In auto mode, non-git-reset-hard commands are approved without hitting approval service
+        assert result.kind == "approved"
+        approval_service.create_request.assert_not_called()
