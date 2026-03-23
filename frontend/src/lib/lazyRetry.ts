@@ -4,7 +4,8 @@ import { lazy, type ComponentType } from "react";
  * Wraps a dynamic import with retry logic for transient network failures.
  * On final failure, forces a page reload (once) to bust any stale HTML cache.
  */
-export function lazyRetry<T extends ComponentType<unknown>>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function lazyRetry<T extends ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
   retries = 2,
 ): ReturnType<typeof lazy<T>> {
