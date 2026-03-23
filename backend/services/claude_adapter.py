@@ -419,7 +419,9 @@ class ClaudeAdapter(AgentAdapterInterface):
         if job_id:
             from backend.services import telemetry as tel
 
-            attrs: dict[str, str | bool | int | float] = {"job_id": job_id, "sdk": "claude", "tool_name": tool_name, "success": success}
+            attrs: dict[str, str | bool | int | float] = {
+                "job_id": job_id, "sdk": "claude", "tool_name": tool_name, "success": success
+            }
             tel.tool_duration.record(duration_ms, attrs)
 
             self._schedule_db_write(self._db_write(
