@@ -23,9 +23,6 @@ async def analytics_overview(
     agg = await repo.aggregate(period_days=period)
     cost_trend = await repo.cost_by_day(period_days=period)
 
-    # Detect if any job in the period has unlimited premium quota
-    unlimited_premium = await repo.has_unlimited_premium(period_days=period)
-
     total_input = agg.get("total_input_tokens", 0) or 0
     total_cache = agg.get("total_cache_read", 0) or 0
     cache_rate = (total_cache / total_input * 100) if total_input else 0
@@ -45,7 +42,6 @@ async def analytics_overview(
         "totalTokens": agg.get("total_tokens", 0),
         "avgDurationMs": float(agg.get("avg_duration_ms", 0) or 0),
         "totalPremiumRequests": float(agg.get("total_premium_requests", 0) or 0),
-        "unlimitedPremium": unlimited_premium,
         "totalToolCalls": total_tools,
         "totalToolFailures": total_failures,
         "toolSuccessRate": round(tool_success_rate, 1),

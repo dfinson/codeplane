@@ -312,25 +312,3 @@ class TelemetrySummaryRepo(BaseRepository):
             """),
         )
         return [dict(r) for r in result.mappings().all()]
-
-    async def has_unlimited_premium(self, *, period_days: int = 7) -> bool:
-        """Check if any job in the period has an unlimited premium quota."""
-        import json
-
-        result = await self._session.execute(
-            text(f"""
-                SELECT quota_json FROM job_telemetry_summary
-                WHERE created_at >= datetime('now', '-{int(period_days)} days')
-                    AND quota_json IS NOT NULL
-                LIMIT 50
-            """),
-        )
-        for row in result.mappings().all():
-            try:
-                quota = json.loads(row["quota_json"])
-                for snap in quota.values():
-                    if isinstance(snap, dict) and snap.get("is_unlimited"):
-                        return True
-            except (json.JSONDecodeError, TypeError):
-                continue
-        return False

@@ -212,7 +212,6 @@ export interface AnalyticsOverview {
   totalTokens: number;
   avgDurationMs: number;
   totalPremiumRequests: number;
-  unlimitedPremium: boolean;
   totalToolCalls: number;
   totalToolFailures: number;
   toolSuccessRate: number;
