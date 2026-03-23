@@ -47,6 +47,7 @@ class JobRow(Base):
     created_at = Column(TZDateTime, nullable=False)
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
 
 class EventRow(Base):

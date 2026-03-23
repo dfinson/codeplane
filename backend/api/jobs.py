@@ -435,6 +435,147 @@ async def get_job_timeline(
     return milestones
 
 
+@router.get("/jobs/{job_id}/snapshot")
+async def get_job_snapshot(
+    job_id: str,
+    svc: FromDishka[JobService],
+    session: FromDishka[AsyncSession],
+    event_bus: FromDishka[EventBus],
+    config: FromDishka[CPLConfig],
+) -> dict[str, object]:
+    """Full state hydration for a single job.
+
+    Returns the job, logs, transcript, diff, approvals, and timeline in a
+    single response. Used by the frontend after SSE reconnection or page
+    refresh to ensure the UI is fully consistent with backend state.
+    """
+    from backend.models.api_schemas import JobSnapshotResponse
+
+    job = await svc.get_job(job_id)
+    progress_preview = await svc.get_latest_progress_preview(job_id)
+
+    # Collect all sub-resources in parallel via gather
+    import asyncio as _aio
+
+    logs_coro = svc.list_events_by_job(job_id, [DomainEventKind.log_line_emitted], limit=2000)
+    transcript_coro = svc.list_events_by_job(job_id, [DomainEventKind.transcript_updated], limit=2000)
+    timeline_coro = svc.list_events_by_job(job_id, [DomainEventKind.progress_headline], limit=200)
+    summary_coro = svc.list_events_by_job(job_id, [DomainEventKind.tool_group_summary], limit=5000)
+
+    log_events, transcript_events, timeline_events, summary_events = await _aio.gather(
+        logs_coro, transcript_coro, timeline_coro, summary_coro
+    )
+
+    # Build logs
+    logs = [
+        LogLinePayload(
+            job_id=e.job_id,
+            seq=e.payload.get("seq", 0),
+            timestamp=e.payload.get("timestamp", e.timestamp),
+            level=e.payload.get("level", "info"),
+            message=e.payload.get("message", ""),
+            context=e.payload.get("context"),
+        )
+        for e in log_events
+    ]
+
+    # Build transcript with group summaries
+    group_summary_by_turn: dict[str, str] = {
+        str(ev.payload.get("turn_id")): str(ev.payload.get("summary"))
+        for ev in summary_events
+        if ev.payload.get("turn_id") and ev.payload.get("summary")
+    }
+    transcript = [
+        TranscriptPayload(
+            job_id=e.job_id,
+            seq=e.payload.get("seq", 0),
+            timestamp=e.payload.get("timestamp", e.timestamp),
+            role=e.payload.get("role", "agent"),
+            content=e.payload.get("content", ""),
+            title=e.payload.get("title"),
+            turn_id=e.payload.get("turn_id"),
+            tool_name=e.payload.get("tool_name"),
+            tool_args=e.payload.get("tool_args"),
+            tool_result=e.payload.get("tool_result"),
+            tool_success=e.payload.get("tool_success"),
+            tool_issue=e.payload.get("tool_issue"),
+            tool_intent=e.payload.get("tool_intent"),
+            tool_title=e.payload.get("tool_title"),
+            tool_display=e.payload.get("tool_display"),
+            tool_group_summary=group_summary_by_turn.get(e.payload.get("turn_id") or ""),
+        )
+        for e in transcript_events
+    ]
+
+    # Build timeline
+    milestones: list[ProgressHeadlinePayload] = []
+    for event in timeline_events:
+        replaces = event.payload.get("replaces_count", 0)
+        if replaces > 0:
+            milestones = milestones[:-replaces] if replaces < len(milestones) else []
+        milestones.append(
+            ProgressHeadlinePayload(
+                job_id=event.job_id,
+                headline=event.payload.get("headline", ""),
+                headline_past=event.payload.get("headline_past", ""),
+                summary=event.payload.get("summary", ""),
+                timestamp=event.timestamp,
+            )
+        )
+
+    # Build diff (live or from snapshot)
+    diff: list[DiffFileModel] = []
+    if (
+        job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path
+        and job.worktree_path != job.repo
+    ):
+        from backend.services.diff_service import DiffService
+        from backend.services.git_service import GitService
+
+        git = GitService(config)
+        ds = DiffService(git_service=git, event_bus=event_bus)
+        try:
+            diff = await ds.calculate_diff(job.worktree_path, job.base_ref)
+        except Exception:
+            pass
+
+    if not diff:
+        diff_events = await svc.list_events_by_job(job_id, [DomainEventKind.diff_updated])
+        if diff_events:
+            raw_files = diff_events[-1].payload.get("changed_files", [])
+            diff = [DiffFileModel.model_validate(f) for f in raw_files]
+
+    # Build approvals from DB state (includes resolution status)
+    from backend.models.api_schemas import ApprovalResponse
+    from backend.persistence.approval_repo import ApprovalRepository
+
+    approval_repo = ApprovalRepository(session)
+    db_approvals = await approval_repo.list_for_job(job_id)
+    approval_list: list[ApprovalResponse] = [
+        ApprovalResponse(
+            id=a.id,
+            job_id=a.job_id,
+            description=a.description,
+            proposed_action=a.proposed_action,
+            requested_at=a.requested_at,
+            resolved_at=a.resolved_at,
+            resolution=a.resolution,
+        )
+        for a in db_approvals
+    ]
+
+    resp = JobSnapshotResponse(
+        job=_job_to_response(job, progress_preview),
+        logs=logs,
+        transcript=transcript,
+        diff=diff,
+        approvals=approval_list,
+        timeline=milestones,
+    )
+    return resp.model_dump(by_alias=True)
+
+
 @router.get("/jobs/{job_id}/telemetry")
 async def get_job_telemetry(
     job_id: str,

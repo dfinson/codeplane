@@ -328,7 +328,17 @@ class JobService:
             verify_prompt=verify_prompt,
             self_review_prompt=self_review_prompt,
         )
-        await self._job_repo.create(job)
+        try:
+            await self._job_repo.create(job)
+        except Exception:
+            # Compensate: clean up the worktree that was already created
+            # so we don't leave orphaned directories on disk.
+            log.error("job_persist_failed_cleaning_worktree", job_id=job_id, worktree_path=worktree_path)
+            try:
+                await self._git.remove_worktree(resolved_repo, worktree_path)
+            except Exception:
+                log.warning("compensation_worktree_cleanup_failed", job_id=job_id, worktree_path=worktree_path, exc_info=True)
+            raise
         log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
         return job
 

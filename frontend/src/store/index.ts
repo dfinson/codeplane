@@ -14,7 +14,13 @@ import { create } from "zustand";
 // See: frontend/src/api/types.ts for the planned generated aliases.
 // ---------------------------------------------------------------------------
 
-import type { DiffFileModel } from "../api/types";
+import type { DiffFileModel, SDKInfo } from "../api/types";
+import { fetchSDKs, fetchModels } from "../api/client";
+
+function pickDefaultModelId(models: Array<{ value: string; isDefault: boolean }>): string | null {
+  const flagged = models.find((m) => m.isDefault);
+  return flagged?.value ?? models[0]?.value ?? null;
+}
 
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -237,6 +243,14 @@ interface AppState {
   terminalSessions: Record<string, TerminalSession>;
   activeTerminalTab: string | null;
 
+  // SDK + model catalogue (loaded once at app startup)
+  sdks: SDKInfo[];
+  defaultSdk: string | null;
+  sdksLoading: boolean;
+  modelsBySdk: Record<string, { value: string; label: string }[]>;
+  defaultModelBySdk: Record<string, string | null>;
+  modelsLoadingBySdk: Record<string, boolean>;
+
   // UI state
   connectionStatus: ConnectionStatus;
   reconnectAttempt: number;
@@ -244,8 +258,21 @@ interface AppState {
   // Actions
   setConnectionStatus: (status: ConnectionStatus) => void;
   setReconnectAttempt: (attempt: number) => void;
+  /** Fetches SDK list + models for the default SDK. Called once on app mount. */
+  initSdksAndModels: () => Promise<void>;
+  /** Fetches models for a specific SDK (no-op if already loaded). */
+  loadModelsForSdk: (sdkId: string) => Promise<void>;
   dispatchSSEEvent: (eventType: string, data: unknown) => void;
   applySnapshot: (jobs: JobSummary[], approvals: ApprovalRequest[]) => void;
+  /** Bulk-apply a full job snapshot from the hydration endpoint. */
+  hydrateJob: (snapshot: {
+    job: JobSummary;
+    logs: LogLine[];
+    transcript: TranscriptEntry[];
+    diff: DiffFileModel[];
+    approvals: ApprovalRequest[];
+    timeline: TimelineEntry[];
+  }) => void;
 
   // Terminal actions
   toggleTerminalDrawer: () => void;
@@ -254,6 +281,15 @@ interface AppState {
   addTerminalSession: (session: TerminalSession) => void;
   removeTerminalSession: (id: string) => void;
   createTerminalSession: (opts?: { cwd?: string; jobId?: string; label?: string }) => void;
+}
+
+// Module-level singleton guard: ensures initSdksAndModels is only ever
+// in-flight once, even if called concurrently from multiple components.
+let _sdkInitPromise: Promise<void> | null = null;
+
+/** Reset the SDK init guard — for use in tests only. */
+export function _resetSdkInitForTesting() {
+  _sdkInitPromise = null;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -268,6 +304,14 @@ export const useStore = create<AppState>((set, get) => ({
   connectionStatus: "reconnecting",
   reconnectAttempt: 0,
 
+  // SDK + model catalogue
+  sdks: [],
+  defaultSdk: null,
+  sdksLoading: true,
+  modelsBySdk: {},
+  defaultModelBySdk: {},
+  modelsLoadingBySdk: {},
+
   // Terminal state
   terminalDrawerOpen: false,
   terminalDrawerHeight: 300,
@@ -279,11 +323,87 @@ export const useStore = create<AppState>((set, get) => ({
 
   setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
 
+  initSdksAndModels: async () => {
+    // No-op if already done (success or failure)
+    if (!get().sdksLoading) return;
+    // Coalesce concurrent callers onto the same in-flight promise
+    if (_sdkInitPromise) return _sdkInitPromise;
+    _sdkInitPromise = (async () => {
+      try {
+        const r = await fetchSDKs();
+        set({ sdks: r.sdks, defaultSdk: r.default, sdksLoading: false });
+        // Pre-load models for the default SDK
+        await get().loadModelsForSdk(r.default);
+      } catch (err) {
+        console.error("Failed to fetch SDKs", err);
+        set({ sdksLoading: false });
+      }
+    })();
+    return _sdkInitPromise;
+  },
+
+  loadModelsForSdk: async (sdkId: string) => {
+    // Skip if already loaded or currently loading
+    const state = get();
+    if (state.modelsBySdk[sdkId] !== undefined || state.modelsLoadingBySdk[sdkId]) return;
+    set((s) => ({ modelsLoadingBySdk: { ...s.modelsLoadingBySdk, [sdkId]: true } }));
+    try {
+      const models = await fetchModels(sdkId);
+      const mapped = models
+        .map((x) => ({
+          value: String(x.id ?? x.name ?? ""),
+          label: String(x.name ?? x.id ?? "unknown"),
+          isDefault: Boolean(
+            (typeof x.default === "boolean" && x.default) ||
+            (typeof x.isDefault === "boolean" && x.isDefault) ||
+            (typeof x.is_default === "boolean" && x.is_default),
+          ),
+        }))
+        .filter((x) => x.value);
+      set((s) => ({
+        modelsBySdk: { ...s.modelsBySdk, [sdkId]: mapped.map(({ value, label }) => ({ value, label })) },
+        defaultModelBySdk: { ...s.defaultModelBySdk, [sdkId]: pickDefaultModelId(mapped) },
+        modelsLoadingBySdk: { ...s.modelsLoadingBySdk, [sdkId]: false },
+      }));
+    } catch (err) {
+      console.error(`Failed to fetch models for SDK "${sdkId}"`, err);
+      set((s) => ({
+        modelsBySdk: { ...s.modelsBySdk, [sdkId]: [] },
+        defaultModelBySdk: { ...s.defaultModelBySdk, [sdkId]: null },
+        modelsLoadingBySdk: { ...s.modelsLoadingBySdk, [sdkId]: false },
+      }));
+    }
+  },
+
   applySnapshot: (jobs, approvals) =>
     set({
       jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
       approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
     }),
+
+  hydrateJob: (snapshot) => {
+    const jobId = snapshot.job.id;
+    set((s) => {
+      // Remove stale approvals for this job before merging fresh ones
+      const keptApprovals = Object.fromEntries(
+        Object.entries(s.approvals).filter(([, a]) => a.jobId !== jobId),
+      );
+      return {
+        jobs: { ...s.jobs, [jobId]: enrichJob(snapshot.job) },
+        logs: { ...s.logs, [jobId]: snapshot.logs },
+        transcript: { ...s.transcript, [jobId]: snapshot.transcript },
+        diffs: { ...s.diffs, [jobId]: snapshot.diff },
+        timelines: {
+          ...s.timelines,
+          [jobId]: snapshot.timeline.map((t) => ({ ...t, active: false })),
+        },
+        approvals: {
+          ...keptApprovals,
+          ...Object.fromEntries(snapshot.approvals.map((a) => [a.id, a])),
+        },
+      };
+    });
+  },
 
   dispatchSSEEvent: (eventType, data) => {
     // Process the event and only call set() if we have an actual state change.
@@ -502,7 +622,7 @@ export const useStore = create<AppState>((set, get) => ({
                 ...state.jobs,
                 [jobId]: {
                   ...existing,
-                  resolution: "merged",
+                  mergeStatus: "merged",
                   updatedAt: (payload.timestamp as string) ?? existing.updatedAt,
                 },
               },
@@ -522,7 +642,7 @@ export const useStore = create<AppState>((set, get) => ({
                 ...state.jobs,
                 [jobId]: {
                   ...existing,
-                  resolution: "conflict",
+                  mergeStatus: "conflict",
                   conflictFiles,
                   prUrl: prUrl ?? existing.prUrl,
                   updatedAt: (payload.timestamp as string) ?? existing.updatedAt,

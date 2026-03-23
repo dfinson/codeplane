@@ -100,6 +100,8 @@ MAX_REPLAY_AGE = timedelta(minutes=5)
 class SSEConnection:
     """Represents a single SSE client connection."""
 
+    _QUEUE_WARN_THRESHOLD = 0.8  # 80% of maxsize
+
     def __init__(self, job_id: str | None = None) -> None:
         self.job_id = job_id  # None = all jobs
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1024)
@@ -111,7 +113,10 @@ class SSEConnection:
         try:
             self.queue.put_nowait(data)
         except asyncio.QueueFull:
-            log.warning("sse_queue_full", job_id=self.job_id)
+            # Close the overloaded connection so the client reconnects and
+            # gets missed events via replay instead of silently losing them.
+            log.warning("sse_queue_full_closing_connection", job_id=self.job_id)
+            self.close()
 
     def close(self) -> None:
         self.closed = True

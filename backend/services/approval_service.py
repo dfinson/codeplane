@@ -166,6 +166,33 @@ class ApprovalService:
         """Return True if the operator has approved all for this job."""
         return job_id in self._trusted_jobs
 
+    async def recover_pending_approvals(self) -> int:
+        """Recreate in-memory futures for approvals that survived a server restart.
+
+        Called during ``recover_on_startup()`` so that any job still in
+        ``waiting_for_approval`` state can be unblocked when the operator
+        resolves the approval through the API.
+
+        Returns the number of futures recreated.
+        """
+        async with self._session_factory() as session:
+            repo = self._make_repo(session)
+            pending = await repo.list_pending()
+
+        loop = asyncio.get_running_loop()
+        recovered = 0
+        for approval in pending:
+            if approval.id in self._pending_futures:
+                continue  # already tracked (shouldn't happen, but defensive)
+            future: asyncio.Future[str] = loop.create_future()
+            self._pending_futures[approval.id] = future
+            self._approval_to_job[approval.id] = approval.job_id
+            recovered += 1
+
+        if recovered:
+            log.info("approvals_recovered", count=recovered)
+        return recovered
+
     async def trust_job(self, job_id: str) -> int:
         """Mark a job as trusted and approve all its pending requests.
 

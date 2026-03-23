@@ -118,20 +118,42 @@ _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
 # Default prompts for post-completion verification and self-review turns
 DEFAULT_VERIFY_PROMPT = (
-    "Before this task is complete: identify and run this project's test suite, "
-    "linter, and type checker. If anything fails, fix it and re-run until "
-    "everything passes. Assume that any failure is caused by your changes — "
-    "do not dismiss failures as pre-existing or flaky. Also check that you "
-    "haven't made unrelated changes outside the scope of the original task; "
-    "revert any that you find. Report what you ran and the results."
+    "You are now running a post-task verification pass as per standard instructions. "
+    "Start by briefly stating your intent — e.g. 'Running lint and tests to verify "
+    "my changes.' — so it is visible in the conversation. "
+    "Then check whether any source files or documentation were modified during this "
+    "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
+    "If no files were modified — for example, the task was read-only or an "
+    "audit — state that there is nothing to verify and stop. "
+    "Only if files were changed: identify and run this project's test suite, "
+    "linter, and type checker. Stop as soon as everything passes — you do not "
+    "need to exhaust the maximum number of allowed turns. If something fails, "
+    "fix it and re-run. Assume failures are caused by your changes; do not "
+    "dismiss them as pre-existing or flaky. Also check that you haven't made "
+    "unrelated changes outside the scope of the original task; revert any that "
+    "you find. "
+    "Keep verification output brief. Your final message must be focused on the "
+    "original task: summarise what was built or changed and why. Mention the "
+    "verification outcome (e.g. 'all checks passed') as a single sentence, not "
+    "as the main topic."
 )
 
 DEFAULT_SELF_REVIEW_PROMPT = (
-    "Review the changes you just made. Look at the full diff. Check for: "
-    "missed edge cases, incomplete implementations, leftover debug code, "
-    "broken imports, dead code, backwards-compatibility shims or fallback "
-    "paths that may no longer be needed, and inconsistencies with the "
-    "surrounding codebase. If you find issues, fix them."
+    "You are now running a post-task self-review pass as per standard instructions. "
+    "Start by briefly stating your intent — e.g. 'Reviewing my changes for "
+    "correctness.' — so it is visible in the conversation. "
+    "Then check whether any source files or documentation were modified during this "
+    "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
+    "If no files were modified — for example, the task was read-only or an "
+    "audit — state that there is nothing to review and stop. "
+    "Only if files were changed: look at the full diff and check for missed edge "
+    "cases, incomplete implementations, leftover debug code, broken imports, dead "
+    "code, backwards-compatibility shims or fallback paths that may no longer be "
+    "needed, and inconsistencies with the surrounding codebase. If you find "
+    "issues, fix them. "
+    "Keep self-review output brief. Your final message must be focused on the "
+    "original task: summarise what was built or changed and why. Mention the "
+    "review outcome as a single sentence, not as the main topic."
 )
 
 
@@ -320,9 +342,7 @@ class RuntimeService:
             if job is None:
                 raise JobNotFoundError(f"Job {job_id} does not exist.")
             if job.state not in (JobState.running, JobState.waiting_for_approval):
-                raise StateConflictError(
-                    f"Job {job_id} is not active and cannot be recovered (current: {job.state})."
-                )
+                raise StateConflictError(f"Job {job_id} is not active and cannot be recovered (current: {job.state}).")
 
             previous_state = job.state
             previous_session_count = job.session_count
@@ -411,37 +431,57 @@ class RuntimeService:
     ) -> None:
         """Create an asyncio task to execute the job."""
         if job.id in self._tasks:
-            return  # Already running (race-condition guard)
+            return  # Already running (in-memory guard)
+
+        # DB-level compare-and-swap: prevents double-start if recovery and
+        # an HTTP request race on the same job.  Only the winner proceeds.
+        from backend.persistence.job_repo import JobRepository
+
+        async with self._session_factory() as session:
+            repo = JobRepository(session)
+            claimed = await repo.claim_for_start(job.id)
+            await session.commit()
+        if not claimed:
+            log.warning("job_start_claim_lost", job_id=job.id)
+            return
 
         agent_session = _AgentSession()
         self._agent_sessions[job.id] = agent_session
 
-        # Ensure job is in running state
+        # The DB CAS already set the state to running; publish the event
+        # if the domain object's state hasn't caught up yet.
         if job.state != JobState.running:
-            async with self._session_factory() as session:
-                svc = self._make_job_service(session)
-                await svc.transition_state(job.id, JobState.running)
-                await session.commit()
             await self._publish_state_event(job.id, job.state, JobState.running)
 
-        session_config = build_session_config(
-            job,
-            self._config,
-            self._permission_overrides.pop(job.id, None),
-        )
-        if override_prompt is not None:
-            import dataclasses
+        try:
+            session_config = build_session_config(
+                job,
+                self._config,
+                self._permission_overrides.pop(job.id, None),
+            )
+            if override_prompt is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, prompt=override_prompt)
-        if resume_sdk_session_id is not None:
-            import dataclasses
+                session_config = dataclasses.replace(session_config, prompt=override_prompt)
+            if resume_sdk_session_id is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
+                session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
 
-        task = asyncio.create_task(
-            self._run_job(job.id, agent_session, session_config),
-            name=f"job-{job.id}",
-        )
+            task = asyncio.create_task(
+                self._run_job(job.id, agent_session, session_config),
+                name=f"job-{job.id}",
+            )
+        except Exception:
+            # Task creation failed after the DB CAS set state to running.
+            # Revert to the pre-claim state so the job isn't orphaned.
+            self._agent_sessions.pop(job.id, None)
+            log.error("job_start_task_creation_failed", job_id=job.id, exc_info=True)
+            async with self._session_factory() as session:
+                repo = JobRepository(session)
+                await repo.update_state(job.id, job.state, datetime.now(UTC))
+                await session.commit()
+            raise
         self._tasks[job.id] = task
         # Pre-register prompt for echo suppression so the SDK user.message
         # echo of the initial prompt is discarded (shown via the synthetic entry).
@@ -583,11 +623,27 @@ class RuntimeService:
             resolution_event = None
 
             # Strategy completed normally → succeeded
+            #
+            # Commit the state transition BEFORE running merge resolution.
+            # Merge operations open their own sessions to persist merge_status
+            # and publish events — if the outer session is still uncommitted
+            # SQLite will deadlock on the jobs table write lock.
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.transition_state(job_id, JobState.succeeded)
+                if not post_conflict_merge_requested or self._merge_service is None:
+                    from backend.persistence.job_repo import JobRepository
 
-                if post_conflict_merge_requested and self._merge_service is not None:
+                    job_repo = JobRepository(session)
+                    await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
+                    if post_conflict_merge_requested and self._merge_service is None:
+                        log.warning("post_conflict_merge_unavailable", job_id=job_id)
+                await session.commit()
+
+            # Merge resolution runs in its own session(s) — no lock contention.
+            if post_conflict_merge_requested and self._merge_service is not None:
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
                     current_job = await svc.get_job(job_id)
                     if current_job is None:
                         raise ValueError(f"Job {job_id} not found before post-conflict merge")
@@ -604,15 +660,7 @@ class RuntimeService:
                         resolved,
                         pr_url=final_pr_url,
                     )
-                else:
-                    from backend.persistence.job_repo import JobRepository
-
-                    job_repo = JobRepository(session)
-                    await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
-                    if post_conflict_merge_requested and self._merge_service is None:
-                        log.warning("post_conflict_merge_unavailable", job_id=job_id)
-
-                await session.commit()
+                    await session.commit()
 
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
@@ -1728,6 +1776,11 @@ class RuntimeService:
 
     async def recover_on_startup(self) -> None:
         """Recover from a previous crash by restarting active jobs and re-enqueueing queued ones."""
+        # Restore in-memory futures for approvals that survived the restart
+        # so that recovered jobs in waiting_for_approval can be unblocked.
+        if self._approval_service is not None:
+            await self._approval_service.recover_pending_approvals()
+
         orphaned_jobs: list[tuple[Job, JobState]] = []
         async with self._session_factory() as session:
             svc = self._make_job_service(session)

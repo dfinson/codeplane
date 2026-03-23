@@ -121,6 +121,18 @@ export function fetchJobDiff(jobId: string): Promise<DiffFileModel[]> {
   return request(`/jobs/${encodeURIComponent(jobId)}/diff`);
 }
 
+/** Full state hydration for a single job — used after reconnect or page refresh. */
+export function fetchJobSnapshot(jobId: string): Promise<{
+  job: import("../store").JobSummary;
+  logs: import("../store").LogLine[];
+  transcript: import("../store").TranscriptEntry[];
+  diff: DiffFileModel[];
+  approvals: import("../store").ApprovalRequest[];
+  timeline: import("../store").TimelineEntry[];
+}> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/snapshot`);
+}
+
 export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
   return request("/jobs", {
     method: "POST",

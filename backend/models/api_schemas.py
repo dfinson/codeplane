@@ -568,6 +568,17 @@ class SnapshotPayload(CamelModel):
     pending_approvals: list[ApprovalResponse]
 
 
+class JobSnapshotResponse(CamelModel):
+    """Full state hydration for a single job — used after reconnect or page refresh."""
+
+    job: JobResponse
+    logs: list[LogLinePayload]
+    transcript: list[TranscriptPayload]
+    diff: list[DiffFileModel]
+    approvals: list[ApprovalResponse]
+    timeline: list[ProgressHeadlinePayload]
+
+
 class SDKInfoResponse(CamelModel):
     id: str
     name: str

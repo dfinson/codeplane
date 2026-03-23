@@ -78,7 +78,14 @@ def _build_frontend() -> bool:
 @click.option("--host", default=None, help="Bind host (default: from config or 127.0.0.1)")
 @click.option("--port", default=None, type=int, help="Bind port (default: from config or 8080)")
 @click.option("--dev", is_flag=True, help="Dev mode: skip frontend build")
-@click.option("--remote", is_flag=True, help="Enable remote access via Dev Tunnels")
+@click.option("--remote", is_flag=True, help="Enable remote access via a tunnel provider")
+@click.option(
+    "--provider",
+    default="devtunnel",
+    type=click.Choice(["devtunnel", "cloudflare"], case_sensitive=False),
+    show_default=True,
+    help="Remote access provider (requires --remote)",
+)
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--skip-preflight", is_flag=True, help="Skip preflight checks")
@@ -87,6 +94,7 @@ def up(
     port: int | None,
     dev: bool,
     remote: bool,
+    provider: str,
     password: str | None,
     no_password: bool,
     skip_preflight: bool,
@@ -103,8 +111,32 @@ def up(
         if not validate_preflight(port):
             raise SystemExit(1)
 
+    remote_provider = RemoteProvider(provider) if remote else RemoteProvider.local
+
+    # Read credentials from .env (takes precedence) then OS environment
+    import os
+
+    dotenv_path = Path(__file__).resolve().parent.parent / ".env"
+    dotenv_vars: dict[str, str] = {}
+    if dotenv_path.is_file():
+        for line in dotenv_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                dotenv_vars[k.strip()] = v.strip()
+
+    def _env(key: str) -> str | None:
+        return dotenv_vars.get(key) or os.environ.get(key) or None
+
+    cloudflare_token = _env("CPL_CLOUDFLARE_TUNNEL_TOKEN")
+    cloudflare_hostname = _env("CPL_CLOUDFLARE_HOSTNAME")
+
     if remote:
-        error = validate_remote_provider(RemoteProvider.devtunnel)
+        error = validate_remote_provider(
+            remote_provider,
+            cloudflare_token=cloudflare_token,
+            cloudflare_hostname=cloudflare_hostname,
+        )
         if error:
             click.secho(error, fg="red", err=True)
             raise SystemExit(1)
@@ -120,20 +152,7 @@ def up(
     effective_password: str | None = password
 
     if not effective_password and not no_password:
-        import os
-        from pathlib import Path
-
-        # .env takes precedence over system env
-        env_pw: str | None = None
-        dotenv = Path(__file__).resolve().parent.parent / ".env"
-        if dotenv.is_file():
-            for line in dotenv.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("CPL_TUNNEL_PASSWORD=") and not line.startswith("#"):
-                    env_pw = line.split("=", 1)[1].strip()
-                    break
-        if not env_pw:
-            env_pw = os.environ.get("CPL_TUNNEL_PASSWORD")
+        env_pw = _env("CPL_TUNNEL_PASSWORD")
         if env_pw:
             effective_password = env_pw
 
@@ -170,7 +189,12 @@ def up(
 
     if remote:
         try:
-            tunnel_handle = start_remote_access(RemoteProvider.devtunnel, port=port)
+            tunnel_handle = start_remote_access(
+                remote_provider,
+                port=port,
+                cloudflare_token=cloudflare_token,
+                cloudflare_hostname=cloudflare_hostname,
+            )
         except TunnelStartError as exc:
             click.secho(f"ERROR: {exc}", fg="red", err=True)
             raise SystemExit(1) from exc

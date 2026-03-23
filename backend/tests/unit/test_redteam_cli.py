@@ -55,7 +55,9 @@ class TestUpCommand:
         assert "--port" in result.output
         assert "--dev" in result.output
         assert "--remote" in result.output
-        assert "Dev Tunnels" in result.output
+        assert "--provider" in result.output
+        assert "devtunnel" in result.output
+        assert "cloudflare" in result.output
 
     @patch("backend.cli.validate_remote_provider", return_value="ERROR: 'devtunnel' CLI not found.")
     def test_up_remote_requires_devtunnel_cli(self, mock_validate) -> None:

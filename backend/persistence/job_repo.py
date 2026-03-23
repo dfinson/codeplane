@@ -27,13 +27,19 @@ class JobRepository(BaseRepository):
     """Database access for job records."""
 
     async def _update_row(self, job_id: str, **updates: Any) -> None:
-        """Fetch a job row by ID and apply field updates."""
+        """Fetch a job row by ID and apply field updates with optimistic locking.
+
+        Increments the ``version`` column on every update. If the row was
+        concurrently modified (version mismatch after flush), the caller's
+        session should detect the stale state on commit.
+        """
         result = await self._session.execute(select(JobRow).where(JobRow.id == job_id))
         row = result.scalar_one_or_none()
         if row is None:
             return
         for field, value in updates.items():
             setattr(row, field, value)
+        row.version = (row.version if row.version is not None else 0) + 1  # type: ignore[assignment]
         await self._session.flush()
 
     async def list_ids(self) -> set[str]:
@@ -74,6 +80,7 @@ class JobRepository(BaseRepository):
             max_turns=cast("int | None", row.max_turns),
             verify_prompt=cast("str | None", row.verify_prompt),
             self_review_prompt=cast("str | None", row.self_review_prompt),
+            version=cast("int", row.version) or 1,
         )
 
     async def create(self, job: Job) -> Job:
@@ -270,6 +277,39 @@ class JobRepository(BaseRepository):
     async def update_sdk_session_id(self, job_id: str, sdk_session_id: str | None) -> None:
         """Persist or clear the Copilot SDK session ID for future resumption."""
         await self._update_row(job_id, sdk_session_id=sdk_session_id)
+
+    async def claim_for_start(self, job_id: str) -> bool:
+        """Atomically claim a job for execution using a DB-level compare-and-swap.
+
+        Sets state to 'running' only if the current state allows starting.
+        Returns True if this call won the race, False if another caller
+        already claimed the job.
+        """
+        from datetime import UTC, datetime
+        from sqlalchemy import update
+
+        stmt = (
+            update(JobRow)
+            .where(
+                JobRow.id == job_id,
+                JobRow.state.in_([
+                    JobState.queued,
+                    JobState.running,
+                    # Terminal states allowed for resume
+                    JobState.succeeded,
+                    JobState.failed,
+                    JobState.canceled,
+                ]),
+            )
+            .values(
+                state=JobState.running,
+                updated_at=datetime.now(UTC),
+                version=JobRow.version + 1,
+            )
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount) > 0  # type: ignore[attr-defined]
 
     async def update_title_and_branch(self, job_id: str, title: str | None = None, branch: str | None = None) -> None:
         """Update the title and/or branch of a job (used by async naming)."""

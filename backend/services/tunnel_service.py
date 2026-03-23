@@ -265,7 +265,22 @@ def start_remote_access(
         handle.watchdog.start()
         return handle
     origin, proc = _start_cloudflare(port, cloudflare_token=cloudflare_token, cloudflare_hostname=cloudflare_hostname)
-    return TunnelHandle(provider=provider, origin=origin, proc=proc)
+    handle = TunnelHandle(provider=provider, origin=origin, proc=proc)
+    handle.watchdog = TunnelWatchdog(
+        tunnel_url=origin,
+        restart_command=[
+            "cloudflared",
+            "tunnel",
+            "--no-autoupdate",
+            "run",
+            "--token",
+            cloudflare_token or "",
+        ],
+        proc=proc,
+        label="cloudflare",
+    )
+    handle.watchdog.start()
+    return handle
 
 
 def _run_capture(args: list[str]) -> subprocess.CompletedProcess[str]:

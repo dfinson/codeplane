@@ -40,6 +40,9 @@ beforeEach(() => {
     connectionStatus: "connected",
     terminalDrawerOpen: false,
     terminalSessions: {},
+    // Pre-mark SDK catalogue as loaded so initSdksAndModels() is a no-op
+    // in these tests (they don't test SDK/model loading and have no API mock).
+    sdksLoading: false,
   });
 });
 

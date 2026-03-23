@@ -193,6 +193,7 @@ class Job:
     max_turns: int | None = None
     verify_prompt: str | None = None
     self_review_prompt: str | None = None
+    version: int = 1
 
 
 @dataclass

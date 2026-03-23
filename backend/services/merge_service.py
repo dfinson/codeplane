@@ -56,8 +56,8 @@ def _classify_cherry_pick_failure(exc: GitError) -> str:
     combined_message = "\n".join(part for part in (str(exc), exc.stderr) if part).lower()
     if any(pattern in combined_message for pattern in _CHERRY_PICK_ALREADY_APPLIED_PATTERNS):
         return (
-            "Cherry-pick stopped because one or more branch commits are already present on the base branch;"
-            " rebase the branch or create a PR"
+            "Cherry-pick stopped because one or more branch commits are already present"
+            " on the base branch; rebase the branch or create a PR"
         )
     return "Cherry-pick failed without conflict markers; check git configuration or hooks"
 
@@ -203,9 +203,11 @@ class MergeService:
 
         log.info("merge_ff_ref_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
 
+        # Persist before publishing so the frontend never sees an event
+        # that the DB hasn't committed.
+        await self._update_merge_status(job_id, Resolution.merged)
         await self._publish_merge_completed(job_id, branch, base_ref, "ff_only")
         await self._post_merge_cleanup(job_id, repo_path, None, branch)
-        await self._update_merge_status(job_id, Resolution.merged)
         return MergeResult(status=MergeStatus.merged, strategy="ff_only")
 
     @contextlib.asynccontextmanager
@@ -324,15 +326,16 @@ class MergeService:
 
         if merge_ok:
             log.info("merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
+            await self._update_merge_status(job_id, Resolution.merged)
             await self._publish_merge_completed(job_id, branch, base_ref, "merge")
             await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, Resolution.merged)
             return MergeResult(status=MergeStatus.merged, strategy="merge")
 
         if merge_ok is None:
             await self._update_merge_status(job_id, "not_merged")
             return MergeResult(status=MergeStatus.error, error=error or "Merge failed without conflict markers")
 
+        await self._update_merge_status(job_id, Resolution.conflict)
         await self._publish_merge_conflict(
             job_id,
             branch,
@@ -340,7 +343,6 @@ class MergeService:
             conflict_files,
             fallback="none",
         )
-        await self._update_merge_status(job_id, Resolution.conflict)
         return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
     async def _get_conflict_file_list(self, repo_path: str, branch: str, base_ref: str) -> list[str] | None:
@@ -443,22 +445,45 @@ class MergeService:
             except GitError:
                 log.warning("branch_cleanup_failed", job_id=job_id, exc_info=True)
 
+    _MERGE_STATUS_MAX_ATTEMPTS = 3
+    _MERGE_STATUS_RETRY_DELAY_S = 0.05
+
     async def _update_merge_status(
         self,
         job_id: str,
         merge_status: str,
         pr_url: str | None = None,
     ) -> None:
-        """Persist merge status to the database."""
+        """Persist merge status to the database with retry on SQLite lock.
+
+        This must succeed for the UI to stay consistent — a silently-dropped
+        update leaves the card showing a stale state.  Retry on transient
+        SQLite lock errors (same strategy as event persistence).
+        """
+        from sqlalchemy.exc import OperationalError
+
         from backend.persistence.job_repo import JobRepository
 
-        try:
-            async with self._session_factory() as session:
-                repo = JobRepository(session)
-                await repo.update_merge_status(job_id, merge_status, pr_url=pr_url)
-                await session.commit()
-        except SQLAlchemyError:
-            log.warning("merge_status_update_failed", job_id=job_id, exc_info=True)
+        for attempt in range(self._MERGE_STATUS_MAX_ATTEMPTS):
+            try:
+                async with self._session_factory() as session:
+                    repo = JobRepository(session)
+                    await repo.update_merge_status(job_id, merge_status, pr_url=pr_url)
+                    await session.commit()
+                    return
+            except OperationalError as exc:
+                if "database is locked" not in str(exc).lower() or attempt == self._MERGE_STATUS_MAX_ATTEMPTS - 1:
+                    log.error("merge_status_update_failed", job_id=job_id, merge_status=merge_status, exc_info=True)
+                    raise
+                log.warning(
+                    "merge_status_retrying_after_lock",
+                    job_id=job_id,
+                    attempt=attempt + 1,
+                )
+                await asyncio.sleep(self._MERGE_STATUS_RETRY_DELAY_S * (attempt + 1))
+            except SQLAlchemyError:
+                log.error("merge_status_update_failed", job_id=job_id, merge_status=merge_status, exc_info=True)
+                raise
 
     async def _publish_merge_completed(
         self,
@@ -637,15 +662,16 @@ class MergeService:
 
             if merge_ok:
                 log.info("resolve_merge_succeeded", job_id=job_id, branch=branch)
+                await self._update_merge_status(job_id, Resolution.merged)
                 await self._publish_merge_completed(job_id, branch, base_ref, "merge")
                 await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-                await self._update_merge_status(job_id, Resolution.merged)
                 return MergeResult(status=MergeStatus.merged, strategy="merge")
 
             if merge_ok is None:
                 await self._update_merge_status(job_id, "not_merged")
                 return MergeResult(status=MergeStatus.error, error=error or "Merge failed without conflict markers")
 
+            await self._update_merge_status(job_id, Resolution.conflict)
             await self._publish_merge_conflict(
                 job_id,
                 branch,
@@ -654,7 +680,6 @@ class MergeService:
                 fallback="none",
                 pr_url=None,
             )
-            await self._update_merge_status(job_id, Resolution.conflict)
             return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
     async def _operator_smart_merge(
@@ -742,6 +767,7 @@ class MergeService:
                     await self._git.checkout(base_ref, cwd=repo_path)
                 except GitError:
                     log.warning("smart_merge_checkout_base_failed", job_id=job_id, exc_info=True)
+                await self._update_merge_status(job_id, Resolution.conflict)
                 await self._publish_merge_conflict(
                     job_id,
                     branch,
@@ -750,13 +776,12 @@ class MergeService:
                     fallback="none",
                     pr_url=None,
                 )
-                await self._update_merge_status(job_id, Resolution.conflict)
                 return MergeResult(status=MergeStatus.conflict, conflict_files=conflict_files)
 
             log.info("smart_merge_succeeded", job_id=job_id, branch=branch, base_ref=base_ref)
+            await self._update_merge_status(job_id, Resolution.merged)
             await self._publish_merge_completed(job_id, branch, base_ref, "cherry_pick")
             await self._post_merge_cleanup(job_id, repo_path, worktree_path, branch)
-            await self._update_merge_status(job_id, Resolution.merged)
             return MergeResult(status=MergeStatus.merged, strategy="cherry_pick")
 
     async def _discard(
