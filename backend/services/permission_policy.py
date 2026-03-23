@@ -55,8 +55,7 @@ class PolicyDecision(StrEnum):
 #   git reset HEAD --hard
 #   cd /repo && git reset --hard origin/main
 _GIT_RESET_HARD_RE = re.compile(
-    r"\bgit\s+reset\b[^|;&\n]*?\s--hard\b"  # --hard after  reset [flags/ref]
-    r"|\bgit\s+reset\s+--hard\b",  # --hard immediately after reset
+    r"\bgit\s+reset\b[^|;&\n]*?\s--hard\b",
     re.IGNORECASE,
 )
 
