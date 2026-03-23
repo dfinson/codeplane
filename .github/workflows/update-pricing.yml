@@ -1,0 +1,38 @@
+name: Update Model Pricing
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Refresh weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-pricing:
+    name: Fetch model pricing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pricing update
+        run: python tools/update_model_pricing.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/data/model_pricing.json
+          if git diff --cached --quiet; then
+            echo "No pricing changes"
+          else
+            git commit -m "chore: update model pricing from LiteLLM"
+            git push
+          fi

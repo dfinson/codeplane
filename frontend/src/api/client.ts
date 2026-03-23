@@ -299,6 +299,21 @@ export function fetchAnalyticsRepos(period = 7): Promise<AnalyticsRepos> {
   return request(`/analytics/repos?period=${period}`);
 }
 
+// Model pricing — keyed by model name, null if not found
+export interface ModelPricing {
+  provider: string;
+  input: number;       // $/MTok
+  output: number;      // $/MTok
+  cache_read: number;  // $/MTok
+  cache_write: number; // $/MTok
+  max_input_tokens: number;
+  max_output_tokens: number;
+}
+
+export function fetchModelPricing(models: string[]): Promise<Record<string, ModelPricing | null>> {
+  return request(`/analytics/pricing?models=${encodeURIComponent(models.join(","))}`);
+}
+
 export function fetchAnalyticsJobs(params?: {
   period?: number;
   sdk?: string;

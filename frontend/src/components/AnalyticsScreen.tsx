@@ -3,6 +3,7 @@ import {
   BarChart3, DollarSign, Clock, Cpu, Wrench, TrendingUp,
   ArrowUpRight, GitBranch, ChevronUp, ChevronDown,
 } from "lucide-react";
+import { Tooltip } from "./ui/tooltip";
 import {
   fetchAnalyticsOverview,
   fetchAnalyticsModels,
@@ -79,7 +80,7 @@ function StatCard({
   icon: React.ElementType;
   label: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
 }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-1">
@@ -178,7 +179,11 @@ function ModelBreakdown({ models }: { models: AnalyticsModels["models"] }) {
               <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
               <th className="text-right py-1.5 px-2 font-medium">Cost</th>
               <th className="text-right py-1.5 px-2 font-medium">Tokens</th>
-              <th className="text-right py-1.5 px-2 font-medium">Cache</th>
+              <th className="text-right py-1.5 px-2 font-medium">
+                <Tooltip content="Percentage of input tokens served from prompt cache — cached tokens are billed at a reduced rate.">
+                  <span className="cursor-help border-b border-dotted border-muted-foreground/50">Cache</span>
+                </Tooltip>
+              </th>
               <th className="text-right py-1.5 px-2 font-medium">Avg Time</th>
             </tr>
           </thead>
@@ -533,7 +538,13 @@ export function AnalyticsScreen() {
           icon={ArrowUpRight}
           label="Tokens"
           value={formatTokens(overview.totalTokens)}
-          sub={`${overview.cacheHitRate}% cache`}
+          sub={
+            <Tooltip content="Cached tokens reuse previous context at a significantly lower rate. Higher cache percentages reduce total spend.">
+              <span className="cursor-help border-b border-dotted border-muted-foreground/50">
+                {overview.cacheHitRate}% cache
+              </span>
+            </Tooltip>
+          }
         />
         <StatCard
           icon={Wrench}
