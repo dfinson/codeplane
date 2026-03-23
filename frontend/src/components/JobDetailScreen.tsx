@@ -323,13 +323,15 @@ export function JobDetailScreen() {
 
       {/* Job header */}
       <div className="rounded-lg border border-border bg-card p-4 mb-4">
+        <div className="mb-2">
+          {job.title ? (
+            <h1 className="text-lg font-bold text-foreground break-words">{job.title}</h1>
+          ) : (
+            <h1 className="text-lg font-bold text-foreground break-words">{job.id}</h1>
+          )}
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <div className="flex items-center gap-2">
-            {job.title ? (
-              <span className="text-lg font-bold text-foreground">{job.title}</span>
-            ) : (
-              <span className="text-lg font-bold text-foreground">{job.id}</span>
-            )}
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-muted-foreground font-mono">{job.id}</span>
             <span aria-live="polite"><StateBadge state={job.state} /></span>
             <SdkBadge sdk={job.sdk} />
