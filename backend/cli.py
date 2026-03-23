@@ -345,6 +345,39 @@ def _find_pids_on_port(port: int) -> list[int]:
     return []
 
 
+def _is_server_running(host: str, port: int) -> tuple[bool, list[int]]:
+    """Detect a running CodePlane instance.
+
+    Uses the same layered strategy as ``cpl doctor``:
+    1. /health endpoint (definitive)
+    2. Process scan for ``cpl up`` / ``cpl restart`` commands
+    3. Port-level PID detection
+
+    Returns (running, pids).  *pids* may be empty when detection succeeded
+    via health-probe alone — callers that need PIDs should fall back to
+    ``_find_pids_on_port``.
+    """
+    from backend.services.setup_service import _find_cpl_processes
+
+    # 1. Health endpoint
+    status, _ = _api_get(f"http://{host}:{port}", "/health")
+    if status == 200:
+        pids = _find_pids_on_port(port)
+        return True, pids
+
+    # 2. Process scan (cross-platform)
+    pids = _find_cpl_processes()
+    if pids:
+        return True, pids
+
+    # 3. Port-level detection
+    pids = _find_pids_on_port(port)
+    if pids:
+        return True, pids
+
+    return False, []
+
+
 def _api_get(base_url: str, path: str) -> tuple[int, dict[str, Any] | None]:
     """Perform a GET request. Returns (status, body | None)."""
     import json
@@ -412,7 +445,13 @@ def _stop_server(port: int) -> bool:
 
     pids = _find_pids_on_port(port)
     if not pids:
-        click.echo("  No process found on that port — already stopped.")
+        # Process scan may have found PIDs that aren't on the port yet (startup race)
+        from backend.services.setup_service import _find_cpl_processes
+
+        pids = _find_cpl_processes()
+
+    if not pids:
+        click.echo("  No process found — already stopped.")
         return True
 
     click.echo(f"  Sending SIGTERM to PID(s) {pids}…")
@@ -438,8 +477,8 @@ def down(host: str | None, port: int | None, force: bool) -> None:
     port = port or config.server.port
     base_url = f"http://{host}:{port}"
 
-    # Check if the server is even running
-    if not _find_pids_on_port(port):
+    running, _ = _is_server_running(host, port)
+    if not running:
         click.echo("CodePlane is not running.")
         return
 
@@ -502,7 +541,8 @@ def restart(
     base_url = f"http://{host}:{port}"
 
     # --- Down phase ---
-    if _find_pids_on_port(port):
+    running, _ = _is_server_running(host, port)
+    if running:
         click.echo("Stopping running instance…")
         if not force:
             _pause_active_sessions(base_url)
