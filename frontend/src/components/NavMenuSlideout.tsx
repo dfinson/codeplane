@@ -34,7 +34,12 @@ export function NavMenuSlideout() {
           onClick={() => setOpen(true)}
           aria-label="Open navigation menu"
           aria-expanded={open}
-          className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          className={cn(
+            "p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md transition-colors",
+            open
+              ? "text-foreground bg-accent"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent",
+          )}
         >
           <Menu size={16} />
         </button>
