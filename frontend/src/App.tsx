@@ -10,6 +10,7 @@ import { DotBadge } from "./components/ui/badge";
 import { Spinner } from "./components/ui/spinner";
 import { Tooltip } from "./components/ui/tooltip";
 import { lazyRetry } from "./lib/lazyRetry";
+import { useIsMobile } from "./hooks/useIsMobile";
 
 const JobDetailScreen = lazyRetry(() =>
   import("./components/JobDetailScreen").then((module) => ({ default: module.JobDetailScreen })),
@@ -106,6 +107,7 @@ function RouteFallback() {
 export function App() {
   useSSE();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const toggleTerminalDrawer = useStore((s) => s.toggleTerminalDrawer);
   const terminalDrawerOpen = useStore((s) => s.terminalDrawerOpen);
   const sessionCount = useStore((s) => Object.keys(s.terminalSessions).length);
@@ -165,11 +167,11 @@ export function App() {
 
         <div className="flex items-center gap-1 opacity-[0.78]">
           <ConnectionStatusIndicator />
-          <Tooltip content={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}>
+          <Tooltip content={`Terminal${isMobile ? "" : ` (Ctrl+\`)`}${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}>
             <button
               onClick={toggleTerminalDrawer}
               aria-label="Toggle terminal"
-              title={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}
+              title={`Terminal${isMobile ? "" : ` (Ctrl+\`)`}${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}
               className={`p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md transition-colors ${
                 terminalDrawerOpen
                   ? "text-foreground bg-accent"
@@ -199,10 +201,10 @@ export function App() {
               <History size={16} />
             </Link>
           </Tooltip>
-          <Tooltip content="Settings (⌘,)">
+          <Tooltip content={isMobile ? "Settings" : "Settings (⌘,)"}>
             <Link
               to="/settings"
-              aria-label="Settings (⌘,)"
+              aria-label={isMobile ? "Settings" : "Settings (⌘,)"}
               className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
             >
               <Settings size={16} />

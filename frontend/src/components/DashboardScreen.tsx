@@ -44,7 +44,7 @@ export function DashboardScreen() {
         <Button size="sm" onClick={() => navigate("/jobs/new")}>
           <Plus size={16} />
           New Job
-          <kbd className="ml-1 rounded border border-white/20 px-1 py-px font-mono text-[10px] leading-none opacity-70">Alt+N</kbd>
+          <kbd className="ml-1 hidden sm:inline rounded border border-white/20 px-1 py-px font-mono text-[10px] leading-none opacity-70">Alt+N</kbd>
         </Button>
       </div>
       <KanbanBoard />
