@@ -380,7 +380,7 @@ class ProgressTrackingService:
                 )
 
                 try:
-                    raw = await self._utility_session.complete(prompt, timeout=10)
+                    raw = await self._utility_session.complete(prompt, timeout=30)
                     raw = raw.strip()
 
                     # Strip markdown fences if present
@@ -477,7 +477,7 @@ class ProgressTrackingService:
                 )
 
                 try:
-                    raw = await self._utility_session.complete(prompt, timeout=10)
+                    raw = await self._utility_session.complete(prompt, timeout=30)
                     raw = raw.strip()
 
                     # Strip markdown fences

@@ -27,6 +27,10 @@ export default defineConfig({
             return "diff-viewer";
           }
 
+          if (id.includes("node_modules/react-syntax-highlighter") || id.includes("node_modules/refractor") || id.includes("node_modules/prismjs")) {
+            return "syntax-highlighter";
+          }
+
           return undefined;
         },
       },
