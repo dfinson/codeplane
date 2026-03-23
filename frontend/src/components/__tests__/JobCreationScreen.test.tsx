@@ -68,7 +68,7 @@ import {
   suggestNames,
 } from "../../api/client";
 import { JobCreationScreen } from "../JobCreationScreen";
-import { useStore } from "../../store";
+import { useStore, _resetSdkInitForTesting } from "../../store";
 
 async function renderScreen() {
   // Simulate App.tsx calling initSdksAndModels on mount, so the store is
@@ -124,7 +124,8 @@ beforeEach(() => {
   } as any);
   mockNavigate.mockReset();
 
-  // Reset the store's SDK/model catalogue so each test starts fresh
+  // Reset the store's SDK/model catalogue and init guard so each test starts fresh
+  _resetSdkInitForTesting();
   useStore.setState({
     sdks: [],
     defaultSdk: null,

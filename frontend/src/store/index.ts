@@ -273,6 +273,15 @@ interface AppState {
   createTerminalSession: (opts?: { cwd?: string; jobId?: string; label?: string }) => void;
 }
 
+// Module-level singleton guard: ensures initSdksAndModels is only ever
+// in-flight once, even if called concurrently from multiple components.
+let _sdkInitPromise: Promise<void> | null = null;
+
+/** Reset the SDK init guard — for use in tests only. */
+export function _resetSdkInitForTesting() {
+  _sdkInitPromise = null;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   jobs: {},
   approvals: {},
@@ -305,18 +314,22 @@ export const useStore = create<AppState>((set, get) => ({
   setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
 
   initSdksAndModels: async () => {
-    // No-op if already loaded or a fetch is already in-flight
-    const state = get();
-    if (state.sdks.length > 0 || !state.sdksLoading) return;
-    try {
-      const r = await fetchSDKs();
-      set({ sdks: r.sdks, defaultSdk: r.default, sdksLoading: false });
-      // Pre-load models for the default SDK
-      await get().loadModelsForSdk(r.default);
-    } catch (err) {
-      console.error("Failed to fetch SDKs", err);
-      set({ sdksLoading: false });
-    }
+    // No-op if already done (success or failure)
+    if (!get().sdksLoading) return;
+    // Coalesce concurrent callers onto the same in-flight promise
+    if (_sdkInitPromise) return _sdkInitPromise;
+    _sdkInitPromise = (async () => {
+      try {
+        const r = await fetchSDKs();
+        set({ sdks: r.sdks, defaultSdk: r.default, sdksLoading: false });
+        // Pre-load models for the default SDK
+        await get().loadModelsForSdk(r.default);
+      } catch (err) {
+        console.error("Failed to fetch SDKs", err);
+        set({ sdksLoading: false });
+      }
+    })();
+    return _sdkInitPromise;
   },
 
   loadModelsForSdk: async (sdkId: string) => {
