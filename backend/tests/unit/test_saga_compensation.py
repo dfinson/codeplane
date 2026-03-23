@@ -6,13 +6,12 @@ the worktree is cleaned up (compensation).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.models.domain import Job, JobState, PermissionMode
+from backend.models.domain import JobState
 from backend.services.job_service import JobService
 
 
@@ -51,11 +50,11 @@ class TestJobCreationCompensation:
         )
 
         # Patch validate_repo to return the resolved path
-        with patch.object(svc, "validate_repo", return_value="/repos/test"):
-            with pytest.raises(Exception, match="DB write failed"):
-                await svc.create_job(repo="/repos/test", prompt="Fix the bug")
-
-        # Compensation: worktree should be cleaned up
+        with (
+            patch.object(svc, "validate_repo", return_value="/repos/test"),
+            pytest.raises(Exception, match="DB write failed"),
+        ):
+            await svc.create_job(repo="/repos/test", prompt="Fix the bug")
         git_service.remove_worktree.assert_called_once_with(
             "/repos/test", "/repos/test/.cpl-worktrees/fix-bug"
         )
@@ -82,9 +81,11 @@ class TestJobCreationCompensation:
             config=config,
         )
 
-        with patch.object(svc, "validate_repo", return_value="/repos/test"):
-            with pytest.raises(Exception, match="DB write failed"):
-                await svc.create_job(repo="/repos/test", prompt="Fix the bug")
+        with (
+            patch.object(svc, "validate_repo", return_value="/repos/test"),
+            pytest.raises(Exception, match="DB write failed"),
+        ):
+            await svc.create_job(repo="/repos/test", prompt="Fix the bug")
 
         # Both called, but original error propagates
         git_service.remove_worktree.assert_called_once()
@@ -92,7 +93,6 @@ class TestJobCreationCompensation:
     @pytest.mark.asyncio
     async def test_successful_creation_no_cleanup(self) -> None:
         """Normal job creation does not trigger compensation."""
-        now = datetime.now(UTC)
         job_repo = AsyncMock()
         job_repo.list_ids = AsyncMock(return_value=set())
         job_repo.create = AsyncMock(return_value=None)

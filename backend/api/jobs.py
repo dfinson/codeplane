@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
@@ -535,10 +536,8 @@ async def get_job_snapshot(
 
         git = GitService(config)
         ds = DiffService(git_service=git, event_bus=event_bus)
-        try:
+        with contextlib.suppress(Exception):
             diff = await ds.calculate_diff(job.worktree_path, job.base_ref)
-        except Exception:
-            pass
 
     if not diff:
         diff_events = await svc.list_events_by_job(job_id, [DomainEventKind.diff_updated])

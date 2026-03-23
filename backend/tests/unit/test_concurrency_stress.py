@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.models.db import Base, JobRow
+from backend.models.db import Base
 from backend.models.domain import Job, JobState
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.job_repo import JobRepository
@@ -148,7 +148,7 @@ class TestOptimisticLocking:
             await repo.create(_make_job("v-job2", "queued"))
             await session.commit()
 
-        for i in range(5):
+        for _i in range(5):
             async with session_factory() as session:
                 repo = JobRepository(session)
                 await repo.update_state("v-job2", "running", datetime.now(UTC))
@@ -232,10 +232,10 @@ class TestConcurrentEventAppends:
         assert len(set(db_ids)) == 20
 
         async with session_factory() as session:
-            repo = EventRepository(session)
-            events = await repo.list_by_job("ev-job", [DomainEventKind.log_line_emitted], limit=100)
+            event_repo = EventRepository(session)
+            events = await event_repo.list_by_job("ev-job", [DomainEventKind.log_line_emitted], limit=100)
         assert len(events) == 20
 
         # IDs should be monotonically increasing
-        event_ids = [e.db_id for e in events]
+        event_ids = [e.db_id for e in events if e.db_id is not None]
         assert event_ids == sorted(event_ids)

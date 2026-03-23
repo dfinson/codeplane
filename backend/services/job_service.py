@@ -337,7 +337,12 @@ class JobService:
             try:
                 await self._git.remove_worktree(resolved_repo, worktree_path)
             except Exception:
-                log.warning("compensation_worktree_cleanup_failed", job_id=job_id, worktree_path=worktree_path, exc_info=True)
+                log.warning(
+                    "compensation_worktree_cleanup_failed",
+                    job_id=job_id,
+                    worktree_path=worktree_path,
+                    exc_info=True,
+                )
             raise
         log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
         return job

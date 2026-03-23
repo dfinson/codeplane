@@ -286,6 +286,7 @@ class JobRepository(BaseRepository):
         already claimed the job.
         """
         from datetime import UTC, datetime
+
         from sqlalchemy import update
 
         stmt = (

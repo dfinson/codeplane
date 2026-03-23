@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import event as sa_event
@@ -137,8 +137,8 @@ class TestDeadLetterRetry:
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         """Simulate event persist failure then success on retry."""
-        from backend.models.events import DomainEvent, DomainEventKind
         from backend.lifespan import _persist_event_with_retry
+        from backend.models.events import DomainEvent, DomainEventKind
 
         event = DomainEvent(
             event_id="test-evt-1",
@@ -164,9 +164,10 @@ class TestDeadLetterRetry:
     ) -> None:
         """Event persist retries on SQLite lock errors."""
         from sqlalchemy.exc import OperationalError
+
+        from backend.lifespan import _persist_event_with_retry
         from backend.models.events import DomainEvent, DomainEventKind
         from backend.persistence.event_repo import EventRepository
-        from backend.lifespan import _persist_event_with_retry
 
         event = DomainEvent(
             event_id="test-evt-retry",

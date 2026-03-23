@@ -115,7 +115,7 @@ def _init_event_infrastructure(
                 event, attempt = await asyncio.wait_for(
                     dead_letter.get(), timeout=_DEAD_LETTER_RETRY_INTERVAL_S
                 )
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 return
