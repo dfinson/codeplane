@@ -135,6 +135,7 @@ export function App() {
     { enableOnFormTags: true, preventDefault: true, useKey: true },
     [terminalDrawerOpen, toggleTerminalDrawer],
   );
+  useHotkeys("alt+j", () => navigate("/"), { preventDefault: true });
   useHotkeys("alt+n", () => navigate("/jobs/new"), { preventDefault: true });
   useHotkeys("alt+a", () => navigate("/analytics"), { preventDefault: true });
   useHotkeys("ctrl+comma,meta+comma", () => navigate("/settings"), {

@@ -670,7 +670,20 @@ async def get_job_telemetry(
         "premiumRequests": float(summary.get("premium_requests", 0)),
     }
     if quota_snapshots is not None:
-        result["quotaSnapshots"] = quota_snapshots
+        # Convert snake_case keys from DB JSON to camelCase for the frontend
+        result["quotaSnapshots"] = {
+            resource: {
+                "usedRequests": snap.get("used_requests", 0),
+                "entitlementRequests": snap.get("entitlement_requests", 0),
+                "remainingPercentage": snap.get("remaining_percentage", 0),
+                "overage": snap.get("overage", 0),
+                "overageAllowed": snap.get("overage_allowed", False),
+                "isUnlimited": snap.get("is_unlimited", False),
+                "resetDate": snap.get("reset_date", ""),
+            }
+            for resource, snap in quota_snapshots.items()
+            if isinstance(snap, dict)
+        }
 
     return result
 

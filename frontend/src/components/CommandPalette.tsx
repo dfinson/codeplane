@@ -12,6 +12,7 @@ import {
   TerminalSquare,
   ArrowRight,
   BarChart3,
+  Columns3,
 } from "lucide-react";
 
 interface PaletteItem {
@@ -48,6 +49,14 @@ export function CommandPalette() {
 
   const staticItems: PaletteItem[] = useMemo(
     () => [
+      {
+        id: "jobs",
+        label: "Jobs",
+        description: "Kanban board overview",
+        icon: <Columns3 className="h-4 w-4" />,
+        action: () => navigate("/"),
+        keywords: ["kanban", "board", "dashboard", "home", "overview"],
+      },
       {
         id: "new-job",
         label: "New Job",
