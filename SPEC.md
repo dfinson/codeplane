@@ -2351,13 +2351,27 @@ All errors return a consistent envelope:
 
 Approval gates intercept risky operations before they execute. This ensures the operator maintains control over destructive or irreversible actions.
 
-### 18.2 Permission Modes
+### 18.2 Hard-Gated Commands
+
+Certain shell commands are **always** routed to the operator for approval, regardless of the active permission mode — even in `auto` mode. These commands are irreversible or bypass CodePlane's managed workflows:
+
+| Pattern | Reason |
+|---------|--------|
+| `git merge …` | Bypasses CodePlane merge controls |
+| `git pull …` | Implicitly merges remote changes |
+| `git rebase …` | Rewrites history / merges changes |
+| `git cherry-pick …` | Merges a specific commit |
+| `git reset --hard …` | Destructive — discards uncommitted work |
+
+Hard-gated commands return `ask` from the permission policy. The agent system prompt also instructs the agent not to run these commands; the hard gate is a defence-in-depth backstop.
+
+### 18.3 Permission Modes
 
 CodePlane supports three permission modes that control how the SDK's permission requests are handled.
 
 | Mode | Behavior |
 |------|----------|
-| `auto` (default) | Full trust: auto-approve **all** operations including reads, writes, shells, MCP tools, and URL fetches. The agent operates without any approval interruptions. |
+| `auto` (default) | Full trust: auto-approve **all** operations including reads, writes, shells, MCP tools, and URL fetches. The agent operates without any approval interruptions. **Exception:** hard-gated commands (§18.2) still require approval. |
 | `read_only` | Allow reads within the worktree and read-only shell commands (grep, find, ls, cat, etc.). Deny all writes, URL fetches, and mutating operations. |
 | `approval_required` | Auto-approve reads and read-only shell commands. Require operator approval for all writes, non-read-only shells, URL fetches, mutating MCP tools, and custom tools. |
 
@@ -2426,7 +2440,7 @@ runtime:
   permission_mode: auto
 ```
 
-### 18.3 Delegation to the Agent Runtime
+### 18.4 Delegation to the Agent Runtime
 
 The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's permission policy then evaluates the request against the active mode to decide whether to auto-approve, deny, or route to the operator.
 
@@ -2444,7 +2458,7 @@ CodePlane's role is to:
 
 The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the CodePlane level. In `auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
 
-### 18.4 Approval Request Object
+### 18.5 Approval Request Object
 
 ```json
 {
@@ -2458,11 +2472,12 @@ The per-repo `protected_paths` list (Section 10.3) is evaluated by the permissio
 
 The adapter normalizes whichever fields the SDK provides into this common shape. Fields the SDK doesn't supply are omitted.
 
-### 18.5 Approval Flow
+### 18.6 Approval Flow
 
 1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
 2. Adapter evaluates the permission policy:
-   - **`auto` mode:** returns `approved` immediately for all operations — SDK proceeds, no event emitted
+   - **Hard-gated commands (§18.2):** always returns `ask` — routes to operator regardless of mode
+   - **`auto` mode:** returns `approved` immediately for all non-hard-gated operations — SDK proceeds, no event emitted
    - **`read_only` mode:** evaluates request kind; denies writes, non-read-only shells, URL fetches, and mutating MCP calls
    - **`approval_required` mode:** evaluates request kind; auto-approves reads and read-only shells, routes everything else to operator
 3. If auto-approved: SDK proceeds immediately, no operator interaction
@@ -2482,7 +2497,7 @@ The adapter normalizes whichever fields the SDK provides into this common shape.
 
 The SDK's `on_permission_request` callback is **async** — it blocks the SDK at the callback level while waiting for the operator's response. This ensures the action does not proceed until approved.
 
-### 18.6 Approval Timeout
+### 18.7 Approval Timeout
 
 Approval requests do not expire automatically. The job remains in `waiting_for_approval` state indefinitely until the operator responds. This is intentional for a single-operator tool.
 

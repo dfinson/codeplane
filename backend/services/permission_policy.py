@@ -32,6 +32,21 @@ class PolicyDecision(StrEnum):
     deny = "deny"
 
 
+# ---------------------------------------------------------------------------
+# Hard-gated shell commands — ALWAYS require operator approval regardless of
+# permission mode.  These are irreversible or bypass CodePlane controls
+# (e.g. merging outside the managed merge flow).
+# ---------------------------------------------------------------------------
+_HARD_GATED_SHELL_RE = re.compile(
+    r"(?i)"
+    # git merge / pull / rebase / cherry-pick — bypass CodePlane merge controls
+    r"(?:^\s*git\s+(?:merge|pull|rebase|cherry-pick)\b)"
+    # git reset --hard — destructive history rewrite
+    r"|(?:^\s*git\s+reset\s+.*--hard\b)"
+    r"|(?:^\s*git\s+reset\s+--hard\b)",
+)
+
+
 # Read-only shell commands that are always safe.
 # Covers Unix (grep, ls, cat …), Windows cmd (dir, findstr, where …),
 # and PowerShell cmdlets (Get-ChildItem, Select-String …).
@@ -206,6 +221,11 @@ def _evaluate(
     read_only: bool | None = None,
 ) -> PolicyDecision:
     """Core dispatcher: look up (mode, kind) in the rule table and resolve."""
+    # Hard-gated commands always require approval, regardless of mode.
+    if kind == "shell" and full_command_text and _HARD_GATED_SHELL_RE.search(full_command_text):
+        log.info("hard_gated_command", command=full_command_text, mode=mode)
+        return _ASK
+
     rule = _RULES.get((mode, kind))
     if rule is None:
         default = _MODE_DEFAULTS.get(mode, _ASK)
