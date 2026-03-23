@@ -351,6 +351,7 @@ export function AnalyticsScreen() {
           icon={TrendingUp}
           label="Premium Req"
           value={String(Math.round(overview.totalPremiumRequests))}
+          sub={overview.totalPremiumRequests === 0 ? "* unlimited seats not metered" : undefined}
         />
       </div>
 
