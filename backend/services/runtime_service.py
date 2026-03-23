@@ -119,13 +119,11 @@ _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
 # Default prompts for post-completion verification and self-review turns
 DEFAULT_VERIFY_PROMPT = (
-    "You are now running a post-task verification pass as per standard instructions. "
-    "Start by briefly stating your intent — e.g. 'Running lint and tests to verify "
-    "my changes.' — so it is visible in the conversation. "
+    "You are now running a post-task verification pass. "
+    "Start with a single short sentence announcing this — e.g. 'Running lint and tests.' "
     "Then check whether any source files or documentation were modified during this "
     "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
-    "If no files were modified — for example, the task was read-only or an "
-    "audit — state that there is nothing to verify and stop. "
+    "If no files were modified, state that there is nothing to verify and stop. "
     "Only if files were changed: identify and run this project's test suite, "
     "linter, and type checker. Stop as soon as everything passes — you do not "
     "need to exhaust the maximum number of allowed turns. If something fails, "
@@ -133,28 +131,27 @@ DEFAULT_VERIFY_PROMPT = (
     "dismiss them as pre-existing or flaky. Also check that you haven't made "
     "unrelated changes outside the scope of the original task; revert any that "
     "you find. "
-    "Keep verification output brief. Your final message must be focused on the "
-    "original task: summarise what was built or changed and why. Mention the "
-    "verification outcome (e.g. 'all checks passed') as a single sentence, not "
-    "as the main topic."
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the verification outcome "
+    "as one appended sentence (e.g. 'All checks pass.' or 'Fixed a failing test "
+    "in foo.py.'). The checks are a footnote — the task summary is the headline."
 )
 
 DEFAULT_SELF_REVIEW_PROMPT = (
-    "You are now running a post-task self-review pass as per standard instructions. "
-    "Start by briefly stating your intent — e.g. 'Reviewing my changes for "
-    "correctness.' — so it is visible in the conversation. "
+    "You are now running a post-task self-review pass. "
+    "Start with a single short sentence announcing this — e.g. 'Reviewing my changes.' "
     "Then check whether any source files or documentation were modified during this "
     "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
-    "If no files were modified — for example, the task was read-only or an "
-    "audit — state that there is nothing to review and stop. "
+    "If no files were modified, state that there is nothing to review and stop. "
     "Only if files were changed: look at the full diff and check for missed edge "
     "cases, incomplete implementations, leftover debug code, broken imports, dead "
     "code, backwards-compatibility shims or fallback paths that may no longer be "
     "needed, and inconsistencies with the surrounding codebase. If you find "
     "issues, fix them. "
-    "Keep self-review output brief. Your final message must be focused on the "
-    "original task: summarise what was built or changed and why. Mention the "
-    "review outcome as a single sentence, not as the main topic."
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the review outcome as one "
+    "appended sentence (e.g. 'Self-review clean.' or 'Removed a leftover debug "
+    "print.'). The review is a footnote — the task summary is the headline."
 )
 
 
