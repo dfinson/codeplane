@@ -217,8 +217,16 @@ def up(
 
     app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
 
+    # Stash banner info so lifespan can print it after services are ready
+    app.state.banner_args = {
+        "host": host,
+        "port": port,
+        "dev": dev,
+        "tunnel_url": tunnel_origin,
+        "password": effective_password,
+    }
+
     try:
-        _print_startup_banner(host, port, dev, tunnel_origin, effective_password)
         uvicorn.run(app, host=host, port=port)
     finally:
         if tunnel_handle is not None:

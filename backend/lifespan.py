@@ -434,6 +434,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.dishka_container = container
 
+    # Print the startup banner now that all services are ready
+    banner_args = getattr(app.state, "banner_args", None)
+    if banner_args:
+        from backend.cli import _print_startup_banner
+
+        _print_startup_banner(**banner_args)
+
     yield
 
     # Shutdown in reverse initialisation order

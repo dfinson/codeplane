@@ -123,14 +123,13 @@ class TestUpCommand:
     def test_up_host_0000_auto_generates_password(self) -> None:
         """--host 0.0.0.0 without explicit password should auto-generate one."""
         runner = CliRunner()
-        with patch("backend.cli.run_migrations"), patch("backend.cli.uvicorn.run"):
+        with patch("backend.cli.run_migrations"), patch("backend.cli.uvicorn.run") as mock_run:
             result = runner.invoke(cli, ["up", "--host", "0.0.0.0", "--skip-preflight"])
             if result.exit_code == 0:
-                # The banner should contain "Password:" (auto-generated)
-                assert (
-                    "password" in result.output.lower()
-                    or "auto-enabled" in (result.output + (result.stderr or "")).lower()
-                )
+                # The banner now prints inside lifespan; verify the app was
+                # created with an auto-generated password stashed for it.
+                app = mock_run.call_args[0][0]
+                assert getattr(app.state, "banner_args", {}).get("password")
 
     def test_up_host_0000_with_explicit_password_allowed(self) -> None:
         """--host 0.0.0.0 --password mypass should work without issue."""
