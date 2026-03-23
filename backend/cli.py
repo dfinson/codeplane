@@ -145,6 +145,13 @@ def up(
     cloudflare_hostname = _env("CPL_CLOUDFLARE_HOSTNAME")
     tunnel_name = tunnel_name or _env("CPL_DEVTUNNEL_NAME")
 
+    # Password logic: block unsafe combos before checking provider availability
+    if remote and no_password:
+        click.secho(
+            "ERROR: --remote with --no-password is not allowed. Remote access requires authentication.", fg="red"
+        )
+        raise SystemExit(1)
+
     if remote:
         error = validate_remote_provider(
             remote_provider,
@@ -154,13 +161,6 @@ def up(
         if error:
             click.secho(error, fg="red", err=True)
             raise SystemExit(1)
-
-    # Password logic: auto-generate for tunnel, allow explicit, block unsafe combos
-    if remote and no_password:
-        click.secho(
-            "ERROR: --remote with --no-password is not allowed. Remote access requires authentication.", fg="red"
-        )
-        raise SystemExit(1)
 
     # Password priority: --password flag > CPL_DEVTUNNEL_PASSWORD env/dotenv > auto-generate for tunnel
     effective_password: str | None = password
