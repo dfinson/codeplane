@@ -178,9 +178,7 @@ class TestTrustJob:
     async def test_trust_job_skips_explicit_approvals(self, svc: ApprovalService) -> None:
         """git reset --hard (requires_explicit_approval=True) must NOT be auto-resolved by trust."""
         a_normal = await svc.create_request("job-1", "Normal action?")
-        a_explicit = await svc.create_request(
-            "job-1", "git reset --hard HEAD", requires_explicit_approval=True
-        )
+        a_explicit = await svc.create_request("job-1", "git reset --hard HEAD", requires_explicit_approval=True)
         resolved = await svc.trust_job("job-1")
 
         # Only the normal approval should have been auto-resolved

@@ -112,9 +112,7 @@ def _init_event_infrastructure(
         """Background task: retry persisting events that failed initially."""
         while True:
             try:
-                event, attempt = await asyncio.wait_for(
-                    dead_letter.get(), timeout=_DEAD_LETTER_RETRY_INTERVAL_S
-                )
+                event, attempt = await asyncio.wait_for(dead_letter.get(), timeout=_DEAD_LETTER_RETRY_INTERVAL_S)
             except TimeoutError:
                 continue
             except asyncio.CancelledError:

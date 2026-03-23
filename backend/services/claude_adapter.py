@@ -193,8 +193,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                     )
                     return PermissionResultDeny(
                         message=(
-                            "git reset --hard requires operator approval"
-                            " but no approval infrastructure is available"
+                            "git reset --hard requires operator approval but no approval infrastructure is available"
                         )
                     )
 
@@ -354,9 +353,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and job_id not in self._job_main_models:
             self._job_main_models[job_id] = model
-            self._schedule_db_write(
-                self._db_write("set_model", job_id=job_id, model=model)
-            )
+            self._schedule_db_write(self._db_write("set_model", job_id=job_id, model=model))
 
         for block in content_blocks:
             if isinstance(block, TextBlock):
@@ -480,25 +477,29 @@ class ClaudeAdapter(AgentAdapterInterface):
             }
             tel.tool_duration.record(duration_ms, attrs)
 
-            self._schedule_db_write(self._db_write(
-                "increment",
-                job_id=job_id,
-                tool_call_count=1,
-                tool_failure_count=0 if success else 1,
-                total_tool_duration_ms=int(duration_ms),
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "increment",
+                    job_id=job_id,
+                    tool_call_count=1,
+                    tool_failure_count=0 if success else 1,
+                    total_tool_duration_ms=int(duration_ms),
+                )
+            )
 
             job_start = self._job_start_times.get(job_id, time.monotonic())
             offset = time.monotonic() - job_start
-            self._schedule_db_write(self._db_write(
-                "insert_span",
-                job_id=job_id,
-                span_type="tool",
-                name=tool_name,
-                started_at=round(offset, 2),
-                duration_ms=duration_ms,
-                attrs={"success": success},
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "insert_span",
+                    job_id=job_id,
+                    span_type="tool",
+                    name=tool_name,
+                    started_at=round(offset, 2),
+                    duration_ms=duration_ms,
+                    attrs={"success": success},
+                )
+            )
 
     def _process_result_message(
         self,
@@ -532,36 +533,40 @@ class ClaudeAdapter(AgentAdapterInterface):
             tel.cost_usd.add(float(total_cost_usd), attrs)
             tel.llm_duration.record(float(duration_ms), {**attrs, "is_subagent": False})
 
-            self._schedule_db_write(self._db_write(
-                "increment",
-                job_id=job_id,
-                input_tokens=int(input_tokens),
-                output_tokens=int(output_tokens),
-                cache_read_tokens=int(cache_read),
-                cache_write_tokens=int(cache_write),
-                total_cost_usd=float(total_cost_usd),
-                llm_call_count=1,
-                total_llm_duration_ms=int(duration_ms),
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "increment",
+                    job_id=job_id,
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                    cache_read_tokens=int(cache_read),
+                    cache_write_tokens=int(cache_write),
+                    total_cost_usd=float(total_cost_usd),
+                    llm_call_count=1,
+                    total_llm_duration_ms=int(duration_ms),
+                )
+            )
 
             job_start = self._job_start_times.get(job_id, time.monotonic())
             offset = time.monotonic() - job_start
-            self._schedule_db_write(self._db_write(
-                "insert_span",
-                job_id=job_id,
-                span_type="llm",
-                name=model or "claude",
-                started_at=round(offset, 2),
-                duration_ms=float(duration_ms),
-                attrs={
-                    "input_tokens": int(input_tokens),
-                    "output_tokens": int(output_tokens),
-                    "cache_read_tokens": int(cache_read),
-                    "cache_write_tokens": int(cache_write),
-                    "cost": float(total_cost_usd),
-                    "is_subagent": False,
-                },
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "insert_span",
+                    job_id=job_id,
+                    span_type="llm",
+                    name=model or "claude",
+                    started_at=round(offset, 2),
+                    duration_ms=float(duration_ms),
+                    attrs={
+                        "input_tokens": int(input_tokens),
+                        "output_tokens": int(output_tokens),
+                        "cache_read_tokens": int(cache_read),
+                        "cache_write_tokens": int(cache_write),
+                        "cost": float(total_cost_usd),
+                        "is_subagent": False,
+                    },
+                )
+            )
 
         self._enqueue_log(
             session_id,

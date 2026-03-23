@@ -618,24 +618,28 @@ async def get_job_telemetry(
     for span in spans:
         attrs = span.get("attrs", {})
         if span.get("span_type") == "tool":
-            tool_calls.append({
-                "name": span["name"],
-                "durationMs": float(span.get("duration_ms", 0)),
-                "success": attrs.get("success", True),
-                "offsetSec": float(span.get("started_at", 0)),
-            })
+            tool_calls.append(
+                {
+                    "name": span["name"],
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "success": attrs.get("success", True),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
         elif span.get("span_type") == "llm":
-            llm_calls.append({
-                "model": span["name"],
-                "inputTokens": attrs.get("input_tokens", 0),
-                "outputTokens": attrs.get("output_tokens", 0),
-                "cacheReadTokens": attrs.get("cache_read_tokens", 0),
-                "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
-                "cost": attrs.get("cost", 0),
-                "durationMs": float(span.get("duration_ms", 0)),
-                "isSubagent": attrs.get("is_subagent", False),
-                "offsetSec": float(span.get("started_at", 0)),
-            })
+            llm_calls.append(
+                {
+                    "model": span["name"],
+                    "inputTokens": attrs.get("input_tokens", 0),
+                    "outputTokens": attrs.get("output_tokens", 0),
+                    "cacheReadTokens": attrs.get("cache_read_tokens", 0),
+                    "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
+                    "cost": attrs.get("cost", 0),
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "isSubagent": attrs.get("is_subagent", False),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
 
     result: dict[str, object] = {
         "available": True,

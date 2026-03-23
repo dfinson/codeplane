@@ -261,8 +261,10 @@ def _evaluate(
     # Hard-gated commands always require approval, regardless of mode or trust level.
     # _HARD_GATED_SHELL_RE covers merge/pull/rebase/cherry-pick and simple git reset --hard.
     # is_git_reset_hard() additionally catches compound commands (e.g. cd /x && git reset --hard).
-    if kind == "shell" and full_command_text and (
-        _HARD_GATED_SHELL_RE.search(full_command_text) or is_git_reset_hard(full_command_text)
+    if (
+        kind == "shell"
+        and full_command_text
+        and (_HARD_GATED_SHELL_RE.search(full_command_text) or is_git_reset_hard(full_command_text))
     ):
         log.info("hard_gated_command", command=full_command_text, mode=mode)
         return _ASK

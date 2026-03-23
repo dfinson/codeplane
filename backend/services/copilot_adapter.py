@@ -382,37 +382,41 @@ class CopilotAdapter(AgentAdapterInterface):
         tel.llm_duration.record(duration_ms, {**attrs, "is_subagent": is_subagent})
 
         # SQLite summary increment
-        self._schedule_db_write(self._db_write(
-            "increment",
-            job_id=job_id,
-            input_tokens=input_toks,
-            output_tokens=output_toks,
-            cache_read_tokens=cache_read,
-            cache_write_tokens=cache_write,
-            total_cost_usd=cost,
-            llm_call_count=1,
-            total_llm_duration_ms=int(duration_ms),
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "increment",
+                job_id=job_id,
+                input_tokens=input_toks,
+                output_tokens=output_toks,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                total_cost_usd=cost,
+                llm_call_count=1,
+                total_llm_duration_ms=int(duration_ms),
+            )
+        )
 
         # SQLite span detail
         start_time = self._job_start_times.get(job_id, _time.monotonic())
         offset = _time.monotonic() - start_time
-        self._schedule_db_write(self._db_write(
-            "insert_span",
-            job_id=job_id,
-            span_type="llm",
-            name=actual_model or "unknown",
-            started_at=round(offset, 2),
-            duration_ms=duration_ms,
-            attrs={
-                "input_tokens": input_toks,
-                "output_tokens": output_toks,
-                "cache_read_tokens": cache_read,
-                "cache_write_tokens": cache_write,
-                "cost": cost,
-                "is_subagent": is_subagent,
-            },
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "insert_span",
+                job_id=job_id,
+                span_type="llm",
+                name=actual_model or "unknown",
+                started_at=round(offset, 2),
+                duration_ms=duration_ms,
+                attrs={
+                    "input_tokens": input_toks,
+                    "output_tokens": output_toks,
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
+                    "cost": cost,
+                    "is_subagent": is_subagent,
+                },
+            )
+        )
 
         # Capture Copilot quota snapshots if present
         raw_snapshots = getattr(data, "quota_snapshots", None)
@@ -438,9 +442,13 @@ class CopilotAdapter(AgentAdapterInterface):
                 tel.quota_entitlement_gauge.set(entitlement, {"job_id": job_id, "sdk": "copilot", "resource": key})
                 tel.quota_remaining_gauge.set(remaining, {"job_id": job_id, "sdk": "copilot", "resource": key})
 
-            self._schedule_db_write(self._db_write(
-                "set_quota", job_id=job_id, quota_json=_json.dumps(parsed),
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "set_quota",
+                    job_id=job_id,
+                    quota_json=_json.dumps(parsed),
+                )
+            )
 
     def _handle_tool_start(self, data: Any, job_id: str) -> None:
         tool_id = data.tool_call_id or ""
@@ -492,25 +500,29 @@ class CopilotAdapter(AgentAdapterInterface):
         tel.tool_duration.record(dur, attrs)
 
         # SQLite writes
-        self._schedule_db_write(self._db_write(
-            "increment",
-            job_id=job_id,
-            tool_call_count=1,
-            tool_failure_count=0 if success else 1,
-            total_tool_duration_ms=int(dur),
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "increment",
+                job_id=job_id,
+                tool_call_count=1,
+                tool_failure_count=0 if success else 1,
+                total_tool_duration_ms=int(dur),
+            )
+        )
 
         job_start = self._job_start_times.get(job_id, _time.monotonic())
         offset = _time.monotonic() - job_start
-        self._schedule_db_write(self._db_write(
-            "insert_span",
-            job_id=job_id,
-            span_type="tool",
-            name=resolved_name,
-            started_at=round(offset, 2),
-            duration_ms=dur,
-            attrs={"success": success},
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "insert_span",
+                job_id=job_id,
+                span_type="tool",
+                name=resolved_name,
+                started_at=round(offset, 2),
+                duration_ms=dur,
+                attrs={"success": success},
+            )
+        )
 
     def _handle_context_changed(self, data: Any, job_id: str) -> None:
         from backend.services import telemetry as tel
@@ -519,9 +531,13 @@ class CopilotAdapter(AgentAdapterInterface):
         attrs = {"job_id": job_id, "sdk": "copilot"}
         tel.context_tokens_gauge.set(current, attrs)
 
-        self._schedule_db_write(self._db_write(
-            "set_context", job_id=job_id, current_tokens=current,
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "set_context",
+                job_id=job_id,
+                current_tokens=current,
+            )
+        )
 
     def _handle_compaction(self, data: Any, job_id: str) -> None:
         from backend.services import telemetry as tel
@@ -532,15 +548,24 @@ class CopilotAdapter(AgentAdapterInterface):
         tel.compactions_counter.add(1, attrs)
         tel.tokens_compacted.add(max(0, pre - post), attrs)
 
-        self._schedule_db_write(self._db_write(
-            "increment", job_id=job_id, compactions=1, tokens_compacted=max(0, pre - post),
-        ))
+        self._schedule_db_write(
+            self._db_write(
+                "increment",
+                job_id=job_id,
+                compactions=1,
+                tokens_compacted=max(0, pre - post),
+            )
+        )
 
         if post:
             tel.context_tokens_gauge.set(post, attrs)
-            self._schedule_db_write(self._db_write(
-                "set_context", job_id=job_id, current_tokens=post,
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "set_context",
+                    job_id=job_id,
+                    current_tokens=post,
+                )
+            )
 
     # --- Log emission ---
 
@@ -788,34 +813,22 @@ class CopilotAdapter(AgentAdapterInterface):
                 elif kind_str == "session.truncation":
                     if data.token_limit:
                         window = int(data.token_limit)
-                        tel.context_window_gauge.set(
-                            window, {"job_id": job_id, "sdk": "copilot"}
-                        )
-                        self._schedule_db_write(
-                            self._db_write("set_context", job_id=job_id, window_size=window)
-                        )
+                        tel.context_window_gauge.set(window, {"job_id": job_id, "sdk": "copilot"})
+                        self._schedule_db_write(self._db_write("set_context", job_id=job_id, window_size=window))
                 elif kind_str == "session.model_change":
                     if data.new_model:
                         self._job_main_models[job_id] = data.new_model
-                        self._schedule_db_write(
-                            self._db_write("set_model", job_id=job_id, model=data.new_model)
-                        )
+                        self._schedule_db_write(self._db_write("set_model", job_id=job_id, model=data.new_model))
                 elif kind_str == "assistant.message":
                     tel.messages_counter.add(1, {"job_id": job_id, "sdk": "copilot", "role": "agent"})
-                    self._schedule_db_write(
-                        self._db_write("increment", job_id=job_id, agent_messages=1)
-                    )
+                    self._schedule_db_write(self._db_write("increment", job_id=job_id, agent_messages=1))
                 elif kind_str == "user.message":
                     tel.messages_counter.add(1, {"job_id": job_id, "sdk": "copilot", "role": "operator"})
-                    self._schedule_db_write(
-                        self._db_write("increment", job_id=job_id, operator_messages=1)
-                    )
+                    self._schedule_db_write(self._db_write("increment", job_id=job_id, operator_messages=1))
                 elif kind_str == "session.shutdown":
                     total_pr = getattr(data, "total_premium_requests", None)
                     if data and total_pr is not None:
-                        tel.premium_requests_counter.add(
-                            float(total_pr), {"job_id": job_id, "sdk": "copilot"}
-                        )
+                        tel.premium_requests_counter.add(float(total_pr), {"job_id": job_id, "sdk": "copilot"})
                         self._schedule_db_write(
                             self._db_write("increment", job_id=job_id, premium_requests=float(total_pr))
                         )
