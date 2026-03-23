@@ -16,7 +16,7 @@ import dataclasses
 import enum
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
@@ -745,12 +745,86 @@ class RuntimeService:
                     )
                 except Exception:
                     log.warning("metrics_persist_failed", job_id=job_id, exc_info=True)
+
+            # --- Store post-completion artifacts (telemetry, plan, approvals) ---
+            await self._store_post_completion_artifacts(job_id, tel_snapshot)
+
             heartbeat_task.cancel()
             self._heartbeat_tasks.pop(job_id, None)
             if self._progress_tracking is not None:
                 self._progress_tracking.stop_tracking(job_id)
                 await self._progress_tracking.finalize_plan_steps(job_id)
             await self._cleanup_job_state(job_id)
+
+    async def _store_post_completion_artifacts(
+        self,
+        job_id: str,
+        tel_snapshot: Any | None,
+    ) -> None:
+        """Persist internal state (telemetry, plan, approvals) as downloadable artifacts."""
+        try:
+            # Look up job slug for human-friendly artifact names
+            slug = ""
+            try:
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
+                    job = await svc.get_job(job_id)
+                if job is not None:
+                    slug = (job.worktree_name or job.title or "").strip()
+            except Exception:
+                pass
+
+            async with self._session_factory() as session:
+                from backend.persistence.artifact_repo import ArtifactRepository
+                from backend.services.artifact_service import ArtifactService
+
+                artifact_svc = ArtifactService(ArtifactRepository(session))
+
+                # Telemetry report
+                if tel_snapshot is not None:
+                    try:
+                        await artifact_svc.store_telemetry_report(
+                            job_id, tel_snapshot.to_dict(), slug=slug,
+                        )
+                    except Exception:
+                        log.debug("telemetry_artifact_failed", job_id=job_id, exc_info=True)
+
+                # Agent plan steps (from in-memory progress tracker)
+                if self._progress_tracking is not None:
+                    steps = self._progress_tracking.get_plan_steps(job_id)
+                    if steps:
+                        try:
+                            await artifact_svc.store_agent_plan(job_id, steps, slug=slug)
+                        except Exception:
+                            log.debug("plan_artifact_failed", job_id=job_id, exc_info=True)
+
+                # Approval history
+                try:
+                    from backend.persistence.approval_repo import ApprovalRepository
+
+                    approval_repo = ApprovalRepository(session)
+                    approvals = await approval_repo.list_for_job(job_id)
+                    if approvals:
+                        approval_dicts = [
+                            {
+                                "id": a.id,
+                                "description": a.description,
+                                "proposed_action": a.proposed_action,
+                                "requested_at": a.requested_at.isoformat(),
+                                "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+                                "resolution": a.resolution,
+                            }
+                            for a in approvals
+                        ]
+                        await artifact_svc.store_approval_history(
+                            job_id, approval_dicts, slug=slug,
+                        )
+                except Exception:
+                    log.debug("approval_artifact_failed", job_id=job_id, exc_info=True)
+
+                await session.commit()
+        except Exception:
+            log.warning("post_completion_artifacts_failed", job_id=job_id, exc_info=True)
 
     def _start_snapshot_task(self, job_id: str) -> None:
         if self._shutting_down:

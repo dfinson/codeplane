@@ -289,6 +289,10 @@ class ProgressTrackingService:
         """Record terminal outcome (``succeeded`` / ``failed`` / ``canceled``)."""
         self._plan_terminal_state[job_id] = outcome
 
+    def get_plan_steps(self, job_id: str) -> list[dict[str, str]]:
+        """Return the last known plan steps for a job (may be empty)."""
+        return list(self._plan_last_steps.get(job_id, []))
+
     # -- Plan finalization ---------------------------------------------------
 
     async def finalize_plan_steps(self, job_id: str) -> None:
