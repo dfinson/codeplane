@@ -51,9 +51,7 @@ class TestMergeStatusRetry:
     """_update_merge_status retries on SQLite lock errors."""
 
     @pytest.mark.asyncio
-    async def test_direct_update_succeeds(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_direct_update_succeeds(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Normal merge status update works without retry."""
         async with session_factory() as session:
             repo = JobRepository(session)
@@ -67,9 +65,7 @@ class TestMergeStatusRetry:
         assert job.merge_status == "merged"
 
     @pytest.mark.asyncio
-    async def test_concurrent_merge_status_updates(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_concurrent_merge_status_updates(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Multiple concurrent merge_status updates are serialized by SQLite."""
         statuses = ["merged", "conflict", "not_merged", "merged", "conflict"]
 
@@ -89,9 +85,7 @@ class TestMergeStatusRetry:
         assert job.merge_status in statuses
 
     @pytest.mark.asyncio
-    async def test_merge_status_with_pr_url(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_merge_status_with_pr_url(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Merge status update with PR URL persists both fields."""
         async with session_factory() as session:
             repo = JobRepository(session)

@@ -46,28 +46,52 @@ class TunnelHandle:
     def close(self) -> None:
         if self.watchdog is not None:
             self.watchdog.stop()
+            with self.watchdog._lock:
+                watchdog_proc = self.watchdog.proc
+        else:
+            watchdog_proc = None
+        # Terminate all unique process references to avoid orphans from mid-restart races
+        procs_to_kill: set[subprocess.Popen[str]] = set()
         if self.proc is not None:
-            self.proc.terminate()
-        if self.watchdog is not None and self.watchdog.proc is not self.proc:
-            self.watchdog.proc.terminate()
+            procs_to_kill.add(self.proc)
+        if watchdog_proc is not None:
+            procs_to_kill.add(watchdog_proc)
+        for p in procs_to_kill:
+            p.terminate()
 
 
 class TunnelWatchdog:
     """Restart a tunnel host process when the remote relay stops forwarding."""
 
-    _CHECK_INTERVAL = 10
+    _CHECK_INTERVAL: float = 10
     _FAIL_THRESHOLD = 2
     _HTTP_TIMEOUT = 5
     _RESTART_ATTEMPTS = 3
     _RESTART_GRACE_PERIOD = 2
     _RECOVERY_TIMEOUT = 15
+    _MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB cap on captured process output
+    _GIVEUP_COOLDOWN: float = 60  # seconds before reattempting after all restart attempts fail
+    _RELAY_CHECK_FREQUENCY = 5  # verify tunnel relay URL every N health checks
+    _BACKOFF_BASE = 5  # exponential backoff base between restart attempts (seconds)
 
-    def __init__(self, *, tunnel_url: str, restart_command: list[str], proc: subprocess.Popen[str], label: str) -> None:
+    def __init__(
+        self,
+        *,
+        tunnel_url: str,
+        restart_command: list[str],
+        proc: subprocess.Popen[str],
+        label: str,
+        local_port: int | None = None,
+        restart_env: dict[str, str] | None = None,
+    ) -> None:
         self.tunnel_url = tunnel_url
         self.restart_command = restart_command
+        self.restart_env = restart_env
         self.proc = proc
         self.label = label
+        self._local_port = local_port
         self._stop_event = __import__("threading").Event()
+        self._lock = __import__("threading").Lock()
         self._thread: Any = None
 
     def start(self) -> None:
@@ -81,11 +105,15 @@ class TunnelWatchdog:
         if self._thread is not None:
             self._thread.join(timeout=5)
 
-    def _health_ok(self) -> bool:
+    def _health_ok(self, *, use_tunnel_url: bool = False) -> bool:
         import urllib.request
 
+        if use_tunnel_url or not self._local_port:
+            url = f"{self.tunnel_url}/api/health"
+        else:
+            url = f"http://127.0.0.1:{self._local_port}/api/health"
         try:
-            req = urllib.request.Request(f"{self.tunnel_url}/api/health", method="GET")
+            req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=self._HTTP_TIMEOUT) as resp:  # noqa: S310
                 return bool(resp.status == 200)
         except Exception:
@@ -110,7 +138,7 @@ class TunnelWatchdog:
         if proc.stdout is None:
             return ""
         with contextlib.suppress(Exception):
-            return proc.stdout.read().strip()
+            return proc.stdout.read(self._MAX_OUTPUT_BYTES).strip()
         return ""
 
     def _wait_for_recovery(self) -> bool:
@@ -128,7 +156,15 @@ class TunnelWatchdog:
         log.debug("tunnel_watchdog_restarting", provider=self.label)
         last_error = "unknown restart failure"
 
+        env = {**__import__("os").environ, **(self.restart_env or {})} if self.restart_env else None
+
         for attempt in range(1, self._RESTART_ATTEMPTS + 1):
+            if attempt > 1:
+                backoff = self._BACKOFF_BASE * (2 ** (attempt - 2))
+                log.debug("tunnel_watchdog_backoff", provider=self.label, seconds=backoff, attempt=attempt)
+                if self._stop_event.wait(timeout=backoff):
+                    return True
+
             self._terminate_process()
 
             proc = subprocess.Popen(
@@ -136,8 +172,10 @@ class TunnelWatchdog:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=env,
             )
-            self.proc = proc
+            with self._lock:
+                self.proc = proc
 
             if self._stop_event.wait(timeout=self._RESTART_GRACE_PERIOD):
                 return True
@@ -151,6 +189,8 @@ class TunnelWatchdog:
                     reason=last_error,
                 )
                 continue
+
+            _start_output_drain(proc)
 
             if self._wait_for_recovery():
                 log.info(
@@ -181,13 +221,20 @@ class TunnelWatchdog:
             return
 
         consecutive_failures = 0
+        check_count = 0
 
         while not self._stop_event.is_set():
+            check_count += 1
+            use_relay = check_count % self._RELAY_CHECK_FREQUENCY == 0
+
             if not self._process_running():
                 log.warning("tunnel_watchdog_process_exited", provider=self.label)
-                self._restart_process()
+                if not self._restart_process():
+                    log.warning("tunnel_watchdog_cooldown", provider=self.label, seconds=self._GIVEUP_COOLDOWN)
+                    if self._stop_event.wait(timeout=self._GIVEUP_COOLDOWN):
+                        return
                 consecutive_failures = 0
-            elif self._health_ok():
+            elif self._health_ok(use_tunnel_url=use_relay):
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
@@ -198,13 +245,45 @@ class TunnelWatchdog:
                     threshold=self._FAIL_THRESHOLD,
                 )
                 if consecutive_failures >= self._FAIL_THRESHOLD:
-                    self._restart_process()
+                    if not self._restart_process():
+                        log.warning("tunnel_watchdog_cooldown", provider=self.label, seconds=self._GIVEUP_COOLDOWN)
+                        if self._stop_event.wait(timeout=self._GIVEUP_COOLDOWN):
+                            return
                     consecutive_failures = 0
-                    if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
-                        return
 
             if self._stop_event.wait(timeout=self._CHECK_INTERVAL):
                 return
+
+
+def _start_output_drain(proc: subprocess.Popen[str]) -> None:
+    """Drain stdout in a background thread to prevent pipe buffer deadlock."""
+    import threading
+
+    stdout = proc.stdout
+    if stdout is None:
+        return
+
+    def _drain() -> None:
+        with contextlib.suppress(Exception):
+            while True:
+                chunk = stdout.read(8192)
+                if not chunk:
+                    break
+
+    threading.Thread(target=_drain, daemon=True, name="tunnel-stdout-drain").start()
+
+
+def _wait_for_startup(proc: subprocess.Popen[str], *, label: str = "tunnel", timeout: float = 5) -> None:
+    """Poll until the tunnel process has survived the startup window or raise on early exit."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            output = ""
+            if proc.stdout:
+                with contextlib.suppress(Exception):
+                    output = proc.stdout.read(64 * 1024).strip()
+            raise TunnelStartError(output or f"{label} process exited during startup")
+        time.sleep(0.5)
 
 
 def validate_remote_provider(
@@ -249,18 +328,20 @@ def start_remote_access(
     port: int,
     cloudflare_token: str | None = None,
     cloudflare_hostname: str | None = None,
+    tunnel_name: str | None = None,
 ) -> TunnelHandle:
     """Start the selected remote access provider."""
     if provider is RemoteProvider.local:
         return TunnelHandle(provider=provider)
     if provider is RemoteProvider.devtunnel:
-        origin, proc, tunnel_name = _start_devtunnel(port)
+        origin, proc, resolved_name = _start_devtunnel(port, tunnel_name=tunnel_name)
         handle = TunnelHandle(provider=provider, origin=origin, proc=proc)
         handle.watchdog = TunnelWatchdog(
             tunnel_url=origin,
-            restart_command=["devtunnel", "host", tunnel_name],
+            restart_command=["devtunnel", "host", resolved_name],
             proc=proc,
             label="devtunnel",
+            local_port=port,
         )
         handle.watchdog.start()
         return handle
@@ -268,16 +349,11 @@ def start_remote_access(
     handle = TunnelHandle(provider=provider, origin=origin, proc=proc)
     handle.watchdog = TunnelWatchdog(
         tunnel_url=origin,
-        restart_command=[
-            "cloudflared",
-            "tunnel",
-            "--no-autoupdate",
-            "run",
-            "--token",
-            cloudflare_token or "",
-        ],
+        restart_command=["cloudflared", "tunnel", "--no-autoupdate", "run"],
+        restart_env={"TUNNEL_TOKEN": cloudflare_token or ""},
         proc=proc,
         label="cloudflare",
+        local_port=port,
     )
     handle.watchdog.start()
     return handle
@@ -287,32 +363,24 @@ def _run_capture(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, capture_output=True, text=True, timeout=30)
 
 
-def _parse_devtunnel_name() -> str:
-    user_result = _run_capture(["devtunnel", "user", "show"])
-    username = "codeplane"
-    for line in user_result.stdout.splitlines():
-        if "Logged in as" not in line:
-            continue
-        parts = line.split()
-        if "as" in parts:
-            idx = parts.index("as") + 1
-            if idx < len(parts):
-                username = parts[idx]
-        break
-    return f"{username}-codeplane"
+_CODEPLANE_TUNNEL_PREFIX = "cpl-"
 
 
-def _lookup_devtunnel(tunnel_name: str) -> tuple[bool, str | None]:
+def _list_devtunnels() -> list[dict[str, Any]]:
+    """Return the parsed tunnel list from ``devtunnel list --json``."""
     list_result = _run_capture(["devtunnel", "list", "--json"])
     if list_result.returncode != 0:
-        return False, None
-
+        return []
     try:
         data = json.loads(list_result.stdout)
     except json.JSONDecodeError:
-        return False, None
+        return []
+    result: list[dict[str, Any]] = data.get("tunnels", [])
+    return result
 
-    for tunnel in data.get("tunnels", []):
+
+def _lookup_devtunnel(tunnel_name: str) -> tuple[bool, str | None]:
+    for tunnel in _list_devtunnels():
         tunnel_id = tunnel.get("tunnelId", "")
         if not tunnel_id:
             continue
@@ -322,21 +390,41 @@ def _lookup_devtunnel(tunnel_name: str) -> tuple[bool, str | None]:
     return False, None
 
 
-def _start_devtunnel(port: int) -> tuple[str, subprocess.Popen[str], str]:
-    tunnel_name = _parse_devtunnel_name()
-    exists, region = _lookup_devtunnel(tunnel_name)
+def _find_existing_codeplane_tunnel() -> tuple[str, str] | None:
+    """Find an existing tunnel whose name starts with the codeplane prefix.
+
+    Returns ``(name, region)`` or ``None``.
+    """
+    for tunnel in _list_devtunnels():
+        tunnel_id = tunnel.get("tunnelId", "")
+        if not tunnel_id:
+            continue
+        name, _, region = tunnel_id.partition(".")
+        if name.startswith(_CODEPLANE_TUNNEL_PREFIX) and region:
+            return name, region
+    return None
+
+
+def _start_devtunnel(port: int, *, tunnel_name: str | None = None) -> tuple[str, subprocess.Popen[str], str]:
+    if tunnel_name:
+        # Explicit name — use as-is
+        exists, region = _lookup_devtunnel(tunnel_name)
+    else:
+        # Auto mode — reuse an existing codeplane tunnel or generate a random name
+        existing = _find_existing_codeplane_tunnel()
+        if existing:
+            tunnel_name, region = existing
+            exists = True
+        else:
+            tunnel_name = f"{_CODEPLANE_TUNNEL_PREFIX}{secrets.token_hex(4)}"
+            exists, region = False, None
 
     if not exists:
         create_result = _run_capture(["devtunnel", "create", tunnel_name, "--allow-anonymous", "--expiration", "30d"])
         if create_result.returncode != 0:
-            tunnel_name = f"{tunnel_name}-{secrets.token_hex(2)}"
-            create_retry = _run_capture(
-                ["devtunnel", "create", tunnel_name, "--allow-anonymous", "--expiration", "30d"]
+            raise TunnelStartError(
+                create_result.stderr.strip() or create_result.stdout.strip() or "devtunnel create failed"
             )
-            if create_retry.returncode != 0:
-                raise TunnelStartError(
-                    create_retry.stderr.strip() or create_retry.stdout.strip() or "devtunnel create failed"
-                )
 
     _run_capture(["devtunnel", "port", "create", tunnel_name, "-p", str(port), "--protocol", "http"])
     _, region = _lookup_devtunnel(tunnel_name)
@@ -349,10 +437,8 @@ def _start_devtunnel(port: int) -> tuple[str, subprocess.Popen[str], str]:
         stderr=subprocess.STDOUT,
         text=True,
     )
-    time.sleep(2)
-    if proc.poll() is not None:
-        output = proc.stdout.read().strip() if proc.stdout else ""
-        raise TunnelStartError(output or "devtunnel host exited immediately")
+    _wait_for_startup(proc, label="devtunnel")
+    _start_output_drain(proc)
 
     tunnel_url = f"https://{tunnel_name}-{port}.{region}.devtunnels.ms"
     log.debug("tunnel_started", provider="devtunnel", url=tunnel_url)
@@ -369,16 +455,16 @@ def _start_cloudflare(
         raise TunnelStartError("Cloudflare remote access requires a tunnel token and hostname.")
 
     hostname = cloudflare_hostname.removeprefix("https://").rstrip("/")
+    env = {**__import__("os").environ, "TUNNEL_TOKEN": cloudflare_token}
     proc = subprocess.Popen(
-        ["cloudflared", "tunnel", "--no-autoupdate", "run", "--token", cloudflare_token],
+        ["cloudflared", "tunnel", "--no-autoupdate", "run"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=env,
     )
-    time.sleep(2)
-    if proc.poll() is not None:
-        output = proc.stdout.read().strip() if proc.stdout else ""
-        raise TunnelStartError(output or "cloudflared tunnel exited immediately")
+    _wait_for_startup(proc, label="cloudflare")
+    _start_output_drain(proc)
 
     tunnel_url = f"https://{hostname}"
     log.debug("tunnel_started", provider="cloudflare", url=tunnel_url, port=port)

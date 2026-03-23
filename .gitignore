@@ -116,3 +116,4 @@ __marimo__/
 .desloppify/
 scorecard.png
 .desloppify-observe-report*.txt
+*.tsbuildinfo

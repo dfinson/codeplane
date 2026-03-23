@@ -54,9 +54,7 @@ class TestApprovalRecovery:
     """Tests that pending approvals are recovered after server restart."""
 
     @pytest.mark.asyncio
-    async def test_recover_recreates_futures(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_recover_recreates_futures(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Simulate: create approvals, destroy service, create new service, recover."""
         # Phase 1: Create pending approvals
         svc1 = ApprovalService(session_factory)
@@ -74,9 +72,7 @@ class TestApprovalRecovery:
         assert a2.id in svc2._pending_futures
 
     @pytest.mark.asyncio
-    async def test_recovered_future_can_be_resolved(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_recovered_future_can_be_resolved(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """After recovery, resolving an approval unblocks the future."""
         svc1 = ApprovalService(session_factory)
         a1 = await svc1.create_request("job-1", "OK?")
@@ -96,9 +92,7 @@ class TestApprovalRecovery:
         assert resolved.resolved_at is not None
 
     @pytest.mark.asyncio
-    async def test_already_resolved_not_recovered(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_already_resolved_not_recovered(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Approvals that were resolved before restart are not recovered."""
         svc1 = ApprovalService(session_factory)
         a1 = await svc1.create_request("job-1", "OK?")
@@ -114,9 +108,7 @@ class TestApprovalRecovery:
         assert a1.id not in svc2._pending_futures
 
     @pytest.mark.asyncio
-    async def test_recovery_is_idempotent(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_recovery_is_idempotent(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Calling recover twice doesn't duplicate futures."""
         svc = ApprovalService(session_factory)
         await svc.create_request("job-1", "OK?")
@@ -133,9 +125,7 @@ class TestDeadLetterRetry:
     """Tests for the event persistence dead-letter queue."""
 
     @pytest.mark.asyncio
-    async def test_dead_letter_retries_and_succeeds(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_dead_letter_retries_and_succeeds(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Simulate event persist failure then success on retry."""
         from backend.lifespan import _persist_event_with_retry
         from backend.models.events import DomainEvent, DomainEventKind
@@ -159,9 +149,7 @@ class TestDeadLetterRetry:
         assert event.db_id is not None
 
     @pytest.mark.asyncio
-    async def test_persist_retries_on_lock_error(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_persist_retries_on_lock_error(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Event persist retries on SQLite lock errors."""
         from sqlalchemy.exc import OperationalError
 

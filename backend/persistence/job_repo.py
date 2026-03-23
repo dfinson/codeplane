@@ -293,14 +293,16 @@ class JobRepository(BaseRepository):
             update(JobRow)
             .where(
                 JobRow.id == job_id,
-                JobRow.state.in_([
-                    JobState.queued,
-                    JobState.running,
-                    # Terminal states allowed for resume
-                    JobState.succeeded,
-                    JobState.failed,
-                    JobState.canceled,
-                ]),
+                JobRow.state.in_(
+                    [
+                        JobState.queued,
+                        JobState.running,
+                        # Terminal states allowed for resume
+                        JobState.succeeded,
+                        JobState.failed,
+                        JobState.canceled,
+                    ]
+                ),
             )
             .values(
                 state=JobState.running,

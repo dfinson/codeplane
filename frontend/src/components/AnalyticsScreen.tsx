@@ -1,0 +1,396 @@
+import { useState, useEffect } from "react";
+import {
+  BarChart3, DollarSign, Clock, Cpu, Wrench, TrendingUp,
+  ArrowUpRight,
+} from "lucide-react";
+import {
+  fetchAnalyticsOverview,
+  fetchAnalyticsModels,
+  fetchAnalyticsTools,
+  type AnalyticsOverview,
+  type AnalyticsModels,
+  type AnalyticsTools,
+} from "../api/client";
+import { Badge } from "./ui/badge";
+import { Spinner } from "./ui/spinner";
+import {
+  AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip as RTooltip,
+  ResponsiveContainer, PieChart, Pie, Cell,
+} from "recharts";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatUsd(n: number): string {
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${s % 60}s`;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  succeeded: "#22c55e",
+  failed: "#ef4444",
+  cancelled: "#f59e0b",
+  running: "#3b82f6",
+};
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 flex flex-col gap-1">
+      <div className="flex items-center gap-2 text-muted-foreground text-xs font-medium uppercase tracking-wide">
+        <Icon size={14} />
+        {label}
+      </div>
+      <div className="text-2xl font-semibold text-foreground">{value}</div>
+      {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
+    </div>
+  );
+}
+
+function CostTrendChart({ data }: { data: { date: string; cost: number; jobs: number }[] }) {
+  if (!data.length) return <p className="text-muted-foreground text-sm">No data yet.</p>;
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <AreaChart data={data} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+            <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+        <XAxis
+          dataKey="date"
+          tick={{ fontSize: 11, fill: "#888" }}
+          tickFormatter={(v: string) => v.slice(5)}
+        />
+        <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+        <RTooltip
+          contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+          formatter={(v) => [formatUsd(Number(v)), "Cost"]}
+          labelFormatter={(l) => String(l)}
+        />
+        <Area type="monotone" dataKey="cost" stroke="#6366f1" fill="url(#costGrad)" strokeWidth={2} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function JobStatusPie({ overview }: { overview: AnalyticsOverview }) {
+  const data = [
+    { name: "Succeeded", value: overview.succeeded },
+    { name: "Failed", value: overview.failed },
+    { name: "Cancelled", value: overview.cancelled },
+    { name: "Running", value: overview.running },
+  ].filter((d) => d.value > 0);
+
+  if (!data.length) return null;
+
+  return (
+    <ResponsiveContainer width="100%" height={180}>
+      <PieChart>
+        <Pie data={data} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={2}>
+          {data.map((entry) => (
+            <Cell key={entry.name} fill={STATUS_COLORS[entry.name.toLowerCase()] || "#666"} />
+          ))}
+        </Pie>
+        <RTooltip
+          contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+        />
+      </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ModelBreakdown({ models }: { models: AnalyticsModels["models"] }) {
+  if (!models.length) return <p className="text-muted-foreground text-sm">No model data yet.</p>;
+  const chartData = models.slice(0, 8).map((m) => ({
+    name: m.model || "unknown",
+    cost: Number(m.total_cost_usd) || 0,
+    jobs: m.job_count,
+  }));
+  return (
+    <div className="space-y-3">
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+          <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#888" }} interval={0} angle={-20} textAnchor="end" height={50} />
+          <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+          <RTooltip
+            contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+            formatter={(v) => [formatUsd(Number(v)), "Cost"]}
+          />
+          <Bar dataKey="cost" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-muted-foreground border-b border-border">
+              <th className="text-left py-1.5 px-2 font-medium">Model</th>
+              <th className="text-left py-1.5 px-2 font-medium">SDK</th>
+              <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
+              <th className="text-right py-1.5 px-2 font-medium">Cost</th>
+              <th className="text-right py-1.5 px-2 font-medium">Tokens</th>
+              <th className="text-right py-1.5 px-2 font-medium">Cache</th>
+              <th className="text-right py-1.5 px-2 font-medium">Avg Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((m, i) => {
+              const cacheRate = m.input_tokens ? ((m.cache_read_tokens / m.input_tokens) * 100) : 0;
+              return (
+                <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
+                  <td className="py-1.5 px-2 font-mono">{m.model || "—"}</td>
+                  <td className="py-1.5 px-2">
+                    <Badge variant="outline" className="text-[10px]">{m.sdk}</Badge>
+                  </td>
+                  <td className="text-right py-1.5 px-2">{m.job_count}</td>
+                  <td className="text-right py-1.5 px-2">{formatUsd(Number(m.total_cost_usd) || 0)}</td>
+                  <td className="text-right py-1.5 px-2">{formatTokens(m.total_tokens)}</td>
+                  <td className="text-right py-1.5 px-2">{cacheRate.toFixed(0)}%</td>
+                  <td className="text-right py-1.5 px-2">{formatDuration(Number(m.avg_duration_ms) || 0)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
+  if (!tools.length) return <p className="text-muted-foreground text-sm">No tool data yet.</p>;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-muted-foreground border-b border-border">
+            <th className="text-left py-1.5 px-2 font-medium">Tool</th>
+            <th className="text-right py-1.5 px-2 font-medium">Calls</th>
+            <th className="text-right py-1.5 px-2 font-medium">Failures</th>
+            <th className="text-right py-1.5 px-2 font-medium">Success</th>
+            <th className="text-right py-1.5 px-2 font-medium">Avg</th>
+            <th className="text-right py-1.5 px-2 font-medium">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tools.map((t, i) => {
+            const successRate = t.count > 0 ? ((t.count - (t.failure_count || 0)) / t.count * 100) : 100;
+            return (
+              <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
+                <td className="py-1.5 px-2 font-mono">{t.name}</td>
+                <td className="text-right py-1.5 px-2">{t.count}</td>
+                <td className="text-right py-1.5 px-2">
+                  {t.failure_count ? (
+                    <span className="text-red-400">{t.failure_count}</span>
+                  ) : (
+                    <span className="text-muted-foreground">0</span>
+                  )}
+                </td>
+                <td className="text-right py-1.5 px-2">
+                  <span className={successRate >= 95 ? "text-green-400" : successRate >= 80 ? "text-yellow-400" : "text-red-400"}>
+                    {successRate.toFixed(0)}%
+                  </span>
+                </td>
+                <td className="text-right py-1.5 px-2">{formatDuration(Number(t.avg_duration_ms) || 0)}</td>
+                <td className="text-right py-1.5 px-2">{formatDuration(Number(t.total_duration_ms) || 0)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+export function AnalyticsScreen() {
+  const [period, setPeriod] = useState(7);
+  const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
+  const [models, setModels] = useState<AnalyticsModels | null>(null);
+  const [tools, setTools] = useState<AnalyticsTools | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    Promise.all([
+      fetchAnalyticsOverview(period),
+      fetchAnalyticsModels(period),
+      fetchAnalyticsTools(Math.max(period, 30)),
+    ])
+      .then(([o, m, t]) => {
+        if (cancelled) return;
+        setOverview(o);
+        setModels(m);
+        setTools(t);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message || "Failed to load analytics");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [period]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spinner size="lg" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-red-400">
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  if (!overview) return null;
+
+  const successRate = overview.totalJobs
+    ? ((overview.succeeded / overview.totalJobs) * 100).toFixed(0)
+    : "—";
+
+  return (
+    <div className="max-w-7xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
+            <BarChart3 size={20} />
+            Analytics
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Fleet-wide telemetry across all agent runs
+          </p>
+        </div>
+        <select
+          value={period}
+          onChange={(e) => setPeriod(Number(e.target.value))}
+          className="rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground"
+        >
+          <option value={1}>Last 24h</option>
+          <option value={7}>Last 7 days</option>
+          <option value={14}>Last 14 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={90}>Last 90 days</option>
+        </select>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <StatCard icon={Cpu} label="Jobs" value={String(overview.totalJobs)} sub={`${successRate}% success`} />
+        <StatCard icon={DollarSign} label="Cost" value={formatUsd(overview.totalCostUsd)} />
+        <StatCard
+          icon={Clock}
+          label="Avg Duration"
+          value={formatDuration(overview.avgDurationMs)}
+        />
+        <StatCard
+          icon={ArrowUpRight}
+          label="Tokens"
+          value={formatTokens(overview.totalTokens)}
+          sub={`${overview.cacheHitRate}% cache`}
+        />
+        <StatCard
+          icon={Wrench}
+          label="Tool Calls"
+          value={String(overview.totalToolCalls)}
+          sub={`${overview.toolSuccessRate}% success`}
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="Premium Req"
+          value={String(Math.round(overview.totalPremiumRequests))}
+        />
+      </div>
+
+      {/* Charts row */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 rounded-lg border border-border bg-card p-4">
+          <h2 className="text-sm font-medium text-foreground mb-3">Cost Trend</h2>
+          <CostTrendChart data={overview.costTrend} />
+        </div>
+        <div className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-sm font-medium text-foreground mb-3">Job Outcomes</h2>
+          <JobStatusPie overview={overview} />
+          <div className="flex flex-wrap gap-3 justify-center mt-2">
+            {[
+              { label: "Succeeded", color: STATUS_COLORS.succeeded, count: overview.succeeded },
+              { label: "Failed", color: STATUS_COLORS.failed, count: overview.failed },
+              { label: "Cancelled", color: STATUS_COLORS.cancelled, count: overview.cancelled },
+            ]
+              .filter((d) => d.count > 0)
+              .map((d) => (
+                <span key={d.label} className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <span className="inline-block w-2 h-2 rounded-full" style={{ background: d.color }} />
+                  {d.label} ({d.count})
+                </span>
+              ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Model breakdown */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-sm font-medium text-foreground mb-3">Model Usage</h2>
+        {models && <ModelBreakdown models={models.models} />}
+      </div>
+
+      {/* Tool health */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-sm font-medium text-foreground mb-3">Tool Health</h2>
+        {tools && <ToolHealth tools={tools.tools} />}
+      </div>
+    </div>
+  );
+}

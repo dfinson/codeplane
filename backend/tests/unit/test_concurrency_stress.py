@@ -68,9 +68,7 @@ class TestClaimForStart:
         assert claimed is True
 
     @pytest.mark.asyncio
-    async def test_concurrent_claims_only_one_wins(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_concurrent_claims_only_one_wins(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Race 10 concurrent claim_for_start calls — exactly one should win."""
         async with session_factory() as session:
             repo = JobRepository(session)
@@ -99,9 +97,7 @@ class TestClaimForStart:
         assert job.state == JobState.running
 
     @pytest.mark.asyncio
-    async def test_claim_fails_for_nonexistent_job(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_claim_fails_for_nonexistent_job(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         async with session_factory() as session:
             repo = JobRepository(session)
             claimed = await repo.claim_for_start("does-not-exist")
@@ -113,9 +109,7 @@ class TestOptimisticLocking:
     """Version column increments on every update."""
 
     @pytest.mark.asyncio
-    async def test_version_increments_on_update(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_version_increments_on_update(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         async with session_factory() as session:
             repo = JobRepository(session)
             await repo.create(_make_job("v-job", "queued"))
@@ -200,9 +194,7 @@ class TestConcurrentEventAppends:
     """Multiple event appends are serialized and all persisted."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_appends_all_persisted(
-        self, session_factory: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_concurrent_appends_all_persisted(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         from backend.models.events import DomainEvent, DomainEventKind
         from backend.persistence.event_repo import EventRepository
 

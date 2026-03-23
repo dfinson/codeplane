@@ -62,8 +62,9 @@ SESSION_TTL: float = 86400  # 24 hours
 # Active session tokens: token → creation timestamp (monotonic clock)
 _session_tokens: dict[str, float] = {}
 
-# The password hash (set during startup)
-_password_hash: str | None = None
+# The password hash and salt (set during startup)
+_password_hash: bytes | None = None
+_password_salt: bytes | None = None
 
 # Load logo as base64 for the login page — deferred to first use
 _logo_path = Path(__file__).resolve().parent.parent.parent / "docs" / "images" / "logo.png"
@@ -80,8 +81,9 @@ def _get_logo_b64() -> str:
 
 def set_password(password: str) -> None:
     """Set the password for this server instance."""
-    global _password_hash  # noqa: PLW0603
-    _password_hash = hashlib.sha256(password.encode()).hexdigest()
+    global _password_hash, _password_salt  # noqa: PLW0603
+    _password_salt = secrets.token_bytes(16)
+    _password_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), _password_salt, iterations=600_000)
 
 
 def generate_password() -> str:
@@ -90,10 +92,10 @@ def generate_password() -> str:
 
 
 def _check_password(password: str) -> bool:
-    """Constant-time password comparison."""
-    if _password_hash is None:
+    """Constant-time password comparison using PBKDF2."""
+    if _password_hash is None or _password_salt is None:
         return False
-    candidate = hashlib.sha256(password.encode()).hexdigest()
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), _password_salt, iterations=600_000)
     return hmac.compare_digest(candidate, _password_hash)
 
 
@@ -135,6 +137,13 @@ def is_valid_token(token: str | None) -> bool:
         return False
     _cleanup_expired_tokens()
     return token in _session_tokens
+
+
+def invalidate_session(token: str | None) -> bool:
+    """Remove a session token, returning True if it existed."""
+    if not token:
+        return False
+    return _session_tokens.pop(token, None) is not None
 
 
 def is_localhost(request: Request) -> bool:
@@ -236,9 +245,20 @@ def _is_https_request(request: Request) -> bool:
     return host.endswith(".devtunnels.ms")
 
 
+def _client_ip(request: Request) -> str:
+    """Extract the real client IP, respecting X-Forwarded-For behind tunnels."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        # First entry is the original client
+        ip = forwarded.split(",")[0].strip()
+        if ip:
+            return ip
+    return request.client.host if request.client else "unknown"
+
+
 async def authenticate_login_request(request: Request) -> Response:
     """Handle POST /api/auth/login — validate password, set cookie."""
-    ip = request.client.host if request.client else "unknown"
+    ip = _client_ip(request)
 
     if _is_rate_limited(ip):
         log.warning("auth_login_rate_limited", client_ip=ip)
@@ -267,6 +287,16 @@ async def authenticate_login_request(request: Request) -> Response:
         max_age=86400,  # 24 hours
         path="/",
     )
+    return response
+
+
+async def authenticate_logout_request(request: Request) -> Response:
+    """Handle POST /api/auth/logout — invalidate session cookie."""
+    token = request.cookies.get(COOKIE_NAME)
+    invalidate_session(token)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(key=COOKIE_NAME, path="/")
+    log.info("auth_logout", client_ip=_client_ip(request))
     return response
 
 

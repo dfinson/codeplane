@@ -1,7 +1,7 @@
-import { Component, type ReactNode, Suspense, lazy, useEffect } from "react";
+import { Component, type ReactNode, Suspense, useEffect } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
-import { Settings, History, TerminalSquare, Search } from "lucide-react";
+import { Settings, History, TerminalSquare, Search, BarChart3 } from "lucide-react";
 import { CommandPalette } from "./components/CommandPalette";
 import { useSSE } from "./hooks/useSSE";
 import { useStore, selectConnectionStatus } from "./store";
@@ -9,20 +9,24 @@ import { DashboardScreen } from "./components/DashboardScreen";
 import { DotBadge } from "./components/ui/badge";
 import { Spinner } from "./components/ui/spinner";
 import { Tooltip } from "./components/ui/tooltip";
+import { lazyRetry } from "./lib/lazyRetry";
 
-const JobDetailScreen = lazy(() =>
+const JobDetailScreen = lazyRetry(() =>
   import("./components/JobDetailScreen").then((module) => ({ default: module.JobDetailScreen })),
 );
-const JobCreationScreen = lazy(() =>
+const JobCreationScreen = lazyRetry(() =>
   import("./components/JobCreationScreen").then((module) => ({ default: module.JobCreationScreen })),
 );
-const SettingsScreen = lazy(() =>
+const SettingsScreen = lazyRetry(() =>
   import("./components/SettingsScreen").then((module) => ({ default: module.SettingsScreen })),
 );
-const HistoryScreen = lazy(() =>
+const HistoryScreen = lazyRetry(() =>
   import("./components/HistoryScreen").then((module) => ({ default: module.HistoryScreen })),
 );
-const TerminalDrawer = lazy(() =>
+const AnalyticsScreen = lazyRetry(() =>
+  import("./components/AnalyticsScreen").then((module) => ({ default: module.AnalyticsScreen })),
+);
+const TerminalDrawer = lazyRetry(() =>
   import("./components/TerminalDrawer").then((module) => ({ default: module.TerminalDrawer })),
 );
 
@@ -38,19 +42,28 @@ class ErrorBoundary extends Component<
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
+  private isChunkError(error: Error): boolean {
+    const msg = error.message || "";
+    return /loading.*chunk|dynamic.*import|failed to fetch/i.test(msg);
+  }
   render() {
     if (this.state.error) {
+      const isChunk = this.isChunkError(this.state.error);
       return (
         <div className="p-8 max-w-2xl mx-auto">
-          <p className="text-lg font-semibold text-red-400 mb-2">Something went wrong</p>
-          <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-card rounded-lg p-4 border border-border overflow-auto">
-            {this.state.error.message}{"\n"}{this.state.error.stack}
-          </pre>
+          <p className="text-lg font-semibold text-red-400 mb-2">
+            {isChunk ? "A network error occurred loading the page" : "Something went wrong"}
+          </p>
+          {!isChunk && (
+            <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-card rounded-lg p-4 border border-border overflow-auto">
+              {this.state.error.message}{"\n"}{this.state.error.stack}
+            </pre>
+          )}
           <button
-            onClick={() => this.setState({ error: null })}
+            onClick={() => isChunk ? window.location.reload() : this.setState({ error: null })}
             className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90"
           >
-            Try again
+            {isChunk ? "Reload page" : "Try again"}
           </button>
         </div>
       );
@@ -123,6 +136,7 @@ export function App() {
     [terminalDrawerOpen, toggleTerminalDrawer],
   );
   useHotkeys("alt+n", () => navigate("/jobs/new"), { preventDefault: true });
+  useHotkeys("alt+a", () => navigate("/analytics"), { preventDefault: true });
   useHotkeys("ctrl+comma,meta+comma", () => navigate("/settings"), {
     enableOnFormTags: true,
     preventDefault: true,
@@ -165,6 +179,16 @@ export function App() {
               <TerminalSquare size={16} />
             </button>
           </Tooltip>
+          <Tooltip content="Analytics">
+            <Link
+              to="/analytics"
+              aria-label="Analytics"
+              title="Analytics"
+              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
+            >
+              <BarChart3 size={16} />
+            </Link>
+          </Tooltip>
           <Tooltip content="Job history">
             <Link
               to="/history"
@@ -195,6 +219,7 @@ export function App() {
               <Route path="/jobs/new" element={<JobCreationScreen />} />
               <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
               <Route path="/history" element={<HistoryScreen />} />
+              <Route path="/analytics" element={<AnalyticsScreen />} />
               <Route path="/settings" element={<SettingsScreen />} />
             </Routes>
           </Suspense>

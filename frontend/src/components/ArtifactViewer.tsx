@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { type LucideIcon, Download, FileText, FileCode, ChevronDown, ChevronRight, BookOpen, ScrollText } from "lucide-react";
+import { type LucideIcon, Download, FileText, FileCode, ChevronDown, ChevronRight, BookOpen, ScrollText, ListChecks, Activity, ShieldCheck } from "lucide-react";
 import { fetchArtifacts, downloadArtifactUrl, fetchArtifactText } from "../api/client";
 import { Badge } from "./ui/badge";
 import { Spinner } from "./ui/spinner";
@@ -18,6 +18,9 @@ interface Artifact {
 const TYPE_ICON: Record<string, LucideIcon> = {
   diff_snapshot: FileCode,
   session_log: ScrollText,
+  agent_plan: ListChecks,
+  telemetry_report: Activity,
+  approval_history: ShieldCheck,
   document: BookOpen,
   custom: FileText,
 };

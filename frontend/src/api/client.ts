@@ -199,6 +199,93 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   return request(`/jobs/${encodeURIComponent(jobId)}/telemetry`);
 }
 
+// --- Analytics ---
+
+export interface AnalyticsOverview {
+  period: number;
+  totalJobs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  running: number;
+  totalCostUsd: number;
+  totalTokens: number;
+  avgDurationMs: number;
+  totalPremiumRequests: number;
+  totalToolCalls: number;
+  totalToolFailures: number;
+  toolSuccessRate: number;
+  cacheHitRate: number;
+  costTrend: { date: string; cost: number; jobs: number }[];
+}
+
+export interface AnalyticsModels {
+  period: number;
+  models: {
+    model: string;
+    sdk: string;
+    job_count: number;
+    total_cost_usd: number;
+    total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    avg_duration_ms: number;
+    premium_requests: number;
+  }[];
+}
+
+export interface AnalyticsTools {
+  period: number;
+  tools: {
+    name: string;
+    count: number;
+    avg_duration_ms: number;
+    total_duration_ms: number;
+    failure_count: number;
+  }[];
+}
+
+export interface AnalyticsJobs {
+  period: number;
+  jobs: Record<string, unknown>[];
+}
+
+export function fetchAnalyticsOverview(period = 7): Promise<AnalyticsOverview> {
+  return request(`/analytics/overview?period=${period}`);
+}
+
+export function fetchAnalyticsModels(period = 7): Promise<AnalyticsModels> {
+  return request(`/analytics/models?period=${period}`);
+}
+
+export function fetchAnalyticsTools(period = 30): Promise<AnalyticsTools> {
+  return request(`/analytics/tools?period=${period}`);
+}
+
+export function fetchAnalyticsJobs(params?: {
+  period?: number;
+  sdk?: string;
+  model?: string;
+  status?: string;
+  sort?: string;
+  desc?: boolean;
+  limit?: number;
+  offset?: number;
+}): Promise<AnalyticsJobs> {
+  const sp = new URLSearchParams();
+  if (params?.period) sp.set("period", String(params.period));
+  if (params?.sdk) sp.set("sdk", params.sdk);
+  if (params?.model) sp.set("model", params.model);
+  if (params?.status) sp.set("status", params.status);
+  if (params?.sort) sp.set("sort", params.sort);
+  if (params?.desc !== undefined) sp.set("desc", String(params.desc));
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  const qs = sp.toString();
+  return request(`/analytics/jobs${qs ? `?${qs}` : ""}`);
+}
+
 // --- Repos ---
 
 export function fetchRepos(): Promise<RepoListResponse> {

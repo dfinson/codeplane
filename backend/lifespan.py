@@ -198,6 +198,7 @@ async def _wire_core_services(
     adapter_registry = AdapterRegistry(
         approval_service=approval_service,
         event_bus=event_bus,
+        session_factory=session_factory,
     )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
@@ -435,6 +436,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         },
     )
     app.state.dishka_container = container
+
+    # Print the startup banner now that all services are ready
+    banner_args = getattr(app.state, "banner_args", None)
+    if banner_args:
+        from backend.cli import _print_startup_banner
+
+        _print_startup_banner(**banner_args)
 
     yield
 

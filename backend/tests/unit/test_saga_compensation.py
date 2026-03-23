@@ -55,6 +55,7 @@ class TestJobCreationCompensation:
             pytest.raises(Exception, match="DB write failed"),
         ):
             await svc.create_job(repo="/repos/test", prompt="Fix the bug")
+        # Compensation: worktree should be cleaned up
         git_service.remove_worktree.assert_called_once_with(
             "/repos/test", "/repos/test/.cpl-worktrees/fix-bug"
         )

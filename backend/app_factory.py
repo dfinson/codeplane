@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from starlette.responses import Response
 
 from backend import __version__
-from backend.api import approvals, artifacts, events, health, jobs, settings, terminal, voice, workspace
+from backend.api import analytics, approvals, artifacts, events, health, jobs, settings, terminal, voice, workspace
 from backend.lifespan import lifespan
 from backend.services.agent_adapter import SDKModelMismatchError
 from backend.services.approval_service import ApprovalAlreadyResolvedError, ApprovalNotFoundError
@@ -84,6 +84,7 @@ def _configure_middleware(
         from backend.services.auth import (
             auth_middleware,
             authenticate_login_request,
+            authenticate_logout_request,
             is_request_authenticated,
             set_password,
         )
@@ -93,6 +94,7 @@ def _configure_middleware(
         from starlette.routing import Route
 
         app.routes.insert(0, Route("/api/auth/login", authenticate_login_request, methods=["POST"]))
+        app.routes.insert(1, Route("/api/auth/logout", authenticate_logout_request, methods=["POST"]))
 
         @app.middleware("http")
         async def _auth_gate(request: Request, call_next: Callable[..., Awaitable[Response]]) -> Response:
@@ -115,6 +117,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(workspace.router, prefix="/api")
     app.include_router(voice.router, prefix="/api")
     app.include_router(settings.router, prefix="/api")
+    app.include_router(analytics.router, prefix="/api")
     # Terminal router has its own /api/terminal prefix
     app.include_router(terminal.router)
 

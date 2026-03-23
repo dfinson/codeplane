@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from backend.services.permission_policy import (
+    _HARD_GATED_SHELL_RE,
     _READONLY_SHELL_RE,
     PolicyDecision,
     _is_path_within_workspace,
@@ -180,6 +181,114 @@ class TestReadonlyShellRegex:
     def test_case_insensitive(self) -> None:
         assert _READONLY_SHELL_RE.match("GREP foo")
         assert _READONLY_SHELL_RE.match("Ls -la")
+
+
+# ---------------------------------------------------------------------------
+# _HARD_GATED_SHELL_RE
+# ---------------------------------------------------------------------------
+
+
+class TestHardGatedShellRegex:
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git merge --no-ff feature",
+            "  git merge origin/main",
+            "git pull",
+            "git pull origin main",
+            "git pull --rebase",
+            "git rebase main",
+            "git rebase -i HEAD~3",
+            "git cherry-pick abc123",
+            "git cherry-pick --no-commit abc123",
+            "git reset --hard",
+            "git reset --hard HEAD",
+            "git reset --hard HEAD~1",
+            "git reset --mixed --hard HEAD",
+            "GIT MERGE main",
+            "Git Pull origin main",
+        ],
+    )
+    def test_matches_hard_gated_commands(self, cmd: str) -> None:
+        assert _HARD_GATED_SHELL_RE.search(cmd), f"Expected match for: {cmd}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git status",
+            "git log --oneline",
+            "git diff",
+            "git add .",
+            "git commit -m 'msg'",
+            "git push origin main",
+            "git branch feature",
+            "git checkout main",
+            "git stash",
+            "git reset --soft HEAD~1",
+            "git reset HEAD file.py",
+            "grep merge file.txt",
+            "echo git merge",
+        ],
+    )
+    def test_does_not_match_safe_commands(self, cmd: str) -> None:
+        assert not _HARD_GATED_SHELL_RE.search(cmd), f"Expected no match for: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# Hard gate integration: always asks regardless of mode
+# ---------------------------------------------------------------------------
+
+
+class TestHardGateIntegration:
+    """Hard-gated commands must return 'ask' in every permission mode."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_auto_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_auto(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_read_only_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_read_only(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_approval_required_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_approval_required(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    def test_auto_mode_still_approves_normal_shell(self, tmp_path: Path) -> None:
+        """Non-hard-gated commands remain auto-approved in auto mode."""
+        result = evaluate_auto(kind="shell", workspace_path=str(tmp_path), full_command_text="python script.py")
+        assert result == PolicyDecision.approve
 
 
 # ---------------------------------------------------------------------------

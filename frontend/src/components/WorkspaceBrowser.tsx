@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Folder, FolderOpen, FileCode, FilePlus2, FileEdit, FileMinus2, FileSymlink, ChevronRight, ChevronDown, ArrowLeft } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
@@ -11,8 +11,9 @@ import type { DiffFileModel } from "../api/types";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
+import { lazyRetry } from "../lib/lazyRetry";
 
-const MobileSyntaxView = lazy(() => import("./MobileSyntaxView"));
+const MobileSyntaxView = lazyRetry(() => import("./MobileSyntaxView"));
 
 interface TreeEntry {
   path: string;

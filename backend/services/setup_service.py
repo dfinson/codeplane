@@ -196,6 +196,92 @@ def _check_gh_auth() -> tuple[bool, str]:
         return False, "gh not available"
 
 
+def _check_server_running(host: str, port: int) -> tuple[bool, str]:
+    """Probe the /health endpoint, falling back to process detection.
+
+    Returns (running, detail).  The detail string includes version/uptime when
+    the health endpoint is reachable, or PID info when only the process is found.
+    """
+    import json
+    from urllib.error import URLError
+    from urllib.request import Request, urlopen
+
+    # 1. Try the health endpoint (definitive when reachable)
+    req = Request(f"http://{host}:{port}/health", method="GET")
+    try:
+        with urlopen(req, timeout=2) as resp:  # noqa: S310
+            body = json.loads(resp.read())
+            version = body.get("version", "?")
+            uptime = int(body.get("uptimeSeconds", 0))
+            active = body.get("activeJobs", 0)
+            queued = body.get("queuedJobs", 0)
+            parts = [f"v{version}", f"uptime {uptime}s"]
+            if active or queued:
+                parts.append(f"{active} active, {queued} queued")
+            return True, ", ".join(parts)
+    except (URLError, OSError, ValueError):
+        pass
+
+    # 2. Fallback — scan for a cpl process (cross-platform)
+    pids = _find_cpl_processes()
+    if pids:
+        pids_str = ", ".join(str(p) for p in pids)
+        return True, f"process detected (PID {pids_str}) but /health not reachable"
+
+    return False, "not reachable"
+
+
+def _find_cpl_processes() -> list[int]:
+    """Return PIDs of running ``cpl up`` / ``cpl restart`` processes (cross-platform)."""
+    pids: list[int] = []
+    _system = platform.system()
+
+    if _system == "Windows":
+        # WMIC is available on all supported Windows versions
+        try:
+            result = subprocess.run(
+                [
+                    "wmic",
+                    "process",
+                    "where",
+                    "CommandLine like '%cpl%up%' or CommandLine like '%cpl%restart%'",
+                    "get",
+                    "ProcessId",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+    else:
+        # POSIX (Linux, macOS, BSD)
+        try:
+            result = subprocess.run(
+                ["ps", "axo", "pid,args"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            my_pid = os.getpid()
+            for line in result.stdout.splitlines():
+                lower = line.lower()
+                if ("cpl up" in lower or "cpl restart" in lower) and "doctor" not in lower:
+                    parts = line.split()
+                    if parts and parts[0].isdigit():
+                        pid = int(parts[0])
+                        if pid != my_pid:
+                            pids.append(pid)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+    return pids
+
+
 def _check_port(port: int) -> tuple[bool, str]:
     """Check if a port is available. Returns (available, detail)."""
     probe_targets: list[tuple[int, str]] = [(socket.AF_INET, "127.0.0.1")]
@@ -480,19 +566,42 @@ def verify_requirements(*, port: int | None = None, include_optional_dependencie
         )
 
     if port is not None:
-        ok, detail = _check_port(port)
-        if ok:
-            results.append(CheckResult(f"Port {port}", CheckStatus.passed, detail, category="env"))
-        else:
+        running, run_detail = _check_server_running("127.0.0.1", port)
+        if running:
             results.append(
                 CheckResult(
-                    f"Port {port}",
-                    CheckStatus.fail,
-                    detail,
-                    hint=f"Try: cpl up --port {port + 1}\n  Or: lsof -i :{port} | grep LISTEN",
+                    f"Server (:{port})",
+                    CheckStatus.passed,
+                    f"running — {run_detail}",
                     category="env",
                 )
             )
+        else:
+            results.append(
+                CheckResult(
+                    f"Server (:{port})",
+                    CheckStatus.warn,
+                    "not running",
+                    hint="Start with: cpl up",
+                    category="env",
+                )
+            )
+
+            # Only check port availability when CodePlane isn't running —
+            # otherwise we'd falsely report the port as "in use".
+            ok, detail = _check_port(port)
+            if ok:
+                results.append(CheckResult(f"Port {port}", CheckStatus.passed, detail, category="env"))
+            else:
+                results.append(
+                    CheckResult(
+                        f"Port {port}",
+                        CheckStatus.fail,
+                        detail,
+                        hint=f"Try: cpl up --port {port + 1}\n  Or: lsof -i :{port} | grep LISTEN",
+                        category="env",
+                    )
+                )
 
     # --- Disk space ---
     try:

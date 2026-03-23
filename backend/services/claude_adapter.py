@@ -67,6 +67,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         self,
         approval_service: ApprovalService | None = None,
         event_bus: EventBus | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         self._queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._clients: dict[str, ClaudeSDKClient] = {}
@@ -75,18 +76,53 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._tool_start_times: dict[str, float] = {}
         self._approval_service = approval_service
         self._event_bus = event_bus
+        self._session_factory = session_factory
+        self._job_start_times: dict[str, float] = {}
+        self._job_main_models: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _cleanup_session(self, session_id: str) -> None:
+        job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
-        self._session_to_job.pop(session_id, None)
         task = self._consumer_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
+        if job_id:
+            self._job_start_times.pop(job_id, None)
+            self._job_main_models.pop(job_id, None)
+
+    def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
+        """Schedule an async DB write from a synchronous or async context."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            pass  # No event loop — skip DB write
+
+    async def _db_write(self, fn_name: str, **kwargs: Any) -> None:
+        """Execute a telemetry DB write in its own session."""
+        if self._session_factory is None:
+            return
+        try:
+            async with self._session_factory() as session:
+                from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
+
+                if fn_name == "increment":
+                    await TelemetrySummaryRepo(session).increment(**kwargs)
+                elif fn_name == "insert_span":
+                    await TelemetrySpansRepo(session).insert(**kwargs)
+                elif fn_name == "set_model":
+                    await TelemetrySummaryRepo(session).set_model(**kwargs)
+                elif fn_name == "set_quota":
+                    await TelemetrySummaryRepo(session).set_quota(**kwargs)
+                await session.commit()
+        except Exception:
+            log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
 
     def _enqueue(self, session_id: str, event: SessionEvent) -> None:
         q = self._queues.get(session_id)
@@ -316,10 +352,11 @@ class ClaudeAdapter(AgentAdapterInterface):
         job_id = self._session_to_job.get(session_id)
 
         # Lock in the main model from the first AssistantMessage that carries one
-        if job_id and model:
-            from backend.services.telemetry import collector as tel
-
-            tel.set_main_model(job_id, model)
+        if job_id and model and job_id not in self._job_main_models:
+            self._job_main_models[job_id] = model
+            self._schedule_db_write(
+                self._db_write("set_model", job_id=job_id, model=model)
+            )
 
         for block in content_blocks:
             if isinstance(block, TextBlock):
@@ -433,14 +470,35 @@ class ClaudeAdapter(AgentAdapterInterface):
 
         # Telemetry
         if job_id:
-            from backend.services.telemetry import collector as tel
+            from backend.services import telemetry as tel
 
-            tel.record_tool_call(
-                job_id,
-                tool_name=tool_name,
+            attrs: dict[str, str | bool] = {
+                "job_id": job_id,
+                "sdk": "claude",
+                "tool_name": tool_name,
+                "success": bool(success),
+            }
+            tel.tool_duration.record(duration_ms, attrs)
+
+            self._schedule_db_write(self._db_write(
+                "increment",
+                job_id=job_id,
+                tool_call_count=1,
+                tool_failure_count=0 if success else 1,
+                total_tool_duration_ms=int(duration_ms),
+            ))
+
+            job_start = self._job_start_times.get(job_id, time.monotonic())
+            offset = time.monotonic() - job_start
+            self._schedule_db_write(self._db_write(
+                "insert_span",
+                job_id=job_id,
+                span_type="tool",
+                name=tool_name,
+                started_at=round(offset, 2),
                 duration_ms=duration_ms,
-                success=success,
-            )
+                attrs={"success": success},
+            ))
 
     def _process_result_message(
         self,
@@ -461,21 +519,49 @@ class ClaudeAdapter(AgentAdapterInterface):
         cache_read = usage.get("cache_read_input_tokens", 0) if isinstance(usage, dict) else 0
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
-        # Telemetry — note: model is not on ResultMessage, so we pass empty string.
-        # Model info is available on AssistantMessage instead.
+        # Telemetry — note: model is not on ResultMessage, so we use the main model.
         if job_id:
-            from backend.services.telemetry import collector as tel
+            from backend.services import telemetry as tel
 
-            tel.record_llm_usage(
-                job_id,
-                model="",
+            model = self._job_main_models.get(job_id, "")
+            attrs = {"job_id": job_id, "sdk": "claude", "model": model}
+            tel.tokens_input.add(int(input_tokens), attrs)
+            tel.tokens_output.add(int(output_tokens), attrs)
+            tel.tokens_cache_read.add(int(cache_read), attrs)
+            tel.tokens_cache_write.add(int(cache_write), attrs)
+            tel.cost_usd.add(float(total_cost_usd), attrs)
+            tel.llm_duration.record(float(duration_ms), {**attrs, "is_subagent": False})
+
+            self._schedule_db_write(self._db_write(
+                "increment",
+                job_id=job_id,
                 input_tokens=int(input_tokens),
                 output_tokens=int(output_tokens),
                 cache_read_tokens=int(cache_read),
                 cache_write_tokens=int(cache_write),
-                cost=float(total_cost_usd),
+                total_cost_usd=float(total_cost_usd),
+                llm_call_count=1,
+                total_llm_duration_ms=int(duration_ms),
+            ))
+
+            job_start = self._job_start_times.get(job_id, time.monotonic())
+            offset = time.monotonic() - job_start
+            self._schedule_db_write(self._db_write(
+                "insert_span",
+                job_id=job_id,
+                span_type="llm",
+                name=model or "claude",
+                started_at=round(offset, 2),
                 duration_ms=float(duration_ms),
-            )
+                attrs={
+                    "input_tokens": int(input_tokens),
+                    "output_tokens": int(output_tokens),
+                    "cache_read_tokens": int(cache_read),
+                    "cache_write_tokens": int(cache_write),
+                    "cost": float(total_cost_usd),
+                    "is_subagent": False,
+                },
+            ))
 
         self._enqueue_log(
             session_id,
@@ -511,6 +597,7 @@ class ClaudeAdapter(AgentAdapterInterface):
 
         if config.job_id:
             self._session_to_job[session_id] = config.job_id
+            self._job_start_times.setdefault(config.job_id, time.monotonic())
 
         # Build options
         options = ClaudeCodeOptions(

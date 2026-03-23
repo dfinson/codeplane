@@ -178,6 +178,19 @@ class PlatformConfig:
 
 
 @dataclass
+class TelemetryConfig:
+    """Telemetry / observability configuration."""
+
+    # Set to push telemetry to an external OTLP collector (e.g. "http://localhost:4317").
+    # When unset, telemetry is in-process only (InMemoryReader).
+    otel_exporter_endpoint: str = ""
+    # Optional budget caps for burn-rate projection in the analytics dashboard.
+    claude_monthly_budget_usd: float = 0.0
+    # Copilot entitlement auto-detected from SDK quota snapshots, but overridable.
+    copilot_premium_entitlement: int = 0
+
+
+@dataclass
 class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -187,6 +200,7 @@ class CPLConfig:
     completion: CompletionConfig = field(default_factory=CompletionConfig)
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -232,6 +246,7 @@ def load_config(path: Path | None = None) -> CPLConfig:
         completion=_parse_section(raw, CompletionConfig, "completion"),
         terminal=_parse_section(raw, TerminalConfig, "terminal"),
         verification=_parse_section(raw, VerificationConfig, "verification"),
+        telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )

@@ -128,6 +128,31 @@ function formatUsd(amount: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// CacheEfficiencyBar — visual cache hit rate with color coding
+// ---------------------------------------------------------------------------
+
+function CacheEfficiencyBar({ inputTokens, cacheReadTokens }: { inputTokens: number; cacheReadTokens: number }) {
+  const rate = inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : 0;
+  const color = rate >= 60 ? "text-green-400" : rate >= 30 ? "text-yellow-400" : "text-red-400";
+  const barColor = rate >= 60 ? "bg-green-500" : rate >= 30 ? "bg-yellow-500" : "bg-red-500";
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-muted-foreground">Cache Efficiency</span>
+        <span className={cn("font-semibold tabular-nums", color)}>{rate.toFixed(0)}%</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all duration-300", barColor)}
+          style={{ width: `${Math.min(100, rate)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CostSection component
 // ---------------------------------------------------------------------------
 
@@ -530,6 +555,13 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                     <p className="text-muted-foreground">Cache Write</p>
                   </div>
                 </div>
+                {/* Cache efficiency bar */}
+                {(data.inputTokens ?? 0) > 0 && (
+                  <CacheEfficiencyBar
+                    inputTokens={data.inputTokens ?? 0}
+                    cacheReadTokens={data.cacheReadTokens ?? 0}
+                  />
+                )}
               </div>
 
               {/* Context window */}

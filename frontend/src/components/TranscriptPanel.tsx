@@ -600,8 +600,6 @@ export function TranscriptPanel({
   interactive,
   pausable,
   jobState,
-  resolution,
-  archivedAt,
   prompt,
   promptTimestamp,
 }: {
@@ -676,21 +674,19 @@ export function TranscriptPanel({
   }, [displayItems.length, virtualizer]);
 
   const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
-  const shouldCreateFollowUp =
-    isTerminal &&
-    (!!archivedAt || resolution === "merged" || resolution === "pr_created" || resolution === "discarded");
 
   const handleSend = useCallback(async () => {
     if (!msg.trim()) return;
     setSending(true);
     try {
       if (isTerminal) {
-        if (shouldCreateFollowUp) {
+        try {
+          await resumeJob(jobId, msg.trim());
+        } catch {
+          // Worktree gone / unrecoverable — fall back to follow-up job
           const nextJob = await continueJob(jobId, msg.trim());
           toast.success("Follow-up job created");
           navigate(`/jobs/${nextJob.id}`);
-        } else {
-          await resumeJob(jobId, msg.trim());
         }
       } else {
         await sendOperatorMessage(jobId, msg.trim());
@@ -701,7 +697,7 @@ export function TranscriptPanel({
     } finally {
       setSending(false);
     }
-  }, [jobId, msg, isTerminal, navigate, shouldCreateFollowUp]);
+  }, [jobId, msg, isTerminal, navigate]);
 
   const handlePause = useCallback(async () => {
     setPausing(true);

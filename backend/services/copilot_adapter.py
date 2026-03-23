@@ -47,6 +47,7 @@ class CopilotAdapter(AgentAdapterInterface):
         self,
         approval_service: ApprovalService | None = None,
         event_bus: EventBus | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         self._queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._sessions: dict[str, CopilotSession] = {}
@@ -56,16 +57,58 @@ class CopilotAdapter(AgentAdapterInterface):
         self._tool_call_buffer: dict[str, dict[str, str]] = {}  # tool_call_id → {tool_name, tool_args, turn_id}
         self._approval_service = approval_service
         self._event_bus = event_bus
+        self._session_factory = session_factory
+        # Per-job monotonic start time for computing span offsets
+        self._job_start_times: dict[str, float] = {}
+        # Per-job confirmed main model
+        self._job_main_models: dict[str, str] = {}
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
+        import time as _time
+
         self._session_to_job[session_id] = job_id
+        self._job_start_times.setdefault(job_id, _time.monotonic())
+
+    def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
+        """Schedule an async DB write from a synchronous SDK callback."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            pass  # No event loop — skip DB write (shouldn't happen in normal operation)
+
+    async def _db_write(self, fn_name: str, **kwargs: Any) -> None:
+        """Execute a telemetry DB write in its own session."""
+        if self._session_factory is None:
+            return
+        try:
+            async with self._session_factory() as session:
+                from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+                from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
+
+                if fn_name == "increment":
+                    await TelemetrySummaryRepo(session).increment(**kwargs)
+                elif fn_name == "insert_span":
+                    await TelemetrySpansRepo(session).insert(**kwargs)
+                elif fn_name == "set_model":
+                    await TelemetrySummaryRepo(session).set_model(**kwargs)
+                elif fn_name == "set_context":
+                    await TelemetrySummaryRepo(session).set_context(**kwargs)
+                elif fn_name == "set_quota":
+                    await TelemetrySummaryRepo(session).set_quota(**kwargs)
+                await session.commit()
+        except Exception:
+            log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
 
     def _cleanup_session(self, session_id: str) -> None:
         """Remove session and queue references for a completed/aborted session."""
+        job_id = self._session_to_job.pop(session_id, None)
         self._sessions.pop(session_id, None)
         self._queues.pop(session_id, None)
-        self._session_to_job.pop(session_id, None)
+        if job_id:
+            self._job_start_times.pop(job_id, None)
+            self._job_main_models.pop(job_id, None)
 
     async def _handle_permission_request(
         self,
@@ -282,12 +325,17 @@ class CopilotAdapter(AgentAdapterInterface):
         self,
         data: Any,
         job_id: str,
-        tel: Any,
         requested_model: str,
         model_verified: list[bool],
         queue: asyncio.Queue[SessionEvent | None],
     ) -> None:
+        import time as _time
+
+        from backend.services import telemetry as tel
+
         actual_model = data.model or ""
+        is_subagent = False
+
         if not model_verified[0] and requested_model and actual_model:
             model_verified[0] = True
             if actual_model != requested_model:
@@ -308,39 +356,93 @@ class CopilotAdapter(AgentAdapterInterface):
                 )
             else:
                 log.info("model_confirmed", model=actual_model, job_id=job_id)
-            # Lock in the main model once confirmed (on first usage event)
-            tel.set_main_model(job_id, actual_model)
-        tel.record_llm_usage(
-            job_id,
-            model=actual_model,
-            input_tokens=int(data.input_tokens or 0),
-            output_tokens=int(data.output_tokens or 0),
-            cache_read_tokens=int(data.cache_read_tokens or 0),
-            cache_write_tokens=int(data.cache_write_tokens or 0),
-            cost=float(data.cost or 0),
-            duration_ms=float(data.duration or 0),
-        )
+            self._job_main_models[job_id] = actual_model
+            self._schedule_db_write(self._db_write("set_model", job_id=job_id, model=actual_model))
+
+        # Sub-agent detection
+        main_model = self._job_main_models.get(job_id, "")
+        if main_model and actual_model and actual_model != main_model:
+            is_subagent = True
+
+        input_toks = int(data.input_tokens or 0)
+        output_toks = int(data.output_tokens or 0)
+        cache_read = int(data.cache_read_tokens or 0)
+        cache_write = int(data.cache_write_tokens or 0)
+        cost = float(data.cost or 0)
+        duration_ms = float(data.duration or 0)
+
+        attrs = {"job_id": job_id, "sdk": "copilot", "model": actual_model}
+
+        # OTEL instruments
+        tel.tokens_input.add(input_toks, attrs)
+        tel.tokens_output.add(output_toks, attrs)
+        tel.tokens_cache_read.add(cache_read, attrs)
+        tel.tokens_cache_write.add(cache_write, attrs)
+        tel.cost_usd.add(cost, attrs)
+        tel.llm_duration.record(duration_ms, {**attrs, "is_subagent": is_subagent})
+
+        # SQLite summary increment
+        self._schedule_db_write(self._db_write(
+            "increment",
+            job_id=job_id,
+            input_tokens=input_toks,
+            output_tokens=output_toks,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
+            total_cost_usd=cost,
+            llm_call_count=1,
+            total_llm_duration_ms=int(duration_ms),
+        ))
+
+        # SQLite span detail
+        start_time = self._job_start_times.get(job_id, _time.monotonic())
+        offset = _time.monotonic() - start_time
+        self._schedule_db_write(self._db_write(
+            "insert_span",
+            job_id=job_id,
+            span_type="llm",
+            name=actual_model or "unknown",
+            started_at=round(offset, 2),
+            duration_ms=duration_ms,
+            attrs={
+                "input_tokens": input_toks,
+                "output_tokens": output_toks,
+                "cache_read_tokens": cache_read,
+                "cache_write_tokens": cache_write,
+                "cost": cost,
+                "is_subagent": is_subagent,
+            },
+        ))
+
         # Capture Copilot quota snapshots if present
         raw_snapshots = getattr(data, "quota_snapshots", None)
         if raw_snapshots:
-            from backend.services.telemetry import QuotaSnapshot
+            import json as _json
 
-            parsed = {
-                key: QuotaSnapshot(
-                    used_requests=float(getattr(snap, "used_requests", 0) or 0),
-                    entitlement_requests=float(getattr(snap, "entitlement_requests", 0) or 0),
-                    remaining_percentage=float(getattr(snap, "remaining_percentage", 0) or 0),
-                    overage=float(getattr(snap, "overage", 0) or 0),
-                    overage_allowed=bool(getattr(snap, "overage_allowed_with_exhausted_quota", False)),
-                    is_unlimited=bool(getattr(snap, "is_unlimited_entitlement", False)),
-                    usage_allowed_with_exhausted_quota=bool(getattr(snap, "usage_allowed_with_exhausted_quota", False)),
-                    reset_date=str(getattr(snap, "reset_date", "") or ""),
-                )
-                for key, snap in raw_snapshots.items()
-            }
-            tel.record_quota_snapshots(job_id, snapshots=parsed)
+            parsed: dict[str, dict[str, Any]] = {}
+            for key, snap in raw_snapshots.items():
+                used = float(getattr(snap, "used_requests", 0) or 0)
+                entitlement = float(getattr(snap, "entitlement_requests", 0) or 0)
+                remaining = float(getattr(snap, "remaining_percentage", 0) or 0)
+                parsed[key] = {
+                    "used_requests": used,
+                    "entitlement_requests": entitlement,
+                    "remaining_percentage": remaining,
+                    "overage": float(getattr(snap, "overage", 0) or 0),
+                    "overage_allowed": bool(getattr(snap, "overage_allowed_with_exhausted_quota", False)),
+                    "is_unlimited": bool(getattr(snap, "is_unlimited_entitlement", False)),
+                    "reset_date": str(getattr(snap, "reset_date", "") or ""),
+                }
+                # OTEL gauges
+                tel.quota_used_gauge.set(used, {"job_id": job_id, "sdk": "copilot", "resource": key})
+                tel.quota_entitlement_gauge.set(entitlement, {"job_id": job_id, "sdk": "copilot", "resource": key})
+                tel.quota_remaining_gauge.set(remaining, {"job_id": job_id, "sdk": "copilot", "resource": key})
 
-    def _handle_tool_start(self, data: Any, job_id: str, tel: Any) -> None:
+            self._schedule_db_write(self._db_write(
+                "set_quota", job_id=job_id, quota_json=_json.dumps(parsed),
+            ))
+
+    def _handle_tool_start(self, data: Any, job_id: str) -> None:
         tool_id = data.tool_call_id or ""
         import json as _json
         import time as _time
@@ -373,39 +475,72 @@ class CopilotAdapter(AgentAdapterInterface):
             "tool_title": tool_title,
         }
 
-    def _handle_tool_end(self, data: Any, job_id: str, tel: Any) -> None:
+    def _handle_tool_end(self, data: Any, job_id: str) -> None:
         tool_id = data.tool_call_id or ""
         import time as _time
+
+        from backend.services import telemetry as tel
 
         start = self._tool_start_times.pop(tool_id, _time.monotonic())
         dur = (_time.monotonic() - start) * 1000
         # Prefer the display name buffered at tool.execution_start
         buffered_name = self._tool_call_buffer.get(tool_id, {}).get("tool_name")
         resolved_name = buffered_name or data.tool_name or data.mcp_tool_name or "tool"
-        tel.record_tool_call(
-            job_id,
-            tool_name=resolved_name,
+        success = bool(data.success) if data.success is not None else True
+
+        attrs = {"job_id": job_id, "sdk": "copilot", "tool_name": resolved_name, "success": success}
+        tel.tool_duration.record(dur, attrs)
+
+        # SQLite writes
+        self._schedule_db_write(self._db_write(
+            "increment",
+            job_id=job_id,
+            tool_call_count=1,
+            tool_failure_count=0 if success else 1,
+            total_tool_duration_ms=int(dur),
+        ))
+
+        job_start = self._job_start_times.get(job_id, _time.monotonic())
+        offset = _time.monotonic() - job_start
+        self._schedule_db_write(self._db_write(
+            "insert_span",
+            job_id=job_id,
+            span_type="tool",
+            name=resolved_name,
+            started_at=round(offset, 2),
             duration_ms=dur,
-            success=bool(data.success) if data.success is not None else True,
-        )
+            attrs={"success": success},
+        ))
 
-    def _handle_context_changed(self, data: Any, job_id: str, tel: Any) -> None:
-        tel.record_context_change(
-            job_id,
-            current_tokens=int(data.current_tokens or 0),
-        )
+    def _handle_context_changed(self, data: Any, job_id: str) -> None:
+        from backend.services import telemetry as tel
 
-    def _handle_compaction(self, data: Any, job_id: str, tel: Any) -> None:
-        tel.record_compaction(
-            job_id,
-            pre_tokens=int(data.pre_compaction_tokens or 0),
-            post_tokens=int(data.post_compaction_tokens or 0),
-        )
-        if data.post_compaction_tokens:
-            tel.record_context_change(
-                job_id,
-                current_tokens=int(data.post_compaction_tokens),
-            )
+        current = int(data.current_tokens or 0)
+        attrs = {"job_id": job_id, "sdk": "copilot"}
+        tel.context_tokens_gauge.set(current, attrs)
+
+        self._schedule_db_write(self._db_write(
+            "set_context", job_id=job_id, current_tokens=current,
+        ))
+
+    def _handle_compaction(self, data: Any, job_id: str) -> None:
+        from backend.services import telemetry as tel
+
+        pre = int(data.pre_compaction_tokens or 0)
+        post = int(data.post_compaction_tokens or 0)
+        attrs = {"job_id": job_id, "sdk": "copilot"}
+        tel.compactions_counter.add(1, attrs)
+        tel.tokens_compacted.add(max(0, pre - post), attrs)
+
+        self._schedule_db_write(self._db_write(
+            "increment", job_id=job_id, compactions=1, tokens_compacted=max(0, pre - post),
+        ))
+
+        if post:
+            tel.context_tokens_gauge.set(post, attrs)
+            self._schedule_db_write(self._db_write(
+                "set_context", job_id=job_id, current_tokens=post,
+            ))
 
     # --- Log emission ---
 
@@ -638,32 +773,52 @@ class CopilotAdapter(AgentAdapterInterface):
             payload = sdk_event.data.to_dict() if sdk_event.data else {}
             data = sdk_event.data
 
-            # --- Copilot SDK → standard telemetry contract ---
+            # --- Copilot SDK → OTEL telemetry + SQLite ---
             job_id = self._session_to_job.get(session_id)
             if job_id and data:
-                from backend.services.telemetry import collector as tel
+                from backend.services import telemetry as tel
 
                 handler_name = self._TELEMETRY_DISPATCH.get(kind_str)
                 if handler_name:
                     handler = getattr(self, handler_name)
                     if kind_str == "assistant.usage":
-                        handler(data, job_id, tel, requested_model, _model_verified, queue)
+                        handler(data, job_id, requested_model, _model_verified, queue)
                     else:
-                        handler(data, job_id, tel)
+                        handler(data, job_id)
                 elif kind_str == "session.truncation":
                     if data.token_limit:
-                        tel.record_context_change(job_id, window_size=int(data.token_limit))
+                        window = int(data.token_limit)
+                        tel.context_window_gauge.set(
+                            window, {"job_id": job_id, "sdk": "copilot"}
+                        )
+                        self._schedule_db_write(
+                            self._db_write("set_context", job_id=job_id, window_size=window)
+                        )
                 elif kind_str == "session.model_change":
                     if data.new_model:
-                        tel.set_main_model(job_id, data.new_model)
+                        self._job_main_models[job_id] = data.new_model
+                        self._schedule_db_write(
+                            self._db_write("set_model", job_id=job_id, model=data.new_model)
+                        )
                 elif kind_str == "assistant.message":
-                    tel.record_message(job_id, role="agent")
+                    tel.messages_counter.add(1, {"job_id": job_id, "sdk": "copilot", "role": "agent"})
+                    self._schedule_db_write(
+                        self._db_write("increment", job_id=job_id, agent_messages=1)
+                    )
                 elif kind_str == "user.message":
-                    tel.record_message(job_id, role="operator")
+                    tel.messages_counter.add(1, {"job_id": job_id, "sdk": "copilot", "role": "operator"})
+                    self._schedule_db_write(
+                        self._db_write("increment", job_id=job_id, operator_messages=1)
+                    )
                 elif kind_str == "session.shutdown":
                     total_pr = getattr(data, "total_premium_requests", None)
                     if data and total_pr is not None:
-                        tel.record_premium_requests(job_id, count=float(total_pr))
+                        tel.premium_requests_counter.add(
+                            float(total_pr), {"job_id": job_id, "sdk": "copilot"}
+                        )
+                        self._schedule_db_write(
+                            self._db_write("increment", job_id=job_id, premium_requests=float(total_pr))
+                        )
 
             # --- Emit log events for operational SDK events ---
             self._emit_log_event(kind_str, data, requested_model, queue, log_seq)

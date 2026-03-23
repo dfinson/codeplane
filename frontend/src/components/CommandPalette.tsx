@@ -11,6 +11,7 @@ import {
   Settings,
   TerminalSquare,
   ArrowRight,
+  BarChart3,
 } from "lucide-react";
 
 interface PaletteItem {
@@ -70,6 +71,14 @@ export function CommandPalette() {
         icon: <Settings className="h-4 w-4" />,
         action: () => navigate("/settings"),
         keywords: ["config", "preferences", "options"],
+      },
+      {
+        id: "analytics",
+        label: "Analytics",
+        description: "Fleet telemetry dashboard",
+        icon: <BarChart3 className="h-4 w-4" />,
+        action: () => navigate("/analytics"),
+        keywords: ["metrics", "telemetry", "cost", "usage", "dashboard", "stats"],
       },
       // Context-aware terminal entries: show job terminal first when inside a job view
       ...(currentJob?.worktreePath && !currentJob?.archivedAt && currentJobId

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, lazy, Suspense } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, RotateCcw, XCircle, ExternalLink, CheckCircle2, AlertTriangle, ArrowDownCircle, GitMerge, GitPullRequest, Trash2, Archive, FolderTree, FolderGit2, GitBranch, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
 import { formatJobTerminalLabel } from "../lib/terminalLabels";
 import { fetchJob, cancelJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts, resumeJob } from "../api/client";
+import { lazyRetry } from "../lib/lazyRetry";
 import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
@@ -21,9 +22,9 @@ import { JobDetailSkeleton } from "./JobDetailSkeleton";
 import { Tooltip } from "./ui/tooltip";
 import { ConfirmDialog } from "./ui/confirm-dialog";
 
-const WorkspaceBrowser = lazy(() => import("./WorkspaceBrowser"));
-const DiffViewer = lazy(() => import("./DiffViewer"));
-const ArtifactViewer = lazy(() => import("./ArtifactViewer"));
+const WorkspaceBrowser = lazyRetry(() => import("./WorkspaceBrowser"));
+const DiffViewer = lazyRetry(() => import("./DiffViewer"));
+const ArtifactViewer = lazyRetry(() => import("./ArtifactViewer"));
 
 const SKELETON_DELAY_MS = 500;
 
@@ -170,8 +171,9 @@ export function JobDetailScreen() {
     if (!jobId) return;
     const updated = await cancelJob(jobId);
     useStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
-    toast.success("Job canceled");
-  }, [jobId]);
+    toast.success("Job canceled and archived");
+    navigate("/");
+  }, [jobId, navigate]);
 
   const handleResume = useCallback(async () => {
     if (!jobId) return;
@@ -294,9 +296,10 @@ export function JobDetailScreen() {
   const canResume = job.state === "failed";
   const isRunning = job.state === "running";
   const hasMergeConflict =
-    job.resolution === "conflict" ||
+    !["merged", "pr_created", "discarded"].includes(job.resolution ?? "") &&
+    (job.resolution === "conflict" ||
     job.mergeStatus === "conflict" ||
-    ((job.conflictFiles?.length ?? 0) > 0);
+    ((job.conflictFiles?.length ?? 0) > 0));
   const unresolvedResolutionError =
     !hasMergeConflict && (job.resolution === "unresolved" || !job.resolution)
       ? (job.resolutionError ?? null)
@@ -529,11 +532,13 @@ export function JobDetailScreen() {
                     {isConflict ? "Merge conflict — user input required" : isSignOff ? "Sign off required" : "Job succeeded"}
                   </p>
                   <p className={`text-sm mt-0.5 ${isConflict ? "text-amber-400" : isSignOff ? "text-blue-400" : "text-green-400"}`}>
-                    {job.resolution === "merged" && "Changes merged into base branch."}
-                    {job.resolution === "pr_created" && "Pull request created."}
-                    {job.resolution === "discarded" && (hasChanges ? "Changes discarded." : "Completed — no changes to merge.")}
-                    {isConflict && "Merge conflict detected. Resolve with the agent, create a PR to fix manually, or discard."}
-                    {isSignOff && (
+                    {isConflict
+                      ? "Merge conflict detected. Resolve with the agent, create a PR to fix manually, or discard."
+                      : job.resolution === "merged" ? "Changes merged into base branch."
+                      : job.resolution === "pr_created" ? "Pull request created."
+                      : job.resolution === "discarded" ? (hasChanges ? "Changes discarded." : "Completed — no changes to merge.")
+                      : null}
+                    {!isConflict && isSignOff && (
                       hasChanges
                         ? "Choose how to handle the changes: auto merge onto the main worktree, create a PR, or discard."
                         : "Completed with no changes to merge."
@@ -626,9 +631,9 @@ export function JobDetailScreen() {
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
         onConfirm={doCancelJob}
-        title="Cancel Job?"
-        description="This will stop the running agent. Any uncommitted work will remain in the worktree."
-        confirmLabel="Cancel Job"
+        title="Cancel & Archive Job?"
+        description="This will stop the running agent and archive the job. The worktree and branch will be cleaned up."
+        confirmLabel="Cancel & Archive"
       />
 
       <ConfirmDialog

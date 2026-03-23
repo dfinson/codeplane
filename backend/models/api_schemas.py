@@ -60,6 +60,9 @@ class ArtifactType(StrEnum):
     agent_summary = "agent_summary"
     session_snapshot = "session_snapshot"
     session_log = "session_log"
+    agent_plan = "agent_plan"
+    telemetry_report = "telemetry_report"
+    approval_history = "approval_history"
     document = "document"
     custom = "custom"
 

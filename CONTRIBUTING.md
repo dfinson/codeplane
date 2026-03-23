@@ -13,7 +13,7 @@
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
 make install
-cp .env.sample .env          # optional — set CPL_TUNNEL_PASSWORD for tunnel auth
+cp .env.sample .env          # optional — set CPL_DEVTUNNEL_PASSWORD for tunnel auth
 ```
 
 ## Development

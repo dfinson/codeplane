@@ -582,39 +582,95 @@ async def get_job_telemetry(
 ) -> dict[str, object]:
     """Get telemetry data for a job run.
 
-    Returns in-memory live telemetry when available.  Falls back to the
-    persisted snapshot (written at session end) so metrics are always
-    visible even after backend restarts or for archived / terminal jobs.
+    Returns the persisted telemetry summary from the OTEL-backed SQLite store.
+    Includes per-call span detail (tool calls, LLM calls) when available.
     """
-    from backend.services.telemetry import TelemetryCollector, collector
-
-    tel = collector.get(job_id)
+    import json
 
     from backend.persistence.job_repo import JobRepository
-    from backend.persistence.metrics_repo import MetricsRepository
+    from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-    job_repo = JobRepository(session)
-
-    if tel is None:
-        # Try loading from the persisted job_metrics snapshot.
-        snapshot = await MetricsRepository(session).load_snapshot(job_id)
-        if snapshot:
-            # Reconstruct a transient JobTelemetry so we can call to_dict()
-            # which produces the camelCase API shape.
-            temp = TelemetryCollector()
-            temp.start_job(job_id)
-            temp.restore_from_snapshot(job_id, snapshot)
-            temp.end_job(job_id)
-            temp_tel = temp.get(job_id)
-            if temp_tel is not None:
-                job_row = await job_repo.get(job_id)
-                sdk = job_row.sdk if job_row else ""
-                return {**temp_tel.to_dict(), "sdk": sdk, "available": True}
+    summary = await TelemetrySummaryRepo(session).get(job_id)
+    if summary is None:
         return {"jobId": job_id, "available": False}
 
-    job_row = await job_repo.get(job_id)
+    job_row = await JobRepository(session).get(job_id)
     sdk = job_row.sdk if job_row else ""
-    return {**tel.to_dict(), "sdk": sdk, "available": True}
+
+    # Parse quota JSON if present
+    quota_snapshots = None
+    if summary.get("quota_json"):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            quota_snapshots = json.loads(summary["quota_json"])
+
+    # Compute derived fields
+    input_tok = summary.get("input_tokens", 0)
+    output_tok = summary.get("output_tokens", 0)
+    cache_read = summary.get("cache_read_tokens", 0)
+    window_size = summary.get("context_window_size", 0)
+    current_ctx = summary.get("current_context_tokens", 0)
+
+    # Load span detail for tool/LLM call breakdowns
+    spans = await TelemetrySpansRepo(session).list_for_job(job_id)
+    tool_calls = []
+    llm_calls = []
+    for span in spans:
+        attrs = span.get("attrs", {})
+        if span.get("span_type") == "tool":
+            tool_calls.append({
+                "name": span["name"],
+                "durationMs": float(span.get("duration_ms", 0)),
+                "success": attrs.get("success", True),
+                "offsetSec": float(span.get("started_at", 0)),
+            })
+        elif span.get("span_type") == "llm":
+            llm_calls.append({
+                "model": span["name"],
+                "inputTokens": attrs.get("input_tokens", 0),
+                "outputTokens": attrs.get("output_tokens", 0),
+                "cacheReadTokens": attrs.get("cache_read_tokens", 0),
+                "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
+                "cost": attrs.get("cost", 0),
+                "durationMs": float(span.get("duration_ms", 0)),
+                "isSubagent": attrs.get("is_subagent", False),
+                "offsetSec": float(span.get("started_at", 0)),
+            })
+
+    result: dict[str, object] = {
+        "available": True,
+        "jobId": job_id,
+        "sdk": sdk,
+        "model": summary.get("model", ""),
+        "mainModel": summary.get("model", ""),
+        "durationMs": summary.get("duration_ms", 0),
+        "inputTokens": input_tok,
+        "outputTokens": output_tok,
+        "totalTokens": input_tok + output_tok,
+        "cacheReadTokens": cache_read,
+        "cacheWriteTokens": summary.get("cache_write_tokens", 0),
+        "totalCost": float(summary.get("total_cost_usd", 0)),
+        "contextWindowSize": window_size,
+        "currentContextTokens": current_ctx,
+        "contextUtilization": (current_ctx / window_size) if window_size else 0,
+        "compactions": summary.get("compactions", 0),
+        "tokensCompacted": summary.get("tokens_compacted", 0),
+        "toolCallCount": summary.get("tool_call_count", 0),
+        "totalToolDurationMs": summary.get("total_tool_duration_ms", 0),
+        "toolCalls": tool_calls,
+        "llmCallCount": summary.get("llm_call_count", 0),
+        "totalLlmDurationMs": summary.get("total_llm_duration_ms", 0),
+        "llmCalls": llm_calls,
+        "approvalCount": summary.get("approval_count", 0),
+        "totalApprovalWaitMs": summary.get("approval_wait_ms", 0),
+        "agentMessages": summary.get("agent_messages", 0),
+        "operatorMessages": summary.get("operator_messages", 0),
+        "premiumRequests": float(summary.get("premium_requests", 0)),
+    }
+    if quota_snapshots is not None:
+        result["quotaSnapshots"] = quota_snapshots
+
+    return result
 
 
 @router.post("/jobs/{job_id}/resolve", response_model=ResolveJobResponse)

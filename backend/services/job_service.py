@@ -406,14 +406,20 @@ class JobService:
         return job
 
     async def cancel_job(self, job_id: str) -> Job:
-        """Cancel a running or queued job. Raises StateConflictError if not cancellable."""
+        """Cancel a running or queued job and auto-archive it.
+
+        Cancelled jobs are immediately archived so they don't clutter the
+        Kanban board — cancellation is a deliberate operator action.
+        """
         job = await self.get_job(job_id)
         if job.state in TERMINAL_STATES:
             raise StateConflictError(f"Cannot cancel job {job_id}: already in terminal state '{job.state}'.")
         try:
-            return await self.transition_state(job_id, JobState.canceled)
+            job = await self.transition_state(job_id, JobState.canceled)
         except InvalidStateTransitionError as exc:
             raise StateConflictError(str(exc)) from exc
+        await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+        return await self.get_job(job_id)
 
     async def rerun_job(self, job_id: str) -> Job:
         """Create a new job from an existing job's configuration."""

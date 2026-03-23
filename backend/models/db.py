@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase
 
 from backend.models.domain import PermissionMode
@@ -103,16 +103,55 @@ class DiffSnapshotRow(Base):
     __table_args__ = (Index("idx_diff_snapshots_job_id", "job_id"),)
 
 
-class JobMetricsRow(Base):
-    """Persisted telemetry snapshot for a job.
+class JobTelemetrySummaryRow(Base):
+    """Denormalized per-job telemetry — upserted on every telemetry event."""
 
-    Written at the end of every session so that cumulative metrics survive
-    daemon restarts and are available when a job is resumed.  Only one row
-    per job — upserted on each session end.
-    """
-
-    __tablename__ = "job_metrics"
+    __tablename__ = "job_telemetry_summary"
 
     job_id = Column(String, ForeignKey("jobs.id"), primary_key=True)
-    snapshot_json = Column(Text, nullable=False)  # JSON — see JobTelemetry.to_snapshot()
+    sdk = Column(String, nullable=False)
+    model = Column(String, nullable=False, default="")
+    repo = Column(String, nullable=False, default="")
+    branch = Column(String, nullable=False, default="")
+    status = Column(String, nullable=False, default="running")
+    created_at = Column(TZDateTime, nullable=False)
+    completed_at = Column(TZDateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    total_cost_usd = Column(Float, nullable=False, default=0.0)
+    premium_requests = Column(Float, nullable=False, default=0.0)
+    llm_call_count = Column(Integer, nullable=False, default=0)
+    total_llm_duration_ms = Column(Integer, nullable=False, default=0)
+    tool_call_count = Column(Integer, nullable=False, default=0)
+    tool_failure_count = Column(Integer, nullable=False, default=0)
+    total_tool_duration_ms = Column(Integer, nullable=False, default=0)
+    compactions = Column(Integer, nullable=False, default=0)
+    tokens_compacted = Column(Integer, nullable=False, default=0)
+    approval_count = Column(Integer, nullable=False, default=0)
+    approval_wait_ms = Column(Integer, nullable=False, default=0)
+    agent_messages = Column(Integer, nullable=False, default=0)
+    operator_messages = Column(Integer, nullable=False, default=0)
+    context_window_size = Column(Integer, nullable=False, default=0)
+    current_context_tokens = Column(Integer, nullable=False, default=0)
+    quota_json = Column(Text, nullable=True)
     updated_at = Column(TZDateTime, nullable=False)
+
+
+class JobTelemetrySpanRow(Base):
+    """Individual LLM or tool call — append-only."""
+
+    __tablename__ = "job_telemetry_spans"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
+    span_type = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    started_at = Column(Text, nullable=False)  # float stored as text
+    duration_ms = Column(Text, nullable=False)
+    attrs_json = Column(Text, nullable=False)
+    created_at = Column(TZDateTime, nullable=False)
+
+    __table_args__ = (Index("idx_spans_job", "job_id"),)

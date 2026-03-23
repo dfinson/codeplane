@@ -4,8 +4,8 @@ Hard-blocked operations (e.g. ``git reset --hard``) must never be
 auto-resolved by a blanket trust grant.  This column flags those approvals
 so the operator is always required to click Approve explicitly.
 
-Revision ID: 0006_add_requires_explicit_approval
-Revises: 0005_add_indexes_and_version
+Revision ID: 0007_add_requires_explicit_approval
+Revises: 0006_otel_telemetry
 Create Date: 2026-03-22
 
 """
@@ -17,8 +17,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0006_add_requires_explicit_approval"
-down_revision: Union[str, None] = "0005_add_indexes_and_version"
+revision: str = "0007_add_requires_explicit_approval"
+down_revision: Union[str, None] = "0006_otel_telemetry"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

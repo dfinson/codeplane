@@ -1,550 +1,151 @@
-"""Agent-agnostic telemetry collection.
+"""OTEL-native telemetry for CodePlane.
 
-Defines a standard telemetry contract that any agent adapter
-(Copilot SDK, Claude Code, etc.) feeds into via simple method calls.
-The adapter is responsible for translating SDK-specific events into
-these standardized telemetry operations.
+Provides OpenTelemetry instruments (counters, histograms, gauges) that agent
+adapters call directly.  An in-process ``InMemoryMetricReader`` is always
+active so the API can serve live telemetry with zero config.  An optional
+OTLP exporter can be activated by setting ``OTEL_EXPORTER_ENDPOINT`` to push
+to Grafana / Jaeger / Prometheus.
 
-Contract:
-  telemetry.start_job(job_id)
-  telemetry.end_job(job_id)
-  telemetry.record_llm_usage(job_id, ...)          # token counts, model, cost
-  telemetry.record_tool_call(job_id, ...)           # tool invocation
-  telemetry.record_context_change(job_id, ...)      # context window state
-  telemetry.record_approval(job_id, ...)            # approval wait
-  telemetry.record_message(job_id, ...)             # conversation messages
-  telemetry.record_premium_requests(job_id, ...)    # Copilot premium req count
-  telemetry.record_quota_snapshots(job_id, ...)     # Copilot quota snapshots
-  telemetry.get(job_id) -> JobTelemetry             # read aggregated data
+Adapters import the instruments and call them with standard OTEL attributes::
+
+    from backend.services.telemetry import tokens_input, llm_duration, tracer
+
+    attrs = {"job_id": jid, "sdk": "copilot", "model": "gpt-4o"}
+    tokens_input.add(500, attrs)
+    llm_duration.record(1200.0, {**attrs, "is_subagent": False})
 """
 
 from __future__ import annotations
 
-import contextlib
-import dataclasses
-import time
-from dataclasses import dataclass, field, replace
-from typing import Any, cast
+import os
+from typing import Any
 
-# Retention limits for call history lists
-_MAX_LLM_CALLS = 100
-_MAX_TOOL_CALLS = 200
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+# ---------------------------------------------------------------------------
+# Providers — always in-process; optionally export via OTLP
+# ---------------------------------------------------------------------------
 
-def _as_str(value: object, default: str = "") -> str:
-    return value if isinstance(value, str) else default
+_memory_reader = InMemoryMetricReader()
+_span_exporter = InMemorySpanExporter()
 
+_metric_readers: list[Any] = [_memory_reader]
 
-def _as_int(value: object, default: int = 0) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        with contextlib.suppress(ValueError):
-            return int(value)
-    return default
-
-
-def _as_float(value: object, default: float = 0.0) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, int | float):
-        return float(value)
-    if isinstance(value, str):
-        with contextlib.suppress(ValueError):
-            return float(value)
-    return default
-
-
-@dataclass
-class ToolCallRecord:
-    """A single tool invocation."""
-
-    name: str
-    duration_ms: float
-    success: bool
-    timestamp: float
-
-
-@dataclass
-class LLMCallRecord:
-    """A single LLM API call."""
-
-    model: str
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-    cost: float
-    duration_ms: float
-    timestamp: float
-    is_subagent: bool = False
-
-
-@dataclass
-class QuotaSnapshot:
-    """Point-in-time snapshot of a Copilot premium-request quota resource."""
-
-    used_requests: float = 0.0
-    entitlement_requests: float = 0.0
-    remaining_percentage: float = 0.0
-    overage: float = 0.0
-    overage_allowed: bool = False
-    is_unlimited: bool = False
-    usage_allowed_with_exhausted_quota: bool = False
-    reset_date: str = ""
-
-
-@dataclass
-class JobTelemetry:
-    """Aggregated telemetry for a single job run.
-
-    This is the standard shape exposed to the API/UI regardless of
-    which agent SDK produced the data.
-    """
-
-    job_id: str
-    model: str = ""
-    start_time: float = 0.0
-    end_time: float = 0.0
-    # Duration accumulated from previous sessions (carries over on resume)
-    accumulated_duration_ms: float = 0.0
-
-    # Token totals (accumulated across all LLM calls)
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    total_cost: float = 0.0
-
-    # Context window
-    context_window_size: int = 0
-    current_context_tokens: int = 0
-    compactions: int = 0
-    tokens_compacted: int = 0
-
-    # Tool tracking
-    tool_calls: list[ToolCallRecord] = field(default_factory=list)
-    tool_call_count: int = 0
-    total_tool_duration_ms: float = 0.0
-
-    # LLM call tracking
-    llm_calls: list[LLMCallRecord] = field(default_factory=list)
-    llm_call_count: int = 0
-    total_llm_duration_ms: float = 0.0
-
-    # The authoritative model for the *main* agent (not sub-agents).
-    # Set via set_main_model(); sub-agent calls are detected when the model
-    # on a usage event differs from main_model after main_model is known.
-    main_model: str = ""
-
-    # Approval tracking
-    approval_count: int = 0
-    total_approval_wait_ms: float = 0.0
-
-    # Message counts
-    agent_messages: int = 0
-    operator_messages: int = 0
-
-    # --- Cost / quota (populated by the SDK adapter) ---
-    # Copilot: premium requests consumed this session (from session.shutdown).
-    premium_requests: float = 0.0
-    # Latest quota snapshot per resource key (from assistant.usage quota_snapshots).
-    # Key is the quota resource identifier emitted by the Copilot SDK.
-    quota_snapshots: dict[str, QuotaSnapshot] = field(default_factory=dict)
-
-    @property
-    def duration_ms(self) -> float:
-        if not self.start_time:
-            return self.accumulated_duration_ms
-        end = self.end_time if self.end_time else time.monotonic()
-        return self.accumulated_duration_ms + (end - self.start_time) * 1000
-
-    @property
-    def context_utilization(self) -> float:
-        """Fraction of context window used (0.0-1.0)."""
-        if self.context_window_size <= 0:
-            return 0.0
-        return min(1.0, self.current_context_tokens / self.context_window_size)
-
-    def to_snapshot(self) -> dict[str, object]:
-        """Serialize all cumulative metrics for persistent storage.
-
-        The snapshot captures the full accumulated state at the end of a
-        session so that it can be restored when the job is resumed after a
-        process restart.  Uses snake_case keys (different from to_dict()).
-        """
-        return {
-            "model": self.model,
-            "main_model": self.main_model,
-            # Capture the full duration including the current session
-            "duration_ms": self.duration_ms,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "total_tokens": self.total_tokens,
-            "cache_read_tokens": self.cache_read_tokens,
-            "cache_write_tokens": self.cache_write_tokens,
-            "total_cost": self.total_cost,
-            "compactions": self.compactions,
-            "tokens_compacted": self.tokens_compacted,
-            "tool_call_count": self.tool_call_count,
-            "total_tool_duration_ms": self.total_tool_duration_ms,
-            "tool_calls_raw": [dataclasses.asdict(tc) for tc in self.tool_calls[-_MAX_TOOL_CALLS:]],
-            "llm_call_count": self.llm_call_count,
-            "total_llm_duration_ms": self.total_llm_duration_ms,
-            "llm_calls_raw": [dataclasses.asdict(lc) for lc in self.llm_calls[-_MAX_LLM_CALLS:]],
-            "approval_count": self.approval_count,
-            "total_approval_wait_ms": self.total_approval_wait_ms,
-            "agent_messages": self.agent_messages,
-            "operator_messages": self.operator_messages,
-            "premium_requests": self.premium_requests,
-            "quota_snapshots_raw": {k: dataclasses.asdict(v) for k, v in self.quota_snapshots.items()},
-        }
-
-    def to_dict(self) -> dict[str, object]:
-        """Serialize to API-friendly dict."""
-        return {
-            "jobId": self.job_id,
-            "model": self.model,
-            "mainModel": self.main_model or self.model,
-            "durationMs": round(self.duration_ms),
-            "inputTokens": self.input_tokens,
-            "outputTokens": self.output_tokens,
-            "promptTokens": self.input_tokens,
-            "completionTokens": self.output_tokens,
-            "totalTokens": self.total_tokens,
-            "cacheReadTokens": self.cache_read_tokens,
-            "cacheWriteTokens": self.cache_write_tokens,
-            "totalCost": round(self.total_cost, 6),
-            "contextWindowSize": self.context_window_size,
-            "currentContextTokens": self.current_context_tokens,
-            "contextUtilization": round(self.context_utilization, 3),
-            "compactions": self.compactions,
-            "tokensCompacted": self.tokens_compacted,
-            "toolCallCount": self.tool_call_count,
-            "totalToolDurationMs": round(self.total_tool_duration_ms),
-            "toolCalls": [
-                {
-                    "name": tc.name,
-                    "durationMs": round(tc.duration_ms),
-                    "success": tc.success,
-                    "offsetSec": round(tc.timestamp - self.start_time, 1) if self.start_time else 0,
-                }
-                for tc in self.tool_calls[-_MAX_TOOL_CALLS:]
-            ],
-            "llmCallCount": self.llm_call_count,
-            "totalLlmDurationMs": round(self.total_llm_duration_ms),
-            "llmCalls": [
-                {
-                    "model": lc.model,
-                    "inputTokens": lc.input_tokens,
-                    "outputTokens": lc.output_tokens,
-                    "cacheReadTokens": lc.cache_read_tokens,
-                    "cacheWriteTokens": lc.cache_write_tokens,
-                    "cost": round(lc.cost, 6),
-                    "durationMs": round(lc.duration_ms),
-                    "offsetSec": round(lc.timestamp - self.start_time, 1) if self.start_time else 0,
-                    "isSubagent": lc.is_subagent,
-                }
-                for lc in self.llm_calls[-_MAX_LLM_CALLS:]
-            ],
-            "approvalCount": self.approval_count,
-            "totalApprovalWaitMs": round(self.total_approval_wait_ms),
-            "agentMessages": self.agent_messages,
-            "operatorMessages": self.operator_messages,
-            "premiumRequests": self.premium_requests,
-            "quotaSnapshots": {
-                k: {
-                    "usedRequests": v.used_requests,
-                    "entitlementRequests": v.entitlement_requests,
-                    "remainingPercentage": round(v.remaining_percentage, 1),
-                    "overage": v.overage,
-                    "overageAllowed": v.overage_allowed,
-                    "isUnlimited": v.is_unlimited,
-                    "usageAllowedWithExhaustedQuota": v.usage_allowed_with_exhausted_quota,
-                    "resetDate": v.reset_date,
-                }
-                for k, v in self.quota_snapshots.items()
-            },
-        }
-
-
-class TelemetryCollector:
-    """Agent-agnostic telemetry aggregator.
-
-    Each agent adapter calls these methods to feed telemetry.
-    The collector aggregates per-job and exposes via get()/get_all().
-    """
-
-    def __init__(self) -> None:
-        self._jobs: dict[str, JobTelemetry] = {}
-
-    def start_job(self, job_id: str, model: str = "") -> None:
-        existing = self._jobs.get(job_id)
-        if existing:
-            # Session resumption: carry forward all accumulated metrics; only
-            # reset the monotonic clock so wall-clock time is additive.
-            self._jobs[job_id] = replace(
-                existing,
-                model=model or existing.model,
-                main_model=existing.main_model or model or existing.model,
-                start_time=time.monotonic(),
-                end_time=0.0,
-                accumulated_duration_ms=existing.duration_ms,
-                # context_window_size / current_context_tokens reflect live state;
-                # let the new session overwrite them via record_context_snapshot.
-                compactions=existing.compactions,
-                tokens_compacted=existing.tokens_compacted,
-                tool_calls=existing.tool_calls,
-                tool_call_count=existing.tool_call_count,
-                total_tool_duration_ms=existing.total_tool_duration_ms,
-                llm_calls=existing.llm_calls,
-                llm_call_count=existing.llm_call_count,
-                total_llm_duration_ms=existing.total_llm_duration_ms,
-                approval_count=existing.approval_count,
-                total_approval_wait_ms=existing.total_approval_wait_ms,
-                agent_messages=existing.agent_messages,
-                operator_messages=existing.operator_messages,
-                # Carry over accumulated quota/premium data across resumptions
-                premium_requests=existing.premium_requests,
-                quota_snapshots=existing.quota_snapshots,
-                context_window_size=0,
-                current_context_tokens=0,
-            )
-        else:
-            self._jobs[job_id] = JobTelemetry(
-                job_id=job_id,
-                model=model,
-                main_model=model,
-                start_time=time.monotonic(),
-            )
-
-    def end_job(self, job_id: str) -> None:
-        tel = self._jobs.get(job_id)
-        if tel:
-            tel.end_time = time.monotonic()
-
-    def restore_from_snapshot(self, job_id: str, snapshot: dict[str, object]) -> None:
-        """Restore cumulative metrics from a persisted snapshot.
-
-        Called when resuming a job after a process restart, when in-memory
-        state was lost.  The freshly-created JobTelemetry entry (created by
-        start_job()) is back-filled with the accumulated totals from the
-        snapshot so that metrics continue to grow monotonically across all
-        sessions of a job.
-        """
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-
-        # Scalar cumulative counters
-        tel.model = _as_str(snapshot.get("model"), tel.model) or tel.model
-        tel.main_model = _as_str(snapshot.get("main_model"), tel.main_model) or tel.main_model
-        tel.accumulated_duration_ms = _as_float(snapshot.get("duration_ms"))
-        tel.input_tokens = _as_int(snapshot.get("input_tokens"))
-        tel.output_tokens = _as_int(snapshot.get("output_tokens"))
-        tel.total_tokens = _as_int(snapshot.get("total_tokens"))
-        tel.cache_read_tokens = _as_int(snapshot.get("cache_read_tokens"))
-        tel.cache_write_tokens = _as_int(snapshot.get("cache_write_tokens"))
-        tel.total_cost = _as_float(snapshot.get("total_cost"))
-        tel.compactions = _as_int(snapshot.get("compactions"))
-        tel.tokens_compacted = _as_int(snapshot.get("tokens_compacted"))
-        tel.tool_call_count = _as_int(snapshot.get("tool_call_count"))
-        tel.total_tool_duration_ms = _as_float(snapshot.get("total_tool_duration_ms"))
-        tel.llm_call_count = _as_int(snapshot.get("llm_call_count"))
-        tel.total_llm_duration_ms = _as_float(snapshot.get("total_llm_duration_ms"))
-        tel.approval_count = _as_int(snapshot.get("approval_count"))
-        tel.total_approval_wait_ms = _as_float(snapshot.get("total_approval_wait_ms"))
-        tel.agent_messages = _as_int(snapshot.get("agent_messages"))
-        tel.operator_messages = _as_int(snapshot.get("operator_messages"))
-        tel.premium_requests = _as_float(snapshot.get("premium_requests"))
-
-        # Call history lists
-        raw_tools = snapshot.get("tool_calls_raw", [])
-        if isinstance(raw_tools, list):
-            tel.tool_calls = [ToolCallRecord(**tc) for tc in raw_tools if isinstance(tc, dict)]
-        raw_llm = snapshot.get("llm_calls_raw", [])
-        if isinstance(raw_llm, list):
-            tel.llm_calls = [LLMCallRecord(**lc) for lc in raw_llm if isinstance(lc, dict)]
-
-        # Quota snapshots
-        raw_quotas = snapshot.get("quota_snapshots_raw", {})
-        if isinstance(raw_quotas, dict):
-            tel.quota_snapshots = {
-                str(key): QuotaSnapshot(**cast("dict[str, Any]", value))
-                for key, value in raw_quotas.items()
-                if isinstance(value, dict)
-            }
-
-    def set_main_model(self, job_id: str, model: str) -> None:
-        """Explicitly set the main agent's model (called when the SDK confirms the model).
-
-        This is authoritative: any subsequent LLM call with a *different* model
-        will be tagged as a sub-agent call.
-        """
-        tel = self._jobs.get(job_id)
-        if not tel or not model:
-            return
-        tel.main_model = model
-        tel.model = model
-
-    def record_llm_usage(
-        self,
-        job_id: str,
-        *,
-        model: str = "",
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        cache_read_tokens: int = 0,
-        cache_write_tokens: int = 0,
-        cost: float = 0.0,
-        duration_ms: float = 0.0,
-        is_subagent: bool = False,
-    ) -> None:
-        """Record an LLM API call's token usage and cost."""
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-
-        resolved_model = model or tel.model or tel.main_model
-
-        # Auto-detect sub-agent calls: if we have a confirmed main_model and this
-        # call's model differs, it's a sub-agent process.
-        if not is_subagent and tel.main_model and resolved_model and resolved_model != tel.main_model:
-            is_subagent = True
-
-        # Only update the live model/main_model when this is a main-agent call
-        if not is_subagent and model:
-            tel.model = model
-            if not tel.main_model:
-                tel.main_model = model
-
-        tel.input_tokens += input_tokens
-        tel.output_tokens += output_tokens
-        tel.total_tokens += input_tokens + output_tokens
-        tel.cache_read_tokens += cache_read_tokens
-        tel.cache_write_tokens += cache_write_tokens
-        tel.total_cost += cost
-        tel.llm_call_count += 1
-        tel.total_llm_duration_ms += duration_ms
-        tel.llm_calls.append(
-            LLMCallRecord(
-                model=resolved_model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_write_tokens=cache_write_tokens,
-                cost=cost,
-                duration_ms=duration_ms,
-                timestamp=time.monotonic(),
-                is_subagent=is_subagent,
-            )
+_endpoint = os.environ.get("OTEL_EXPORTER_ENDPOINT", "")
+if _endpoint:
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (  # type: ignore[import-not-found]
+            OTLPMetricExporter,
         )
-        # Keep last _MAX_LLM_CALLS LLM calls
-        if len(tel.llm_calls) > _MAX_LLM_CALLS:
-            tel.llm_calls = tel.llm_calls[-_MAX_LLM_CALLS:]
-
-    def record_tool_call(
-        self,
-        job_id: str,
-        *,
-        tool_name: str,
-        duration_ms: float = 0.0,
-        success: bool = True,
-    ) -> None:
-        """Record a tool invocation."""
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-        tel.tool_calls.append(
-            ToolCallRecord(
-                name=tool_name,
-                duration_ms=duration_ms,
-                success=success,
-                timestamp=time.monotonic(),
-            )
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-not-found]
+            OTLPSpanExporter,
         )
-        tel.tool_call_count += 1
-        tel.total_tool_duration_ms += duration_ms
-        # Keep last _MAX_TOOL_CALLS tool calls
-        if len(tel.tool_calls) > _MAX_TOOL_CALLS:
-            tel.tool_calls = tel.tool_calls[-_MAX_TOOL_CALLS:]
+        from opentelemetry.sdk.metrics.export import (
+            PeriodicExportingMetricReader,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    def record_context_change(
-        self,
-        job_id: str,
-        *,
-        current_tokens: int = 0,
-        window_size: int = 0,
-    ) -> None:
-        """Record a context window state change."""
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-        if current_tokens:
-            tel.current_context_tokens = current_tokens
-        if window_size:
-            tel.context_window_size = window_size
+        _metric_readers.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=_endpoint)))
+        _otlp_span_processor: BatchSpanProcessor | None = BatchSpanProcessor(OTLPSpanExporter(endpoint=_endpoint))
+    except ImportError:
+        _otlp_span_processor = None
+else:
+    _otlp_span_processor = None
 
-    def record_compaction(
-        self,
-        job_id: str,
-        *,
-        pre_tokens: int = 0,
-        post_tokens: int = 0,
-    ) -> None:
-        """Record a context compaction event."""
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-        tel.compactions += 1
-        tel.tokens_compacted += max(0, pre_tokens - post_tokens)
+meter_provider = MeterProvider(metric_readers=_metric_readers)
+tracer_provider = TracerProvider()
+tracer_provider.add_span_processor(SimpleSpanProcessor(_span_exporter))
+if _otlp_span_processor is not None:
+    tracer_provider.add_span_processor(_otlp_span_processor)
 
-    def record_approval(self, job_id: str, *, wait_ms: float = 0.0) -> None:
-        tel = self._jobs.get(job_id)
-        if tel:
-            tel.approval_count += 1
-            tel.total_approval_wait_ms += wait_ms
+metrics.set_meter_provider(meter_provider)
+trace.set_tracer_provider(tracer_provider)
 
-    def record_message(self, job_id: str, *, role: str) -> None:
-        tel = self._jobs.get(job_id)
-        if not tel:
-            return
-        if role == "agent":
-            tel.agent_messages += 1
-        else:
-            tel.operator_messages += 1
+# ---------------------------------------------------------------------------
+# Instruments
+# ---------------------------------------------------------------------------
 
-    def record_premium_requests(self, job_id: str, *, count: float) -> None:
-        """Record total Copilot premium requests consumed (from session.shutdown)."""
-        tel = self._jobs.get(job_id)
-        if tel:
-            tel.premium_requests = count
+meter = metrics.get_meter("codeplane")
+tracer = trace.get_tracer("codeplane")
 
-    def record_quota_snapshots(
-        self,
-        job_id: str,
-        *,
-        snapshots: dict[str, QuotaSnapshot],
-    ) -> None:
-        """Update quota snapshots from a Copilot assistant.usage event."""
-        tel = self._jobs.get(job_id)
-        if tel:
-            tel.quota_snapshots.update(snapshots)
+# Counters (monotonic, incremented per event)
+tokens_input = meter.create_counter("cp.tokens.input", unit="tokens", description="Input tokens consumed")
+tokens_output = meter.create_counter("cp.tokens.output", unit="tokens", description="Output tokens produced")
+tokens_cache_read = meter.create_counter("cp.tokens.cache_read", unit="tokens", description="Cache-read input tokens")
+tokens_cache_write = meter.create_counter(
+    "cp.tokens.cache_write", unit="tokens", description="Cache-write input tokens"
+)
+cost_usd = meter.create_counter("cp.cost", unit="USD", description="Cost in USD")
+compactions_counter = meter.create_counter("cp.compactions", description="Context compaction events")
+tokens_compacted = meter.create_counter(
+    "cp.tokens.compacted", unit="tokens", description="Tokens reclaimed via compaction"
+)
+messages_counter = meter.create_counter("cp.messages", description="Messages exchanged")
+premium_requests_counter = meter.create_counter("cp.premium_requests", description="Copilot premium requests consumed")
+approvals_counter = meter.create_counter("cp.approvals", description="Approval requests")
 
-    def get(self, job_id: str) -> JobTelemetry | None:
-        return self._jobs.get(job_id)
+# Histograms (latency distributions — auto p50/p95/p99)
+llm_duration = meter.create_histogram("cp.llm.duration", unit="ms", description="LLM call duration")
+tool_duration = meter.create_histogram("cp.tool.duration", unit="ms", description="Tool call duration")
+approval_wait = meter.create_histogram("cp.approval.wait", unit="ms", description="Approval wait time")
 
-    def get_all(self) -> dict[str, JobTelemetry]:
-        return dict(self._jobs)
+# Gauges (point-in-time values)
+context_tokens_gauge = meter.create_gauge("cp.context.tokens", description="Current context window token count")
+context_window_gauge = meter.create_gauge("cp.context.window_size", description="Max context window size")
+quota_used_gauge = meter.create_gauge("cp.quota.used", description="Copilot quota used requests")
+quota_entitlement_gauge = meter.create_gauge("cp.quota.entitlement", description="Copilot quota entitlement")
+quota_remaining_gauge = meter.create_gauge("cp.quota.remaining_pct", unit="%", description="Copilot quota remaining %")
+
+# ---------------------------------------------------------------------------
+# Per-job span tracking — root span per job for waterfall views
+# ---------------------------------------------------------------------------
+
+_job_spans: dict[str, trace.Span] = {}
 
 
-# Module-level singleton — intentional.  All agent adapters import ``collector``
-# directly and call its methods to feed telemetry.  A single shared instance is
-# required so that the API layer can read aggregated data for any job regardless
-# of which adapter produced it.  Instantiation is side-effect-free (no I/O).
-collector = TelemetryCollector()
+def start_job_span(
+    job_id: str,
+    sdk: str,
+    model: str = "",
+    repo: str = "",
+    branch: str = "",
+) -> None:
+    """Create a root span for a job run."""
+    span = tracer.start_span(
+        "cp.job",
+        attributes={
+            "job_id": job_id,
+            "sdk": sdk,
+            "model": model,
+            "repo": repo,
+            "branch": branch,
+        },
+    )
+    _job_spans[job_id] = span
+
+
+def end_job_span(job_id: str) -> None:
+    """End the root span for a job run."""
+    span = _job_spans.pop(job_id, None)
+    if span is not None:
+        span.end()
+
+
+# ---------------------------------------------------------------------------
+# Public accessors for API layer
+# ---------------------------------------------------------------------------
+
+
+def get_memory_reader() -> InMemoryMetricReader:
+    """Return the in-memory metric reader for live API queries."""
+    return _memory_reader
+
+
+def get_span_exporter() -> InMemorySpanExporter:
+    """Return the in-memory span exporter for live trace queries."""
+    return _span_exporter

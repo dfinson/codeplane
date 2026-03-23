@@ -614,18 +614,23 @@ class TestEventTelemetry:
             duration=1500,
         )
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with (
+            patch("backend.services.telemetry.tokens_input") as mock_in,
+            patch("backend.services.telemetry.tokens_output") as mock_out,
+            patch("backend.services.telemetry.tokens_cache_read") as mock_cr,
+            patch("backend.services.telemetry.tokens_cache_write") as mock_cw,
+            patch("backend.services.telemetry.cost_usd") as mock_cost,
+            patch("backend.services.telemetry.llm_duration") as mock_dur,
+        ):
             session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
 
-            mock_tel.record_llm_usage.assert_called_once_with(
-                "job-tel",
-                model="gpt-4o",
-                input_tokens=100,
-                output_tokens=50,
-                cache_read_tokens=10,
-                cache_write_tokens=5,
-                cost=0.002,
-                duration_ms=1500.0,
+            mock_in.add.assert_called_once_with(100, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
+            mock_out.add.assert_called_once_with(50, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
+            mock_cr.add.assert_called_once_with(10, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
+            mock_cw.add.assert_called_once_with(5, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
+            mock_cost.add.assert_called_once_with(0.002, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o"})
+            mock_dur.record.assert_called_once_with(
+                1500.0, {"job_id": "job-tel", "sdk": "copilot", "model": "gpt-4o", "is_subagent": False}
             )
 
     @pytest.mark.asyncio
@@ -649,8 +654,7 @@ class TestEventTelemetry:
             duration=100,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
+        session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
 
         events = []
         while not queue.empty():
@@ -684,8 +688,7 @@ class TestEventTelemetry:
             duration=200,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
+        session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
 
         events = []
         while not queue.empty():
@@ -711,7 +714,7 @@ class TestEventTelemetry:
             tool_title=None,
         )
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.tool_duration") as mock_tool_dur:
             session.fire_event(_FakeSdkSessionEvent("tool.execution_start", start_data))
 
             # Verify start time recorded
@@ -731,9 +734,9 @@ class TestEventTelemetry:
             )
             session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", complete_data))
 
-            mock_tel.record_tool_call.assert_called_once()
-            call_args = mock_tel.record_tool_call.call_args
-            assert call_args[1]["tool_name"] == "bash" or call_args[0][1] == "bash"
+            mock_tool_dur.record.assert_called_once()
+            call_args = mock_tool_dur.record.call_args
+            assert call_args[0][1]["tool_name"] == "bash"
 
     @pytest.mark.asyncio
     @patch("backend.services.tool_formatters.format_tool_display", return_value="bash: ls")
@@ -761,8 +764,7 @@ class TestEventTelemetry:
             turn_id="t1",
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", complete_data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", complete_data))
 
         events = []
         while not queue.empty():
@@ -801,8 +803,7 @@ class TestEventTelemetry:
             turn_id="t1",
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", complete_data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", complete_data))
 
         events = []
         while not queue.empty():
@@ -821,10 +822,10 @@ class TestEventTelemetry:
 
         data = _FakeEventData(current_tokens=5000)
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.context_tokens_gauge") as mock_gauge:
             session.fire_event(_FakeSdkSessionEvent("session.context_changed", data))
 
-            mock_tel.record_context_change.assert_called_once_with("job-tel", current_tokens=5000)
+            mock_gauge.set.assert_called_once_with(5000, {"job_id": "job-tel", "sdk": "copilot"})
 
     @pytest.mark.asyncio
     async def test_compaction_complete(self, adapter: CopilotAdapter) -> None:
@@ -832,12 +833,17 @@ class TestEventTelemetry:
 
         data = _FakeEventData(pre_compaction_tokens=10000, post_compaction_tokens=3000)
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with (
+            patch("backend.services.telemetry.compactions_counter") as mock_comp,
+            patch("backend.services.telemetry.tokens_compacted") as mock_tc,
+            patch("backend.services.telemetry.context_tokens_gauge") as mock_ctx,
+        ):
             session.fire_event(_FakeSdkSessionEvent("session.compaction_complete", data))
 
-            mock_tel.record_compaction.assert_called_once_with("job-tel", pre_tokens=10000, post_tokens=3000)
+            mock_comp.add.assert_called_once_with(1, {"job_id": "job-tel", "sdk": "copilot"})
+            mock_tc.add.assert_called_once_with(7000, {"job_id": "job-tel", "sdk": "copilot"})
             # Also records a context change for the post-compaction token count
-            mock_tel.record_context_change.assert_called_with("job-tel", current_tokens=3000)
+            mock_ctx.set.assert_called_with(3000, {"job_id": "job-tel", "sdk": "copilot"})
 
     @pytest.mark.asyncio
     async def test_session_truncation(self, adapter: CopilotAdapter) -> None:
@@ -845,10 +851,10 @@ class TestEventTelemetry:
 
         data = _FakeEventData(token_limit=128000)
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.context_window_gauge") as mock_gauge:
             session.fire_event(_FakeSdkSessionEvent("session.truncation", data))
 
-            mock_tel.record_context_change.assert_called_once_with("job-tel", window_size=128000)
+            mock_gauge.set.assert_called_once_with(128000, {"job_id": "job-tel", "sdk": "copilot"})
 
     @pytest.mark.asyncio
     async def test_session_model_change(self, adapter: CopilotAdapter) -> None:
@@ -856,10 +862,10 @@ class TestEventTelemetry:
 
         data = _FakeEventData(new_model="gpt-4o-mini")
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
-            session.fire_event(_FakeSdkSessionEvent("session.model_change", data))
+        session.fire_event(_FakeSdkSessionEvent("session.model_change", data))
 
-            mock_tel.set_main_model.assert_called_once_with("job-tel", "gpt-4o-mini")
+        # New code just updates _job_main_models dict directly
+        assert adapter._job_main_models.get("job-tel") == "gpt-4o-mini"
 
     @pytest.mark.asyncio
     async def test_assistant_message_records_telemetry(self, adapter: CopilotAdapter) -> None:
@@ -867,10 +873,10 @@ class TestEventTelemetry:
 
         data = _FakeEventData(content="hello", title=None, turn_id=None)
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.messages_counter") as mock_msg:
             session.fire_event(_FakeSdkSessionEvent("assistant.message", data))
 
-            mock_tel.record_message.assert_called_once_with("job-tel", role="agent")
+            mock_msg.add.assert_called_once_with(1, {"job_id": "job-tel", "sdk": "copilot", "role": "agent"})
 
     @pytest.mark.asyncio
     async def test_user_message_records_telemetry(self, adapter: CopilotAdapter) -> None:
@@ -878,10 +884,10 @@ class TestEventTelemetry:
 
         data = _FakeEventData(content="user prompt", message=None)
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.messages_counter") as mock_msg:
             session.fire_event(_FakeSdkSessionEvent("user.message", data))
 
-            mock_tel.record_message.assert_called_once_with("job-tel", role="operator")
+            mock_msg.add.assert_called_once_with(1, {"job_id": "job-tel", "sdk": "copilot", "role": "operator"})
 
 
 # ---------------------------------------------------------------------------
@@ -923,8 +929,7 @@ class TestLogEvents:
             tool_title=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -954,7 +959,6 @@ class TestLogEvents:
         )
 
         with (
-            patch("backend.services.telemetry.collector"),
             patch("backend.services.tool_formatters.format_tool_display", return_value="grep: ok"),
         ):
             session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
@@ -987,7 +991,6 @@ class TestLogEvents:
         )
 
         with (
-            patch("backend.services.telemetry.collector"),
             patch("backend.services.tool_formatters.format_tool_display", return_value="bash: failed"),
         ):
             session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
@@ -1012,8 +1015,7 @@ class TestLogEvents:
             duration=500,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
+        session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -1040,8 +1042,7 @@ class TestLogEvents:
             duration=100,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
+        session.fire_event(_FakeSdkSessionEvent("assistant.usage", data))
 
         events = []
         while not queue.empty():
@@ -1060,8 +1061,7 @@ class TestLogEvents:
 
         data = _FakeEventData(pre_compaction_tokens=8000, post_compaction_tokens=2000)
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("session.compaction_complete", data))
+        session.fire_event(_FakeSdkSessionEvent("session.compaction_complete", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -1073,9 +1073,7 @@ class TestLogEvents:
 
         data = _FakeEventData(new_model="gpt-4o-mini")
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
-            mock_tel.get.return_value = MagicMock()
-            session.fire_event(_FakeSdkSessionEvent("session.model_change", data))
+        session.fire_event(_FakeSdkSessionEvent("session.model_change", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -1097,8 +1095,7 @@ class TestLogEvents:
             tool_title=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
 
         events = self._drain_queue(queue)
         log_events = [e for e in events if e.kind == SessionEventKind.log]
@@ -1197,8 +1194,7 @@ class TestToolStartBuffering:
             tool_title=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
 
         buf = adapter._tool_call_buffer["tc-desc"]
         assert buf["tool_intent"] == "List files"
@@ -1225,8 +1221,7 @@ class TestToolStartBuffering:
             tool_title="read_file",
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
 
         buf = adapter._tool_call_buffer["tc-str"]
         assert buf["tool_args"] == '{"path": "/tmp/foo"}'
@@ -1254,8 +1249,7 @@ class TestToolStartBuffering:
             tool_title=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
 
         buf = adapter._tool_call_buffer["tc-none"]
         assert buf["tool_args"] == ""
@@ -1299,8 +1293,7 @@ class TestToolResultExtraction:
             turn_id=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
 
         events = []
         while not queue.empty():
@@ -1346,8 +1339,7 @@ class TestToolResultExtraction:
             turn_id=None,
         )
 
-        with patch("backend.services.telemetry.collector"):
-            session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
+        session.fire_event(_FakeSdkSessionEvent("tool.execution_complete", data))
 
         events = []
         while not queue.empty():
