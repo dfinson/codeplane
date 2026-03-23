@@ -196,6 +196,92 @@ def _check_gh_auth() -> tuple[bool, str]:
         return False, "gh not available"
 
 
+def _check_server_running(host: str, port: int) -> tuple[bool, str]:
+    """Probe the /health endpoint, falling back to process detection.
+
+    Returns (running, detail).  The detail string includes version/uptime when
+    the health endpoint is reachable, or PID info when only the process is found.
+    """
+    import json
+    from urllib.error import URLError
+    from urllib.request import Request, urlopen
+
+    # 1. Try the health endpoint (definitive when reachable)
+    req = Request(f"http://{host}:{port}/health", method="GET")
+    try:
+        with urlopen(req, timeout=2) as resp:  # noqa: S310
+            body = json.loads(resp.read())
+            version = body.get("version", "?")
+            uptime = int(body.get("uptimeSeconds", 0))
+            active = body.get("activeJobs", 0)
+            queued = body.get("queuedJobs", 0)
+            parts = [f"v{version}", f"uptime {uptime}s"]
+            if active or queued:
+                parts.append(f"{active} active, {queued} queued")
+            return True, ", ".join(parts)
+    except (URLError, OSError, ValueError):
+        pass
+
+    # 2. Fallback — scan for a cpl process (cross-platform)
+    pids = _find_cpl_processes()
+    if pids:
+        pids_str = ", ".join(str(p) for p in pids)
+        return True, f"process detected (PID {pids_str}) but /health not reachable"
+
+    return False, "not reachable"
+
+
+def _find_cpl_processes() -> list[int]:
+    """Return PIDs of running ``cpl up`` / ``cpl restart`` processes (cross-platform)."""
+    pids: list[int] = []
+    _system = platform.system()
+
+    if _system == "Windows":
+        # WMIC is available on all supported Windows versions
+        try:
+            result = subprocess.run(
+                [
+                    "wmic",
+                    "process",
+                    "where",
+                    "CommandLine like '%cpl%up%' or CommandLine like '%cpl%restart%'",
+                    "get",
+                    "ProcessId",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+    else:
+        # POSIX (Linux, macOS, BSD)
+        try:
+            result = subprocess.run(
+                ["ps", "axo", "pid,args"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            exclude = {os.getpid(), os.getppid()}
+            for line in result.stdout.splitlines():
+                lower = line.lower()
+                if ("cpl up" in lower or "cpl restart" in lower) and "doctor" not in lower:
+                    parts = line.split()
+                    if parts and parts[0].isdigit():
+                        pid = int(parts[0])
+                        if pid not in exclude:
+                            pids.append(pid)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+    return pids
+
+
 def _check_port(port: int) -> tuple[bool, str]:
     """Check if a port is available. Returns (available, detail)."""
     probe_targets: list[tuple[int, str]] = [(socket.AF_INET, "127.0.0.1")]
@@ -413,7 +499,12 @@ def _get_env_persistence_instructions(var_name: str, value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def verify_requirements(*, port: int | None = None, include_optional_dependencies: bool = True) -> list[CheckResult]:
+def verify_requirements(
+    *,
+    port: int | None = None,
+    include_optional_dependencies: bool = True,
+    preflight: bool = False,
+) -> list[CheckResult]:
     """Run all preflight checks and return structured results.
 
     Parameters
@@ -422,6 +513,9 @@ def verify_requirements(*, port: int | None = None, include_optional_dependencie
         If given, also checks whether the port is available.
     include_optional_dependencies:
         Whether to include optional tools like the Dev Tunnels CLI in the dependency list.
+    preflight:
+        When True (called before ``cpl up``), only check for conflicting
+        processes and port availability instead of reporting server health.
     """
     results: list[CheckResult] = []
 
@@ -480,19 +574,72 @@ def verify_requirements(*, port: int | None = None, include_optional_dependencie
         )
 
     if port is not None:
-        ok, detail = _check_port(port)
-        if ok:
-            results.append(CheckResult(f"Port {port}", CheckStatus.passed, detail, category="env"))
-        else:
-            results.append(
-                CheckResult(
-                    f"Port {port}",
-                    CheckStatus.fail,
-                    detail,
-                    hint=f"Try: cpl up --port {port + 1}\n  Or: lsof -i :{port} | grep LISTEN",
-                    category="env",
+        running, run_detail = _check_server_running("127.0.0.1", port)
+
+        if preflight:
+            # Preflight: we're about to start — only care about conflicts.
+            if running:
+                results.append(
+                    CheckResult(
+                        f"Server (:{port})",
+                        CheckStatus.warn,
+                        f"already running — {run_detail}",
+                        hint="Another instance may conflict. Stop it first: cpl down",
+                        category="env",
+                    )
                 )
-            )
+            else:
+                # Not running — expected; just check port is free.
+                ok, detail = _check_port(port)
+                if ok:
+                    results.append(CheckResult(f"Port {port}", CheckStatus.passed, detail, category="env"))
+                else:
+                    results.append(
+                        CheckResult(
+                            f"Port {port}",
+                            CheckStatus.fail,
+                            detail,
+                            hint=f"Try: cpl up --port {port + 1}\n  Or: lsof -i :{port} | grep LISTEN",
+                            category="env",
+                        )
+                    )
+        else:
+            # Doctor / status: report full server health.
+            if running:
+                results.append(
+                    CheckResult(
+                        f"Server (:{port})",
+                        CheckStatus.passed,
+                        f"running — {run_detail}",
+                        category="env",
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult(
+                        f"Server (:{port})",
+                        CheckStatus.warn,
+                        "not running",
+                        hint="Start with: cpl up",
+                        category="env",
+                    )
+                )
+
+                # Only check port availability when CodePlane isn't running —
+                # otherwise we'd falsely report the port as "in use".
+                ok, detail = _check_port(port)
+                if ok:
+                    results.append(CheckResult(f"Port {port}", CheckStatus.passed, detail, category="env"))
+                else:
+                    results.append(
+                        CheckResult(
+                            f"Port {port}",
+                            CheckStatus.fail,
+                            detail,
+                            hint=f"Try: cpl up --port {port + 1}\n  Or: lsof -i :{port} | grep LISTEN",
+                            category="env",
+                        )
+                    )
 
     # --- Disk space ---
     try:
@@ -747,7 +894,7 @@ def validate_preflight(port: int) -> bool:
     On warnings, pauses to let the user fix issues or continue.
     """
     config = load_config()
-    results = verify_requirements(port=port, include_optional_dependencies=False)
+    results = verify_requirements(port=port, include_optional_dependencies=False, preflight=True)
 
     _console.print()
     _console.print("  [bold]Preflight[/bold]")
@@ -796,7 +943,7 @@ def validate_preflight(port: int) -> bool:
                 _remember_skipped_warning(w, config.runtime.default_sdk)
 
         # Re-check for any remaining hard failures after fixes
-        results = verify_requirements(port=port, include_optional_dependencies=False)
+        results = verify_requirements(port=port, include_optional_dependencies=False, preflight=True)
         if any(r.status == CheckStatus.fail for r in results):
             _console.print()
             _console.print("  [red bold]Cannot start — fix the errors above.[/red bold]")

@@ -412,6 +412,11 @@ class _WarmSession:
                 await asyncio.wait_for(done.wait(), timeout=timeout)
             except TimeoutError:
                 log.warning("utility_complete_timeout", index=self.index)
+                # Session is in an unknown state after a timeout — kill it so
+                # the pool-level caller triggers a reconnect instead of reusing
+                # a dead session on every subsequent call (death spiral).
+                await self.close()
+                raise
 
             return "\n".join(collected)
 

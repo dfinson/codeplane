@@ -40,6 +40,9 @@ beforeEach(() => {
     connectionStatus: "connected",
     terminalDrawerOpen: false,
     terminalSessions: {},
+    // Pre-mark SDK catalogue as loaded so initSdksAndModels() is a no-op
+    // in these tests (they don't test SDK/model loading and have no API mock).
+    sdksLoading: false,
   });
 });
 
@@ -51,10 +54,10 @@ describe("App", () => {
 
   it("renders navigation links for settings and history", async () => {
     await renderApp();
-    expect(screen.getByTitle("Job History")).toBeInTheDocument();
-    // Settings link is icon-only; find by href
-    const settingsLink = document.querySelector('a[href="/settings"]');
-    expect(settingsLink).toBeInTheDocument();
+    // Nav items are inside the slide-out menu — open it first
+    fireEvent.click(screen.getByLabelText("Open navigation menu"));
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+    expect(screen.getByText("Job History")).toBeInTheDocument();
   });
 
   it("shows connection status from store", async () => {
@@ -96,17 +99,20 @@ describe("App", () => {
 
   it("toggles terminal drawer on button click", async () => {
     await renderApp();
-    const btn = screen.getByTitle(/terminal/i);
-    fireEvent.click(btn);
+    // Terminal is inside the slide-out menu — open it, click terminal to open drawer
+    fireEvent.click(screen.getByLabelText("Open navigation menu"));
+    fireEvent.click(screen.getByText("Terminal").closest("button")!);
     expect(useStore.getState().terminalDrawerOpen).toBe(true);
-    fireEvent.click(btn);
+    // Re-open menu, click terminal again to close drawer
+    fireEvent.click(screen.getByLabelText("Open navigation menu"));
+    fireEvent.click(screen.getByText("Terminal").closest("button")!);
     expect(useStore.getState().terminalDrawerOpen).toBe(false);
   });
 
   it("toggles terminal drawer on Ctrl+` shortcut", async () => {
     await renderApp();
     expect(useStore.getState().terminalDrawerOpen).toBe(false);
-    fireEvent.keyDown(window, { key: "`", ctrlKey: true });
+    fireEvent.keyDown(document, { key: "`", ctrlKey: true });
     expect(useStore.getState().terminalDrawerOpen).toBe(true);
   });
 
@@ -120,7 +126,8 @@ describe("App", () => {
       terminalSessions: { s1: {} as never, s2: {} as never },
     });
     await renderApp();
-    const btn = screen.getByTitle(/terminal.*2 sessions/i);
-    expect(btn).toBeInTheDocument();
+    // Session count badge is shown inside the Terminal menu item
+    fireEvent.click(screen.getByLabelText("Open navigation menu"));
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 });

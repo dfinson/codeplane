@@ -10,6 +10,7 @@ import { Progress } from "./ui/progress";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
 import { useStore } from "../store";
+import { Tooltip } from "./ui/tooltip";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,25 +100,59 @@ function formatTokens(n: number): string {
 // Cost / quota helpers
 // ---------------------------------------------------------------------------
 
-// Per-model USD rates ($/MTok) for Claude API — input / output
-const CLAUDE_MODEL_RATES: Record<string, { input: number; output: number; label: string }> = {
-  "claude-opus-4-6":    { input: 5,   output: 25,  label: "Claude Opus 4.6" },
-  "claude-opus-4-5":    { input: 5,   output: 25,  label: "Claude Opus 4.5" },
-  "claude-opus-4":      { input: 15,  output: 75,  label: "Claude Opus 4" },
-  "claude-sonnet-4-6":  { input: 3,   output: 15,  label: "Claude Sonnet 4.6" },
-  "claude-sonnet-4-5":  { input: 3,   output: 15,  label: "Claude Sonnet 4.5" },
-  "claude-sonnet-4":    { input: 3,   output: 15,  label: "Claude Sonnet 4" },
-  "claude-haiku-4-5":   { input: 1,   output: 5,   label: "Claude Haiku 4.5" },
-  "claude-haiku-3-5":   { input: 0.8, output: 4,   label: "Claude Haiku 3.5" },
-};
+import { fetchModelPricing, type ModelPricing } from "../api/client";
 
-function normalizeModelKey(model: string): string {
-  return model.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-");
+// In-memory cache — populated as models are encountered. Shared across all
+// MetricsPanel instances so we only fetch each model once.
+const _pricingCache = new Map<string, ModelPricing | null>();
+const _pricingInflight = new Map<string, Promise<ModelPricing | null>>();
+
+function useModelPricing(model: string | undefined): ModelPricing | null {
+  const [pricing, setPricing] = useState<ModelPricing | null>(null);
+
+  useEffect(() => {
+    if (!model) return;
+
+    // Already cached
+    if (_pricingCache.has(model)) {
+      setPricing(_pricingCache.get(model) ?? null);
+      return;
+    }
+
+    // Deduplicate in-flight requests for the same model
+    let promise = _pricingInflight.get(model);
+    if (!promise) {
+      promise = fetchModelPricing([model])
+        .then((res) => {
+          const entry = res[model] ?? null;
+          _pricingCache.set(model, entry);
+          return entry;
+        })
+        .catch(() => {
+          _pricingCache.set(model, null);
+          return null;
+        })
+        .finally(() => _pricingInflight.delete(model));
+      _pricingInflight.set(model, promise);
+    }
+
+    let cancelled = false;
+    promise.then((entry) => { if (!cancelled) setPricing(entry); });
+    return () => { cancelled = true; };
+  }, [model]);
+
+  return pricing;
 }
 
-function lookupModelRate(model: string) {
-  const key = normalizeModelKey(model);
-  return CLAUDE_MODEL_RATES[key] ?? null;
+/** Estimate what cost would have been without prompt caching.  */
+function estimateCostWithoutCache(
+  pricing: ModelPricing,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+): number {
+  // Without cache, all cache_read tokens would be charged at full input rate
+  return ((inputTokens + cacheReadTokens) * pricing.input + outputTokens * pricing.output) / 1_000_000;
 }
 
 function formatUsd(amount: number): string {
@@ -125,6 +160,63 @@ function formatUsd(amount: number): string {
   if (amount < 0.01)  return `$${amount.toFixed(4)}`;
   if (amount < 1)     return `$${amount.toFixed(3)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+// ---------------------------------------------------------------------------
+// CacheEfficiencyBar — visual cache hit rate with color coding
+// ---------------------------------------------------------------------------
+
+function CacheEfficiencyBar({ inputTokens, cacheReadTokens, pricing, outputTokens, actualCost }: {
+  inputTokens: number;
+  cacheReadTokens: number;
+  pricing?: ModelPricing | null;
+  outputTokens?: number;
+  actualCost?: number;
+}) {
+  const rate = inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : 0;
+  const color = rate >= 60 ? "text-green-400" : rate >= 30 ? "text-yellow-400" : "text-red-400";
+  const barColor = rate >= 60 ? "bg-green-500" : rate >= 30 ? "bg-yellow-500" : "bg-red-500";
+
+  // Compute dynamic savings info when pricing is available
+  let savingsText: string | undefined;
+  if (pricing && cacheReadTokens > 0) {
+    const fullCost = estimateCostWithoutCache(pricing, inputTokens, outputTokens ?? 0, cacheReadTokens);
+    if (actualCost != null && actualCost > 0) {
+      const saved = fullCost - actualCost;
+      if (saved > 0) {
+        const pct = (saved / fullCost) * 100;
+        savingsText = `Caching saved est. ${formatUsd(saved)} (${pct.toFixed(0)}% off). Without cache this session would cost ~${formatUsd(fullCost)}.`;
+      }
+    } else {
+      // No actual cost available (e.g. Copilot) — show relative discount
+      const cacheDiscount = pricing.input > 0
+        ? ((1 - pricing.cache_read / pricing.input) * 100).toFixed(0)
+        : null;
+      savingsText = cacheDiscount
+        ? `Cached tokens are billed at ${cacheDiscount}% less than regular input for this model ($${pricing.cache_read}/MTok vs $${pricing.input}/MTok).`
+        : undefined;
+    }
+  }
+
+  const tooltipContent = savingsText
+    ?? "Higher cache efficiency = lower cost. Cached tokens are reused from previous turns at a reduced rate.";
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <Tooltip content={tooltipContent}>
+          <span className="text-muted-foreground cursor-help">Cache Efficiency</span>
+        </Tooltip>
+        <span className={cn("font-semibold tabular-nums", color)}>{rate.toFixed(0)}%</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all duration-300", barColor)}
+          style={{ width: `${Math.min(100, rate)}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +311,7 @@ function CopilotCostView({ data }: { data: TelemetryData }) {
 
 function ClaudeCostView({ data }: { data: TelemetryData }) {
   const totalCost = data.totalCost ?? 0;
-  const rate = data.model ? lookupModelRate(data.model) : null;
+  const pricing = useModelPricing(data.model);
 
   return (
     <div className="space-y-2">
@@ -230,9 +322,10 @@ function ClaudeCostView({ data }: { data: TelemetryData }) {
         </span>
       </div>
 
-      {rate && (
+      {pricing && (
         <p className="text-xs text-muted-foreground">
-          {rate.label}: ${rate.input}/MTok input · ${rate.output}/MTok output
+          ${pricing.input}/MTok input · ${pricing.output}/MTok output
+          {pricing.cache_read > 0 && ` · $${pricing.cache_read}/MTok cache read`}
         </p>
       )}
 
@@ -456,6 +549,9 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     durationMs: mainCalls.reduce((s, c) => s + c.durationMs, 0),
   }), [mainCalls]);
 
+  // Dynamic model pricing from backend
+  const modelPricing = useModelPricing(data?.model ?? data?.mainModel);
+
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       {/* Collapsible header */}
@@ -523,13 +619,33 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                   </div>
                   <div>
                     <p className="text-sm font-bold tabular-nums">{formatTokens(data.cacheReadTokens ?? 0)}</p>
-                    <p className="text-muted-foreground">Cache Read</p>
+                    <Tooltip content={modelPricing && modelPricing.cache_read > 0
+                      ? `Tokens reused from previous turns — billed at $${modelPricing.cache_read}/MTok vs $${modelPricing.input}/MTok regular input.`
+                      : "Tokens reused from previous turns at a reduced rate vs regular input."
+                    }>
+                      <p className="text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline">Cache Read</p>
+                    </Tooltip>
                   </div>
                   <div>
                     <p className="text-sm font-bold tabular-nums">{formatTokens(data.cacheWriteTokens ?? 0)}</p>
-                    <p className="text-muted-foreground">Cache Write</p>
+                    <Tooltip content={modelPricing && modelPricing.cache_write > 0
+                      ? `Tokens written to cache — billed at $${modelPricing.cache_write}/MTok. Available for cheaper reuse in subsequent calls.`
+                      : "Tokens written to cache this turn — available for cheaper reuse in subsequent calls."
+                    }>
+                      <p className="text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline">Cache Write</p>
+                    </Tooltip>
                   </div>
                 </div>
+                {/* Cache efficiency bar */}
+                {(data.inputTokens ?? 0) > 0 && (
+                  <CacheEfficiencyBar
+                    inputTokens={data.inputTokens ?? 0}
+                    cacheReadTokens={data.cacheReadTokens ?? 0}
+                    outputTokens={data.outputTokens ?? 0}
+                    pricing={modelPricing}
+                    actualCost={data.totalCost}
+                  />
+                )}
               </div>
 
               {/* Context window */}

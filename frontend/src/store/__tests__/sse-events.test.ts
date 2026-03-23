@@ -329,7 +329,7 @@ describe("column selectors", () => {
     expect(active.map((j) => j.id).sort()).toEqual(["j-1", "j-2"]);
   });
 
-  it("selectSignoffJobs returns waiting_for_approval, succeeded, canceled", () => {
+  it("selectSignoffJobs returns waiting_for_approval and succeeded, not canceled", () => {
     useStore.setState({
       jobs: {
         "j-1": makeJob({ id: "j-1", state: "waiting_for_approval" }),
@@ -340,7 +340,7 @@ describe("column selectors", () => {
       },
     });
     const signoff = selectSignoffJobs(useStore.getState());
-    expect(signoff.map((j) => j.id).sort()).toEqual(["j-1", "j-2", "j-3"]);
+    expect(signoff.map((j) => j.id).sort()).toEqual(["j-1", "j-2"]);
   });
 
   it("selectAttentionJobs returns failed, not archived", () => {

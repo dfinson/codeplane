@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -22,9 +22,11 @@ class AdapterRegistry:
         self,
         approval_service: ApprovalService | None = None,
         event_bus: EventBus | None = None,
+        session_factory: Any | None = None,
     ) -> None:
         self._approval_service = approval_service
         self._event_bus = event_bus
+        self._session_factory = session_factory
         self._adapters: dict[AgentSDK, AgentAdapterInterface] = {}
 
     def get_adapter(self, sdk: AgentSDK | str) -> AgentAdapterInterface:
@@ -42,6 +44,7 @@ class AdapterRegistry:
             return CopilotAdapter(
                 approval_service=self._approval_service,
                 event_bus=self._event_bus,
+                session_factory=self._session_factory,
             )
         if sdk == AgentSDK.claude:
             from backend.services.claude_adapter import ClaudeAdapter
@@ -49,5 +52,6 @@ class AdapterRegistry:
             return ClaudeAdapter(
                 approval_service=self._approval_service,
                 event_bus=self._event_bus,
+                session_factory=self._session_factory,
             )
         raise ValueError(f"Unknown SDK: {sdk}")

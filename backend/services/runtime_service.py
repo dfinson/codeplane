@@ -11,6 +11,7 @@ Progress tracking (headline milestones and plan extraction) is delegated to
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import enum
 import re
@@ -118,20 +119,39 @@ _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
 # Default prompts for post-completion verification and self-review turns
 DEFAULT_VERIFY_PROMPT = (
-    "Before this task is complete: identify and run this project's test suite, "
-    "linter, and type checker. If anything fails, fix it and re-run until "
-    "everything passes. Assume that any failure is caused by your changes — "
-    "do not dismiss failures as pre-existing or flaky. Also check that you "
-    "haven't made unrelated changes outside the scope of the original task; "
-    "revert any that you find. Report what you ran and the results."
+    "You are now running a post-task verification pass. "
+    "Start with a single short sentence announcing this — e.g. 'Running lint and tests.' "
+    "Then check whether any source files or documentation were modified during this "
+    "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
+    "If no files were modified, state that there is nothing to verify and stop. "
+    "Only if files were changed: identify and run this project's test suite, "
+    "linter, and type checker. Stop as soon as everything passes — you do not "
+    "need to exhaust the maximum number of allowed turns. If something fails, "
+    "fix it and re-run. Assume failures are caused by your changes; do not "
+    "dismiss them as pre-existing or flaky. Also check that you haven't made "
+    "unrelated changes outside the scope of the original task; revert any that "
+    "you find. "
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the verification outcome "
+    "as one appended sentence (e.g. 'All checks pass.' or 'Fixed a failing test "
+    "in foo.py.'). The checks are a footnote — the task summary is the headline."
 )
 
 DEFAULT_SELF_REVIEW_PROMPT = (
-    "Review the changes you just made. Look at the full diff. Check for: "
-    "missed edge cases, incomplete implementations, leftover debug code, "
-    "broken imports, dead code, backwards-compatibility shims or fallback "
-    "paths that may no longer be needed, and inconsistencies with the "
-    "surrounding codebase. If you find issues, fix them."
+    "You are now running a post-task self-review pass. "
+    "Start with a single short sentence announcing this — e.g. 'Reviewing my changes.' "
+    "Then check whether any source files or documentation were modified during this "
+    "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
+    "If no files were modified, state that there is nothing to review and stop. "
+    "Only if files were changed: look at the full diff and check for missed edge "
+    "cases, incomplete implementations, leftover debug code, broken imports, dead "
+    "code, backwards-compatibility shims or fallback paths that may no longer be "
+    "needed, and inconsistencies with the surrounding codebase. If you find "
+    "issues, fix them. "
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the review outcome as one "
+    "appended sentence (e.g. 'Self-review clean.' or 'Removed a leftover debug "
+    "print.'). The review is a footnote — the task summary is the headline."
 )
 
 
@@ -409,37 +429,57 @@ class RuntimeService:
     ) -> None:
         """Create an asyncio task to execute the job."""
         if job.id in self._tasks:
-            return  # Already running (race-condition guard)
+            return  # Already running (in-memory guard)
+
+        # DB-level compare-and-swap: prevents double-start if recovery and
+        # an HTTP request race on the same job.  Only the winner proceeds.
+        from backend.persistence.job_repo import JobRepository
+
+        async with self._session_factory() as session:
+            repo = JobRepository(session)
+            claimed = await repo.claim_for_start(job.id)
+            await session.commit()
+        if not claimed:
+            log.warning("job_start_claim_lost", job_id=job.id)
+            return
 
         agent_session = _AgentSession()
         self._agent_sessions[job.id] = agent_session
 
-        # Ensure job is in running state
+        # The DB CAS already set the state to running; publish the event
+        # if the domain object's state hasn't caught up yet.
         if job.state != JobState.running:
-            async with self._session_factory() as session:
-                svc = self._make_job_service(session)
-                await svc.transition_state(job.id, JobState.running)
-                await session.commit()
             await self._publish_state_event(job.id, job.state, JobState.running)
 
-        session_config = build_session_config(
-            job,
-            self._config,
-            self._permission_overrides.pop(job.id, None),
-        )
-        if override_prompt is not None:
-            import dataclasses
+        try:
+            session_config = build_session_config(
+                job,
+                self._config,
+                self._permission_overrides.pop(job.id, None),
+            )
+            if override_prompt is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, prompt=override_prompt)
-        if resume_sdk_session_id is not None:
-            import dataclasses
+                session_config = dataclasses.replace(session_config, prompt=override_prompt)
+            if resume_sdk_session_id is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
+                session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
 
-        task = asyncio.create_task(
-            self._run_job(job.id, agent_session, session_config),
-            name=f"job-{job.id}",
-        )
+            task = asyncio.create_task(
+                self._run_job(job.id, agent_session, session_config),
+                name=f"job-{job.id}",
+            )
+        except Exception:
+            # Task creation failed after the DB CAS set state to running.
+            # Revert to the pre-claim state so the job isn't orphaned.
+            self._agent_sessions.pop(job.id, None)
+            log.error("job_start_task_creation_failed", job_id=job.id, exc_info=True)
+            async with self._session_factory() as session:
+                repo = JobRepository(session)
+                await repo.update_state(job.id, job.state, datetime.now(UTC))
+                await session.commit()
+            raise
         self._tasks[job.id] = task
         # Pre-register prompt for echo suppression so the SDK user.message
         # echo of the initial prompt is discarded (shown via the synthetic entry).
@@ -456,6 +496,7 @@ class RuntimeService:
         import time
 
         self._last_activity[job_id] = time.monotonic()
+        _job_wall_start = time.monotonic()  # captured here so adapter cleanup can't erase it
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(job_id),
             name=f"heartbeat-{job_id}",
@@ -469,27 +510,45 @@ class RuntimeService:
             if self._utility_session is not None:
                 await self._utility_session.notify_job_started()
 
-        # Start telemetry tracking — restore from DB snapshot first so
-        # accumulated metrics from prior sessions carry forward even after a
-        # backend restart.
-        from backend.services.telemetry import collector as tel
+        # Start telemetry tracking — init OTEL spans and SQLite summary row.
+        import time as _time
 
-        had_in_memory = tel.get(job_id) is not None
-        tel.start_job(job_id, model=config.model or "")
+        from backend.services import telemetry as tel
 
-        # If the process restarted (no in-memory state), restore the persisted
-        # snapshot so that cumulative metrics continue to accumulate correctly
-        # across all sessions of this job (covers both native-resume and handoff).
-        if not had_in_memory:
+        tel.start_job_span(job_id, sdk=config.sdk, model=config.model or "")
+
+        # Initialize the summary row in SQLite so event-driven upserts work.
+        # Fire-and-forget via a background task to avoid holding a write lock
+        # that could conflict with concurrent recovery transactions.
+        async def _init_telemetry_row() -> None:
             try:
                 async with self._session_factory() as session:
-                    from backend.persistence.metrics_repo import MetricsRepository
+                    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-                    snapshot = await MetricsRepository(session).load_snapshot(job_id)
-                if snapshot is not None:
-                    tel.restore_from_snapshot(job_id, snapshot)
+                    repo_path = ""
+                    branch_name = ""
+                    sdk_name = ""
+                    try:
+                        svc = self._make_job_service(session)
+                        job_for_tel = await svc.get_job(job_id)
+                        if job_for_tel is not None:
+                            repo_path = job_for_tel.repo or ""
+                            branch_name = job_for_tel.branch or ""
+                            sdk_name = job_for_tel.sdk or ""
+                    except Exception:
+                        pass
+                    await TelemetrySummaryRepo(session).init_job(
+                        job_id,
+                        sdk=sdk_name or "unknown",
+                        model=config.model or "",
+                        repo=repo_path,
+                        branch=branch_name,
+                    )
+                    await session.commit()
             except Exception:
-                log.warning("metrics_restore_failed", job_id=job_id, exc_info=True)
+                log.warning("telemetry_init_failed", job_id=job_id, exc_info=True)
+
+        asyncio.create_task(_init_telemetry_row())
 
         # Resolve worktree_path and base_ref for diff calculations
         worktree_path: str | None = None
@@ -581,11 +640,27 @@ class RuntimeService:
             resolution_event = None
 
             # Strategy completed normally → succeeded
+            #
+            # Commit the state transition BEFORE running merge resolution.
+            # Merge operations open their own sessions to persist merge_status
+            # and publish events — if the outer session is still uncommitted
+            # SQLite will deadlock on the jobs table write lock.
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.transition_state(job_id, JobState.succeeded)
+                if not post_conflict_merge_requested or self._merge_service is None:
+                    from backend.persistence.job_repo import JobRepository
 
-                if post_conflict_merge_requested and self._merge_service is not None:
+                    job_repo = JobRepository(session)
+                    await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
+                    if post_conflict_merge_requested and self._merge_service is None:
+                        log.warning("post_conflict_merge_unavailable", job_id=job_id)
+                await session.commit()
+
+            # Merge resolution runs in its own session(s) — no lock contention.
+            if post_conflict_merge_requested and self._merge_service is not None:
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
                     current_job = await svc.get_job(job_id)
                     if current_job is None:
                         raise ValueError(f"Job {job_id} not found before post-conflict merge")
@@ -602,15 +677,7 @@ class RuntimeService:
                         resolved,
                         pr_url=final_pr_url,
                     )
-                else:
-                    from backend.persistence.job_repo import JobRepository
-
-                    job_repo = JobRepository(session)
-                    await job_repo.update_resolution(job_id, final_resolution, pr_url=None)
-                    if post_conflict_merge_requested and self._merge_service is None:
-                        log.warning("post_conflict_merge_unavailable", job_id=job_id)
-
-                await session.commit()
+                    await session.commit()
 
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
@@ -653,45 +720,151 @@ class RuntimeService:
                 merge_status=final_merge_status,
             )
         except asyncio.CancelledError:
-            log.info("job_canceled_by_task", job_id=job_id)
-            await self._handle_job_canceled(job_id, agent_session, worktree_path, base_ref)
+            if self._shutting_down:
+                # Server is shutting down — leave job state as-is so
+                # recover_on_startup picks it back up on next launch.
+                log.info("job_interrupted_by_shutdown", job_id=job_id)
+                await self._finalize_diff_safe(job_id, worktree_path, base_ref)
+                with contextlib.suppress(Exception):
+                    await agent_session.abort()
+            else:
+                log.info("job_canceled_by_operator", job_id=job_id)
+                await self._handle_job_canceled(job_id, agent_session, worktree_path, base_ref)
         except Exception as exc:
             log.error("job_execution_failed", job_id=job_id, exc_info=True)
             # Finalize diff so changes are preserved even for crashed jobs
             await self._finalize_diff_safe(job_id, worktree_path, base_ref)
             await self._fail_job(job_id, f"Execution error: {exc}")
         finally:
-            tel.end_job(job_id)
-            # Persist cumulative metrics so they survive daemon restarts and
-            # are correctly carried forward on future resume sessions.
-            tel_snapshot = tel.get(job_id)
-            if tel_snapshot is not None:
-                try:
-                    from backend.persistence.metrics_repo import MetricsRepository
+            tel.end_job_span(job_id)
 
-                    async with self._session_factory() as session:
-                        await MetricsRepository(session).save_snapshot(job_id, tel_snapshot.to_snapshot())
-                        await session.commit()
+            # Finalize the summary row with terminal status and duration.
+            try:
+                async with self._session_factory() as session:
+                    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-                    # Signal clients that final telemetry is available so the
-                    # frontend re-fetches and shows the persisted cumulative totals.
-                    await self._event_bus.publish(
-                        DomainEvent(
-                            event_id=DomainEvent.make_event_id(),
-                            job_id=job_id,
-                            timestamp=datetime.now(UTC),
-                            kind=DomainEventKind.telemetry_updated,
-                            payload={"job_id": job_id},
-                        )
+                    # Determine status from job state
+                    status = "succeeded"
+                    try:
+                        svc = self._make_job_service(session)
+                        job_final = await svc.get_job(job_id)
+                        if job_final is not None:
+                            st = str(job_final.state)
+                            if "fail" in st:
+                                status = "failed"
+                            elif "cancel" in st:
+                                status = "cancelled"
+                    except Exception:
+                        pass
+
+                    # Duration from wall-clock start captured at _run_job entry
+                    duration = int((_time.monotonic() - _job_wall_start) * 1000)
+
+                    await TelemetrySummaryRepo(session).finalize(
+                        job_id,
+                        status=status,
+                        duration_ms=duration,
                     )
-                except Exception:
-                    log.warning("metrics_persist_failed", job_id=job_id, exc_info=True)
+                    await session.commit()
+
+                # Signal clients that final telemetry is available
+                await self._event_bus.publish(
+                    DomainEvent(
+                        event_id=DomainEvent.make_event_id(),
+                        job_id=job_id,
+                        timestamp=datetime.now(UTC),
+                        kind=DomainEventKind.telemetry_updated,
+                        payload={"job_id": job_id},
+                    )
+                )
+            except Exception:
+                log.warning("telemetry_finalize_failed", job_id=job_id, exc_info=True)
+
+            # --- Store post-completion artifacts (telemetry, plan, approvals) ---
+            await self._store_post_completion_artifacts(job_id)
+
             heartbeat_task.cancel()
             self._heartbeat_tasks.pop(job_id, None)
             if self._progress_tracking is not None:
                 self._progress_tracking.stop_tracking(job_id)
                 await self._progress_tracking.finalize_plan_steps(job_id)
             await self._cleanup_job_state(job_id)
+
+    async def _store_post_completion_artifacts(
+        self,
+        job_id: str,
+    ) -> None:
+        """Persist internal state (telemetry, plan, approvals) as downloadable artifacts."""
+        try:
+            # Look up job slug for human-friendly artifact names
+            slug = ""
+            try:
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
+                    job = await svc.get_job(job_id)
+                if job is not None:
+                    slug = (job.worktree_name or job.title or "").strip()
+            except Exception:
+                pass
+
+            async with self._session_factory() as session:
+                from backend.persistence.artifact_repo import ArtifactRepository
+                from backend.services.artifact_service import ArtifactService
+
+                artifact_svc = ArtifactService(ArtifactRepository(session))
+
+                # Telemetry report – load from the persisted summary row
+                try:
+                    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
+
+                    summary = await TelemetrySummaryRepo(session).get(job_id)
+                    if summary is not None:
+                        await artifact_svc.store_telemetry_report(
+                            job_id,
+                            summary,
+                            slug=slug,
+                        )
+                except Exception:
+                    log.debug("telemetry_artifact_failed", job_id=job_id, exc_info=True)
+
+                # Agent plan steps (from in-memory progress tracker)
+                if self._progress_tracking is not None:
+                    steps = self._progress_tracking.get_plan_steps(job_id)
+                    if steps:
+                        try:
+                            await artifact_svc.store_agent_plan(job_id, steps, slug=slug)
+                        except Exception:
+                            log.debug("plan_artifact_failed", job_id=job_id, exc_info=True)
+
+                # Approval history
+                try:
+                    from backend.persistence.approval_repo import ApprovalRepository
+
+                    approval_repo = ApprovalRepository(session)
+                    approvals = await approval_repo.list_for_job(job_id)
+                    if approvals:
+                        approval_dicts = [
+                            {
+                                "id": a.id,
+                                "description": a.description,
+                                "proposed_action": a.proposed_action,
+                                "requested_at": a.requested_at.isoformat(),
+                                "resolved_at": a.resolved_at.isoformat() if a.resolved_at else None,
+                                "resolution": a.resolution,
+                            }
+                            for a in approvals
+                        ]
+                        await artifact_svc.store_approval_history(
+                            job_id,
+                            approval_dicts,
+                            slug=slug,
+                        )
+                except Exception:
+                    log.debug("approval_artifact_failed", job_id=job_id, exc_info=True)
+
+                await session.commit()
+        except Exception:
+            log.warning("post_completion_artifacts_failed", job_id=job_id, exc_info=True)
 
     def _start_snapshot_task(self, job_id: str) -> None:
         if self._shutting_down:
@@ -1523,12 +1696,6 @@ class RuntimeService:
                 raise JobNotFoundError(f"Job {job_id} does not exist.")
             if job.state not in TERMINAL_STATES:
                 raise StateConflictError(f"Job {job_id} is not in a terminal state (current: {job.state}).")
-            if job.archived_at is not None:
-                raise StateConflictError(f"Job {job_id} is archived; create a follow-up job instead.")
-            if job.resolution in (Resolution.merged, Resolution.pr_created, Resolution.discarded):
-                raise StateConflictError(
-                    f"Job {job_id} is already resolved as {job.resolution!r}; create a follow-up job instead."
-                )
 
             previous_state = job.state
             previous_session_count = job.session_count
@@ -1726,6 +1893,11 @@ class RuntimeService:
 
     async def recover_on_startup(self) -> None:
         """Recover from a previous crash by restarting active jobs and re-enqueueing queued ones."""
+        # Restore in-memory futures for approvals that survived the restart
+        # so that recovered jobs in waiting_for_approval can be unblocked.
+        if self._approval_service is not None:
+            await self._approval_service.recover_pending_approvals()
+
         orphaned_jobs: list[tuple[Job, JobState]] = []
         async with self._session_factory() as session:
             svc = self._make_job_service(session)
@@ -1745,35 +1917,18 @@ class RuntimeService:
             await self.start_or_enqueue(job)
 
     async def shutdown(self) -> None:
-        """Gracefully shut down all running jobs."""
+        """Gracefully shut down all running jobs.
+
+        Jobs are left in their current state (running / waiting_for_approval)
+        so that ``recover_on_startup`` can pick them up on the next launch
+        instead of marking them as canceled (which confused users).
+        """
         self._shutting_down = True
         for job_id in list(self._tasks):
-            # Cancel with server_shutdown reason
             task = self._tasks.get(job_id)
             if task is not None:
                 task.cancel()
-                try:
-                    async with self._session_factory() as session:
-                        svc = self._make_job_service(session)
-                        current = await svc.get_job(job_id)
-                        if current and current.state not in (
-                            JobState.canceled,
-                            JobState.succeeded,
-                            JobState.failed,
-                        ):
-                            await svc.transition_state(job_id, JobState.canceled)
-                            await session.commit()
-                            await self._event_bus.publish(
-                                DomainEvent(
-                                    event_id=DomainEvent.make_event_id(),
-                                    job_id=job_id,
-                                    timestamp=datetime.now(UTC),
-                                    kind=DomainEventKind.job_canceled,
-                                    payload={"reason": "server_shutdown"},
-                                )
-                            )
-                except Exception:
-                    log.warning("shutdown_cancel_failed", job_id=job_id, exc_info=True)
+                log.info("shutdown_task_cancelled", job_id=job_id)
         # Wait briefly for tasks to complete
         tasks = list(self._tasks.values())
         if tasks:

@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Search, ArrowDownUp } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useStore, selectSignoffJobs, selectActiveJobs, selectAttentionJobs } from "../store";
@@ -54,17 +55,8 @@ export function KanbanBoard() {
   const [sortOpen, setSortOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFilterKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
-      e.preventDefault();
-      filterInputRef.current?.focus();
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("keydown", handleFilterKeyDown);
-    return () => window.removeEventListener("keydown", handleFilterKeyDown);
-  }, [handleFilterKeyDown]);
+  // "/" focuses the filter input (disabled automatically when an input is already focused)
+  useHotkeys("/", () => filterInputRef.current?.focus(), { preventDefault: true, useKey: true });
 
   const process = (jobs: JobSummary[]) => sortJobs(filterJobs(jobs, query), sort);
 
@@ -97,7 +89,7 @@ export function KanbanBoard() {
             className="pl-8 pr-8 h-8 text-sm"
           />
           {!query && (
-            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
+            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 hidden sm:inline rounded border border-border px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
               /
             </kbd>
           )}

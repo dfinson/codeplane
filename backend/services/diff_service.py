@@ -95,10 +95,22 @@ class DiffService:
         unrelated commits added to base_ref after the branch diverged.
         Untracked new files are surfaced via ``git add -N``
         (intent-to-add) before diffing.
+
+        When a merge is currently in progress (MERGE_HEAD exists), the
+        working tree contains the merged-in content from the other branch
+        before the merge commit has been created.  In that window a
+        working-tree diff would include all of the merged branch's unrelated
+        changes.  We detect this state and diff against HEAD (committed
+        state only) so only the job's own committed changes are shown.
         """
         try:
-            # Mark untracked files so they appear in the diff output.
-            await self._git.add_intent_to_add(cwd=worktree_path)
+            # When a merge is in-progress the working tree holds the merged
+            # content from the other branch.  Avoid polluting the diff with
+            # those unrelated changes by comparing committed state only.
+            merge_in_progress = await self._git.is_merge_in_progress(cwd=worktree_path)
+            if not merge_in_progress:
+                # Mark untracked files so they appear in the diff output.
+                await self._git.add_intent_to_add(cwd=worktree_path)
             # Resolve merge-base so we only show branch-own changes,
             # not divergence on the base branch.
             try:
@@ -106,10 +118,14 @@ class DiffService:
             except Exception:
                 log.debug("merge_base_fallback", worktree=worktree_path, base_ref=base_ref, exc_info=True)
                 effective_base = base_ref  # fallback to two-dot if merge-base fails
-            raw = await self._git.diff(
-                effective_base,
-                cwd=worktree_path,
-            )
+            if merge_in_progress:
+                log.debug("diff_merge_in_progress", worktree=worktree_path, base_ref=base_ref)
+                raw = await self._git.diff_range(effective_base, "HEAD", cwd=worktree_path)
+            else:
+                raw = await self._git.diff(
+                    effective_base,
+                    cwd=worktree_path,
+                )
         except Exception as exc:
             if "working directory does not exist" in str(exc):
                 log.info("diff_skipped_missing_worktree", worktree=worktree_path, base_ref=base_ref)

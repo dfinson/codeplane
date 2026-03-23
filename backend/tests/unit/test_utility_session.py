@@ -536,7 +536,7 @@ class TestWarmSession:
             assert result == "result"
 
     @pytest.mark.asyncio
-    async def test_complete_returns_empty_on_timeout(self) -> None:
+    async def test_complete_raises_on_timeout_and_kills_session(self) -> None:
         ws = _WarmSession(model="gpt-4o-mini", index=0)
         mock_session = AsyncMock()
         mock_session.on = MagicMock()
@@ -544,8 +544,10 @@ class TestWarmSession:
         mock_session.send = AsyncMock()
         ws._session = mock_session
 
-        result = await ws.complete("prompt", timeout=0.05)
-        assert result == ""
+        with pytest.raises(TimeoutError):
+            await ws.complete("prompt", timeout=0.05)
+        # Session must be killed so the next call triggers a reconnect
+        assert ws._session is None
 
     @pytest.mark.asyncio
     async def test_complete_handles_task_complete_event(self) -> None:

@@ -74,7 +74,7 @@ Launch automated coding tasks against real repositories, watch everything the ag
 
 ```bash
 make install                  # install backend + frontend dependencies
-cp .env.sample .env           # optional: set CPL_TUNNEL_PASSWORD
+cp .env.sample .env           # optional: set CPL_DEVTUNNEL_PASSWORD
 make run                      # build frontend, start server with remote access
 ```
 

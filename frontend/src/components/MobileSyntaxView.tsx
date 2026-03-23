@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-async-light";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { DiffHunkModel } from "../api/types";
 

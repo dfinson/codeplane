@@ -47,6 +47,8 @@ log = structlog.get_logger()
 
 _EVENT_PERSIST_MAX_ATTEMPTS = 3
 _EVENT_PERSIST_RETRY_DELAY_S = 0.05
+_DEAD_LETTER_RETRY_INTERVAL_S = 5.0
+_DEAD_LETTER_MAX_RETRIES = 10
 
 
 # ---------------------------------------------------------------------------
@@ -71,24 +73,84 @@ class _CoreServices:
 
 def _init_event_infrastructure(
     session_factory: async_sessionmaker[AsyncSession],
-) -> tuple[EventBus, SSEManager]:
-    """Create event bus and SSE manager with persist-then-broadcast wiring."""
+) -> tuple[EventBus, SSEManager, asyncio.Task[None]]:
+    """Create event bus and SSE manager with persist-then-broadcast wiring.
+
+    Returns the event bus, SSE manager, and a background task that retries
+    events from the dead-letter queue.
+    """
     event_bus = EventBus()
     sse_manager = SSEManager()
     persist_lock = asyncio.Lock()
+    dead_letter: asyncio.Queue[tuple[DomainEvent, int]] = asyncio.Queue()
 
     # Persist-then-broadcast subscriber: ensures event.db_id is set
     # (monotonic autoincrement) before SSE frames are built.
     async def _persist_and_broadcast(event: DomainEvent) -> None:
-        await _persist_event_with_retry(
-            event=event,
-            session_factory=session_factory,
-            write_lock=persist_lock,
-        )
+        try:
+            await _persist_event_with_retry(
+                event=event,
+                session_factory=session_factory,
+                write_lock=persist_lock,
+            )
+        except Exception:
+            log.error(
+                "event_persist_failed_queued_for_retry",
+                event_id=event.event_id,
+                job_id=event.job_id,
+                kind=event.kind.value,
+            )
+            dead_letter.put_nowait((event, 0))
+            # Broadcast anyway so the SSE stream doesn't silently drop the
+            # event; the client will get it without a db_id which means the
+            # replay cursor won't cover it, but it's better than silence.
+            await sse_manager.broadcast_domain_event(event)
+            return
         await sse_manager.broadcast_domain_event(event)
 
+    async def _dead_letter_retry_loop() -> None:
+        """Background task: retry persisting events that failed initially."""
+        while True:
+            try:
+                event, attempt = await asyncio.wait_for(dead_letter.get(), timeout=_DEAD_LETTER_RETRY_INTERVAL_S)
+            except TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                return
+
+            try:
+                await _persist_event_with_retry(
+                    event=event,
+                    session_factory=session_factory,
+                    write_lock=persist_lock,
+                )
+                log.info(
+                    "dead_letter_event_persisted",
+                    event_id=event.event_id,
+                    job_id=event.job_id,
+                    retry_attempt=attempt + 1,
+                )
+            except Exception:
+                next_attempt = attempt + 1
+                if next_attempt < _DEAD_LETTER_MAX_RETRIES:
+                    dead_letter.put_nowait((event, next_attempt))
+                    log.warning(
+                        "dead_letter_retry_failed",
+                        event_id=event.event_id,
+                        job_id=event.job_id,
+                        attempt=next_attempt,
+                    )
+                else:
+                    log.error(
+                        "dead_letter_event_permanently_lost",
+                        event_id=event.event_id,
+                        job_id=event.job_id,
+                        kind=event.kind.value,
+                    )
+
     event_bus.subscribe(_persist_and_broadcast)
-    return event_bus, sse_manager
+    retry_task = asyncio.create_task(_dead_letter_retry_loop(), name="dead-letter-retry")
+    return event_bus, sse_manager, retry_task
 
 
 def _is_sqlite_lock_error(exc: OperationalError) -> bool:
@@ -134,6 +196,7 @@ async def _wire_core_services(
     adapter_registry = AdapterRegistry(
         approval_service=approval_service,
         event_bus=event_bus,
+        session_factory=session_factory,
     )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
@@ -339,7 +402,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = create_engine()
     session_factory = create_session_factory(engine)
 
-    event_bus, sse_manager = _init_event_infrastructure(session_factory)
+    event_bus, sse_manager, dead_letter_task = _init_event_infrastructure(session_factory)
 
     config = load_config()
     services = await _wire_core_services(session_factory, event_bus, config)
@@ -372,12 +435,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.dishka_container = container
 
+    # Print the startup banner now that all services are ready
+    banner_args = getattr(app.state, "banner_args", None)
+    if banner_args:
+        from backend.cli import _print_startup_banner
+
+        _print_startup_banner(**banner_args)
+
     yield
 
     # Shutdown in reverse initialisation order
     await container.close()
     await optional.mcp_cleanup.__aexit__(None, None, None)
     optional.retention_task.cancel()
+    dead_letter_task.cancel()
     if optional.terminal_service is not None:
         await optional.terminal_service.shutdown()
     await services.utility_session.shutdown()

@@ -332,6 +332,48 @@ describe("JobDetailScreen", () => {
     expect(screen.getByText("Merge conflict — user input required")).toBeInTheDocument();
   });
 
+  it("does not show conflict text when resolution is merged but stale conflict indicators remain", async () => {
+    vi.mocked(fetchJobDiff).mockResolvedValueOnce([
+      { path: "README.md", status: "modified", additions: 1, deletions: 1, hunks: [] },
+    ] as any);
+
+    // Simulate stale state: resolution is "merged" but mergeStatus/conflictFiles still indicate a past conflict
+    useStore.setState({
+      jobs: {
+        "job-1": makeJob({
+          resolution: "merged",
+          mergeStatus: "conflict",
+          conflictFiles: ["README.md"],
+        }),
+      },
+      diffs: {
+        "job-1": [
+          { path: "README.md", status: "modified", additions: 1, deletions: 1, hunks: [] },
+        ],
+      },
+    } as any);
+
+    vi.mocked(fetchJob).mockResolvedValueOnce(
+      makeJob({
+        resolution: "merged",
+        mergeStatus: "conflict",
+        conflictFiles: ["README.md"],
+      }) as any,
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/jobs/job-1"]}>
+        <Routes>
+          <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // The subtitle should show the merged message, NOT concatenate conflict text
+    expect(await screen.findByText(/Changes merged into base branch/)).toBeInTheDocument();
+    expect(screen.queryByText(/Merge conflict detected/)).not.toBeInTheDocument();
+  });
+
   it("resumes the existing failed job instead of rerunning a new one", async () => {
     useStore.setState({
       jobs: {

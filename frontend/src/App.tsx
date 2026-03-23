@@ -1,27 +1,32 @@
-import { Component, type ReactNode, Suspense, lazy, useEffect, useCallback } from "react";
+import { Component, type ReactNode, Suspense, useEffect } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
-import { Settings, History, TerminalSquare, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { CommandPalette } from "./components/CommandPalette";
+import { NavMenuSlideout } from "./components/NavMenuSlideout";
 import { useSSE } from "./hooks/useSSE";
 import { useStore, selectConnectionStatus } from "./store";
 import { DashboardScreen } from "./components/DashboardScreen";
 import { DotBadge } from "./components/ui/badge";
 import { Spinner } from "./components/ui/spinner";
-import { Tooltip } from "./components/ui/tooltip";
+import { lazyRetry } from "./lib/lazyRetry";
 
-const JobDetailScreen = lazy(() =>
+const JobDetailScreen = lazyRetry(() =>
   import("./components/JobDetailScreen").then((module) => ({ default: module.JobDetailScreen })),
 );
-const JobCreationScreen = lazy(() =>
+const JobCreationScreen = lazyRetry(() =>
   import("./components/JobCreationScreen").then((module) => ({ default: module.JobCreationScreen })),
 );
-const SettingsScreen = lazy(() =>
+const SettingsScreen = lazyRetry(() =>
   import("./components/SettingsScreen").then((module) => ({ default: module.SettingsScreen })),
 );
-const HistoryScreen = lazy(() =>
+const HistoryScreen = lazyRetry(() =>
   import("./components/HistoryScreen").then((module) => ({ default: module.HistoryScreen })),
 );
-const TerminalDrawer = lazy(() =>
+const AnalyticsScreen = lazyRetry(() =>
+  import("./components/AnalyticsScreen").then((module) => ({ default: module.AnalyticsScreen })),
+);
+const TerminalDrawer = lazyRetry(() =>
   import("./components/TerminalDrawer").then((module) => ({ default: module.TerminalDrawer })),
 );
 
@@ -37,19 +42,28 @@ class ErrorBoundary extends Component<
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
+  private isChunkError(error: Error): boolean {
+    const msg = error.message || "";
+    return /loading.*chunk|dynamic.*import|failed to fetch/i.test(msg);
+  }
   render() {
     if (this.state.error) {
+      const isChunk = this.isChunkError(this.state.error);
       return (
         <div className="p-8 max-w-2xl mx-auto">
-          <p className="text-lg font-semibold text-red-400 mb-2">Something went wrong</p>
-          <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-card rounded-lg p-4 border border-border overflow-auto">
-            {this.state.error.message}{"\n"}{this.state.error.stack}
-          </pre>
+          <p className="text-lg font-semibold text-red-400 mb-2">
+            {isChunk ? "A network error occurred loading the page" : "Something went wrong"}
+          </p>
+          {!isChunk && (
+            <pre className="text-xs text-muted-foreground whitespace-pre-wrap bg-card rounded-lg p-4 border border-border overflow-auto">
+              {this.state.error.message}{"\n"}{this.state.error.stack}
+            </pre>
+          )}
           <button
-            onClick={() => this.setState({ error: null })}
+            onClick={() => isChunk ? window.location.reload() : this.setState({ error: null })}
             className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90"
           >
-            Try again
+            {isChunk ? "Reload page" : "Try again"}
           </button>
         </div>
       );
@@ -94,44 +108,39 @@ export function App() {
   const navigate = useNavigate();
   const toggleTerminalDrawer = useStore((s) => s.toggleTerminalDrawer);
   const terminalDrawerOpen = useStore((s) => s.terminalDrawerOpen);
-  const sessionCount = useStore((s) => Object.keys(s.terminalSessions).length);
+  const initSdksAndModels = useStore((s) => s.initSdksAndModels);
+
+  useEffect(() => {
+    initSdksAndModels();
+  }, [initSdksAndModels]);
 
   // Global keyboard shortcuts
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "`") {
-        e.preventDefault();
-        if (!terminalDrawerOpen) {
-          // Drawer is closed — open it
+  useHotkeys(
+    "ctrl+`",
+    () => {
+      if (!terminalDrawerOpen) {
+        toggleTerminalDrawer();
+      } else {
+        const active = document.activeElement;
+        const terminalEl = document.querySelector(".xterm-helper-textarea, .xterm canvas");
+        const focusedInTerminal = terminalEl && (active === terminalEl || terminalEl.contains(active));
+        if (focusedInTerminal) {
           toggleTerminalDrawer();
         } else {
-          // Drawer is open — close only if focus is already inside the terminal,
-          // otherwise just bring focus to the terminal (xterm textarea/canvas)
-          const active = document.activeElement;
-          const terminalEl = document.querySelector(".xterm-helper-textarea, .xterm canvas");
-          const focusedInTerminal = terminalEl && (active === terminalEl || terminalEl.contains(active));
-          if (focusedInTerminal) {
-            toggleTerminalDrawer();
-          } else {
-            (terminalEl as HTMLElement | null)?.focus();
-          }
+          (terminalEl as HTMLElement | null)?.focus();
         }
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
-        e.preventDefault();
-        navigate("/jobs/new");
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        navigate("/settings");
-      }
     },
-    [toggleTerminalDrawer, terminalDrawerOpen, navigate],
+    { enableOnFormTags: true, preventDefault: true, useKey: true },
+    [terminalDrawerOpen, toggleTerminalDrawer],
   );
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
+  useHotkeys("alt+j", () => navigate("/"), { preventDefault: true });
+  useHotkeys("alt+n", () => navigate("/jobs/new"), { preventDefault: true });
+  useHotkeys("alt+a", () => navigate("/analytics"), { preventDefault: true });
+  useHotkeys("ctrl+comma,meta+comma", () => navigate("/settings"), {
+    enableOnFormTags: true,
+    preventDefault: true,
+  });
 
   return (
     <div className="flex flex-col h-screen overflow-x-hidden">
@@ -145,7 +154,7 @@ export function App() {
 
         <button
           onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
-          className="hidden sm:flex min-w-56 items-center justify-between gap-3 rounded-lg border border-border bg-background/70 px-4 py-2 text-sm text-muted-foreground shadow-sm transition-colors hover:text-foreground hover:bg-accent"
+          className="hidden sm:flex sm:w-72 md:w-96 items-center justify-between gap-3 rounded-lg border border-border bg-background/70 px-4 py-2 text-sm text-muted-foreground shadow-sm transition-colors hover:text-foreground hover:bg-accent"
         >
           <span className="flex items-center gap-2">
             <Search size={14} />
@@ -154,41 +163,9 @@ export function App() {
           <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs">⌘K</kbd>
         </button>
 
-        <div className="flex items-center gap-1 opacity-[0.78]">
+        <div className="flex items-center gap-1">
           <ConnectionStatusIndicator />
-          <Tooltip content={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}>
-            <button
-              onClick={toggleTerminalDrawer}
-              aria-label="Toggle terminal"
-              title={`Terminal (Ctrl+\`)${sessionCount > 0 ? ` — ${sessionCount} session${sessionCount > 1 ? "s" : ""}` : ""}`}
-              className={`p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md transition-colors ${
-                terminalDrawerOpen
-                  ? "text-foreground bg-accent"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
-              }`}
-            >
-              <TerminalSquare size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip content="Job history">
-            <Link
-              to="/history"
-              aria-label="Job history"
-              title="Job History"
-              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-            >
-              <History size={16} />
-            </Link>
-          </Tooltip>
-          <Tooltip content="Settings (⌘,)">
-            <Link
-              to="/settings"
-              aria-label="Settings (⌘,)"
-              className="p-2.5 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors no-underline"
-            >
-              <Settings size={16} />
-            </Link>
-          </Tooltip>
+          <NavMenuSlideout />
         </div>
       </header>
 
@@ -200,6 +177,7 @@ export function App() {
               <Route path="/jobs/new" element={<JobCreationScreen />} />
               <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
               <Route path="/history" element={<HistoryScreen />} />
+              <Route path="/analytics" element={<AnalyticsScreen />} />
               <Route path="/settings" element={<SettingsScreen />} />
             </Routes>
           </Suspense>

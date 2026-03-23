@@ -64,18 +64,20 @@ class TestAdapterRegistry:
             registry.get_adapter("unknown_sdk")
 
     def test_get_adapter_passes_services(self) -> None:
-        """Approval service and event bus are passed to adapter constructors."""
+        """Approval service, event bus, and session_factory are passed to adapter constructors."""
         approval = MagicMock()
         bus = MagicMock()
+        sf = MagicMock()
 
         with patch("backend.services.claude_adapter.ClaudeAdapter") as mock_claude:
             mock_claude.return_value = MagicMock()
-            registry = AdapterRegistry(approval_service=approval, event_bus=bus)
+            registry = AdapterRegistry(approval_service=approval, event_bus=bus, session_factory=sf)
             registry.get_adapter(AgentSDK.claude)
 
             mock_claude.assert_called_once_with(
                 approval_service=approval,
                 event_bus=bus,
+                session_factory=sf,
             )
 
     def test_string_sdk_accepted(self) -> None:

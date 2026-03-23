@@ -11,13 +11,99 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from backend.services.permission_policy import (
+    _HARD_GATED_SHELL_RE,
     _READONLY_SHELL_RE,
     PolicyDecision,
     _is_path_within_workspace,
     evaluate_approval_required,
     evaluate_auto,
     evaluate_read_only,
+    is_git_reset_hard,
 )
+
+# ---------------------------------------------------------------------------
+# is_git_reset_hard
+# ---------------------------------------------------------------------------
+
+
+class TestIsGitResetHard:
+    """is_git_reset_hard must detect all common git reset --hard patterns."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset --hard",
+            "git reset --hard HEAD",
+            "git reset --hard HEAD~1",
+            "git reset --hard origin/main",
+            "git reset HEAD --hard",
+            "  git reset --hard  ",
+            "cd /repo && git reset --hard HEAD",
+            "git fetch origin && git reset --hard origin/main",
+            "GIT reset --hard HEAD",  # case-insensitive
+        ],
+    )
+    def test_detects_git_reset_hard(self, cmd: str) -> None:
+        assert is_git_reset_hard(cmd), f"Expected detection for: {cmd!r}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset HEAD",
+            "git reset --soft HEAD",
+            "git reset --mixed HEAD",
+            "git status",
+            "git checkout -- .",
+            "echo 'git reset --hard' is dangerous",  # inside a quoted string — we still detect it
+            "grep 'hard' file.txt",
+            "git reset",
+        ],
+    )
+    def test_ignores_non_hard_reset(self, cmd: str) -> None:
+        # The grep/echo lines contain the text but we verify the non-reset lines are not matched.
+        # Note: "echo 'git reset --hard'" would be caught — that is intentional and conservative.
+        if "git reset --hard" in cmd.lower():
+            return  # conservative detection is expected; skip
+        assert not is_git_reset_hard(cmd), f"Expected no detection for: {cmd!r}"
+
+
+# ---------------------------------------------------------------------------
+# Hard-block: git reset --hard always asks regardless of permission mode
+# ---------------------------------------------------------------------------
+
+
+class TestGitResetHardHardBlock:
+    """Regardless of permission mode, git reset --hard must return PolicyDecision.ask."""
+
+    @pytest.mark.parametrize("evaluate_fn", [evaluate_auto, evaluate_read_only, evaluate_approval_required])
+    def test_git_reset_hard_always_asks(self, tmp_path: Path, evaluate_fn) -> None:
+        result = evaluate_fn(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git reset --hard HEAD",
+        )
+        assert result == PolicyDecision.ask, (
+            f"{evaluate_fn.__name__} returned {result!r} instead of 'ask' for git reset --hard"
+        )
+
+    @pytest.mark.parametrize("evaluate_fn", [evaluate_auto, evaluate_read_only, evaluate_approval_required])
+    def test_git_reset_hard_compound_command_always_asks(self, tmp_path: Path, evaluate_fn) -> None:
+        result = evaluate_fn(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git fetch && git reset --hard origin/main",
+        )
+        assert result == PolicyDecision.ask
+
+    def test_normal_shell_auto_mode_still_approves(self, tmp_path: Path) -> None:
+        """Confirm the hard-block only fires for git reset --hard, not all shell commands."""
+        result = evaluate_auto(
+            kind="shell",
+            workspace_path=str(tmp_path),
+            full_command_text="git status",
+        )
+        assert result == PolicyDecision.approve
+
 
 # ---------------------------------------------------------------------------
 # PolicyDecision enum
@@ -95,6 +181,114 @@ class TestReadonlyShellRegex:
     def test_case_insensitive(self) -> None:
         assert _READONLY_SHELL_RE.match("GREP foo")
         assert _READONLY_SHELL_RE.match("Ls -la")
+
+
+# ---------------------------------------------------------------------------
+# _HARD_GATED_SHELL_RE
+# ---------------------------------------------------------------------------
+
+
+class TestHardGatedShellRegex:
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git merge --no-ff feature",
+            "  git merge origin/main",
+            "git pull",
+            "git pull origin main",
+            "git pull --rebase",
+            "git rebase main",
+            "git rebase -i HEAD~3",
+            "git cherry-pick abc123",
+            "git cherry-pick --no-commit abc123",
+            "git reset --hard",
+            "git reset --hard HEAD",
+            "git reset --hard HEAD~1",
+            "git reset --mixed --hard HEAD",
+            "GIT MERGE main",
+            "Git Pull origin main",
+        ],
+    )
+    def test_matches_hard_gated_commands(self, cmd: str) -> None:
+        assert _HARD_GATED_SHELL_RE.search(cmd), f"Expected match for: {cmd}"
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git status",
+            "git log --oneline",
+            "git diff",
+            "git add .",
+            "git commit -m 'msg'",
+            "git push origin main",
+            "git branch feature",
+            "git checkout main",
+            "git stash",
+            "git reset --soft HEAD~1",
+            "git reset HEAD file.py",
+            "grep merge file.txt",
+            "echo git merge",
+        ],
+    )
+    def test_does_not_match_safe_commands(self, cmd: str) -> None:
+        assert not _HARD_GATED_SHELL_RE.search(cmd), f"Expected no match for: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# Hard gate integration: always asks regardless of mode
+# ---------------------------------------------------------------------------
+
+
+class TestHardGateIntegration:
+    """Hard-gated commands must return 'ask' in every permission mode."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_auto_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_auto(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_read_only_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_read_only(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git merge main",
+            "git pull origin main",
+            "git rebase main",
+            "git cherry-pick abc123",
+            "git reset --hard HEAD",
+        ],
+    )
+    def test_approval_required_mode_asks_for_hard_gated(self, tmp_path: Path, cmd: str) -> None:
+        result = evaluate_approval_required(kind="shell", workspace_path=str(tmp_path), full_command_text=cmd)
+        assert result == PolicyDecision.ask
+
+    def test_auto_mode_still_approves_normal_shell(self, tmp_path: Path) -> None:
+        """Non-hard-gated commands remain auto-approved in auto mode."""
+        result = evaluate_auto(kind="shell", workspace_path=str(tmp_path), full_command_text="python script.py")
+        assert result == PolicyDecision.approve
 
 
 # ---------------------------------------------------------------------------

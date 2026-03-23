@@ -328,7 +328,22 @@ class JobService:
             verify_prompt=verify_prompt,
             self_review_prompt=self_review_prompt,
         )
-        await self._job_repo.create(job)
+        try:
+            await self._job_repo.create(job)
+        except Exception:
+            # Compensate: clean up the worktree that was already created
+            # so we don't leave orphaned directories on disk.
+            log.error("job_persist_failed_cleaning_worktree", job_id=job_id, worktree_path=worktree_path)
+            try:
+                await self._git.remove_worktree(resolved_repo, worktree_path)
+            except Exception:
+                log.warning(
+                    "compensation_worktree_cleanup_failed",
+                    job_id=job_id,
+                    worktree_path=worktree_path,
+                    exc_info=True,
+                )
+            raise
         log.info("job_created", job_id=job_id, title=title, repo=resolved_repo, state=initial_state)
         return job
 
@@ -391,14 +406,20 @@ class JobService:
         return job
 
     async def cancel_job(self, job_id: str) -> Job:
-        """Cancel a running or queued job. Raises StateConflictError if not cancellable."""
+        """Cancel a running or queued job and auto-archive it.
+
+        Cancelled jobs are immediately archived so they don't clutter the
+        Kanban board — cancellation is a deliberate operator action.
+        """
         job = await self.get_job(job_id)
         if job.state in TERMINAL_STATES:
             raise StateConflictError(f"Cannot cancel job {job_id}: already in terminal state '{job.state}'.")
         try:
-            return await self.transition_state(job_id, JobState.canceled)
+            job = await self.transition_state(job_id, JobState.canceled)
         except InvalidStateTransitionError as exc:
             raise StateConflictError(str(exc)) from exc
+        await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+        return await self.get_job(job_id)
 
     async def rerun_job(self, job_id: str) -> Job:
         """Create a new job from an existing job's configuration."""
@@ -527,11 +548,20 @@ class JobService:
         )
 
     async def archive_job(self, job_id: str) -> Job:
-        """Archive a job (hide from Kanban board)."""
+        """Archive a job (hide from Kanban board) and clean up its worktree."""
         job = await self.get_job(job_id)
         if job.state not in TERMINAL_STATES:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, cannot archive active jobs")
         await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+
+        # Clean up worktree and branch immediately rather than waiting for
+        # the daily retention sweep — the UI promises this happens on archive.
+        if self._git and job.worktree_path and job.worktree_path != job.repo:
+            try:
+                await self._git.remove_worktree(job.repo, job.worktree_path)
+                log.info("archive_worktree_removed", job_id=job_id, worktree=job.worktree_path)
+            except Exception:
+                log.warning("archive_worktree_cleanup_failed", job_id=job_id, exc_info=True)
 
         return await self.get_job(job_id)
 

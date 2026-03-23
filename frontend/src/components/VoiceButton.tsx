@@ -133,7 +133,7 @@ export function PromptWithVoice({ value, onChange, error, onBlur, onKeyDown }: P
               </Tooltip>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
+          <p className="hidden sm:block text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
         </div>
       </div>
 

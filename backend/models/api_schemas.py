@@ -60,6 +60,9 @@ class ArtifactType(StrEnum):
     agent_summary = "agent_summary"
     session_snapshot = "session_snapshot"
     session_log = "session_log"
+    agent_plan = "agent_plan"
+    telemetry_report = "telemetry_report"
+    approval_history = "approval_history"
     document = "document"
     custom = "custom"
 
@@ -277,6 +280,9 @@ class ApprovalResponse(CamelModel):
     requested_at: datetime
     resolved_at: datetime | None
     resolution: ApprovalResolution | None
+    # True when this approval was triggered by a hard-blocked operation (e.g.
+    # git reset --hard) that cannot be auto-resolved by a trust grant.
+    requires_explicit_approval: bool = False
 
 
 class ArtifactResponse(CamelModel):
@@ -421,6 +427,7 @@ class ApprovalRequestedPayload(CamelModel):
     description: str
     proposed_action: str | None = None
     timestamp: datetime
+    requires_explicit_approval: bool = False
 
 
 class ApprovalResolvedPayload(CamelModel):
@@ -562,6 +569,17 @@ class TelemetryUpdatedPayload(CamelModel):
 class SnapshotPayload(CamelModel):
     jobs: list[JobResponse]
     pending_approvals: list[ApprovalResponse]
+
+
+class JobSnapshotResponse(CamelModel):
+    """Full state hydration for a single job — used after reconnect or page refresh."""
+
+    job: JobResponse
+    logs: list[LogLinePayload]
+    transcript: list[TranscriptPayload]
+    diff: list[DiffFileModel]
+    approvals: list[ApprovalResponse]
+    timeline: list[ProgressHeadlinePayload]
 
 
 class SDKInfoResponse(CamelModel):

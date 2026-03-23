@@ -1,9 +1,9 @@
-"""Tests for metrics persistence and cross-session aggregation."""
+"""Tests for OTEL telemetry persistence (summary + spans repos)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import event as sa_event
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 from backend.models.db import Base, JobRow
 from backend.models.domain import JobState, PermissionMode
 from backend.persistence.database import _set_sqlite_pragmas
-from backend.persistence.metrics_repo import MetricsRepository
-from backend.services.telemetry import QuotaSnapshot, TelemetryCollector
+from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
 
 @pytest.fixture
@@ -28,7 +28,6 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
 
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as sess:
-        # Insert a parent job row so FK constraint is satisfied
         now = datetime.now(UTC)
         sess.add(
             JobRow(
@@ -50,176 +49,146 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
 
 
 # ---------------------------------------------------------------------------
-# MetricsRepository
+# TelemetrySummaryRepo
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_metrics_repo_save_and_load(session: AsyncSession) -> None:
-    repo = MetricsRepository(session)
-    snapshot = {"input_tokens": 500, "output_tokens": 200, "total_cost": 0.01}
-
-    await repo.save_snapshot("job-1", snapshot)
+async def test_summary_init_and_get(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    await repo.init_job("job-1", sdk="copilot", model="gpt-4o")
     await session.commit()
 
-    loaded = await repo.load_snapshot("job-1")
-    assert loaded is not None
-    assert loaded["input_tokens"] == 500
-    assert loaded["output_tokens"] == 200
-    assert loaded["total_cost"] == 0.01
+    row = await repo.get("job-1")
+    assert row is not None
+    assert row["sdk"] == "copilot"
+    assert row["model"] == "gpt-4o"
+    assert row["status"] == "running"
+    assert row["input_tokens"] == 0
 
 
 @pytest.mark.asyncio
-async def test_metrics_repo_upsert(session: AsyncSession) -> None:
-    repo = MetricsRepository(session)
-
-    await repo.save_snapshot("job-1", {"input_tokens": 100})
-    await session.commit()
-    await repo.save_snapshot("job-1", {"input_tokens": 350})
+async def test_summary_increment(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    await repo.init_job("job-1", sdk="claude", model="sonnet")
     await session.commit()
 
-    loaded = await repo.load_snapshot("job-1")
-    assert loaded is not None
-    assert loaded["input_tokens"] == 350
+    await repo.increment("job-1", input_tokens=500, output_tokens=200, total_cost_usd=0.01)
+    await session.commit()
+
+    row = await repo.get("job-1")
+    assert row is not None
+    assert row["input_tokens"] == 500
+    assert row["output_tokens"] == 200
+
+    # Second increment accumulates
+    await repo.increment("job-1", input_tokens=100, tool_call_count=3)
+    await session.commit()
+
+    row = await repo.get("job-1")
+    assert row is not None
+    assert row["input_tokens"] == 600
+    assert row["tool_call_count"] == 3
 
 
 @pytest.mark.asyncio
-async def test_metrics_repo_load_missing_returns_none(session: AsyncSession) -> None:
-    repo = MetricsRepository(session)
-    assert await repo.load_snapshot("no-such-job") is None
+async def test_summary_finalize(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    await repo.init_job("job-1", sdk="copilot")
+    await session.commit()
+
+    await repo.finalize("job-1", status="succeeded", duration_ms=12345)
+    await session.commit()
+
+    row = await repo.get("job-1")
+    assert row is not None
+    assert row["status"] == "succeeded"
+    assert row["duration_ms"] == 12345
+    assert row["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_summary_get_missing_returns_none(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    assert await repo.get("no-such-job") is None
+
+
+@pytest.mark.asyncio
+async def test_summary_set_model(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    await repo.init_job("job-1", sdk="claude")
+    await session.commit()
+
+    await repo.set_model("job-1", "claude-opus-4")
+    await session.commit()
+
+    row = await repo.get("job-1")
+    assert row is not None
+    assert row["model"] == "claude-opus-4"
+
+
+@pytest.mark.asyncio
+async def test_summary_aggregate(session: AsyncSession) -> None:
+    repo = TelemetrySummaryRepo(session)
+    await repo.init_job("job-1", sdk="copilot", model="gpt-4o")
+    await repo.increment("job-1", input_tokens=1000, output_tokens=500)
+    await repo.finalize("job-1", status="succeeded", duration_ms=5000)
+    await session.commit()
+
+    agg = await repo.aggregate(period_days=7)
+    assert agg["total_jobs"] == 1
+    assert agg["succeeded"] == 1
 
 
 # ---------------------------------------------------------------------------
-# JobTelemetry.to_snapshot / TelemetryCollector.restore_from_snapshot
+# TelemetrySpansRepo
 # ---------------------------------------------------------------------------
 
 
-def _make_collector_with_metrics(job_id: str = "job-1") -> TelemetryCollector:
-    """Return a collector with some recorded activity."""
-    col = TelemetryCollector()
-    col.start_job(job_id, model="gpt-4o")
-    col.set_main_model(job_id, "gpt-4o")
-    col.record_llm_usage(
-        job_id,
-        model="gpt-4o",
-        input_tokens=300,
-        output_tokens=150,
-        cost=0.005,
-        duration_ms=1200,
+@pytest.mark.asyncio
+async def test_spans_insert_and_list(session: AsyncSession) -> None:
+    repo = TelemetrySpansRepo(session)
+    await repo.insert(
+        job_id="job-1",
+        span_type="tool",
+        name="read_file",
+        started_at=0.0,
+        duration_ms=50.0,
+        attrs={"success": True},
     )
-    col.record_tool_call(job_id, tool_name="read_file", duration_ms=50, success=True)
-    col.record_approval(job_id, wait_ms=3000)
-    col.record_message(job_id, role="agent")
-    col.record_message(job_id, role="operator")
-    col.record_premium_requests(job_id, count=2.5)
-    col.record_quota_snapshots(
-        job_id,
-        snapshots={"premium": QuotaSnapshot(used_requests=2.5, entitlement_requests=10.0, remaining_percentage=75.0)},
+    await repo.insert(
+        job_id="job-1",
+        span_type="llm",
+        name="gpt-4o",
+        started_at=0.1,
+        duration_ms=1200.0,
+        attrs={"input_tokens": 300, "output_tokens": 150},
     )
-    col.end_job(job_id)
-    return col
+    await session.commit()
+
+    spans = await repo.list_for_job("job-1")
+    assert len(spans) == 2
+    assert spans[0]["name"] == "read_file"
+    assert spans[0]["attrs"]["success"] is True
+    assert spans[1]["name"] == "gpt-4o"
 
 
-def test_to_snapshot_captures_all_cumulative_fields() -> None:
-    col = _make_collector_with_metrics()
-    tel = col.get("job-1")
-    assert tel is not None
-    snap = tel.to_snapshot()
+@pytest.mark.asyncio
+async def test_spans_tool_stats(session: AsyncSession) -> None:
+    repo = TelemetrySpansRepo(session)
+    for i in range(5):
+        await repo.insert(
+            job_id="job-1",
+            span_type="tool",
+            name="write_file",
+            started_at=float(i),
+            duration_ms=100.0 + i * 10,
+            attrs={"success": i != 2},  # one failure
+        )
+    await session.commit()
 
-    assert snap["input_tokens"] == 300
-    assert snap["output_tokens"] == 150
-    assert snap["total_tokens"] == 450
-    assert snap["total_cost"] == 0.005
-    assert snap["tool_call_count"] == 1
-    assert snap["llm_call_count"] == 1
-    assert snap["approval_count"] == 1
-    assert snap["agent_messages"] == 1
-    assert snap["operator_messages"] == 1
-    assert snap["premium_requests"] == 2.5
-    assert snap["model"] == "gpt-4o"
-    assert snap["main_model"] == "gpt-4o"
-    assert isinstance(snap["duration_ms"], float)
-    assert snap["duration_ms"] > 0
-
-    assert isinstance(snap["tool_calls_raw"], list)
-    assert len(snap["tool_calls_raw"]) == 1
-    assert snap["tool_calls_raw"][0]["name"] == "read_file"
-
-    assert isinstance(snap["llm_calls_raw"], list)
-    assert len(snap["llm_calls_raw"]) == 1
-
-    quotas = cast("dict[str, object]", snap["quota_snapshots_raw"])
-    assert "premium" in quotas
-
-
-def test_restore_from_snapshot_replaces_fresh_entry() -> None:
-    """Simulates process restart: fresh collector, restored from snapshot."""
-    original = _make_collector_with_metrics()
-    tel_orig = original.get("job-1")
-    assert tel_orig is not None
-    snap = tel_orig.to_snapshot()
-
-    # New process — empty collector
-    fresh = TelemetryCollector()
-    fresh.start_job("job-1", model="")
-    fresh.restore_from_snapshot("job-1", snap)
-
-    tel = fresh.get("job-1")
-    assert tel is not None
-
-    # Cumulative counters carried forward
-    assert tel.input_tokens == 300
-    assert tel.output_tokens == 150
-    assert tel.total_tokens == 450
-    assert tel.total_cost == 0.005
-    assert tel.tool_call_count == 1
-    assert tel.llm_call_count == 1
-    assert tel.approval_count == 1
-    assert tel.agent_messages == 1
-    assert tel.operator_messages == 1
-    assert tel.premium_requests == 2.5
-    assert tel.model == "gpt-4o"
-    assert tel.main_model == "gpt-4o"
-    assert tel.accumulated_duration_ms > 0
-
-    # Call history restored
-    assert len(tel.tool_calls) == 1
-    assert tel.tool_calls[0].name == "read_file"
-    assert len(tel.llm_calls) == 1
-
-    # Quota snapshots restored
-    assert "premium" in tel.quota_snapshots
-    assert tel.quota_snapshots["premium"].used_requests == 2.5
-
-
-def test_restore_then_continue_accumulates_correctly() -> None:
-    """New session metrics add on top of the restored snapshot totals."""
-    original = _make_collector_with_metrics()
-    original_tel = original.get("job-1")
-    assert original_tel is not None
-    snap = original_tel.to_snapshot()
-
-    # Resumed session in a fresh collector
-    fresh = TelemetryCollector()
-    fresh.start_job("job-1", model="gpt-4o")
-    fresh.restore_from_snapshot("job-1", snap)
-
-    # Second session records additional usage
-    fresh.record_llm_usage("job-1", model="gpt-4o", input_tokens=100, output_tokens=50, cost=0.002)
-    fresh.record_tool_call("job-1", tool_name="write_file", duration_ms=80)
-
-    tel = fresh.get("job-1")
-    assert tel is not None
-    assert tel.input_tokens == 400  # 300 + 100
-    assert tel.output_tokens == 200  # 150 + 50
-    assert tel.total_tokens == 600  # 450 + 150
-    assert tel.tool_call_count == 2  # 1 + 1
-    assert tel.llm_call_count == 2  # 1 + 1
-
-
-def test_restore_noop_when_no_entry() -> None:
-    """restore_from_snapshot is a no-op when the job has no in-memory entry."""
-    col = TelemetryCollector()
-    # No start_job called — should not raise
-    col.restore_from_snapshot("ghost-job", {"input_tokens": 999})
-    assert col.get("ghost-job") is None
+    stats = await repo.tool_stats(period_days=30)
+    assert len(stats) == 1
+    assert stats[0]["name"] == "write_file"
+    assert stats[0]["count"] == 5
+    assert stats[0]["failure_count"] == 1

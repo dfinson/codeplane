@@ -13,7 +13,10 @@ from backend.services.diff_service import DiffService
 
 @pytest.fixture
 def mock_git() -> AsyncMock:
-    return AsyncMock()
+    git = AsyncMock()
+    # Default: no merge in-progress so existing tests use the normal diff path.
+    git.is_merge_in_progress.return_value = False
+    return git
 
 
 @pytest.fixture
@@ -223,3 +226,45 @@ class TestEventPublishing:
         mock_git.diff.side_effect = Exception("git failed")
         files = await diff_service.calculate_diff("/work", "main")
         assert files == []
+
+
+# --- Merge-in-progress guard ---
+
+
+class TestMergeInProgress:
+    """Diff computed while MERGE_HEAD exists must not include the other branch's changes."""
+
+    @pytest.mark.asyncio
+    async def test_uses_diff_range_not_working_tree_when_merge_in_progress(
+        self, diff_service: DiffService, mock_git: AsyncMock
+    ) -> None:
+        mock_git.is_merge_in_progress.return_value = True
+        mock_git.merge_base.return_value = "abc123"
+        mock_git.diff_range.return_value = SIMPLE_DIFF
+        files = await diff_service.calculate_diff("/work", "main")
+        # Must use diff_range (commit-to-commit), not diff (working-tree)
+        mock_git.diff_range.assert_called_once_with("abc123", "HEAD", cwd="/work")
+        mock_git.diff.assert_not_called()
+        assert len(files) == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_intent_to_add_when_merge_in_progress(
+        self, diff_service: DiffService, mock_git: AsyncMock
+    ) -> None:
+        mock_git.is_merge_in_progress.return_value = True
+        mock_git.diff_range.return_value = ""
+        await diff_service.calculate_diff("/work", "main")
+        mock_git.add_intent_to_add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_normal_path_uses_working_tree_diff(
+        self, diff_service: DiffService, mock_git: AsyncMock
+    ) -> None:
+        mock_git.is_merge_in_progress.return_value = False
+        mock_git.merge_base.return_value = "abc123"
+        mock_git.diff.return_value = SIMPLE_DIFF
+        files = await diff_service.calculate_diff("/work", "main")
+        mock_git.add_intent_to_add.assert_called_once()
+        mock_git.diff.assert_called_once_with("abc123", cwd="/work")
+        mock_git.diff_range.assert_not_called()
+        assert len(files) == 1

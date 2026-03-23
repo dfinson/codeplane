@@ -615,19 +615,23 @@ class TestProcessResultMessage:
             },
         )
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with (
+            patch("backend.services.telemetry.tokens_input") as mock_in,
+            patch("backend.services.telemetry.tokens_output") as mock_out,
+            patch("backend.services.telemetry.tokens_cache_read") as mock_cr,
+            patch("backend.services.telemetry.tokens_cache_write") as mock_cw,
+            patch("backend.services.telemetry.cost_usd") as mock_cost,
+            patch("backend.services.telemetry.llm_duration") as mock_dur,
+        ):
             adapter._process_result_message(sid, msg, [0])
 
-            mock_tel.record_llm_usage.assert_called_once_with(
-                "job-1",
-                model="",
-                input_tokens=10,
-                output_tokens=5,
-                cache_read_tokens=2,
-                cache_write_tokens=1,
-                cost=0.01,
-                duration_ms=0.0,
-            )
+            attrs = {"job_id": "job-1", "sdk": "claude", "model": ""}
+            mock_in.add.assert_called_once_with(10, attrs)
+            mock_out.add.assert_called_once_with(5, attrs)
+            mock_cr.add.assert_called_once_with(2, attrs)
+            mock_cw.add.assert_called_once_with(1, attrs)
+            mock_cost.add.assert_called_once_with(0.01, attrs)
+            mock_dur.record.assert_called_once_with(0.0, {**attrs, "is_subagent": False})
 
     def test_result_empty_usage_dict(self, adapter: ClaudeAdapter) -> None:
         """usage=None or non-dict should default to 0."""
@@ -974,7 +978,7 @@ class TestToolResultTelemetry:
         adapter._session_to_job[sid] = "job-1"
         adapter._tool_start_times["tool-1"] = time.monotonic() - 1.0
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.tool_duration") as mock_tool_dur:
             adapter._process_tool_result_block(
                 sid,
                 _FakeToolResultBlock(tool_use_id="tool-1", content="ok"),
@@ -982,9 +986,9 @@ class TestToolResultTelemetry:
                 "job-1",
             )
 
-            mock_tel.record_tool_call.assert_called_once()
-            call_kwargs = mock_tel.record_tool_call.call_args
-            assert call_kwargs[0][0] == "job-1"
+            mock_tool_dur.record.assert_called_once()
+            call_args = mock_tool_dur.record.call_args
+            assert call_args[0][1]["job_id"] == "job-1"
 
     @patch("backend.services.tool_formatters.format_tool_display", return_value="tool: ok")
     def test_tool_result_no_job_skips_telemetry(self, mock_fmt: MagicMock) -> None:
@@ -992,7 +996,7 @@ class TestToolResultTelemetry:
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
 
-        with patch("backend.services.telemetry.collector") as mock_tel:
+        with patch("backend.services.telemetry.tool_duration") as mock_tool_dur:
             adapter._process_tool_result_block(
                 sid,
                 _FakeToolResultBlock(tool_use_id="tool-2", content="ok"),
@@ -1000,4 +1004,4 @@ class TestToolResultTelemetry:
                 None,
             )
 
-            mock_tel.record_tool_call.assert_not_called()
+            mock_tool_dur.record.assert_not_called()

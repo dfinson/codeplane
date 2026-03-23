@@ -62,6 +62,7 @@ export interface ApprovalRequest {
   requestedAt: string;
   resolvedAt: string | null;
   resolution: string | null;
+  requiresExplicitApproval: boolean;
 }
 
 export interface JobStateChangedPayload {

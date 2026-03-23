@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate, useMatch } from "react-router-dom";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { useStore } from "../store";
 import { formatJobTerminalLabel } from "../lib/terminalLabels";
@@ -10,6 +11,8 @@ import {
   Settings,
   TerminalSquare,
   ArrowRight,
+  BarChart3,
+  Columns3,
 } from "lucide-react";
 
 interface PaletteItem {
@@ -35,16 +38,7 @@ export function CommandPalette() {
   const currentJob = currentJobId ? jobsMap[currentJobId] : null;
 
   // Ctrl/Cmd+K toggles the palette
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setOpen((prev) => !prev);
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useHotkeys("ctrl+k,meta+k", () => setOpen((prev) => !prev), { enableOnFormTags: true, preventDefault: true });
 
   // Allow the header trigger button to open the palette
   useEffect(() => {
@@ -55,6 +49,14 @@ export function CommandPalette() {
 
   const staticItems: PaletteItem[] = useMemo(
     () => [
+      {
+        id: "jobs",
+        label: "Jobs",
+        description: "Kanban board overview",
+        icon: <Columns3 className="h-4 w-4" />,
+        action: () => navigate("/"),
+        keywords: ["kanban", "board", "dashboard", "home", "overview"],
+      },
       {
         id: "new-job",
         label: "New Job",
@@ -78,6 +80,14 @@ export function CommandPalette() {
         icon: <Settings className="h-4 w-4" />,
         action: () => navigate("/settings"),
         keywords: ["config", "preferences", "options"],
+      },
+      {
+        id: "analytics",
+        label: "Analytics",
+        description: "Fleet telemetry dashboard",
+        icon: <BarChart3 className="h-4 w-4" />,
+        action: () => navigate("/analytics"),
+        keywords: ["metrics", "telemetry", "cost", "usage", "dashboard", "stats"],
       },
       // Context-aware terminal entries: show job terminal first when inside a job view
       ...(currentJob?.worktreePath && !currentJob?.archivedAt && currentJobId
@@ -179,11 +189,11 @@ export function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search all jobs, navigate…"
+            placeholder="Search or navigate..."
             className="flex-1 bg-transparent border-0 outline-none px-3 py-3 text-sm placeholder:text-muted-foreground"
             autoFocus
           />
-          <kbd className="text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5 font-mono shrink-0">
+          <kbd className="hidden sm:inline text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5 font-mono shrink-0">
             ESC
           </kbd>
         </div>

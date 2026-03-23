@@ -121,6 +121,18 @@ export function fetchJobDiff(jobId: string): Promise<DiffFileModel[]> {
   return request(`/jobs/${encodeURIComponent(jobId)}/diff`);
 }
 
+/** Full state hydration for a single job — used after reconnect or page refresh. */
+export function fetchJobSnapshot(jobId: string): Promise<{
+  job: import("../store").JobSummary;
+  logs: import("../store").LogLine[];
+  transcript: import("../store").TranscriptEntry[];
+  diff: DiffFileModel[];
+  approvals: import("../store").ApprovalRequest[];
+  timeline: import("../store").TimelineEntry[];
+}> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/snapshot`);
+}
+
 export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
   return request("/jobs", {
     method: "POST",
@@ -185,6 +197,144 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   operatorMessages?: number;
 }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/telemetry`);
+}
+
+// --- Analytics ---
+
+export interface AnalyticsOverview {
+  period: number;
+  totalJobs: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  running: number;
+  totalCostUsd: number;
+  totalTokens: number;
+  avgDurationMs: number;
+  totalPremiumRequests: number;
+  totalToolCalls: number;
+  totalToolFailures: number;
+  toolSuccessRate: number;
+  cacheHitRate: number;
+  costTrend: { date: string; cost: number; jobs: number }[];
+}
+
+export interface AnalyticsModels {
+  period: number;
+  models: {
+    model: string;
+    sdk: string;
+    job_count: number;
+    total_cost_usd: number;
+    total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    avg_duration_ms: number;
+    premium_requests: number;
+  }[];
+}
+
+export interface AnalyticsTools {
+  period: number;
+  tools: {
+    name: string;
+    count: number;
+    avg_duration_ms: number;
+    total_duration_ms: number;
+    failure_count: number;
+  }[];
+}
+
+export interface AnalyticsJobs {
+  period: number;
+  jobs: {
+    job_id: string;
+    sdk: string;
+    model: string;
+    repo: string;
+    branch: string;
+    status: string;
+    created_at: string;
+    completed_at: string | null;
+    duration_ms: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    total_cost_usd: number;
+    tool_call_count: number;
+    llm_call_count: number;
+    premium_requests: number;
+  }[];
+}
+
+export interface AnalyticsRepos {
+  period: number;
+  repos: {
+    repo: string;
+    job_count: number;
+    succeeded: number;
+    failed: number;
+    total_cost_usd: number;
+    total_tokens: number;
+    tool_calls: number;
+    avg_duration_ms: number;
+    premium_requests: number;
+  }[];
+}
+
+export function fetchAnalyticsOverview(period = 7): Promise<AnalyticsOverview> {
+  return request(`/analytics/overview?period=${period}`);
+}
+
+export function fetchAnalyticsModels(period = 7): Promise<AnalyticsModels> {
+  return request(`/analytics/models?period=${period}`);
+}
+
+export function fetchAnalyticsTools(period = 30): Promise<AnalyticsTools> {
+  return request(`/analytics/tools?period=${period}`);
+}
+
+export function fetchAnalyticsRepos(period = 7): Promise<AnalyticsRepos> {
+  return request(`/analytics/repos?period=${period}`);
+}
+
+// Model pricing — keyed by model name, null if not found
+export interface ModelPricing {
+  provider: string;
+  input: number;       // $/MTok
+  output: number;      // $/MTok
+  cache_read: number;  // $/MTok
+  cache_write: number; // $/MTok
+  max_input_tokens: number;
+  max_output_tokens: number;
+}
+
+export function fetchModelPricing(models: string[]): Promise<Record<string, ModelPricing | null>> {
+  return request(`/analytics/pricing?models=${encodeURIComponent(models.join(","))}`);
+}
+
+export function fetchAnalyticsJobs(params?: {
+  period?: number;
+  sdk?: string;
+  model?: string;
+  status?: string;
+  sort?: string;
+  desc?: boolean;
+  limit?: number;
+  offset?: number;
+}): Promise<AnalyticsJobs> {
+  const sp = new URLSearchParams();
+  if (params?.period) sp.set("period", String(params.period));
+  if (params?.sdk) sp.set("sdk", params.sdk);
+  if (params?.model) sp.set("model", params.model);
+  if (params?.status) sp.set("status", params.status);
+  if (params?.sort) sp.set("sort", params.sort);
+  if (params?.desc !== undefined) sp.set("desc", String(params.desc));
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  const qs = sp.toString();
+  return request(`/analytics/jobs${qs ? `?${qs}` : ""}`);
 }
 
 // --- Repos ---

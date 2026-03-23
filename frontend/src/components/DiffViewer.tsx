@@ -121,7 +121,7 @@ function computeAskState(): { canAsk: boolean; reason: string | null } {
   return { canAsk: true, reason: null };
 }
 
-export default function DiffViewer({ jobId, jobState, resolution, archivedAt, onAskSent }: DiffViewerProps) {
+export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerProps) {
   const navigate = useNavigate();
   const diffs = useStore(selectJobDiffs(jobId));
   const isMobile = useIsMobile();
@@ -146,9 +146,6 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
   const [askSending, setAskSending] = useState(false);
   const { canAsk, reason: disabledReason } = computeAskState();
   const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
-  const shouldCreateFollowUp =
-    isTerminal &&
-    (!!archivedAt || resolution === "merged" || resolution === "pr_created" || resolution === "discarded");
 
   // Voice input state
   const waveformContainerRef = useRef<HTMLDivElement>(null);
@@ -213,19 +210,18 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
     setAskSending(true);
     try {
       if (isTerminal) {
-        if (shouldCreateFollowUp) {
+        try {
+          await resumeJob(jobId, fullMessage);
+        } catch {
+          // Worktree gone / unrecoverable — fall back to follow-up job
           const nextJob = await continueJob(jobId, fullMessage);
           toast.success("Follow-up job created");
           navigate(`/jobs/${nextJob.id}`);
-        } else {
-          await resumeJob(jobId, fullMessage);
         }
       } else {
         await sendOperatorMessage(jobId, fullMessage);
       }
-      if (!shouldCreateFollowUp) {
-        toast.success("Question sent to agent");
-      }
+      toast.success("Question sent to agent");
       setAskMsg("");
       setCheckedFiles(new Set());
       onAskSent?.();
@@ -234,7 +230,7 @@ export default function DiffViewer({ jobId, jobState, resolution, archivedAt, on
     } finally {
       setAskSending(false);
     }
-  }, [jobId, askMsg, checkedFiles, diffs, isTerminal, navigate, onAskSent, shouldCreateFollowUp]);
+  }, [jobId, askMsg, checkedFiles, diffs, isTerminal, navigate, onAskSent]);
 
   const totalAdditions = diffs.reduce((sum, f) => sum + (f.additions ?? 0), 0);
   const totalDeletions = diffs.reduce((sum, f) => sum + (f.deletions ?? 0), 0);

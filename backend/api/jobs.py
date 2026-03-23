@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
@@ -435,6 +436,145 @@ async def get_job_timeline(
     return milestones
 
 
+@router.get("/jobs/{job_id}/snapshot")
+async def get_job_snapshot(
+    job_id: str,
+    svc: FromDishka[JobService],
+    session: FromDishka[AsyncSession],
+    event_bus: FromDishka[EventBus],
+    config: FromDishka[CPLConfig],
+) -> dict[str, object]:
+    """Full state hydration for a single job.
+
+    Returns the job, logs, transcript, diff, approvals, and timeline in a
+    single response. Used by the frontend after SSE reconnection or page
+    refresh to ensure the UI is fully consistent with backend state.
+    """
+    from backend.models.api_schemas import JobSnapshotResponse
+
+    job = await svc.get_job(job_id)
+    progress_preview = await svc.get_latest_progress_preview(job_id)
+
+    # Collect all sub-resources in parallel via gather
+    import asyncio as _aio
+
+    logs_coro = svc.list_events_by_job(job_id, [DomainEventKind.log_line_emitted], limit=2000)
+    transcript_coro = svc.list_events_by_job(job_id, [DomainEventKind.transcript_updated], limit=2000)
+    timeline_coro = svc.list_events_by_job(job_id, [DomainEventKind.progress_headline], limit=200)
+    summary_coro = svc.list_events_by_job(job_id, [DomainEventKind.tool_group_summary], limit=5000)
+
+    log_events, transcript_events, timeline_events, summary_events = await _aio.gather(
+        logs_coro, transcript_coro, timeline_coro, summary_coro
+    )
+
+    # Build logs
+    logs = [
+        LogLinePayload(
+            job_id=e.job_id,
+            seq=e.payload.get("seq", 0),
+            timestamp=e.payload.get("timestamp", e.timestamp),
+            level=e.payload.get("level", "info"),
+            message=e.payload.get("message", ""),
+            context=e.payload.get("context"),
+        )
+        for e in log_events
+    ]
+
+    # Build transcript with group summaries
+    group_summary_by_turn: dict[str, str] = {
+        str(ev.payload.get("turn_id")): str(ev.payload.get("summary"))
+        for ev in summary_events
+        if ev.payload.get("turn_id") and ev.payload.get("summary")
+    }
+    transcript = [
+        TranscriptPayload(
+            job_id=e.job_id,
+            seq=e.payload.get("seq", 0),
+            timestamp=e.payload.get("timestamp", e.timestamp),
+            role=e.payload.get("role", "agent"),
+            content=e.payload.get("content", ""),
+            title=e.payload.get("title"),
+            turn_id=e.payload.get("turn_id"),
+            tool_name=e.payload.get("tool_name"),
+            tool_args=e.payload.get("tool_args"),
+            tool_result=e.payload.get("tool_result"),
+            tool_success=e.payload.get("tool_success"),
+            tool_issue=e.payload.get("tool_issue"),
+            tool_intent=e.payload.get("tool_intent"),
+            tool_title=e.payload.get("tool_title"),
+            tool_display=e.payload.get("tool_display"),
+            tool_group_summary=group_summary_by_turn.get(e.payload.get("turn_id") or ""),
+        )
+        for e in transcript_events
+    ]
+
+    # Build timeline
+    milestones: list[ProgressHeadlinePayload] = []
+    for event in timeline_events:
+        replaces = event.payload.get("replaces_count", 0)
+        if replaces > 0:
+            milestones = milestones[:-replaces] if replaces < len(milestones) else []
+        milestones.append(
+            ProgressHeadlinePayload(
+                job_id=event.job_id,
+                headline=event.payload.get("headline", ""),
+                headline_past=event.payload.get("headline_past", ""),
+                summary=event.payload.get("summary", ""),
+                timestamp=event.timestamp,
+            )
+        )
+
+    # Build diff (live or from snapshot)
+    diff: list[DiffFileModel] = []
+    if (
+        job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path
+        and job.worktree_path != job.repo
+    ):
+        from backend.services.diff_service import DiffService
+        from backend.services.git_service import GitService
+
+        git = GitService(config)
+        ds = DiffService(git_service=git, event_bus=event_bus)
+        with contextlib.suppress(Exception):
+            diff = await ds.calculate_diff(job.worktree_path, job.base_ref)
+
+    if not diff:
+        diff_events = await svc.list_events_by_job(job_id, [DomainEventKind.diff_updated])
+        if diff_events:
+            raw_files = diff_events[-1].payload.get("changed_files", [])
+            diff = [DiffFileModel.model_validate(f) for f in raw_files]
+
+    # Build approvals from DB state (includes resolution status)
+    from backend.models.api_schemas import ApprovalResponse
+    from backend.persistence.approval_repo import ApprovalRepository
+
+    approval_repo = ApprovalRepository(session)
+    db_approvals = await approval_repo.list_for_job(job_id)
+    approval_list: list[ApprovalResponse] = [
+        ApprovalResponse(
+            id=a.id,
+            job_id=a.job_id,
+            description=a.description,
+            proposed_action=a.proposed_action,
+            requested_at=a.requested_at,
+            resolved_at=a.resolved_at,
+            resolution=a.resolution,
+        )
+        for a in db_approvals
+    ]
+
+    resp = JobSnapshotResponse(
+        job=_job_to_response(job, progress_preview),
+        logs=logs,
+        transcript=transcript,
+        diff=diff,
+        approvals=approval_list,
+        timeline=milestones,
+    )
+    return resp.model_dump(by_alias=True)
+
+
 @router.get("/jobs/{job_id}/telemetry")
 async def get_job_telemetry(
     job_id: str,
@@ -442,39 +582,112 @@ async def get_job_telemetry(
 ) -> dict[str, object]:
     """Get telemetry data for a job run.
 
-    Returns in-memory live telemetry when available.  Falls back to the
-    persisted snapshot (written at session end) so metrics are always
-    visible even after backend restarts or for archived / terminal jobs.
+    Returns the persisted telemetry summary from the OTEL-backed SQLite store.
+    Includes per-call span detail (tool calls, LLM calls) when available.
     """
-    from backend.services.telemetry import TelemetryCollector, collector
-
-    tel = collector.get(job_id)
+    import json
 
     from backend.persistence.job_repo import JobRepository
-    from backend.persistence.metrics_repo import MetricsRepository
+    from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-    job_repo = JobRepository(session)
-
-    if tel is None:
-        # Try loading from the persisted job_metrics snapshot.
-        snapshot = await MetricsRepository(session).load_snapshot(job_id)
-        if snapshot:
-            # Reconstruct a transient JobTelemetry so we can call to_dict()
-            # which produces the camelCase API shape.
-            temp = TelemetryCollector()
-            temp.start_job(job_id)
-            temp.restore_from_snapshot(job_id, snapshot)
-            temp.end_job(job_id)
-            temp_tel = temp.get(job_id)
-            if temp_tel is not None:
-                job_row = await job_repo.get(job_id)
-                sdk = job_row.sdk if job_row else ""
-                return {**temp_tel.to_dict(), "sdk": sdk, "available": True}
+    summary = await TelemetrySummaryRepo(session).get(job_id)
+    if summary is None:
         return {"jobId": job_id, "available": False}
 
-    job_row = await job_repo.get(job_id)
+    job_row = await JobRepository(session).get(job_id)
     sdk = job_row.sdk if job_row else ""
-    return {**tel.to_dict(), "sdk": sdk, "available": True}
+
+    # Parse quota JSON if present
+    quota_snapshots = None
+    if summary.get("quota_json"):
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            quota_snapshots = json.loads(summary["quota_json"])
+
+    # Compute derived fields
+    input_tok = summary.get("input_tokens", 0)
+    output_tok = summary.get("output_tokens", 0)
+    cache_read = summary.get("cache_read_tokens", 0)
+    window_size = summary.get("context_window_size", 0)
+    current_ctx = summary.get("current_context_tokens", 0)
+
+    # Load span detail for tool/LLM call breakdowns
+    spans = await TelemetrySpansRepo(session).list_for_job(job_id)
+    tool_calls = []
+    llm_calls = []
+    for span in spans:
+        attrs = span.get("attrs", {})
+        if span.get("span_type") == "tool":
+            tool_calls.append(
+                {
+                    "name": span["name"],
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "success": attrs.get("success", True),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
+        elif span.get("span_type") == "llm":
+            llm_calls.append(
+                {
+                    "model": span["name"],
+                    "inputTokens": attrs.get("input_tokens", 0),
+                    "outputTokens": attrs.get("output_tokens", 0),
+                    "cacheReadTokens": attrs.get("cache_read_tokens", 0),
+                    "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
+                    "cost": attrs.get("cost", 0),
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "isSubagent": attrs.get("is_subagent", False),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
+
+    result: dict[str, object] = {
+        "available": True,
+        "jobId": job_id,
+        "sdk": sdk,
+        "model": summary.get("model", ""),
+        "mainModel": summary.get("model", ""),
+        "durationMs": summary.get("duration_ms", 0),
+        "inputTokens": input_tok,
+        "outputTokens": output_tok,
+        "totalTokens": input_tok + output_tok,
+        "cacheReadTokens": cache_read,
+        "cacheWriteTokens": summary.get("cache_write_tokens", 0),
+        "totalCost": float(summary.get("total_cost_usd", 0)),
+        "contextWindowSize": window_size,
+        "currentContextTokens": current_ctx,
+        "contextUtilization": (current_ctx / window_size) if window_size else 0,
+        "compactions": summary.get("compactions", 0),
+        "tokensCompacted": summary.get("tokens_compacted", 0),
+        "toolCallCount": summary.get("tool_call_count", 0),
+        "totalToolDurationMs": summary.get("total_tool_duration_ms", 0),
+        "toolCalls": tool_calls,
+        "llmCallCount": summary.get("llm_call_count", 0),
+        "totalLlmDurationMs": summary.get("total_llm_duration_ms", 0),
+        "llmCalls": llm_calls,
+        "approvalCount": summary.get("approval_count", 0),
+        "totalApprovalWaitMs": summary.get("approval_wait_ms", 0),
+        "agentMessages": summary.get("agent_messages", 0),
+        "operatorMessages": summary.get("operator_messages", 0),
+        "premiumRequests": float(summary.get("premium_requests", 0)),
+    }
+    if quota_snapshots is not None:
+        # Convert snake_case keys from DB JSON to camelCase for the frontend
+        result["quotaSnapshots"] = {
+            resource: {
+                "usedRequests": snap.get("used_requests", 0),
+                "entitlementRequests": snap.get("entitlement_requests", 0),
+                "remainingPercentage": snap.get("remaining_percentage", 0),
+                "overage": snap.get("overage", 0),
+                "overageAllowed": snap.get("overage_allowed", False),
+                "isUnlimited": snap.get("is_unlimited", False),
+                "resetDate": snap.get("reset_date", ""),
+            }
+            for resource, snap in quota_snapshots.items()
+            if isinstance(snap, dict)
+        }
+
+    return result
 
 
 @router.post("/jobs/{job_id}/resolve", response_model=ResolveJobResponse)

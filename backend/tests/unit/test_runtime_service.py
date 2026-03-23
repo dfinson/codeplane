@@ -862,12 +862,13 @@ class TestResumeFallback:
 
         await runtime.shutdown()
 
-    async def test_resume_rejects_resolved_merged_job(
+    async def test_resume_allows_resolved_merged_job(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
         config: CPLConfig,
     ) -> None:
+        """Resolved/merged jobs can still be resumed when the worktree exists."""
         runtime = RuntimeService(
             session_factory=session_factory,
             event_bus=event_bus,
@@ -880,26 +881,19 @@ class TestResumeFallback:
         job.resolution = Resolution.merged
         await _create_db_job(session_factory, job)
 
-        with pytest.raises(StateConflictError, match="create a follow-up job instead"):
-            await runtime.resume_job(job.id, "keep going")
-
-        async with session_factory() as session:
-            from backend.persistence.job_repo import JobRepository
-
-            repo = JobRepository(session)
-            row = await repo.get(job.id)
-            assert row is not None
-            assert row.state == JobState.succeeded
-            assert row.resolution == Resolution.merged
+        # Resume should succeed — the backend no longer blocks on resolution
+        result = await runtime.resume_job(job.id, "keep going")
+        assert result.state == JobState.running
 
         await runtime.shutdown()
 
-    async def test_resume_rejects_archived_job(
+    async def test_resume_allows_archived_job(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         event_bus: EventBus,
         config: CPLConfig,
     ) -> None:
+        """Archived jobs can still be resumed when the worktree exists."""
         runtime = RuntimeService(
             session_factory=session_factory,
             event_bus=event_bus,
@@ -912,17 +906,9 @@ class TestResumeFallback:
         job.archived_at = datetime.now(UTC)
         await _create_db_job(session_factory, job)
 
-        with pytest.raises(StateConflictError, match="is archived"):
-            await runtime.resume_job(job.id, "try again")
-
-        async with session_factory() as session:
-            from backend.persistence.job_repo import JobRepository
-
-            repo = JobRepository(session)
-            row = await repo.get(job.id)
-            assert row is not None
-            assert row.state == JobState.failed
-            assert row.archived_at is not None
+        # Resume should succeed — the backend no longer blocks on archived_at
+        result = await runtime.resume_job(job.id, "try again")
+        assert result.state == JobState.running
 
         await runtime.shutdown()
 

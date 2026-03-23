@@ -100,6 +100,8 @@ MAX_REPLAY_AGE = timedelta(minutes=5)
 class SSEConnection:
     """Represents a single SSE client connection."""
 
+    _QUEUE_WARN_THRESHOLD = 0.8  # 80% of maxsize
+
     def __init__(self, job_id: str | None = None) -> None:
         self.job_id = job_id  # None = all jobs
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=1024)
@@ -111,7 +113,10 @@ class SSEConnection:
         try:
             self.queue.put_nowait(data)
         except asyncio.QueueFull:
-            log.warning("sse_queue_full", job_id=self.job_id)
+            # Close the overloaded connection so the client reconnects and
+            # gets missed events via replay instead of silently losing them.
+            log.warning("sse_queue_full_closing_connection", job_id=self.job_id)
+            self.close()
 
     def close(self) -> None:
         self.closed = True
@@ -266,6 +271,7 @@ _SSE_PAYLOAD_REGISTRY: dict[str, tuple[type, FieldMap] | _BuilderFn] = {
             "description": ("description", ""),
             "proposed_action": ("proposed_action", None),
             "timestamp": ("timestamp", _TS_FALLBACK),
+            "requires_explicit_approval": ("requires_explicit_approval", False),
         },
     ),
     "approval_resolved": (
@@ -523,6 +529,7 @@ class SSEManager:
                 requested_at=a.requested_at,
                 resolved_at=a.resolved_at,
                 resolution=a.resolution,
+                requires_explicit_approval=a.requires_explicit_approval,
             )
             for a in pending
         ]

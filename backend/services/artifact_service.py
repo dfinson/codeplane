@@ -390,6 +390,126 @@ class ArtifactService:
         # Sort by creation time — names are no longer guaranteed to contain a numeric session ID.
         return max(snapshots, key=lambda a: a.created_at)
 
+    async def store_telemetry_report(
+        self,
+        job_id: str,
+        telemetry_dict: dict[str, Any],
+        *,
+        slug: str = "",
+    ) -> Artifact:
+        """Persist the final telemetry snapshot as a downloadable artifact."""
+        import re as _re
+
+        tag = _re.sub(r"[^a-z0-9]+", "-", (slug or "").lower()).strip("-")[:40]
+        if not tag:
+            tag = job_id[:12]
+        name = f"{tag}-telemetry.json"
+
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        disk_dir = _ARTIFACTS_BASE / job_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path.write_text(json.dumps(telemetry_dict, indent=2), encoding="utf-8")
+
+        artifact = Artifact(
+            id=artifact_id,
+            job_id=job_id,
+            name=name,
+            type=ArtifactType.telemetry_report,
+            mime_type="application/json",
+            size_bytes=disk_path.stat().st_size,
+            disk_path=str(disk_path),
+            phase=ExecutionPhase.post_completion,
+            created_at=datetime.now(UTC),
+        )
+        return await self._repo.create(artifact)
+
+    async def store_agent_plan(
+        self,
+        job_id: str,
+        steps: list[dict[str, str]],
+        *,
+        slug: str = "",
+    ) -> Artifact | None:
+        """Persist the agent's execution plan steps as an artifact.
+
+        Returns None if steps is empty (no plan was generated).
+        """
+        if not steps:
+            return None
+
+        import re as _re
+
+        tag = _re.sub(r"[^a-z0-9]+", "-", (slug or "").lower()).strip("-")[:40]
+        if not tag:
+            tag = job_id[:12]
+        name = f"{tag}-plan.json"
+
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        disk_dir = _ARTIFACTS_BASE / job_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path.write_text(
+            json.dumps({"steps": steps}, indent=2),
+            encoding="utf-8",
+        )
+
+        artifact = Artifact(
+            id=artifact_id,
+            job_id=job_id,
+            name=name,
+            type=ArtifactType.agent_plan,
+            mime_type="application/json",
+            size_bytes=disk_path.stat().st_size,
+            disk_path=str(disk_path),
+            phase=ExecutionPhase.post_completion,
+            created_at=datetime.now(UTC),
+        )
+        return await self._repo.create(artifact)
+
+    async def store_approval_history(
+        self,
+        job_id: str,
+        approvals: list[dict[str, Any]],
+        *,
+        slug: str = "",
+    ) -> Artifact | None:
+        """Persist the approval request/resolution history as an artifact.
+
+        Returns None if there were no approval requests during the job.
+        """
+        if not approvals:
+            return None
+
+        import re as _re
+
+        tag = _re.sub(r"[^a-z0-9]+", "-", (slug or "").lower()).strip("-")[:40]
+        if not tag:
+            tag = job_id[:12]
+        name = f"{tag}-approvals.json"
+
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        disk_dir = _ARTIFACTS_BASE / job_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path.write_text(
+            json.dumps({"approvals": approvals}, indent=2),
+            encoding="utf-8",
+        )
+
+        artifact = Artifact(
+            id=artifact_id,
+            job_id=job_id,
+            name=name,
+            type=ArtifactType.approval_history,
+            mime_type="application/json",
+            size_bytes=disk_path.stat().st_size,
+            disk_path=str(disk_path),
+            phase=ExecutionPhase.post_completion,
+            created_at=datetime.now(UTC),
+        )
+        return await self._repo.create(artifact)
+
 
 def _guess_mime(filename: str) -> str:
     """Simple MIME type guessing from file extension."""

@@ -811,6 +811,8 @@ export interface components {
             /** Resolvedat */
             resolvedAt: string | null;
             resolution: components["schemas"]["ApprovalResolution"] | null;
+            /** Requiresexplicitapproval */
+            requiresExplicitApproval: boolean;
         };
         /** ArtifactListResponse */
         ArtifactListResponse: {
