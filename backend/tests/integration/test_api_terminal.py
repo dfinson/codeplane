@@ -7,6 +7,7 @@ the AI ask feature, and the WebSocket terminal I/O handler.
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -289,6 +290,9 @@ class TestTerminalWebSocket:
             ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
             ws.receive_text()  # attached confirmation
             ws.send_text(json.dumps({"type": "input", "data": "ls\n"}))
+            # The server processes messages in a background thread; give it a
+            # moment to handle the input before asserting.
+            time.sleep(0.1)
             svc.write.assert_called_with("s1", b"ls\n")
 
     def test_resize_calls_service(self, app: FastAPI) -> None:
@@ -299,6 +303,9 @@ class TestTerminalWebSocket:
             ws.send_text(json.dumps({"type": "attach", "sessionId": "s1"}))
             ws.receive_text()  # attached
             ws.send_text(json.dumps({"type": "resize", "cols": 100, "rows": 40}))
+            # The server processes messages in a background thread; give it a
+            # moment to handle the resize before asserting.
+            time.sleep(0.1)
             svc.resize.assert_called_with("s1", 100, 40)
 
     def test_detach_removes_client(self, app: FastAPI) -> None:

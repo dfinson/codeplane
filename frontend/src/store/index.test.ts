@@ -59,6 +59,7 @@ describe("AppStore", () => {
           requestedAt: "2025-01-01T00:00:00Z",
           resolvedAt: null,
           resolution: null,
+          requiresExplicitApproval: false,
         },
       ];
 
@@ -191,6 +192,7 @@ describe("AppStore", () => {
             requestedAt: "2025-01-01T00:00:00Z",
             resolvedAt: null,
             resolution: null,
+            requiresExplicitApproval: false,
           },
         },
       });

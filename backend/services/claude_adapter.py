@@ -26,6 +26,7 @@ from backend.models.domain import (
     SessionEventKind,
 )
 from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface
+from backend.services.permission_policy import is_git_reset_hard
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -177,6 +178,57 @@ class ClaudeAdapter(AgentAdapterInterface):
         ) -> PermissionResultAllow | PermissionResultDeny:
             mode = config.permission_mode
             job_id = self._session_to_job.get(session_id)
+
+            # ----------------------------------------------------------------
+            # Hard block: git reset --hard always requires explicit operator
+            # approval — no trust bypass, no auto mode bypass, ever.
+            # ----------------------------------------------------------------
+            _shell_cmd = input_data.get("command", "") or "" if tool_name == "Bash" else ""
+            if _shell_cmd and is_git_reset_hard(_shell_cmd):
+                if self._approval_service is None or job_id is None:
+                    log.error(
+                        "git_reset_hard_blocked_no_infra",
+                        tool=tool_name,
+                        command=_shell_cmd[:200],
+                    )
+                    return PermissionResultDeny(
+                        message=(
+                            "git reset --hard requires operator approval but no approval infrastructure is available"
+                        )
+                    )
+
+                description = (
+                    "⚠️ git reset --hard — this will discard ALL uncommitted changes and "
+                    f"move HEAD: {_summarize_tool_input(tool_name, input_data)}"
+                )
+                approval = await self._approval_service.create_request(
+                    job_id=job_id,
+                    description=description,
+                    proposed_action=json.dumps(input_data, default=str)[:_TOOL_ACTION_MAX],
+                    requires_explicit_approval=True,
+                )
+                self._enqueue(
+                    session_id,
+                    SessionEvent(
+                        kind=SessionEventKind.approval_request,
+                        payload={
+                            "description": description,
+                            "proposed_action": json.dumps(input_data, default=str)[:_TOOL_ACTION_MAX],
+                            "approval_id": approval.id,
+                            "requires_explicit_approval": True,
+                        },
+                    ),
+                )
+                log.warning(
+                    "git_reset_hard_awaiting_operator",
+                    approval_id=approval.id,
+                    job_id=job_id,
+                    command=_shell_cmd[:200],
+                )
+                resolution = await self._approval_service.wait_for_resolution(approval.id)
+                if resolution == "approved":
+                    return PermissionResultAllow()
+                return PermissionResultDeny(message="Operator denied git reset --hard")
 
             # Check trust
             if self._approval_service is not None and job_id and self._approval_service.is_trusted(job_id):
@@ -419,33 +471,37 @@ class ClaudeAdapter(AgentAdapterInterface):
         if job_id:
             from backend.services import telemetry as tel
 
-            attrs: dict[str, str | bool | int | float] = {
+            attrs: dict[str, str | bool] = {
                 "job_id": job_id,
                 "sdk": "claude",
                 "tool_name": tool_name,
-                "success": success,
+                "success": bool(success),
             }
             tel.tool_duration.record(duration_ms, attrs)
 
-            self._schedule_db_write(self._db_write(
-                "increment",
-                job_id=job_id,
-                tool_call_count=1,
-                tool_failure_count=0 if success else 1,
-                total_tool_duration_ms=int(duration_ms),
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "increment",
+                    job_id=job_id,
+                    tool_call_count=1,
+                    tool_failure_count=0 if success else 1,
+                    total_tool_duration_ms=int(duration_ms),
+                )
+            )
 
             job_start = self._job_start_times.get(job_id, time.monotonic())
             offset = time.monotonic() - job_start
-            self._schedule_db_write(self._db_write(
-                "insert_span",
-                job_id=job_id,
-                span_type="tool",
-                name=tool_name,
-                started_at=round(offset, 2),
-                duration_ms=duration_ms,
-                attrs={"success": success},
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "insert_span",
+                    job_id=job_id,
+                    span_type="tool",
+                    name=tool_name,
+                    started_at=round(offset, 2),
+                    duration_ms=duration_ms,
+                    attrs={"success": success},
+                )
+            )
 
     def _process_result_message(
         self,
@@ -479,36 +535,40 @@ class ClaudeAdapter(AgentAdapterInterface):
             tel.cost_usd.add(float(total_cost_usd), attrs)
             tel.llm_duration.record(float(duration_ms), {**attrs, "is_subagent": False})
 
-            self._schedule_db_write(self._db_write(
-                "increment",
-                job_id=job_id,
-                input_tokens=int(input_tokens),
-                output_tokens=int(output_tokens),
-                cache_read_tokens=int(cache_read),
-                cache_write_tokens=int(cache_write),
-                total_cost_usd=float(total_cost_usd),
-                llm_call_count=1,
-                total_llm_duration_ms=int(duration_ms),
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "increment",
+                    job_id=job_id,
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                    cache_read_tokens=int(cache_read),
+                    cache_write_tokens=int(cache_write),
+                    total_cost_usd=float(total_cost_usd),
+                    llm_call_count=1,
+                    total_llm_duration_ms=int(duration_ms),
+                )
+            )
 
             job_start = self._job_start_times.get(job_id, time.monotonic())
             offset = time.monotonic() - job_start
-            self._schedule_db_write(self._db_write(
-                "insert_span",
-                job_id=job_id,
-                span_type="llm",
-                name=model or "claude",
-                started_at=round(offset, 2),
-                duration_ms=float(duration_ms),
-                attrs={
-                    "input_tokens": int(input_tokens),
-                    "output_tokens": int(output_tokens),
-                    "cache_read_tokens": int(cache_read),
-                    "cache_write_tokens": int(cache_write),
-                    "cost": float(total_cost_usd),
-                    "is_subagent": False,
-                },
-            ))
+            self._schedule_db_write(
+                self._db_write(
+                    "insert_span",
+                    job_id=job_id,
+                    span_type="llm",
+                    name=model or "claude",
+                    started_at=round(offset, 2),
+                    duration_ms=float(duration_ms),
+                    attrs={
+                        "input_tokens": int(input_tokens),
+                        "output_tokens": int(output_tokens),
+                        "cache_read_tokens": int(cache_read),
+                        "cache_write_tokens": int(cache_write),
+                        "cost": float(total_cost_usd),
+                        "is_subagent": False,
+                    },
+                )
+            )
 
         self._enqueue_log(
             session_id,

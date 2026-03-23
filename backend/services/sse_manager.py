@@ -271,6 +271,7 @@ _SSE_PAYLOAD_REGISTRY: dict[str, tuple[type, FieldMap] | _BuilderFn] = {
             "description": ("description", ""),
             "proposed_action": ("proposed_action", None),
             "timestamp": ("timestamp", _TS_FALLBACK),
+            "requires_explicit_approval": ("requires_explicit_approval", False),
         },
     ),
     "approval_resolved": (
@@ -528,6 +529,7 @@ class SSEManager:
                 requested_at=a.requested_at,
                 resolved_at=a.resolved_at,
                 resolution=a.resolution,
+                requires_explicit_approval=a.requires_explicit_approval,
             )
             for a in pending
         ]

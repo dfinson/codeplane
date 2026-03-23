@@ -301,6 +301,22 @@ class TestMergeBase:
         assert result == "abc1234"
 
 
+class TestIsMergeInProgress:
+    @pytest.mark.asyncio
+    async def test_returns_true_when_merge_head_exists(self, git_service: GitService) -> None:
+        mock_proc = _mock_subprocess(stdout="deadbeef")
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await git_service.is_merge_in_progress(cwd="/repo")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_merge_head(self, git_service: GitService) -> None:
+        mock_proc = _mock_subprocess(returncode=1, stderr="")
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await git_service.is_merge_in_progress(cwd="/repo")
+        assert result is False
+
+
 class TestIsAncestor:
     @pytest.mark.asyncio
     async def test_returns_true_when_ancestor(self, git_service: GitService) -> None:

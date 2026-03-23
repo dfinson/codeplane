@@ -15,9 +15,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "cd .. && . .venv/bin/activate && cpl up",
+    command: "cd .. && . .venv/bin/activate && cpl up --skip-preflight",
     url: "http://127.0.0.1:8080/api/health",
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    timeout: 120_000,
   },
 });

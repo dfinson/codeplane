@@ -618,24 +618,28 @@ async def get_job_telemetry(
     for span in spans:
         attrs = span.get("attrs", {})
         if span.get("span_type") == "tool":
-            tool_calls.append({
-                "name": span["name"],
-                "durationMs": float(span.get("duration_ms", 0)),
-                "success": attrs.get("success", True),
-                "offsetSec": float(span.get("started_at", 0)),
-            })
+            tool_calls.append(
+                {
+                    "name": span["name"],
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "success": attrs.get("success", True),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
         elif span.get("span_type") == "llm":
-            llm_calls.append({
-                "model": span["name"],
-                "inputTokens": attrs.get("input_tokens", 0),
-                "outputTokens": attrs.get("output_tokens", 0),
-                "cacheReadTokens": attrs.get("cache_read_tokens", 0),
-                "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
-                "cost": attrs.get("cost", 0),
-                "durationMs": float(span.get("duration_ms", 0)),
-                "isSubagent": attrs.get("is_subagent", False),
-                "offsetSec": float(span.get("started_at", 0)),
-            })
+            llm_calls.append(
+                {
+                    "model": span["name"],
+                    "inputTokens": attrs.get("input_tokens", 0),
+                    "outputTokens": attrs.get("output_tokens", 0),
+                    "cacheReadTokens": attrs.get("cache_read_tokens", 0),
+                    "cacheWriteTokens": attrs.get("cache_write_tokens", 0),
+                    "cost": attrs.get("cost", 0),
+                    "durationMs": float(span.get("duration_ms", 0)),
+                    "isSubagent": attrs.get("is_subagent", False),
+                    "offsetSec": float(span.get("started_at", 0)),
+                }
+            )
 
     result: dict[str, object] = {
         "available": True,
@@ -668,7 +672,20 @@ async def get_job_telemetry(
         "premiumRequests": float(summary.get("premium_requests", 0)),
     }
     if quota_snapshots is not None:
-        result["quotaSnapshots"] = quota_snapshots
+        # Convert snake_case keys from DB JSON to camelCase for the frontend
+        result["quotaSnapshots"] = {
+            resource: {
+                "usedRequests": snap.get("used_requests", 0),
+                "entitlementRequests": snap.get("entitlement_requests", 0),
+                "remainingPercentage": snap.get("remaining_percentage", 0),
+                "overage": snap.get("overage", 0),
+                "overageAllowed": snap.get("overage_allowed", False),
+                "isUnlimited": snap.get("is_unlimited", False),
+                "resetDate": snap.get("reset_date", ""),
+            }
+            for resource, snap in quota_snapshots.items()
+            if isinstance(snap, dict)
+        }
 
     return result
 

@@ -548,11 +548,20 @@ class JobService:
         )
 
     async def archive_job(self, job_id: str) -> Job:
-        """Archive a job (hide from Kanban board)."""
+        """Archive a job (hide from Kanban board) and clean up its worktree."""
         job = await self.get_job(job_id)
         if job.state not in TERMINAL_STATES:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, cannot archive active jobs")
         await self._job_repo.update_archived_at(job_id, datetime.now(UTC))
+
+        # Clean up worktree and branch immediately rather than waiting for
+        # the daily retention sweep — the UI promises this happens on archive.
+        if self._git and job.worktree_path and job.worktree_path != job.repo:
+            try:
+                await self._git.remove_worktree(job.repo, job.worktree_path)
+                log.info("archive_worktree_removed", job_id=job_id, worktree=job.worktree_path)
+            except Exception:
+                log.warning("archive_worktree_cleanup_failed", job_id=job_id, exc_info=True)
 
         return await self.get_job(job_id)
 
