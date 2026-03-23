@@ -353,7 +353,9 @@ class ClaudeAdapter(AgentAdapterInterface):
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and job_id not in self._job_main_models:
             self._job_main_models[job_id] = model
-            self._schedule_db_write(self._db_write("set_model", job_id=job_id, model=model))
+            self._schedule_db_write(
+                self._db_write("set_model", job_id=job_id, model=model)
+            )
 
         for block in content_blocks:
             if isinstance(block, TextBlock):

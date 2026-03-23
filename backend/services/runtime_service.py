@@ -119,11 +119,11 @@ _HEARTBEAT_TIMEOUT_S = 300  # 5 minutes
 
 # Default prompts for post-completion verification and self-review turns
 DEFAULT_VERIFY_PROMPT = (
-    "You are running a background verification pass. Do not announce that you are "
-    "doing this — go straight to work using your tools without any introductory message. "
-    "First check whether any source files or documentation were modified during this "
+    "You are now running a post-task verification pass. "
+    "Start with a single short sentence announcing this — e.g. 'Running lint and tests.' "
+    "Then check whether any source files or documentation were modified during this "
     "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
-    "If no files were modified, stop silently without sending any message. "
+    "If no files were modified, state that there is nothing to verify and stop. "
     "Only if files were changed: identify and run this project's test suite, "
     "linter, and type checker. Stop as soon as everything passes — you do not "
     "need to exhaust the maximum number of allowed turns. If something fails, "
@@ -131,27 +131,27 @@ DEFAULT_VERIFY_PROMPT = (
     "dismiss them as pre-existing or flaky. Also check that you haven't made "
     "unrelated changes outside the scope of the original task; revert any that "
     "you find. "
-    "When done, send exactly ONE short message (1–3 sentences maximum) that states "
-    "only the verification outcome — e.g. 'Tests and lint pass.' or 'Fixed a type "
-    "error in foo.py — all checks now pass.' Do NOT re-summarise the main task; "
-    "that was already covered in the previous message."
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the verification outcome "
+    "as one appended sentence (e.g. 'All checks pass.' or 'Fixed a failing test "
+    "in foo.py.'). The checks are a footnote — the task summary is the headline."
 )
 
 DEFAULT_SELF_REVIEW_PROMPT = (
-    "You are running a background self-review pass. Do not announce that you are "
-    "doing this — go straight to work using your tools without any introductory message. "
-    "First check whether any source files or documentation were modified during this "
+    "You are now running a post-task self-review pass. "
+    "Start with a single short sentence announcing this — e.g. 'Reviewing my changes.' "
+    "Then check whether any source files or documentation were modified during this "
     "task (e.g. `git diff --stat HEAD` or compare against the base ref). "
-    "If no files were modified, stop silently without sending any message. "
+    "If no files were modified, state that there is nothing to review and stop. "
     "Only if files were changed: look at the full diff and check for missed edge "
     "cases, incomplete implementations, leftover debug code, broken imports, dead "
     "code, backwards-compatibility shims or fallback paths that may no longer be "
     "needed, and inconsistencies with the surrounding codebase. If you find "
     "issues, fix them. "
-    "When done, send exactly ONE short message (1–3 sentences maximum) that states "
-    "only the review outcome — e.g. 'Self-review clean, no issues found.' or "
-    "'Removed a leftover debug print in bar.py.' Do NOT re-summarise the main task; "
-    "that was already covered in the previous message."
+    "Your final message must be a single cohesive summary covering: first, what "
+    "was built or changed and why (the main task); then, the review outcome as one "
+    "appended sentence (e.g. 'Self-review clean.' or 'Removed a leftover debug "
+    "print.'). The review is a footnote — the task summary is the headline."
 )
 
 

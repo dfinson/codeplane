@@ -89,7 +89,7 @@ export function KanbanBoard() {
             className="pl-8 pr-8 h-8 text-sm"
           />
           {!query && (
-            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
+            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 hidden sm:inline rounded border border-border px-1 py-px font-mono text-[10px] text-muted-foreground leading-none">
               /
             </kbd>
           )}

@@ -1,15 +1,19 @@
 import { useState, useEffect } from "react";
 import {
   BarChart3, DollarSign, Clock, Cpu, Wrench, TrendingUp,
-  ArrowUpRight,
+  ArrowUpRight, GitBranch, ChevronUp, ChevronDown,
 } from "lucide-react";
 import {
   fetchAnalyticsOverview,
   fetchAnalyticsModels,
   fetchAnalyticsTools,
+  fetchAnalyticsRepos,
+  fetchAnalyticsJobs,
   type AnalyticsOverview,
   type AnalyticsModels,
   type AnalyticsTools,
+  type AnalyticsRepos,
+  type AnalyticsJobs,
 } from "../api/client";
 import { Badge } from "./ui/badge";
 import { Spinner } from "./ui/spinner";
@@ -41,6 +45,17 @@ function formatDuration(ms: number): string {
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   return `${m}m ${s % 60}s`;
+}
+
+function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -236,6 +251,181 @@ function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Repo breakdown
+// ---------------------------------------------------------------------------
+
+function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
+  if (!repos.length) return <p className="text-muted-foreground text-sm">No repo data yet.</p>;
+
+  const chartData = repos.slice(0, 10).map((r) => ({
+    name: r.repo ? r.repo.split("/").pop() || r.repo : "(none)",
+    cost: Number(r.total_cost_usd) || 0,
+    jobs: r.job_count,
+  }));
+
+  return (
+    <div className="space-y-3">
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+          <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#888" }} interval={0} angle={-20} textAnchor="end" height={50} />
+          <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+          <RTooltip
+            contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+            formatter={(v) => [formatUsd(Number(v)), "Cost"]}
+          />
+          <Bar dataKey="cost" fill="#10b981" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-muted-foreground border-b border-border">
+              <th className="text-left py-1.5 px-2 font-medium">Repository</th>
+              <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
+              <th className="text-right py-1.5 px-2 font-medium">Pass</th>
+              <th className="text-right py-1.5 px-2 font-medium">Fail</th>
+              <th className="text-right py-1.5 px-2 font-medium">Cost</th>
+              <th className="text-right py-1.5 px-2 font-medium">Tokens</th>
+              <th className="text-right py-1.5 px-2 font-medium">Tool Calls</th>
+              <th className="text-right py-1.5 px-2 font-medium">Avg Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {repos.map((r, i) => (
+              <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
+                <td className="py-1.5 px-2 font-mono truncate max-w-[200px]" title={r.repo || "(none)"}>
+                  {r.repo || <span className="text-muted-foreground italic">(none)</span>}
+                </td>
+                <td className="text-right py-1.5 px-2">{r.job_count}</td>
+                <td className="text-right py-1.5 px-2 text-green-400">{r.succeeded}</td>
+                <td className="text-right py-1.5 px-2">
+                  {r.failed ? <span className="text-red-400">{r.failed}</span> : <span className="text-muted-foreground">0</span>}
+                </td>
+                <td className="text-right py-1.5 px-2">{formatUsd(Number(r.total_cost_usd) || 0)}</td>
+                <td className="text-right py-1.5 px-2">{formatTokens(r.total_tokens)}</td>
+                <td className="text-right py-1.5 px-2">{r.tool_calls}</td>
+                <td className="text-right py-1.5 px-2">{formatDuration(Number(r.avg_duration_ms) || 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Jobs table
+// ---------------------------------------------------------------------------
+
+type SortField = "completed_at" | "total_cost_usd" | "duration_ms" | "input_tokens" | "created_at";
+
+function SortHeader({
+  label, field, current, desc, onSort,
+}: {
+  label: string; field: SortField; current: SortField; desc: boolean;
+  onSort: (f: SortField) => void;
+}) {
+  const active = field === current;
+  return (
+    <th
+      className="text-right py-1.5 px-2 font-medium cursor-pointer select-none hover:text-foreground"
+      onClick={() => onSort(field)}
+    >
+      <span className="inline-flex items-center gap-0.5">
+        {label}
+        {active && (desc ? <ChevronDown size={12} /> : <ChevronUp size={12} />)}
+      </span>
+    </th>
+  );
+}
+
+function JobsTable({ period }: { period: number }) {
+  const [jobs, setJobs] = useState<AnalyticsJobs["jobs"]>([]);
+  const [sortField, setSortField] = useState<SortField>("completed_at");
+  const [sortDesc, setSortDesc] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchAnalyticsJobs({ period, sort: sortField, desc: sortDesc, limit: 100 })
+      .then((data) => { if (!cancelled) setJobs(data.jobs); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [period, sortField, sortDesc]);
+
+  const handleSort = (field: SortField) => {
+    if (field === sortField) {
+      setSortDesc(!sortDesc);
+    } else {
+      setSortField(field);
+      setSortDesc(true);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-8">
+        <Spinner size="sm" />
+      </div>
+    );
+  }
+
+  if (!jobs.length) return <p className="text-muted-foreground text-sm">No jobs in this period.</p>;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-muted-foreground border-b border-border">
+            <th className="text-left py-1.5 px-2 font-medium">Job</th>
+            <th className="text-left py-1.5 px-2 font-medium">Repo</th>
+            <th className="text-left py-1.5 px-2 font-medium">Model</th>
+            <th className="text-left py-1.5 px-2 font-medium">Status</th>
+            <SortHeader label="Cost" field="total_cost_usd" current={sortField} desc={sortDesc} onSort={handleSort} />
+            <SortHeader label="Tokens" field="input_tokens" current={sortField} desc={sortDesc} onSort={handleSort} />
+            <SortHeader label="Duration" field="duration_ms" current={sortField} desc={sortDesc} onSort={handleSort} />
+            <SortHeader label="When" field="completed_at" current={sortField} desc={sortDesc} onSort={handleSort} />
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.map((j) => {
+            const shortId = j.job_id?.slice(0, 8) || "—";
+            const repoName = j.repo ? j.repo.split("/").pop() : "—";
+            const statusColor = STATUS_COLORS[j.status] || "#666";
+            const totalTokens = (j.input_tokens || 0) + (j.output_tokens || 0);
+            const when = j.completed_at || j.created_at;
+            const relTime = when ? formatRelativeTime(when) : "—";
+            return (
+              <tr key={j.job_id} className="border-b border-border/50 hover:bg-accent/30">
+                <td className="py-1.5 px-2 font-mono text-muted-foreground" title={j.job_id}>{shortId}</td>
+                <td className="py-1.5 px-2 truncate max-w-[120px]" title={j.repo}>{repoName}</td>
+                <td className="py-1.5 px-2">
+                  <Badge variant="outline" className="text-[10px]">{j.model || "—"}</Badge>
+                </td>
+                <td className="py-1.5 px-2">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: statusColor }} />
+                    {j.status}
+                  </span>
+                </td>
+                <td className="text-right py-1.5 px-2">{formatUsd(Number(j.total_cost_usd) || 0)}</td>
+                <td className="text-right py-1.5 px-2">{formatTokens(totalTokens)}</td>
+                <td className="text-right py-1.5 px-2">{formatDuration(j.duration_ms || 0)}</td>
+                <td className="text-right py-1.5 px-2 text-muted-foreground" title={when || undefined}>{relTime}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -244,6 +434,7 @@ export function AnalyticsScreen() {
   const [overview, setOverview] = useState<AnalyticsOverview | null>(null);
   const [models, setModels] = useState<AnalyticsModels | null>(null);
   const [tools, setTools] = useState<AnalyticsTools | null>(null);
+  const [repos, setRepos] = useState<AnalyticsRepos | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -256,12 +447,14 @@ export function AnalyticsScreen() {
       fetchAnalyticsOverview(period),
       fetchAnalyticsModels(period),
       fetchAnalyticsTools(Math.max(period, 30)),
+      fetchAnalyticsRepos(period),
     ])
-      .then(([o, m, t]) => {
+      .then(([o, m, t, r]) => {
         if (cancelled) return;
         setOverview(o);
         setModels(m);
         setTools(t);
+        setRepos(r);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -385,6 +578,21 @@ export function AnalyticsScreen() {
       <div className="rounded-lg border border-border bg-card p-4">
         <h2 className="text-sm font-medium text-foreground mb-3">Model Usage</h2>
         {models && <ModelBreakdown models={models.models} />}
+      </div>
+
+      {/* Repo breakdown */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-sm font-medium text-foreground mb-3 flex items-center gap-2">
+          <GitBranch size={14} />
+          Repository Breakdown
+        </h2>
+        {repos && <RepoBreakdown repos={repos.repos} />}
+      </div>
+
+      {/* Jobs table */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-sm font-medium text-foreground mb-3">Recent Jobs</h2>
+        <JobsTable period={period} />
       </div>
 
       {/* Tool health */}

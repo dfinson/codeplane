@@ -20,7 +20,8 @@ export function PlanPanel({ jobId }: { jobId: string }) {
   const steps = useStore(selectJobPlan(jobId));
   const [expanded, setExpanded] = useState(true);
 
-  if (steps.length === 0) return null;
+  const hasActiveWork = steps.some((s) => s.status === "active" || s.status === "pending");
+  if (steps.length === 0 || !hasActiveWork) return null;
 
   const doneCount = steps.filter((s) => s.status === "done").length;
   const activeStep = steps.find((s) => s.status === "active");

@@ -175,6 +175,16 @@ def up(
 
         effective_password = generate_password()
 
+    # Block unauthenticated binding on all interfaces — validate before migrations
+    if host == "0.0.0.0" and no_password:  # noqa: S104
+        click.secho(
+            "ERROR: --host 0.0.0.0 with --no-password is not allowed. "
+            "Binding to all interfaces requires authentication.",
+            fg="red",
+            err=True,
+        )
+        raise SystemExit(1)
+
     # Build frontend (unless --dev, which uses Vite's hot-reload server separately)
     if not dev:
         _build_frontend()
@@ -184,16 +194,6 @@ def up(
 
     # Run Alembic migrations before starting the server
     run_migrations()
-
-    # Block unauthenticated binding on all interfaces
-    if host == "0.0.0.0" and no_password:  # noqa: S104
-        click.secho(
-            "ERROR: --host 0.0.0.0 with --no-password is not allowed. "
-            "Binding to all interfaces requires authentication.",
-            fg="red",
-            err=True,
-        )
-        raise SystemExit(1)
 
     # Auto-generate password when binding to all interfaces without one set
     if host == "0.0.0.0" and not effective_password:  # noqa: S104

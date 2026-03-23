@@ -193,7 +193,7 @@ export function CommandPalette() {
             className="flex-1 bg-transparent border-0 outline-none px-3 py-3 text-sm placeholder:text-muted-foreground"
             autoFocus
           />
-          <kbd className="text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5 font-mono shrink-0">
+          <kbd className="hidden sm:inline text-xs text-muted-foreground border border-border rounded px-1.5 py-0.5 font-mono shrink-0">
             ESC
           </kbd>
         </div>

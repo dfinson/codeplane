@@ -74,6 +74,18 @@ async def analytics_tools(
     return {"period": period, "tools": stats}
 
 
+@router.get("/analytics/repos")
+async def analytics_repos(
+    session: FromDishka[AsyncSession],
+    period: Annotated[int, Query(ge=1, le=365)] = 7,
+) -> dict[str, object]:
+    """Per-repo cost and usage breakdown."""
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
+
+    rows = await TelemetrySummaryRepo(session).cost_by_repo(period_days=period)
+    return {"period": period, "repos": rows}
+
+
 @router.get("/analytics/jobs")
 async def analytics_jobs(
     session: FromDishka[AsyncSession],

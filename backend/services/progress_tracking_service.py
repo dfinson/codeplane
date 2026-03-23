@@ -83,6 +83,14 @@ _PLAN_PROMPT_SUFFIX = (
     "future work as 'pending'.\n"
     "- Steps should cover the full task arc — from what's been done to what remains.\n"
     "- Be concrete: mention actual components, endpoints, files when possible.\n"
+    "- PHASE TRANSITIONS: If all previous steps are 'done' but the agent is still "
+    "actively working (running tests, validating, fixing follow-ups, etc.), generate "
+    "a FRESH plan with new steps for the current phase. Do NOT repeat already-done "
+    "steps. The new plan should only contain steps relevant to what the agent is "
+    "doing now and what remains.\n"
+    "- COMPLETION: If all previous steps are 'done' AND the recent activity shows the "
+    "agent has finished (no new tasks, no active work, winding down), "
+    'respond with {"steps": []} to clear the plan.\n'
     '- If you can\'t determine a plan from the activity, respond: {"steps": []}\n'
 )
 
@@ -495,7 +503,23 @@ class ProgressTrackingService:
                     parsed = _json.loads(raw)
                     steps = parsed.get("steps", [])
 
-                    if steps and isinstance(steps, list):
+                    if not isinstance(steps, list):
+                        steps = []
+
+                    if not steps:
+                        # LLM explicitly cleared the plan — publish empty to hide stale steps.
+                        if self._plan_last_steps.get(job_id):
+                            self._plan_last_steps[job_id] = []
+                            await self._event_bus.publish(
+                                DomainEvent(
+                                    event_id=DomainEvent.make_event_id(),
+                                    job_id=job_id,
+                                    timestamp=datetime.now(UTC),
+                                    kind=DomainEventKind.agent_plan_updated,
+                                    payload={"steps": []},
+                                )
+                            )
+                    else:
                         clean_steps = []
                         for s in steps:
                             if isinstance(s, dict) and s.get("label"):

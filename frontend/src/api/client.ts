@@ -248,7 +248,39 @@ export interface AnalyticsTools {
 
 export interface AnalyticsJobs {
   period: number;
-  jobs: Record<string, unknown>[];
+  jobs: {
+    job_id: string;
+    sdk: string;
+    model: string;
+    repo: string;
+    branch: string;
+    status: string;
+    created_at: string;
+    completed_at: string | null;
+    duration_ms: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    total_cost_usd: number;
+    tool_call_count: number;
+    llm_call_count: number;
+    premium_requests: number;
+  }[];
+}
+
+export interface AnalyticsRepos {
+  period: number;
+  repos: {
+    repo: string;
+    job_count: number;
+    succeeded: number;
+    failed: number;
+    total_cost_usd: number;
+    total_tokens: number;
+    tool_calls: number;
+    avg_duration_ms: number;
+    premium_requests: number;
+  }[];
 }
 
 export function fetchAnalyticsOverview(period = 7): Promise<AnalyticsOverview> {
@@ -261,6 +293,10 @@ export function fetchAnalyticsModels(period = 7): Promise<AnalyticsModels> {
 
 export function fetchAnalyticsTools(period = 30): Promise<AnalyticsTools> {
   return request(`/analytics/tools?period=${period}`);
+}
+
+export function fetchAnalyticsRepos(period = 7): Promise<AnalyticsRepos> {
+  return request(`/analytics/repos?period=${period}`);
 }
 
 export function fetchAnalyticsJobs(params?: {
