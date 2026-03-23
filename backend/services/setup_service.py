@@ -267,14 +267,14 @@ def _find_cpl_processes() -> list[int]:
                 text=True,
                 timeout=5,
             )
-            my_pid = os.getpid()
+            exclude = {os.getpid(), os.getppid()}
             for line in result.stdout.splitlines():
                 lower = line.lower()
                 if ("cpl up" in lower or "cpl restart" in lower) and "doctor" not in lower:
                     parts = line.split()
                     if parts and parts[0].isdigit():
                         pid = int(parts[0])
-                        if pid != my_pid:
+                        if pid not in exclude:
                             pids.append(pid)
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
