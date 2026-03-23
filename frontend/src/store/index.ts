@@ -263,6 +263,15 @@ interface AppState {
   loadModelsForSdk: (sdkId: string) => Promise<void>;
   dispatchSSEEvent: (eventType: string, data: unknown) => void;
   applySnapshot: (jobs: JobSummary[], approvals: ApprovalRequest[]) => void;
+  /** Bulk-apply a full job snapshot from the hydration endpoint. */
+  hydrateJob: (snapshot: {
+    job: JobSummary;
+    logs: LogLine[];
+    transcript: TranscriptEntry[];
+    diff: DiffFileModel[];
+    approvals: ApprovalRequest[];
+    timeline: TimelineEntry[];
+  }) => void;
 
   // Terminal actions
   toggleTerminalDrawer: () => void;
@@ -370,6 +379,30 @@ export const useStore = create<AppState>((set, get) => ({
       jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
       approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
     }),
+
+  hydrateJob: (snapshot) => {
+    const jobId = snapshot.job.id;
+    set((s) => {
+      // Remove stale approvals for this job before merging fresh ones
+      const keptApprovals = Object.fromEntries(
+        Object.entries(s.approvals).filter(([, a]) => a.jobId !== jobId),
+      );
+      return {
+        jobs: { ...s.jobs, [jobId]: enrichJob(snapshot.job) },
+        logs: { ...s.logs, [jobId]: snapshot.logs },
+        transcript: { ...s.transcript, [jobId]: snapshot.transcript },
+        diffs: { ...s.diffs, [jobId]: snapshot.diff },
+        timelines: {
+          ...s.timelines,
+          [jobId]: snapshot.timeline.map((t) => ({ ...t, active: false })),
+        },
+        approvals: {
+          ...keptApprovals,
+          ...Object.fromEntries(snapshot.approvals.map((a) => [a.id, a])),
+        },
+      };
+    });
+  },
 
   dispatchSSEEvent: (eventType, data) => {
     // Process the event and only call set() if we have an actual state change.

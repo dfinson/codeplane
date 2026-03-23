@@ -431,37 +431,57 @@ class RuntimeService:
     ) -> None:
         """Create an asyncio task to execute the job."""
         if job.id in self._tasks:
-            return  # Already running (race-condition guard)
+            return  # Already running (in-memory guard)
+
+        # DB-level compare-and-swap: prevents double-start if recovery and
+        # an HTTP request race on the same job.  Only the winner proceeds.
+        from backend.persistence.job_repo import JobRepository
+
+        async with self._session_factory() as session:
+            repo = JobRepository(session)
+            claimed = await repo.claim_for_start(job.id)
+            await session.commit()
+        if not claimed:
+            log.warning("job_start_claim_lost", job_id=job.id)
+            return
 
         agent_session = _AgentSession()
         self._agent_sessions[job.id] = agent_session
 
-        # Ensure job is in running state
+        # The DB CAS already set the state to running; publish the event
+        # if the domain object's state hasn't caught up yet.
         if job.state != JobState.running:
-            async with self._session_factory() as session:
-                svc = self._make_job_service(session)
-                await svc.transition_state(job.id, JobState.running)
-                await session.commit()
             await self._publish_state_event(job.id, job.state, JobState.running)
 
-        session_config = build_session_config(
-            job,
-            self._config,
-            self._permission_overrides.pop(job.id, None),
-        )
-        if override_prompt is not None:
-            import dataclasses
+        try:
+            session_config = build_session_config(
+                job,
+                self._config,
+                self._permission_overrides.pop(job.id, None),
+            )
+            if override_prompt is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, prompt=override_prompt)
-        if resume_sdk_session_id is not None:
-            import dataclasses
+                session_config = dataclasses.replace(session_config, prompt=override_prompt)
+            if resume_sdk_session_id is not None:
+                import dataclasses
 
-            session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
+                session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
 
-        task = asyncio.create_task(
-            self._run_job(job.id, agent_session, session_config),
-            name=f"job-{job.id}",
-        )
+            task = asyncio.create_task(
+                self._run_job(job.id, agent_session, session_config),
+                name=f"job-{job.id}",
+            )
+        except Exception:
+            # Task creation failed after the DB CAS set state to running.
+            # Revert to the pre-claim state so the job isn't orphaned.
+            self._agent_sessions.pop(job.id, None)
+            log.error("job_start_task_creation_failed", job_id=job.id, exc_info=True)
+            async with self._session_factory() as session:
+                repo = JobRepository(session)
+                await repo.update_state(job.id, job.state, datetime.now(UTC))
+                await session.commit()
+            raise
         self._tasks[job.id] = task
         # Pre-register prompt for echo suppression so the SDK user.message
         # echo of the initial prompt is discarded (shown via the synthetic entry).
@@ -1756,6 +1776,11 @@ class RuntimeService:
 
     async def recover_on_startup(self) -> None:
         """Recover from a previous crash by restarting active jobs and re-enqueueing queued ones."""
+        # Restore in-memory futures for approvals that survived the restart
+        # so that recovered jobs in waiting_for_approval can be unblocked.
+        if self._approval_service is not None:
+            await self._approval_service.recover_pending_approvals()
+
         orphaned_jobs: list[tuple[Job, JobState]] = []
         async with self._session_factory() as session:
             svc = self._make_job_service(session)

@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
-import { fetchJob } from "../api/client";
+import { fetchJob, fetchJobSnapshot } from "../api/client";
 import { enrichJob, useStore } from "../store";
 import type { JobSummary } from "../store";
 
@@ -56,6 +56,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
       es = new EventSource(url);
 
       es.onopen = () => {
+        const wasReconnect = attemptRef.current > 0;
         attemptRef.current = 0;
         wasConnectedRef.current = true;
         // Defer the Zustand update to a macrotask (setTimeout 0) rather than a
@@ -69,6 +70,20 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
           setConnectionStatus("connected");
           setReconnectAttempt(0);
         }, 0);
+
+        // After a reconnect, hydrate the scoped job's full state so the UI
+        // catches up on anything missed beyond the SSE replay window.
+        if (wasReconnect && jobId) {
+          fetchJobSnapshot(jobId)
+            .then((snapshot) => {
+              setTimeout(() => {
+                useStore.getState().hydrateJob(snapshot);
+              }, 0);
+            })
+            .catch(() => {
+              // Best-effort; SSE replay may still cover the gap.
+            });
+        }
       };
 
       // Handle named event types
