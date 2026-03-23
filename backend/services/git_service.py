@@ -83,9 +83,28 @@ class GitService:
         """Run `git diff <diff_spec>` and return raw output."""
         return await self._run_git("diff", diff_spec, cwd=cwd)
 
+    async def diff_range(self, ref1: str, ref2: str, *, cwd: str | Path) -> str:
+        """Run `git diff <ref1> <ref2>` comparing two commits (no working tree)."""
+        return await self._run_git("diff", ref1, ref2, cwd=cwd)
+
     async def merge_base(self, ref1: str, ref2: str, *, cwd: str | Path) -> str:
         """Return the merge-base commit between two refs."""
         return (await self._run_git("merge-base", ref1, ref2, cwd=cwd)).strip()
+
+    async def is_merge_in_progress(self, *, cwd: str | Path) -> bool:
+        """Return True if a merge is currently in progress in the worktree.
+
+        Detects the presence of MERGE_HEAD, which git sets after a merge has
+        been started but the resulting commit has not yet been created.  During
+        this window the working tree contains the merged-in content from the
+        other branch, which would pollute a working-tree diff with unrelated
+        changes.
+        """
+        try:
+            await self._run_git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=cwd)
+            return True
+        except GitError:
+            return False
 
     async def add_intent_to_add(self, *, cwd: str | Path) -> None:
         """Mark untracked files as intent-to-add so they appear in diffs."""
