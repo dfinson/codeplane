@@ -189,8 +189,13 @@ def up(
     if not dev:
         _build_frontend()
 
-    # Configure logging before everything else so all startup messages are captured
-    setup_logging(config.logging.file, console_level=config.logging.level)
+    # Configure logging before everything else so all startup messages are captured.
+    # Create the Rich dashboard now (TTY check) so the log handler can be wired in
+    # setup_logging; the Live display itself only starts after the startup banner.
+    from backend.console_dashboard import ConsoleDashboard
+
+    dashboard = ConsoleDashboard.create_if_tty(log_file_path=config.logging.file)
+    setup_logging(config.logging.file, console_level=config.logging.level, dashboard=dashboard)
 
     # Run Alembic migrations before starting the server
     run_migrations()
@@ -225,7 +230,9 @@ def up(
 
     app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
 
-    # Stash banner info so lifespan can print it after services are ready
+    # Stash banner info so lifespan can print it after services are ready.
+    # Also stash the dashboard so lifespan can subscribe it to the EventBus
+    # and start the Live display after the banner.
     app.state.banner_args = {
         "host": host,
         "port": port,
@@ -233,6 +240,7 @@ def up(
         "tunnel_url": tunnel_origin,
         "password": effective_password,
     }
+    app.state.dashboard = dashboard
 
     try:
         uvicorn.run(app, host=host, port=port)

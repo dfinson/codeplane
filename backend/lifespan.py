@@ -372,6 +372,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     event_bus, sse_manager, dead_letter_task = _init_event_infrastructure(session_factory)
 
+    # Wire the console dashboard (present only when stderr is an interactive TTY)
+    # to the event bus so job state and progress updates appear in the live panel.
+    dashboard = getattr(app.state, "dashboard", None)
+    if dashboard is not None:
+        event_bus.subscribe(dashboard.handle_event)
+
     config = load_config()
     services = await _wire_core_services(session_factory, event_bus, config)
 
@@ -403,16 +409,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.dishka_container = container
 
-    # Print the startup banner now that all services are ready
+    # Print the startup banner now that all services are ready, then
+    # activate the Rich live display so it takes over the console.
     banner_args = getattr(app.state, "banner_args", None)
     if banner_args:
         from backend.cli import _print_startup_banner
 
         _print_startup_banner(**banner_args)
 
+    if dashboard is not None:
+        dashboard.start()
+
     yield
 
-    # Shutdown in reverse initialisation order
+    # Shutdown in reverse initialisation order.
+    # Stop the live dashboard first so subsequent log output prints cleanly.
+    if dashboard is not None:
+        dashboard.stop()
     await container.close()
     await optional.mcp_cleanup.__aexit__(None, None, None)
     optional.retention_task.cancel()

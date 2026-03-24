@@ -2,6 +2,11 @@
 
 Configures structlog + stdlib logging with rotating file handler and
 console handler with noise filtering.
+
+When a ``ConsoleDashboard`` is supplied to ``setup_logging`` the plain
+stderr handler is replaced with a ``DashboardLogHandler`` that silences
+INFO chatter on the console (all levels still reach the log file) and
+routes WARNING/ERROR records into the dashboard UI instead.
 """
 
 from __future__ import annotations
@@ -9,8 +14,12 @@ from __future__ import annotations
 import logging
 import logging.handlers
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+    from backend.console_dashboard import ConsoleDashboard
 
 _LOG_LEVEL_MAP: dict[str, int] = {
     "debug": logging.DEBUG,
@@ -40,17 +49,29 @@ class _ConsoleNoiseFilter(logging.Filter):
         return not any(record.name.startswith(prefix) for prefix in _CONSOLE_NOISE_PREFIXES)
 
 
-def setup_logging(log_file: str, console_level: str = "info") -> None:
+def setup_logging(
+    log_file: str,
+    console_level: str = "info",
+    dashboard: ConsoleDashboard | None = None,
+) -> None:
     """Configure structlog + stdlib logging.
 
     Strategy
     --------
     * **File handler** — always at DEBUG verbosity so every log line is
       persisted.  Uses a rotating handler (10 MB × 5 backups).
-    * **Stderr handler** — respects ``console_level`` from config (default
-      info) so the terminal stays readable at runtime.
-    * **structlog** — uses the same stdlib handlers so all structured context
-      fields are serialised consistently.
+    * **Console handler** — two modes:
+
+      - *Plain mode* (``dashboard=None``): respects ``console_level`` from
+        config (default info) so the terminal stays readable at runtime.
+      - *Dashboard mode* (``dashboard`` provided): installs a
+        ``DashboardLogHandler`` that routes WARNING/ERROR records into the
+        Rich live panel and silently drops INFO and below on the console
+        (they remain in the file).  While the Live display has not yet
+        started the handler falls back to a plain stderr stream so nothing
+        is lost during server startup.
+    * **structlog** — uses the same stdlib handlers so all structured
+      context fields are serialised consistently.
     """
     log_path = Path(log_file).expanduser().resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,11 +111,21 @@ def setup_logging(log_file: str, console_level: str = "info") -> None:
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(file_formatter)
 
-    # Stderr handler: configured level
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(console_int)
-    console_handler.setFormatter(console_formatter)
-    console_handler.addFilter(_ConsoleNoiseFilter())
+    # Console handler: dashboard mode or plain stderr
+    if dashboard is not None:
+        from backend.console_dashboard import DashboardLogHandler
+
+        console_handler: logging.Handler = DashboardLogHandler(
+            dashboard=dashboard,
+            fallback_formatter=console_formatter,
+            fallback_filter=_ConsoleNoiseFilter(),
+        )
+    else:
+        plain = logging.StreamHandler()
+        plain.setLevel(console_int)
+        plain.setFormatter(console_formatter)
+        plain.addFilter(_ConsoleNoiseFilter())
+        console_handler = plain
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)  # let handlers decide what to suppress
