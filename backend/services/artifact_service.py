@@ -129,6 +129,61 @@ class ArtifactService:
             collected.append(await self._repo.create(artifact))
         return collected
 
+    async def collect_from_session_storage(
+        self,
+        job_id: str,
+        sdk_session_id: str,
+        config_dir: Path | None = None,
+    ) -> list[Artifact]:
+        """Collect markdown files the agent created in its Copilot session-state folder.
+
+        Scans the top-level of ``{config_dir}/session-state/{sdk_session_id}/``
+        for ``*.md`` files and stores each one as a ``document`` artifact.
+        Subdirectories (e.g. ``checkpoints/``) are intentionally skipped to
+        avoid capturing auto-generated files.
+        """
+        collected: list[Artifact] = []
+        base = config_dir if config_dir is not None else (Path.home() / ".copilot")
+        session_dir = base / "session-state" / sdk_session_id
+        if not session_dir.is_dir():
+            return collected
+
+        for entry in sorted(session_dir.iterdir()):
+            if not entry.is_file() or entry.is_symlink():
+                continue
+            if entry.suffix.lower() != ".md":
+                continue
+            # Guard against symlink escape (resolved path must stay inside session_dir)
+            if not entry.resolve().is_relative_to(session_dir.resolve()):
+                log.warning("session_storage_artifact_outside_dir", path=str(entry))
+                continue
+            entry_size = entry.stat().st_size
+            if entry_size > _MAX_WORKSPACE_ARTIFACT_BYTES:
+                log.warning("session_storage_artifact_too_large", path=str(entry), size=entry_size)
+                continue
+
+            artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+            disk_dir = _ARTIFACTS_BASE / job_id
+            disk_dir.mkdir(parents=True, exist_ok=True)
+            dest = disk_dir / f"{artifact_id}-{entry.name}"
+            dest.write_bytes(entry.read_bytes())
+
+            mime = _guess_mime(entry.name)
+            art_type = _classify_artifact(entry.name)
+            artifact = Artifact(
+                id=artifact_id,
+                job_id=job_id,
+                name=entry.name,
+                type=art_type,
+                mime_type=mime,
+                size_bytes=dest.stat().st_size,
+                disk_path=str(dest),
+                phase=ExecutionPhase.post_completion,
+                created_at=datetime.now(UTC),
+            )
+            collected.append(await self._repo.create(artifact))
+        return collected
+
     async def list_for_job(self, job_id: str) -> list[Artifact]:
         """Return all artifacts for a job.
 
