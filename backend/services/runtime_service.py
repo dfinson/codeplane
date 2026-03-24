@@ -205,6 +205,7 @@ class RuntimeService:
         self._agent_sessions: dict[str, _AgentSession] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, float] = {}
+        self._waiting_for_approval: set[str] = set()
         self._session_ids: dict[str, str] = {}
         self._permission_overrides: dict[str, str] = {}  # job_id → permission_mode
         self._dequeue_lock = asyncio.Lock()
@@ -900,6 +901,7 @@ class RuntimeService:
         self._tasks.pop(job_id, None)
         self._agent_sessions.pop(job_id, None)
         self._last_activity.pop(job_id, None)
+        self._waiting_for_approval.discard(job_id)
         self._session_ids.pop(job_id, None)
         self._echo_suppress.pop(job_id, None)
         self._pending_starts.pop(job_id, None)
@@ -933,6 +935,8 @@ class RuntimeService:
             await svc.transition_state(job_id, JobState.waiting_for_approval)
             await sess.commit()
 
+        self._waiting_for_approval.add(job_id)
+
         await self._event_bus.publish(domain_event)
 
         approval_id = domain_event.payload.get("approval_id", "")
@@ -956,6 +960,7 @@ class RuntimeService:
             svc = self._make_job_service(sess)
             await svc.transition_state(job_id, JobState.running)
             await sess.commit()
+        self._waiting_for_approval.discard(job_id)
         await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
         self._last_activity[job_id] = time.monotonic()
 
@@ -1338,6 +1343,8 @@ class RuntimeService:
                 since_last = time.monotonic() - last
 
                 if since_last >= _HEARTBEAT_TIMEOUT_S:
+                    if job_id in self._waiting_for_approval:
+                        continue
                     log.warning("job_heartbeat_timeout", job_id=job_id, idle_s=since_last)
                     await self._fail_job(job_id, "heartbeat_timeout")
                     task = self._tasks.get(job_id)
@@ -1346,7 +1353,8 @@ class RuntimeService:
                     return
 
                 if since_last >= _HEARTBEAT_WARNING_S:
-                    log.warning("job_heartbeat_warning", job_id=job_id, idle_s=since_last)
+                    if job_id not in self._waiting_for_approval:
+                        log.warning("job_heartbeat_warning", job_id=job_id, idle_s=since_last)
 
                 session_id = self._session_ids.get(job_id, "")
                 await self._event_bus.publish(

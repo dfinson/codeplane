@@ -1501,3 +1501,115 @@ class TestStartOrEnqueueCapacitySafety:
         assert runtime.running_count <= config.runtime.max_concurrent_jobs
 
         await runtime.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat: waiting_for_approval pauses the timeout
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeatWaitingForApproval:
+    async def test_heartbeat_timeout_skipped_while_waiting_for_approval(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> None:
+        """Jobs in waiting_for_approval must not be failed by the heartbeat timeout."""
+        import time
+
+        import backend.services.runtime_service as rs_mod
+
+        failed_jobs: list[str] = []
+
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter()),
+            config=config,
+        )
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        original_fail = runtime._fail_job
+
+        async def _capture_fail(job_id: str, reason: str) -> None:
+            failed_jobs.append(job_id)
+            await original_fail(job_id, reason)
+
+        runtime._fail_job = _capture_fail  # type: ignore[method-assign]
+
+        # Simulate the job in waiting_for_approval with a stale activity timestamp
+        runtime._waiting_for_approval.add(job.id)
+        runtime._last_activity[job.id] = time.monotonic() - (rs_mod._HEARTBEAT_TIMEOUT_S + 10)
+
+        # Run the heartbeat loop with the interval zeroed so it triggers immediately
+        original_interval = rs_mod._HEARTBEAT_INTERVAL_S
+        rs_mod._HEARTBEAT_INTERVAL_S = 0  # type: ignore[attr-defined]
+        try:
+            heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
+            await asyncio.sleep(0.05)
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval  # type: ignore[attr-defined]
+
+        # The loop must have looped (not exited early) and must NOT have failed the job
+        assert job.id not in failed_jobs
+
+        await runtime.shutdown()
+
+    async def test_heartbeat_timeout_fires_when_not_waiting_for_approval(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> None:
+        """Jobs NOT in waiting_for_approval are failed when the timeout expires."""
+        import time
+
+        import backend.services.runtime_service as rs_mod
+
+        failed_jobs: list[str] = []
+
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter()),
+            config=config,
+        )
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        original_fail = runtime._fail_job
+
+        async def _capture_fail(job_id: str, reason: str) -> None:
+            failed_jobs.append(job_id)
+            await original_fail(job_id, reason)
+
+        runtime._fail_job = _capture_fail  # type: ignore[method-assign]
+
+        # Seed stale activity — past the timeout threshold — and no approval wait
+        runtime._last_activity[job.id] = time.monotonic() - (rs_mod._HEARTBEAT_TIMEOUT_S + 10)
+        assert job.id not in runtime._waiting_for_approval
+
+        # Patch interval to 0 so the loop triggers immediately
+        original_interval = rs_mod._HEARTBEAT_INTERVAL_S
+        rs_mod._HEARTBEAT_INTERVAL_S = 0  # type: ignore[attr-defined]
+        try:
+            heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
+            await asyncio.sleep(0.05)
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval  # type: ignore[attr-defined]
+
+        assert job.id in failed_jobs
+
+        await runtime.shutdown()
