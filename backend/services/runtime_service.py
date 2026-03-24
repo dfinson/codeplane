@@ -28,6 +28,7 @@ from backend.models.domain import (
     SessionConfig,
     SessionEvent,
     SessionEventKind,
+    TERMINAL_STATES,
 )
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.services.progress_tracking_service import ProgressTrackingService
@@ -1021,7 +1022,7 @@ class RuntimeService:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 current = await svc.get_job(job_id)
-                if current and current.state != JobState.canceled:
+                if current and current.state not in TERMINAL_STATES:
                     await svc.transition_state(job_id, JobState.canceled)
                     await session.commit()
                     self._set_progress_terminal_state(job_id, JobState.canceled)
