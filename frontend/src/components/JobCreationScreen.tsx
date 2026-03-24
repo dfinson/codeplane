@@ -364,7 +364,7 @@ export function JobCreationScreen() {
               Cancel
             </Button>
             <Button
-              disabled={!repo || !prompt.trim() || voiceState !== "idle"}
+              disabled={!repo || !prompt.trim() || voiceState !== "idle" || !!sdkNotReady}
               loading={submitting}
               onClick={handleSubmit}
             >

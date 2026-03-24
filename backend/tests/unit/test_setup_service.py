@@ -165,7 +165,7 @@ class TestAgentCheckResult:
     @patch("backend.services.setup_service.check_agent_cli")
     def test_ready_but_unauthenticated_agent_is_warning(self, mock_check_agent_cli, mock_check_agent_auth) -> None:
         mock_check_agent_cli.return_value = AgentCLIStatus(
-            "copilot", "GitHub Copilot", True, True, True, "github-copilot-sdk 0.1.0", ""
+            "copilot", "GitHub Copilot", True, True, True, "gh CLI installed", ""
         )
         mock_check_agent_auth.return_value = AgentAuthStatus(
             "copilot", False, "not authenticated", "Run: gh auth login"
@@ -174,22 +174,23 @@ class TestAgentCheckResult:
         result = _build_agent_check_result("copilot")
 
         assert result.status == CheckStatus.warn
-        assert result.category == "agent_auth"
-        assert "auth not detected" in result.detail
+        assert result.category == "agent"
+        assert "not authenticated" in result.detail
         assert result.hint == "Run: gh auth login"
 
     @patch("backend.services.setup_service._check_agent_auth")
     @patch("backend.services.setup_service.check_agent_cli")
-    def test_ready_agent_with_unknown_auth_stays_passed(self, mock_check_agent_cli, mock_check_agent_auth) -> None:
+    def test_ready_agent_with_unknown_auth_is_warning(self, mock_check_agent_cli, mock_check_agent_auth) -> None:
         mock_check_agent_cli.return_value = AgentCLIStatus(
-            "claude", "Claude Code", True, True, True, "claude CLI and SDK installed", ""
+            "claude", "Claude Code", True, True, True, "claude CLI installed", ""
         )
         mock_check_agent_auth.return_value = AgentAuthStatus("claude", None, "unknown")
 
         result = _build_agent_check_result("claude")
 
-        assert result.status == CheckStatus.passed
+        assert result.status == CheckStatus.warn
         assert result.category == "agent"
+        assert "auth unknown" in result.detail
 
 
 class TestOfferInlineFix:
@@ -199,7 +200,7 @@ class TestOfferInlineFix:
         True,
         False,
         False,
-        "Python SDK installed, claude CLI not on PATH",
+        "claude CLI not on PATH",
         "Install CLI: npm install -g @anthropic-ai/claude-code",
     )
 
