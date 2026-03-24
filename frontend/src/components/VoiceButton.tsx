@@ -17,10 +17,12 @@ interface PromptWithVoiceProps {
   error?: string;
   onBlur?: React.FocusEventHandler<HTMLTextAreaElement>;
   onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  onStateChange?: (state: RecordingState) => void;
 }
 
-export function PromptWithVoice({ value, onChange, error, onBlur, onKeyDown }: PromptWithVoiceProps) {
+export function PromptWithVoice({ value, onChange, error, onBlur, onKeyDown, onStateChange }: PromptWithVoiceProps) {
   const [state, setState] = useState<RecordingState>("idle");
+  useEffect(() => { onStateChange?.(state); }, [state, onStateChange]);
   const isMobile = useIsMobile();
   const containerRef = useRef<HTMLDivElement>(null);
   const recordRef = useRef<ReturnType<typeof RecordPlugin.create> | null>(null);
