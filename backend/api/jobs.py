@@ -318,7 +318,7 @@ async def get_job_logs(
         if _level_order.get(event_level, 1) < min_priority:
             continue
         event_session = p.get("session_number")
-        if session is not None and event_session != session:
+        if session is not None and (event_session or 1) != session:
             continue
         lines.append(
             LogLinePayload(

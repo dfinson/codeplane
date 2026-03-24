@@ -871,12 +871,11 @@ class RuntimeService:
                 # Agent log artifact — snapshot of all log_line_emitted events as
                 # a plain-text file, grouped by session for jobs with handoffs.
                 try:
-                    from backend.models.events import DomainEventKind as DomainEventKindAlias
                     from backend.persistence.event_repo import EventRepository
 
                     event_repo = EventRepository(session)
                     log_events = await event_repo.list_by_job(
-                        job_id, [DomainEventKindAlias.log_line_emitted], limit=10000
+                        job_id, [DomainEventKind.log_line_emitted], limit=10000
                     )
                     if log_events:
                         await artifact_svc.store_log_artifact(

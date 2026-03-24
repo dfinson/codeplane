@@ -481,14 +481,15 @@ class ArtifactService:
             tag = job_id[:12]
         name = f"{tag}-agent.log"
 
-        # Sort by sequence number (or timestamp as fallback)
-        sorted_events = sorted(log_events, key=lambda e: (e.get("session_number") or 0, e.get("seq") or 0))
+        # Sort by sequence number (or timestamp as fallback).
+        # Events without session_number (legacy) are treated as session 1.
+        sorted_events = sorted(log_events, key=lambda e: (e.get("session_number") or 1, e.get("seq") or 0))
 
         lines: list[str] = []
         current_session: int | None = None
         for evt in sorted_events:
-            sess_num = evt.get("session_number")
-            if sess_num is not None and sess_num != current_session:
+            sess_num = evt.get("session_number") or 1
+            if sess_num != current_session:
                 current_session = sess_num
                 lines.append(f"\n── session {sess_num} ──────────────────────────────────────\n")
             ts = evt.get("timestamp", "")
