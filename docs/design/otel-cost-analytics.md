@@ -321,7 +321,11 @@ The `ExecutionPhaseChanged` event is already emitted. We need to:
 
 | Attribute | Type | Values |
 |-----------|------|--------|
-| `execution_phase` | string | `environment_setup`, `agent_reasoning`, `verification`, `finalization` |
+| `execution_phase` | string | `environment_setup`, `agent_reasoning`, `verification`, `finalization`, `post_completion` |
+
+> **Note:** `post_completion` occurs after the agent session ends (operator review,
+> merge decisions). It typically has zero LLM/tool cost but is included for
+> completeness — any operator-triggered follow-up actions are tagged here.
 
 ### 5.5 Context Efficiency Tracking
 
@@ -558,20 +562,31 @@ New analytics endpoints that aggregate across jobs:
 **Cost Drivers (what matters most):**
 
 ```sql
--- Top cost drivers by tool category across all jobs in period
+-- Top cost drivers by tool category across all jobs in period.
+-- attributed_cost is computed by the post-job attribution pipeline (§7.1)
+-- and stored in job_cost_attribution; we join through tool spans for grouping.
 SELECT
-    tool_category,
+    sp.tool_category,
     COUNT(*) as call_count,
-    SUM(CASE WHEN is_retry THEN 1 ELSE 0 END) as retry_count,
-    AVG(result_size) as avg_result_size,
-    SUM(attributed_cost) as total_attributed_cost,
-    AVG(attributed_cost) as avg_attributed_cost
-FROM job_telemetry_spans
-WHERE span_type = 'tool'
-  AND created_at > datetime('now', '-30 days')
-GROUP BY tool_category
-ORDER BY total_attributed_cost DESC;
+    SUM(CASE WHEN sp.is_retry THEN 1 ELSE 0 END) as retry_count,
+    AVG(sp.result_size) as avg_result_size,
+    -- Phase-level cost from attribution table, apportioned by tool category
+    SUM(a.cost_file_read + a.cost_file_write + a.cost_file_search
+        + a.cost_shell + a.cost_agent_delegation + a.cost_other_tools)
+        / NULLIF(COUNT(DISTINCT sp.job_id), 0) as avg_job_tool_cost
+FROM job_telemetry_spans sp
+JOIN job_cost_attribution a ON sp.job_id = a.job_id
+WHERE sp.span_type = 'tool'
+  AND sp.created_at > datetime('now', '-30 days')
+GROUP BY sp.tool_category
+ORDER BY avg_job_tool_cost DESC;
 ```
+
+> **Note on tool-attributed cost:** Per-tool-call attributed cost (§7.2) is computed
+> in the attribution pipeline and stored in `job_cost_attribution` as category-level
+> aggregates (`cost_file_read`, `cost_shell`, etc.), not as a per-span column. For
+> per-span drill-downs, query `job_telemetry_spans.attrs_json` which contains the
+> raw `result_size` for proportional attribution at query time.
 
 **Context Efficiency (are we wasting reads):**
 
@@ -1047,10 +1062,15 @@ def classify_tool(tool_name: str) -> str:
 | `cp.tokens.compacted` | Counter | job_id, sdk |
 | `cp.messages` | Counter | job_id, sdk, role |
 | `cp.premium_requests` | Counter | job_id, sdk |
+| `cp.approvals` | Counter | — |
 | `cp.llm.duration` | Histogram | job_id, sdk, model, is_subagent |
 | `cp.tool.duration` | Histogram | job_id, sdk, tool_name, success |
+| `cp.approval.wait` | Histogram | — |
 | `cp.context.tokens` | Gauge | job_id, sdk |
 | `cp.context.window_size` | Gauge | job_id, sdk |
+| `cp.quota.used` | Gauge | job_id, sdk, resource |
+| `cp.quota.entitlement` | Gauge | job_id, sdk, resource |
+| `cp.quota.remaining_pct` | Gauge | job_id, sdk, resource |
 
 ### New Metrics (Proposed)
 
