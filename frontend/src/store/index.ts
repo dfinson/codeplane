@@ -375,11 +375,16 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  applySnapshot: (jobs, approvals) =>
+  applySnapshot: (jobs, approvals) => {
+    const jobMap = Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)]));
+    const validApprovals = approvals.filter(
+      (a) => jobMap[a.jobId]?.state === "waiting_for_approval",
+    );
     set({
-      jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
-      approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
-    }),
+      jobs: jobMap,
+      approvals: Object.fromEntries(validApprovals.map((a) => [a.id, a])),
+    });
+  },
 
   hydrateJob: (snapshot) => {
     const jobId = snapshot.job.id;
@@ -421,6 +426,22 @@ export const useStore = create<AppState>((set, get) => ({
             const isCanceled = newState === "canceled";
             const existingPlan = isCanceled ? state.plans[jobId] : undefined;
             const finalPlan = finalizePlanSteps(existingPlan, "skipped");
+
+            // If the job is leaving waiting_for_approval without an
+            // approval_resolved event (e.g. server-restart recovery), evict any
+            // stale unresolved approvals for this job so the mobile badge stays
+            // in sync with the column content.
+            let approvals = state.approvals;
+            if (newState !== "waiting_for_approval") {
+              const staleIds = Object.keys(state.approvals).filter(
+                (id) => state.approvals[id].jobId === jobId && !state.approvals[id].resolvedAt,
+              );
+              if (staleIds.length > 0) {
+                approvals = { ...state.approvals };
+                for (const id of staleIds) delete approvals[id];
+              }
+            }
+
             return {
               jobs: {
                 ...state.jobs,
@@ -431,6 +452,7 @@ export const useStore = create<AppState>((set, get) => ({
                 },
               },
               ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
+              ...(approvals !== state.approvals && { approvals }),
             };
           }
           return null;
@@ -520,10 +542,19 @@ export const useStore = create<AppState>((set, get) => ({
 
         case "snapshot": {
           const jobs = (payload.jobs as JobSummary[]) ?? [];
-          const approvals =
+          const rawApprovals =
             (payload.pendingApprovals as ApprovalRequest[]) ?? [];
+          const jobMap = Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)]));
+          // Drop approvals whose job is no longer in waiting_for_approval.
+          // This covers the server-restart recovery path where the backend resets
+          // the job to running without resolving its pending approval in the DB,
+          // and the SSE gap is large enough that only a snapshot is sent (no
+          // job_state_changed replay event to trigger the in-flight eviction).
+          const approvals = rawApprovals.filter(
+            (a) => jobMap[a.jobId]?.state === "waiting_for_approval",
+          );
           return {
-            jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
+            jobs: jobMap,
             approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
           };
         }

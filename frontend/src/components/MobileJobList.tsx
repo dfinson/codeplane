@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { PlayCircle, CheckCircle2, Search } from "lucide-react";
-import { useStore, selectJobs, selectApprovals } from "../store";
+import { useStore, selectJobs } from "../store";
 import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
 import { cn } from "../lib/utils";
@@ -40,8 +40,10 @@ export function MobileJobList() {
   const [tab, setTab] = useState<KanbanColumn>(KANBAN_COLUMNS.IN_PROGRESS);
   const [query, setQuery] = useState("");
   const jobs = useStore(selectJobs);
-  const approvals = useStore(selectApprovals);
-  const pendingCount = Object.values(approvals).filter((a) => !a.resolvedAt).length;
+  const awaitingCount = useMemo(
+    () => Object.values(jobs).filter((j) => !j.archivedAt && j.state === "waiting_for_approval").length,
+    [jobs],
+  );
 
   const filtered = useMemo(() => {
     const tabJobs = filterForTab(jobs, tab);
@@ -71,8 +73,8 @@ export function MobileJobList() {
       <div className="flex rounded-lg bg-muted p-1 mb-4 gap-0.5">
         {TABS.map((t) => {
           const label =
-            t === KANBAN_COLUMNS.AWAITING_INPUT && pendingCount > 0
-              ? `${KANBAN_COLUMNS.AWAITING_INPUT} (${pendingCount})`
+            t === KANBAN_COLUMNS.AWAITING_INPUT && awaitingCount > 0
+              ? `${KANBAN_COLUMNS.AWAITING_INPUT} (${awaitingCount})`
               : t;
           return (
             <button
