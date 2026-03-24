@@ -599,7 +599,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
               </div>
 
               {/* Stat cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className={cn("grid grid-cols-2 gap-3", (data.totalCost ?? 0) > 0 ? "sm:grid-cols-5" : "sm:grid-cols-4")}>
                 <StatCard icon={<Clock size={14} />} label="Duration" value={formatDuration(data.durationMs ?? 0)} color="text-blue-400" />
                 <StatCard icon={<Cpu size={14} />} label="Tokens" value={formatTokens(data.totalTokens ?? 0)} color="text-violet-400" />
                 <StatCard icon={<Brain size={14} />} label="LLM Calls" value={String(data.llmCallCount ?? 0)} color="text-blue-400" />
