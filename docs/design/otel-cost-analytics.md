@@ -1069,39 +1069,41 @@ log against transcript events.
 
 ### 9.2 Prompt Composition via Conversation Ledger
 
-The adapter maintains a `ConversationLedger` that records the exact token count of
-every message added to the conversation, producing a precise composition breakdown
-on each LLM completion.
+The adapter maintains a `ConversationLedger` that records the token count of every
+message added to the conversation. Token counts are computed by the caller and
+passed in — the ledger is a pure data structure, not responsible for tokenization.
+This keeps the ledger synchronous and testable regardless of whether the tokenizer
+is local (tiktoken) or remote (Anthropic API).
 
 ```python
 class ConversationLedger:
-    """Tracks exact token counts per conversation segment.
+    """Tracks token counts per conversation segment.
 
-    Uses the model-appropriate tokenizer to count tokens for every
-    message that enters the conversation. Produces a fully-accounted
-    breakdown per LLM turn.
+    Token counts are provided by the caller, computed via the
+    model-appropriate tokenizer before insertion.
     """
 
-    def __init__(self, tokenizer: TokenCounter):
-        self._tokenizer = tokenizer
+    def __init__(self):
         self._system_prompt_tokens: int = 0
         self._messages: list[LedgerEntry] = []
 
-    def set_system_prompt(self, text: str) -> None:
-        """Called once at session init with the exact system prompt text."""
-        self._system_prompt_tokens = self._tokenizer.count(text)
+    def set_system_prompt(self, token_count: int) -> None:
+        """Called once at session init with the exact system prompt token count."""
+        self._system_prompt_tokens = token_count
 
-    def record_message(self, role: str, text: str, category: MessageCategory) -> None:
-        """Record every message added to the conversation.
+    def record_message(self, role: str, category: MessageCategory,
+                       token_count: int) -> None:
+        """Record a message with its pre-computed token count.
 
         category is one of: 'agent', 'operator', 'tool_result', 'file_content'
         — derived from the transcript event role and tool_category.
         """
-        tokens = self._tokenizer.count(text)
-        self._messages.append(LedgerEntry(role=role, category=category, tokens=tokens))
+        self._messages.append(LedgerEntry(
+            role=role, category=category, tokens=token_count,
+        ))
 
     def composition_at_turn(self, sdk_reported_input_tokens: int) -> PromptComposition:
-        """Compute exact composition breakdown for the current turn.
+        """Compute composition breakdown for the current turn.
 
         The SDK-reported input_tokens is the ground truth total.
         The ledger sum accounts for message content; any delta is
@@ -1124,47 +1126,61 @@ class ConversationLedger:
         )
 ```
 
-**`TokenCounter` interface:** Wraps the model-specific tokenizer.
+**Token counting strategies by SDK:**
 
 ```python
-class TokenCounter(Protocol):
-    def count(self, text: str) -> int: ...
-
 class TiktokenCounter:
-    """For OpenAI/Copilot models. Uses the exact local tokenizer the API uses."""
+    """For OpenAI/Copilot models. Local, synchronous, exact."""
     def __init__(self, model: str):
         self._enc = tiktoken.encoding_for_model(model)
     def count(self, text: str) -> int:
         return len(self._enc.encode(text))
 
-class AnthropicAPICounter:
-    """For Claude models. Uses Anthropic's count_tokens API endpoint.
+class AnthropicBatchCounter:
+    """For Claude models. Counts tokens for the full conversation at once
+    via Anthropic's count_tokens API, then attributes to segments by
+    diffing successive totals.
 
-    This makes a network call to POST /v1/messages/count_tokens.
-    The endpoint is free but rate-limited (100-8000 RPM by tier).
-    It accepts a messages array and returns the total input token count.
+    The API counts the entire messages array as a unit, so role formatting
+    overhead is included exactly once per message — matching how the actual
+    API call is billed. We never wrap individual strings as fake messages
+    (which would overcount due to per-message role overhead).
 
-    We wrap single text strings as a minimal user message to get
-    per-segment counts. The API may include role-formatting overhead
-    per message; this is tracked and reconciled at session end.
+    Strategy: after each message is added to the conversation, call
+    count_tokens with the full messages array so far. The delta between
+    successive calls is the exact token cost of the new message, including
+    any formatting the API applies.
     """
     def __init__(self, model: str):
         self._model = model
         self._client = anthropic.AsyncAnthropic()
+        self._messages: list[dict] = []
+        self._last_total: int = 0
 
-    async def count(self, text: str) -> int:
+    async def add_and_count(self, role: str, content: str) -> int:
+        """Add a message and return its exact token delta."""
+        self._messages.append({"role": role, "content": content})
         result = await self._client.messages.count_tokens(
             model=self._model,
-            messages=[{"role": "user", "content": text}],
+            messages=self._messages,
         )
-        return result.input_tokens
+        delta = result.input_tokens - self._last_total
+        self._last_total = result.input_tokens
+        return delta
 ```
 
-> **Note:** `AnthropicAPICounter.count()` is async because it makes a network call.
-> The `ConversationLedger` must account for this — either by awaiting the count
-> inline (acceptable since tool results arrive asynchronously anyway) or by
-> batching counts and resolving them before the next LLM turn. The `TiktokenCounter`
-> is synchronous and instant.
+> **Why delta-based counting for Claude:** Counting individual strings wrapped as
+> fake single-message arrays would systematically overcount — each call includes
+> per-message role formatting overhead that only appears once in the real
+> conversation. By counting the full array and taking deltas, each message's token
+> cost includes exactly its share of formatting, matching what the API actually
+> bills.
+>
+> **Rate limit consideration:** This makes one `count_tokens` call per message added
+> to the conversation. For a typical agent session (50-200 messages), this is well
+> within even the lowest tier limit (100 RPM). If rate limits become a concern,
+> batch multiple messages between counts — the delta for the batch is still exact,
+> just attributed proportionally by character length within the batch.
 
 ### 9.3 Retry Detection via Failed-Predecessor Lookup
 
@@ -1333,10 +1349,11 @@ def classify_tool(tool_name: str) -> str:
    non-OpenAI model (e.g., `claude-*` via Copilot), `tiktoken` may not have the
    correct tokenizer. The Copilot SDK still reports per-turn `input_tokens` via
    `assistant.usage` events, so we have the ground truth total. For per-segment
-   breakdown, we should detect the model family from the model name and use the
-   appropriate counter (`AnthropicAPICounter` for `claude-*` models, `tiktoken` for
+   breakdown, we need to detect the model family from the model name and use the
+   appropriate counter (`AnthropicBatchCounter` for `claude-*` models, `tiktoken` for
    `gpt-*`/`o1-*` models). If the model is unrecognized, we skip per-segment
-   breakdown and record only the SDK-reported total.
+   breakdown and record only the SDK-reported total. This routing logic needs to be
+   validated against the actual model names the Copilot SDK reports.
 
 3. **Subagent attribution:** Subagent costs are currently rolled into the parent job.
    Should we track them as separate cost centers or keep the current model? Separate
