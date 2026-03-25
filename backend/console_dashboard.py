@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from rich.box import ROUNDED, SIMPLE_HEAVY
-from rich.console import Console, ConsoleRenderable, Group
+from rich.console import Console, ConsoleRenderable
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -409,19 +409,19 @@ class ConsoleDashboard:
 
         errors_panel = Panel(err_content, title=err_title, box=ROUNDED)
 
-        # --- Assemble: header + side-by-side body + errors footer ---
-        # Use a Layout only for the body row (horizontal split); wrap the
-        # whole thing in a Group so the header and footer stack vertically.
-        console_height = self._console.size.height
-        body_height = max(6, console_height - 10)
-
-        body_layout = Layout(size=body_height)
-        body_layout.split_row(
+        # --- Assemble: full-screen Layout so every section fits ---
+        root = Layout()
+        root.split_column(
+            Layout(header_panel, name="header", size=3),
+            Layout(name="body"),
+            Layout(errors_panel, name="errors", size=5),
+        )
+        root["body"].split_row(
             Layout(jobs_panel, name="jobs", ratio=5),
             Layout(events_panel, name="events", ratio=4),
         )
 
-        return Group(header_panel, body_layout, errors_panel)
+        return root
 
 
 # ---------------------------------------------------------------------------
