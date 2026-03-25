@@ -64,6 +64,10 @@ class _AgentSession:
         if self._adapter and self._session_id:
             await self._adapter.send_message(self._session_id, message)
 
+    async def interrupt(self) -> None:
+        if self._adapter and self._session_id:
+            await self._adapter.interrupt_session(self._session_id)
+
     async def abort(self) -> None:
         if self._adapter and self._session_id:
             await self._adapter.abort_session(self._session_id)
@@ -1533,10 +1537,11 @@ class RuntimeService:
         return True
 
     async def pause_job(self, job_id: str) -> bool:
-        """Send a silent pause instruction to the agent. Returns True if sent.
+        """Forcefully pause a running agent. Returns True if sent.
 
-        The pause message is never shown in the transcript — the agent receives
-        the instruction to stop and wait for further operator input.
+        Interrupts the agent's current turn immediately, then sends a
+        follow-up message instructing it to wait.  The pause message is
+        never shown in the transcript.
         """
         _pause_msg = (
             "Please stop what you are doing right now and wait. "
@@ -1546,6 +1551,11 @@ class RuntimeService:
         if agent_session is None:
             log.warning("pause_job_no_session", job_id=job_id)
             return False
+        # Interrupt the current turn so the agent stops immediately.
+        try:
+            await agent_session.interrupt()
+        except Exception:
+            log.warning("pause_interrupt_failed", job_id=job_id, exc_info=True)
         # Pre-register the echo suppression before sending so the SDK echo
         # (if any) is discarded and never appears in the transcript.
         self._echo_suppress.setdefault(job_id, set()).add(_pause_msg)

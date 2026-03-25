@@ -20,7 +20,7 @@ log = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 _PRICING_PATH = Path(__file__).resolve().parent.parent / "data" / "model_pricing.json"
-_MODEL_PRICING: dict[str, dict] = {}
+_MODEL_PRICING: dict[str, dict[str, object]] = {}
 
 try:
     _MODEL_PRICING = json.loads(_PRICING_PATH.read_text())
@@ -151,13 +151,13 @@ async def analytics_pricing(
         ...,
         description="Comma-separated model names to look up (e.g. 'claude-sonnet-4-6,claude-opus-4-5')",
     ),
-) -> dict[str, dict | None]:
+) -> dict[str, dict[str, object] | None]:
     """Return pricing info for the requested models.
 
     Looks up each model by exact key first, then falls back to normalised
     matching.  Returns ``null`` for models not found in the pricing data.
     """
-    result: dict[str, dict | None] = {}
+    result: dict[str, dict[str, object] | None] = {}
     for raw in models.split(","):
         name = raw.strip()
         if not name:

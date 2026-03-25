@@ -747,6 +747,15 @@ class ClaudeAdapter(AgentAdapterInterface):
         except Exception:
             log.warning("claude_send_message_failed", session_id=session_id, exc_info=True)
 
+    async def interrupt_session(self, session_id: str) -> None:
+        client = self._clients.get(session_id)
+        if client is None:
+            return
+        try:
+            await client.interrupt()
+        except Exception:
+            log.warning("claude_interrupt_failed", session_id=session_id, exc_info=True)
+
     async def abort_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)
         if client is None:

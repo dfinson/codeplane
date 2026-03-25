@@ -261,7 +261,7 @@ async def test_create_followup_job_uses_parent_handoff_context(runtime: RuntimeS
         get_job=AsyncMock(side_effect=[parent, child]),
         create_job=AsyncMock(return_value=child),
     )
-    runtime._make_job_service = lambda session: fake_service  # type: ignore[method-assign]
+    runtime._make_job_service = lambda session: fake_service  # type: ignore[assignment, return-value]
     runtime._build_followup_handoff_prompt_for_job = AsyncMock(return_value="FOLLOWUP HANDOFF")  # type: ignore[method-assign]
     runtime.start_or_enqueue = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
@@ -1592,7 +1592,7 @@ class TestHeartbeatWaitingForApproval:
 
         # Run the heartbeat loop with the interval zeroed so it triggers immediately
         original_interval = rs_mod._HEARTBEAT_INTERVAL_S
-        rs_mod._HEARTBEAT_INTERVAL_S = 0  # type: ignore[attr-defined]
+        rs_mod._HEARTBEAT_INTERVAL_S = 0
         try:
             heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
             await asyncio.sleep(0.05)
@@ -1600,7 +1600,7 @@ class TestHeartbeatWaitingForApproval:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
         finally:
-            rs_mod._HEARTBEAT_INTERVAL_S = original_interval  # type: ignore[attr-defined]
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval
 
         # The loop must have looped (not exited early) and must NOT have failed the job
         assert job.id not in failed_jobs
@@ -1643,7 +1643,7 @@ class TestHeartbeatWaitingForApproval:
 
         # Patch interval to 0 so the loop triggers immediately
         original_interval = rs_mod._HEARTBEAT_INTERVAL_S
-        rs_mod._HEARTBEAT_INTERVAL_S = 0  # type: ignore[attr-defined]
+        rs_mod._HEARTBEAT_INTERVAL_S = 0
         try:
             heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
             await asyncio.sleep(0.05)
@@ -1651,7 +1651,7 @@ class TestHeartbeatWaitingForApproval:
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat_task
         finally:
-            rs_mod._HEARTBEAT_INTERVAL_S = original_interval  # type: ignore[attr-defined]
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval
 
         assert job.id in failed_jobs
 

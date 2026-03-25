@@ -118,7 +118,7 @@ class _DashboardView:
     def __init__(self, dashboard: ConsoleDashboard) -> None:
         self._dashboard = dashboard
 
-    def __rich__(self) -> ConsoleRenderable:  # type: ignore[override]
+    def __rich__(self) -> ConsoleRenderable:
         return self._dashboard._build_renderable()
 
 

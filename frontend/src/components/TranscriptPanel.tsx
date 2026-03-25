@@ -855,7 +855,7 @@ export function TranscriptPanel({
     setPausing(true);
     try {
       await pauseJob(jobId);
-      toast.info("Pause instruction sent — agent will stop when ready");
+      toast.info("Agent paused");
     } catch (e) {
       toast.error(String(e));
     } finally {

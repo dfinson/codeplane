@@ -302,7 +302,7 @@ def _print_connection_info(host: str, port: int, tunnel_url: str | None, passwor
         except ImportError:
             log.debug("qrcode_not_installed", package="qrcode", exc_info=True)
 
-        body = Group(Text.from_markup("\n".join(lines)), *qr_section)
+        body = Group(Text.from_markup("\n".join(lines)), *qr_section)  # type: ignore[arg-type]
         console.print(Panel(body, title="[bold cyan]CodePlane[/bold cyan]", border_style="cyan"))
     except ImportError:
         click.echo(f"CodePlane server: http://{host}:{port}")
