@@ -243,7 +243,7 @@ test.describe("Job Detail — Live Events", () => {
     await page.goto("/jobs/job-1");
 
     // Should display job ID
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
     // Should display the prompt
     await expect(page.getByText("Fix the bug in auth module")).toBeVisible();
     // Should display branch info
@@ -255,7 +255,7 @@ test.describe("Job Detail — Live Events", () => {
   test("shows cancel button for running job", async ({ page }) => {
     await page.goto("/jobs/job-1");
 
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
     const cancelBtn = page.locator("button", { hasText: "Cancel" });
     await expect(cancelBtn).toBeVisible();
   });
@@ -263,7 +263,7 @@ test.describe("Job Detail — Live Events", () => {
   test("shows tabs: Live, Files, Changes, Artifacts", async ({ page }) => {
     await page.goto("/jobs/job-1");
 
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole("tab", { name: "Live" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Changes" })).toBeVisible();

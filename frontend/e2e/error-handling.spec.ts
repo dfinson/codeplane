@@ -118,7 +118,7 @@ test.describe("Job Failure Display", () => {
     await setupJobDetailMocks(page, failedJob);
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
     // Should display failure banner
     await expect(page.getByText("Job failed")).toBeVisible();
@@ -133,7 +133,7 @@ test.describe("Job Failure Display", () => {
     await setupJobDetailMocks(page, failedJob);
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
     await expect(page.getByText("Job failed")).toBeVisible();
     await expect(page.getByText("No additional details available")).toBeVisible();
@@ -211,7 +211,7 @@ test.describe("Canceled Job Display", () => {
     await setupJobDetailMocks(page, canceledJob);
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
     await expect(page.getByText("Job canceled")).toBeVisible();
   });
@@ -255,7 +255,13 @@ test.describe("Nonexistent Job", () => {
 
 test.describe("SSE Connection Status", () => {
   test("shows connected status when SSE heartbeat received", async ({ page }) => {
+    // Keep the SSE connection alive so the browser doesn't immediately
+    // fire onerror (which would flip status away from "Connected").
     await page.route("**/api/events*", async (route) => {
+      // Fulfill with a streaming response that stays open long enough
+      // for the assertion to pass by padding with keep-alive comments.
+      const heartbeat = "event: session_heartbeat\ndata: {}\n\n";
+      const keepAlive = ": keep-alive\n\n".repeat(100);
       await route.fulfill({
         status: 200,
         headers: {
@@ -263,7 +269,7 @@ test.describe("SSE Connection Status", () => {
           "Cache-Control": "no-cache",
           "X-Accel-Buffering": "no",
         },
-        body: "event: session_heartbeat\ndata: {}\n\n",
+        body: heartbeat + keepAlive,
       });
     });
 
@@ -279,7 +285,7 @@ test.describe("SSE Connection Status", () => {
     await page.goto("/");
 
     // The connection status badge should appear
-    await expect(page.getByText("connected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Connected")).toBeVisible({ timeout: 10_000 });
   });
 });
 
@@ -295,11 +301,12 @@ test.describe("Model Downgrade Banner", () => {
     await setupJobDetailMocks(page, downgradedJob);
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.getByText("Model downgraded")).toBeVisible();
-    await expect(page.getByText("claude-opus-4-20250514")).toBeVisible();
-    await expect(page.getByText("claude-sonnet-4-5-20250514")).toBeVisible();
+    await expect(page.getByText("Model downgraded", { exact: true })).toBeVisible();
+    // Model names appear in both the failure reason and the downgrade banner
+    await expect(page.locator("text=claude-opus-4-20250514").first()).toBeVisible();
+    await expect(page.locator("text=claude-sonnet-4-5-20250514").first()).toBeVisible();
   });
 });
 
@@ -313,7 +320,7 @@ test.describe("Completed Job Display", () => {
     await setupJobDetailMocks(page, mergedJob);
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
     await expect(page.getByText("Job completed")).toBeVisible();
     await expect(page.getByText("Changes merged into base branch")).toBeVisible();
@@ -337,9 +344,9 @@ test.describe("Completed Job Display", () => {
     });
 
     await page.goto("/jobs/job-1");
-    await expect(page.getByText("job-1")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
 
-    await expect(page.getByText("Merge conflict")).toBeVisible();
+    await expect(page.getByText("Merge conflict", { exact: false }).first()).toBeVisible();
     await expect(page.locator("button", { hasText: "Resolve with Agent" })).toBeVisible();
   });
 });

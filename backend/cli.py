@@ -248,6 +248,22 @@ def up(
     }
     app.state.dashboard = dashboard
 
+    # Install signal handlers that stop the Rich Live display before
+    # letting uvicorn handle shutdown.  Without this, the Live refresh
+    # thread keeps painting after Ctrl+C and the terminal appears stuck.
+    _prev_sigint = signal.getsignal(signal.SIGINT)
+    _prev_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _stop_dashboard_and_reraise(signum: int, frame: Any) -> None:
+        if dashboard is not None:
+            dashboard.stop()
+        # Restore the previous handler and re-raise so uvicorn shuts down.
+        signal.signal(signum, _prev_sigint if signum == signal.SIGINT else _prev_sigterm)
+        signal.raise_signal(signum)
+
+    signal.signal(signal.SIGINT, _stop_dashboard_and_reraise)
+    signal.signal(signal.SIGTERM, _stop_dashboard_and_reraise)
+
     try:
         uvicorn.run(
             app,
@@ -256,6 +272,8 @@ def up(
             log_level="warning" if dashboard else "info",
         )
     finally:
+        if dashboard is not None:
+            dashboard.stop()
         if tunnel_handle is not None:
             tunnel_handle.close()
 
