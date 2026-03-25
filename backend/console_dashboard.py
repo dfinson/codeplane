@@ -439,7 +439,7 @@ class ConsoleDashboard:
         # frame height predictable while adapting to the terminal size.
         term_h = self._console.size.height
         total = max(self._MIN_HEIGHT, min(self._MAX_HEIGHT, term_h - 2))
-        header_h = 4 if (self._tunnel_url or self._password) else 3
+        header_h = 4
         errors_h = 5
         body_h = total - header_h - errors_h
 
