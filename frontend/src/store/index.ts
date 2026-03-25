@@ -499,14 +499,18 @@ export const useStore = create<AppState>((set, get) => ({
           const existing = state.transcript[jobId] ?? [];
 
           // When a tool_call arrives, replace any matching tool_running entry
-          // (same turnId + toolName) so the in-progress placeholder is superseded.
+          // (same toolName, and same turnId when both are present) so the
+          // in-progress placeholder is superseded.
           let base = existing;
-          if (entry.role === "tool_call" && entry.turnId) {
+          if (entry.role === "tool_call") {
             const before = base.length;
-            base = base.filter(
-              (e) => !(e.role === "tool_running" && e.turnId === entry.turnId && e.toolName === entry.toolName),
-            );
-            // If we filtered something, skip dedup — the tool_call replaces the tool_running
+            base = base.filter((e) => {
+              if (e.role !== "tool_running" || e.toolName !== entry.toolName) return true;
+              // If both entries have a turnId, they must match to be considered the same call.
+              if (entry.turnId && e.turnId && entry.turnId !== e.turnId) return true;
+              return false;
+            });
+            // If we replaced something, emit directly — no further dedup needed.
             if (base.length < before) {
               const updated = [...base, entry];
               return {

@@ -18,7 +18,7 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Codicon } from "./ui/codicon";
 import { cn } from "../lib/utils";
-import { resolveToolIcon } from "../lib/toolIcons";
+import { resolveToolIcon, type ToolIconDef } from "../lib/toolIcons";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { ConfirmDialog } from "./ui/confirm-dialog";
 
@@ -319,8 +319,9 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       );
     }
     case "replace_string_in_file":
-    case "multi_replace_string_in_file": {
-      const filePath = (args.filePath ?? args.file_path ?? "") as string;
+    case "multi_replace_string_in_file":
+    case "str_replace_based_edit_tool": {
+      const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
       const shortPath = abbreviatePath(filePath);
       return (
         <div className="px-3 py-1.5 text-xs">
@@ -353,13 +354,59 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
-    case "create_file": {
-      const filePath = (args.filePath ?? args.file_path ?? "") as string;
+    case "create_file":
+    case "write": {
+      const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
       return (
         <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
           <Codicon name="edit" size={11} className="text-green-400/70 shrink-0" />
           <span className="font-mono text-foreground/80">{abbreviatePath(filePath)}</span>
-          <span className="text-muted-foreground">→ created</span>
+          <span className="text-muted-foreground">→ {toolName === "write" ? "written" : "created"}</span>
+        </div>
+      );
+    }
+    case "view": {
+      const path = (args.path as string) ?? "";
+      const viewRange = args.view_range as [number, number] | undefined;
+      const lines = countLines(entry.toolResult);
+      const range = Array.isArray(viewRange) && viewRange.length >= 2
+        ? `lines ${viewRange[0]}–${viewRange[1] === -1 ? "end" : viewRange[1]}`
+        : null;
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="file-code" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{abbreviatePath(path)}</span>
+          {range && <span className="text-muted-foreground">{range}</span>}
+          {lines != null && <span className="text-muted-foreground/60">({lines} lines)</span>}
+        </div>
+      );
+    }
+    case "glob": {
+      const pattern = (args.pattern as string) ?? "";
+      const searchPath = (args.path as string) ?? "";
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="search" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{pattern}</span>
+          {searchPath && <span className="text-muted-foreground/60">in {abbreviatePath(searchPath)}</span>}
+          {lines != null && <span className="text-muted-foreground">→ {lines} files</span>}
+        </div>
+      );
+    }
+    case "grep": {
+      const pattern = (args.pattern ?? args.query ?? "") as string;
+      const searchPath = (args.path as string) ?? "";
+      const globFilter = (args.glob as string) ?? "";
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="search" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">&ldquo;{pattern}&rdquo;</span>
+          {(globFilter || searchPath) && (
+            <span className="text-muted-foreground/60">in {globFilter || abbreviatePath(searchPath)}</span>
+          )}
+          {lines != null && <span className="text-muted-foreground">→ {lines} matches</span>}
         </div>
       );
     }
@@ -373,8 +420,10 @@ function hasStructuredRenderer(toolName?: string): boolean {
   const name = stripMcpPrefix(toolName);
   return [
     "bash", "run_in_terminal", "read_file",
-    "replace_string_in_file", "multi_replace_string_in_file",
-    "grep_search", "semantic_search", "file_search", "create_file",
+    "replace_string_in_file", "multi_replace_string_in_file", "str_replace_based_edit_tool",
+    "grep_search", "semantic_search", "file_search",
+    "create_file", "write",
+    "view", "glob", "grep",
   ].includes(name);
 }
 
@@ -407,6 +456,14 @@ function ToolDetail({ entry }: { entry: TranscriptEntry }) {
   );
 }
 
+function ToolIconGlyph({ icon, className }: { icon: ToolIconDef; className?: string }) {
+  if (icon.kind === "codicon") {
+    return <Codicon name={icon.name} size={11} className={className} />;
+  }
+  const Icon = icon.icon;
+  return <Icon size={11} className={className} />;
+}
+
 function ToolStep({ entry, isActive }: {
   entry: TranscriptEntry;
   isActive: boolean;
@@ -415,7 +472,7 @@ function ToolStep({ entry, isActive }: {
   const failed = entry.toolSuccess === false;
   const isRunning = entry.role === "tool_running";
   const label = entry.toolDisplay ?? entry.toolName ?? entry.content;
-  const iconName = resolveToolIcon(entry.toolName);
+  const icon = resolveToolIcon(entry.toolName);
 
   return (
     <div className="relative pl-5">
@@ -423,7 +480,7 @@ function ToolStep({ entry, isActive }: {
         "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
         (isActive || isRunning) && "animate-pulse",
       )}>
-        <Codicon name={iconName} size={11} className={cn(
+        <ToolIconGlyph icon={icon} className={cn(
           failed ? "text-red-400"
             : (isActive || isRunning) ? "text-blue-400"
             : "text-muted-foreground/50",
