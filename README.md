@@ -75,38 +75,37 @@ Launch automated coding tasks against real repositories, watch everything the ag
 
 ## Quick Start
 
-> Requires Python 3.11+, Node.js 20+, and [uv](https://docs.astral.sh/uv/).
+> Requires Python 3.11+ and Node.js 20+.
 
 ```bash
-make install                  # install backend + frontend dependencies
-cp .env.sample .env           # optional: set CPL_DEVTUNNEL_PASSWORD
-make run                      # build frontend, start server with remote access
+pip install git+https://github.com/dfinson/codeplane.git
+cpl up                        # start server (localhost:8080)
 ```
 
-Or step by step:
+Or from a cloned repo:
 
 ```bash
-uv sync                       # install backend dependencies
-cd frontend && npm ci && cd ..
-uv run cpl up                 # start server (localhost:8080)
-uv run cpl up --remote        # start with remote access via Dev Tunnels
-uv run cpl up --dev           # skip frontend build (backend-only work)
+git clone https://github.com/dfinson/codeplane.git
+cd codeplane
+make install                  # install backend + frontend dependencies
+make run                      # build frontend, start server with remote access
 ```
 
 ## CLI
 
 ```bash
-uv run cpl up                                    # start server on localhost:8080
-uv run cpl up --remote                           # enable Dev Tunnels for remote access
-uv run cpl up --remote --provider cloudflare     # use Cloudflare Tunnel instead
-uv run cpl up --dev                              # backend-only (skip frontend build)
-uv run cpl up --port 9090                        # custom port
-uv run cpl up --remote --password SECRET         # tunnel password
-uv run cpl down                                  # gracefully stop the server
-uv run cpl restart                               # stop and restart (preserves sessions)
-uv run cpl version                               # show version
-uv run cpl setup                                 # interactive first-time setup
-uv run cpl doctor                                # diagnose environment issues
+cpl up                                    # start server on localhost:8080
+cpl up --remote                           # enable Dev Tunnels for remote access
+cpl up --remote --provider cloudflare     # use Cloudflare Tunnel instead
+cpl up --dev                              # backend-only (skip frontend build)
+cpl up --port 9090                        # custom port
+cpl up --remote --password SECRET         # tunnel password
+cpl down                                  # gracefully stop the server
+cpl restart                               # stop and restart (preserves sessions)
+cpl info                                  # show connection details and QR code
+cpl version                               # show version
+cpl setup                                 # interactive first-time setup
+cpl doctor                                # diagnose environment issues
 ```
 
 ## Development

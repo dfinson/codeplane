@@ -5,7 +5,7 @@ CodePlane provides the `cpl` command-line interface for managing the server.
 ## Usage
 
 ```bash
-uv run cpl <command> [options]
+cpl <command> [options]
 ```
 
 ## Commands
@@ -15,7 +15,7 @@ uv run cpl <command> [options]
 Start the CodePlane server.
 
 ```bash
-uv run cpl up [options]
+cpl up [options]
 ```
 
 | Option | Description | Default |
@@ -32,13 +32,13 @@ uv run cpl up [options]
 
 ```bash
 # Basic local server
-uv run cpl up
+cpl up
 
 # Remote access with password
-uv run cpl up --remote --password my-secret
+cpl up --remote --password my-secret
 
 # Development mode on custom port
-uv run cpl up --dev --port 9090
+cpl up --dev --port 9090
 ```
 
 On startup, the server:
@@ -56,7 +56,7 @@ On startup, the server:
 Gracefully stop the CodePlane server.
 
 ```bash
-uv run cpl down [options]
+cpl down [options]
 ```
 
 | Option | Description | Default |
@@ -72,7 +72,7 @@ On shutdown, active sessions are paused for recovery on next start.
 Stop and restart the server, preserving sessions for recovery.
 
 ```bash
-uv run cpl restart [options]
+cpl restart [options]
 ```
 
 Accepts all `cpl up` options plus:
@@ -86,7 +86,7 @@ Accepts all `cpl up` options plus:
 Display the current CodePlane version.
 
 ```bash
-uv run cpl version
+cpl version
 ```
 
 ### `cpl setup`
@@ -94,7 +94,7 @@ uv run cpl version
 Run the interactive first-time setup wizard.
 
 ```bash
-uv run cpl setup
+cpl setup
 ```
 
 Walks you through:
@@ -108,7 +108,7 @@ Walks you through:
 Print server connection details and QR code.
 
 ```bash
-uv run cpl info [options]
+cpl info [options]
 ```
 
 | Option | Description | Default |
@@ -125,7 +125,7 @@ Useful for retrieving the tunnel URL and QR code after the server is already run
 Diagnose environment issues.
 
 ```bash
-uv run cpl doctor
+cpl doctor
 ```
 
 Checks for:

@@ -5,14 +5,13 @@ Get your first coding job running in under 5 minutes.
 ## 1. Start the Server
 
 ```bash
-make run
+cpl up
 ```
 
-Or step by step:
+Or from a cloned repo with the frontend built:
 
 ```bash
-cd frontend && npm run build && cd ..
-uv run cpl up
+make run
 ```
 
 The server starts on `http://localhost:8080`. Open it in your browser.
@@ -20,7 +19,7 @@ The server starts on `http://localhost:8080`. Open it in your browser.
 !!! tip "Development Mode"
     For backend-only work, skip the frontend build:
     ```bash
-    uv run cpl up --dev
+    cpl up --dev
     ```
 
 ## 2. Register a Repository

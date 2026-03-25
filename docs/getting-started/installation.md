@@ -8,38 +8,37 @@ Ensure you have the following installed:
 |------|---------|-------|
 | Python | ≥ 3.11 | `python --version` |
 | Node.js | ≥ 20 | `node --version` |
-| uv | latest | `uv --version` |
 | Git | any | `git --version` |
 
-!!! tip "Installing uv"
-    If you don't have `uv`, install it with:
-    ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    ```
+## Install
 
-## Clone & Install
+Install CodePlane directly from GitHub:
+
+```bash
+pip install git+https://github.com/dfinson/codeplane.git
+```
+
+This installs the `cpl` command and all backend dependencies.
+
+!!! note "PyPI coming soon"
+    CodePlane will be published to PyPI in a future release. For now, install directly from GitHub.
+
+### Frontend (for UI)
+
+The frontend needs to be built separately:
+
+```bash
+git clone https://github.com/dfinson/codeplane.git
+cd codeplane/frontend
+npm ci && npm run build
+```
+
+Or use `make install` from the repo root to install everything at once:
 
 ```bash
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
-```
-
-### One Command
-
-```bash
-make install
-```
-
-This runs `uv sync` (backend) and `npm ci` (frontend).
-
-### Manual Steps
-
-```bash
-# Backend dependencies
-uv sync
-
-# Frontend dependencies
-cd frontend && npm ci && cd ..
+make install    # pip install + npm ci
 ```
 
 ## Environment Setup
@@ -52,13 +51,13 @@ Edit `.env` if you want remote access:
 
 ```bash
 # Password for Dev Tunnels remote access
-CPL_TUNNEL_PASSWORD=your-secret-password
+CPL_DEVTUNNEL_PASSWORD=your-secret-password
 ```
 
 ## Verify Installation
 
 ```bash
-uv run cpl doctor
+cpl doctor
 ```
 
 This checks that all dependencies are installed and configured correctly.

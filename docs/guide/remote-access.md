@@ -9,13 +9,13 @@ CodePlane supports two tunnel providers for remote access.
 ### Dev Tunnels (default)
 
 ```bash
-uv run cpl up --remote
+cpl up --remote
 ```
 
 Or with a password:
 
 ```bash
-uv run cpl up --remote --password your-secret
+cpl up --remote --password your-secret
 ```
 
 The server will print a tunnel URL like:
@@ -29,7 +29,7 @@ https://abc123.devtunnels.ms
 For a stable, user-managed hostname:
 
 ```bash
-uv run cpl up --remote --provider cloudflare
+cpl up --remote --provider cloudflare
 ```
 
 Prerequisites:

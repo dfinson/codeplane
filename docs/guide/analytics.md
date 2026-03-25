@@ -69,7 +69,7 @@ CodePlane uses OpenTelemetry internally. To push metrics and traces to an extern
 
 ```bash
 export OTEL_EXPORTER_ENDPOINT=http://localhost:4317
-uv run cpl up
+cpl up
 ```
 
 This enables OTLP export alongside the built-in in-memory metrics.
