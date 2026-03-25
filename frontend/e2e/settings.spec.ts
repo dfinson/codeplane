@@ -122,7 +122,7 @@ test.describe("Settings Screen — Rendering", () => {
   test("displays retention settings", async ({ page }) => {
     await page.goto("/settings");
 
-    await expect(page.getByText("Retention")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("Retention", { exact: true })).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText("Artifact Retention (days)")).toBeVisible();
     await expect(page.getByText("Max Artifact Size (MB)")).toBeVisible();
     await expect(page.getByText("Auto-archive (days)")).toBeVisible();
@@ -131,7 +131,7 @@ test.describe("Settings Screen — Rendering", () => {
   test("displays verification settings", async ({ page }) => {
     await page.goto("/settings");
 
-    await expect(page.getByText("Verification")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("Verification", { exact: true })).toBeVisible({ timeout: 5_000 });
     // Verify checkbox should be checked
     const verifyCheckbox = page.locator("input[type='checkbox']").first();
     await expect(verifyCheckbox).toBeChecked();
@@ -238,12 +238,16 @@ test.describe("Settings Screen — Repository Management", () => {
     await page.goto("/settings");
     await expect(page.getByText("/home/user/project-a")).toBeVisible({ timeout: 5_000 });
 
-    // Hover over the first repo to reveal the delete button, then click it
-    const repoRow = page.locator("div", { hasText: "/home/user/project-a" })
-      .filter({ has: page.locator("button") })
-      .first();
-    await repoRow.hover();
-    await repoRow.locator("button").click();
+    // Hover over the first repo row to reveal the delete button, then click it
+    const repoText = page.getByText("/home/user/project-a");
+    await repoText.hover();
+    // The delete button is a sibling within the same group row
+    await repoText.locator("..").locator("button").click();
+
+    // Confirm the removal in the dialog
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("button", { hasText: "Remove" }).click();
 
     await page.waitForTimeout(500);
     expect(unregisterCalled).toBe(true);
