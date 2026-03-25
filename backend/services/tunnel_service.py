@@ -57,7 +57,12 @@ class TunnelHandle:
         if watchdog_proc is not None:
             procs_to_kill.add(watchdog_proc)
         for p in procs_to_kill:
-            p.terminate()
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    p.kill()
 
 
 class TunnelWatchdog:
@@ -188,6 +193,8 @@ class TunnelWatchdog:
                     attempt=attempt,
                     reason=last_error,
                 )
+                # Ensure the dead process is reaped so it doesn't linger
+                self._terminate_process(proc)
                 continue
 
             _start_output_drain(proc)

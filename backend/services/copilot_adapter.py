@@ -51,6 +51,7 @@ class CopilotAdapter(AgentAdapterInterface):
     ) -> None:
         self._queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._sessions: dict[str, CopilotSession] = {}
+        self._clients: dict[str, Any] = {}  # session_id → CopilotClient (owns CLI server process)
         self._session_to_job: dict[str, str] = {}  # session_id → job_id for telemetry
         self._tool_start_times: dict[str, float] = {}  # tool_call_id → start monotonic
         # Buffers tool.execution_start data so we can emit a combined entry on complete
@@ -102,13 +103,34 @@ class CopilotAdapter(AgentAdapterInterface):
             log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
 
     def _cleanup_session(self, session_id: str) -> None:
-        """Remove session and queue references for a completed/aborted session."""
+        """Remove session and queue references for a completed/aborted session.
+
+        Also stops the CopilotClient that owns the backing CLI server process
+        to prevent leaked child processes from accumulating over time.
+        """
         job_id = self._session_to_job.pop(session_id, None)
         self._sessions.pop(session_id, None)
         self._queues.pop(session_id, None)
+        client = self._clients.pop(session_id, None)
+        if client is not None:
+            asyncio.ensure_future(self._stop_client(client))
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+
+    @staticmethod
+    async def _stop_client(client: Any) -> None:  # noqa: ANN401
+        """Stop a CopilotClient, terminating its CLI server process."""
+        try:
+            await asyncio.wait_for(client.stop(), timeout=10)
+        except TimeoutError:
+            log.warning("copilot_client_stop_timeout_forcing")
+            with contextlib.suppress(Exception):
+                await client.force_stop()
+        except Exception:
+            log.warning("copilot_client_stop_failed", exc_info=True)
+            with contextlib.suppress(Exception):
+                await client.force_stop()
 
     async def _handle_permission_request(
         self,
@@ -805,6 +827,7 @@ class CopilotAdapter(AgentAdapterInterface):
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
         self._sessions[session_id] = session
+        self._clients[session_id] = client
 
         # Wire telemetry mapping before registering the callback so
         # no early SDK events are lost.
@@ -928,6 +951,7 @@ class CopilotAdapter(AgentAdapterInterface):
         tmp_session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[tmp_session_id] = queue
+        self._clients[tmp_session_id] = client
 
         async def _noop_permission(request: object, invocation: dict[str, str]) -> PermissionRequestResult:
             return _Result(kind="approved")

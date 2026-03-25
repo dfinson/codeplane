@@ -355,8 +355,14 @@ def _check_agent_auth(sdk_id: str) -> AgentAuthStatus:
         if shutil.which("claude") is None:
             return AgentAuthStatus(sdk_id, None, "claude CLI not available")
         try:
+            # --text: human-readable output (JSON is the default since CLI ~2.x).
+            # Sample authenticated output:
+            #   Login method: Claude Pro Account
+            #   Organization: user@example.com's Organization
+            #   Email: user@example.com
+            # Sample unauthenticated: exit code 1, "Not logged in" on stderr.
             result = subprocess.run(
-                ["claude", "auth", "status"],
+                ["claude", "auth", "status", "--text"],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -367,10 +373,18 @@ def _check_agent_auth(sdk_id: str) -> AgentAuthStatus:
         output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         lowered = output.lower()
-        if result.returncode == 0 or "logged in" in lowered or "authenticated" in lowered:
-            detail = lines[0] if lines else "authenticated"
+
+        if result.returncode == 0:
+            # Extract email from "Email: user@example.com" line.
+            email = ""
+            for line in lines:
+                if line.lower().startswith("email:"):
+                    email = line.split(":", 1)[1].strip()
+                    break
+            detail = f"Logged in as {email}" if email else "authenticated"
             return AgentAuthStatus(sdk_id, True, detail)
-        if any(token in lowered for token in ("not logged in", "login required", "unauth", "authenticate")):
+
+        if "not logged in" in lowered or "login required" in lowered:
             detail = lines[0] if lines else "not authenticated"
             return AgentAuthStatus(sdk_id, False, detail, "Run: claude auth login")
         return AgentAuthStatus(sdk_id, None, lines[0] if lines else "Unable to determine auth status")

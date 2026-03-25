@@ -88,14 +88,24 @@ class ClaudeAdapter(AgentAdapterInterface):
 
     def _cleanup_session(self, session_id: str) -> None:
         job_id = self._session_to_job.pop(session_id, None)
-        self._clients.pop(session_id, None)
+        client = self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
         task = self._consumer_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
+        if client is not None:
+            asyncio.ensure_future(self._disconnect_client(client))
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+
+    @staticmethod
+    async def _disconnect_client(client: ClaudeSDKClient) -> None:
+        """Disconnect a ClaudeSDKClient, terminating its backing subprocess."""
+        try:
+            await asyncio.wait_for(client.disconnect(), timeout=10)
+        except Exception:
+            log.warning("claude_client_disconnect_failed", exc_info=True)
 
     def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
         """Schedule an async DB write from a synchronous or async context."""

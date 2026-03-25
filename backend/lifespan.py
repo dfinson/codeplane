@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -304,12 +305,16 @@ async def _init_optional_services(
         log.warning("copilot_model_cache_failed", error=str(exc))
     cached_models_by_sdk["copilot"] = copilot_models
 
-    # Claude Code models — the CLI supports exactly these three (/model in a session).
-    cached_models_by_sdk["claude"] = [
-        {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6 (default)"},
-        {"id": "claude-opus-4-6", "name": "Opus 4.6"},
-        {"id": "claude-haiku-4-5", "name": "Haiku 4.5"},
-    ]
+    # Claude Code models — loaded from data/claude_models.json
+    _claude_models_path = Path(__file__).resolve().parent / "data" / "claude_models.json"
+    try:
+        import json as _json
+
+        cached_models_by_sdk["claude"] = _json.loads(_claude_models_path.read_text())
+        log.debug("claude_models_loaded", count=len(cached_models_by_sdk["claude"]))
+    except Exception as exc:
+        log.warning("claude_models_load_failed", error=str(exc))
+        cached_models_by_sdk["claude"] = []
 
     # --- Voice service ---
     voice_service = VoiceService()
