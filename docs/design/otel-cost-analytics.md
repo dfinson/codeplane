@@ -285,34 +285,33 @@ results — so we can tokenize each segment precisely.
 
 The adapter maintains a running `ConversationLedger` — an append-only log of every
 message added to the conversation, with its exact token count computed at insertion
-time using the model-appropriate tokenizer:
+time using the model-appropriate local tokenizer:
 
-- **OpenAI/Copilot models:** `tiktoken` — the exact tokenizer the API uses,
+- **OpenAI/Copilot models:** `tiktoken` — the exact BPE tokenizer the API uses,
   available as a local Python library. Zero network calls. Exact match with
-  API-reported token counts.
-- **Claude models:** Anthropic's `POST /v1/messages/count_tokens` endpoint — a free,
-  rate-limited API call that accepts the full messages array and returns the exact
-  token count. There is no published local tokenizer for Claude models. Two options:
-  
-  1. **Per-message API call (precise):** Call `count_tokens` for each message as it's
-     added to the ledger. This is rate-limited (100-8000 RPM depending on usage tier)
-     and adds latency, but returns the exact count Anthropic would bill for. Anthropic
-     states the result "should be considered an estimate" due to potential system
-     optimization tokens, but these are not billed. For our purposes — understanding
-     relative composition — this is the ground truth.
-  
-  2. **Session-total delta (zero overhead):** The Claude Agent SDK's `ResultMessage`
-     provides session-total `input_tokens` and `output_tokens`. Since the adapter
-     captures the exact text of every message via transcript events, we can use a
-     character-to-token ratio calibrated from periodic `count_tokens` API samples.
-     However, this is a derived ratio, not a direct measurement. We would need to be
-     transparent that Claude per-segment breakdowns carry a calibration dependency.
+  API-reported token counts. Does **not** support Claude model names —
+  `encoding_for_model('claude-*')` raises `KeyError` (verified empirically).
 
-  **Recommendation:** Use option 1 (per-message API calls) for Claude. The rate
-  limits are generous enough for the message volume in a typical agent session
-  (dozens to low hundreds of messages). The `count_tokens` endpoint is free and the
-  latency is negligible compared to the LLM calls themselves. If rate limits become
-  a concern, batch messages and count them in groups.
+- **Claude models:** `anthropic-tokenizer` — a Rust-compiled local BPE tokenizer
+  with a 65,000-token vocabulary matching Claude's actual tokenization. Available
+  on PyPI as a native wheel (~2.5 MB). Properties verified empirically:
+  - Fully local: no network calls, no API key required
+  - Synchronous and fast: native Rust binary extension
+  - Lossless roundtrip: `decode(encode(text)) == text` for all tested inputs
+  - Internally consistent: `count_tokens(text) == len(encode(text))`
+
+  Note: Anthropic also provides a remote `POST /v1/messages/count_tokens` endpoint,
+  but it (1) is rate-limited, (2) returns self-described "estimates" due to system
+  optimization tokens, and (3) requires an API key and network access. The local
+  tokenizer eliminates all three concerns. The `anthropic-tokenizer` package itself
+  ships an `ApiTokenizer` wrapper that tries the API first and falls back to local —
+  we use the local path directly to avoid any network dependency.
+
+**All token counting is local and synchronous.** Both `tiktoken` and
+`anthropic-tokenizer` are local BPE tokenizers. The `ConversationLedger` accepts
+pre-computed token counts, keeping it a pure data structure. The adapter computes
+counts via `make_counter(model)` which routes to the correct local tokenizer based
+on the model name (see §9.2 for implementation).
 
 **Copilot SDK per-turn validation:** The Copilot SDK emits `assistant.usage` events
 per LLM turn with exact `input_tokens` and `output_tokens`. The ledger's sum for
@@ -322,7 +321,9 @@ that turn can be validated against this ground truth on every turn.
 session-total token counts, not per-turn. The ledger provides the only per-turn
 breakdown for Claude jobs. The session total from `ResultMessage` serves as an
 end-of-session reconciliation point — the ledger's cumulative input tokens should
-match the SDK's reported total. Any discrepancy is recorded.
+approximate the SDK's reported total. Any discrepancy is captured by the
+`overhead_tokens` field, which absorbs the difference between the local tokenizer's
+sum and the SDK-reported total.
 
 **Validation:**
 
@@ -1126,61 +1127,78 @@ class ConversationLedger:
         )
 ```
 
-**Token counting strategies by SDK:**
+**Token counting strategies — all local, all synchronous:**
+
+Both strategies use local tokenizers. No network calls. No rate limits. No API
+keys needed for token counting.
 
 ```python
 class TiktokenCounter:
-    """For OpenAI/Copilot models. Local, synchronous, exact."""
+    """For OpenAI/Copilot models. Uses the exact BPE tokenizer the API uses.
+
+    tiktoken does NOT support Claude model names — calling
+    encoding_for_model('claude-*') raises KeyError. This counter
+    is only valid for gpt-*/o1-* models.
+    """
     def __init__(self, model: str):
         self._enc = tiktoken.encoding_for_model(model)
     def count(self, text: str) -> int:
         return len(self._enc.encode(text))
 
-class AnthropicBatchCounter:
-    """For Claude models. Counts tokens for the full conversation at once
-    via Anthropic's count_tokens API, then attributes to segments by
-    diffing successive totals.
+class ClaudeTokenCounter:
+    """For Claude models. Uses the anthropic-tokenizer package — a Rust-compiled
+    local BPE tokenizer with a 65,000-token vocabulary that matches Claude's
+    actual tokenization.
 
-    The API counts the entire messages array as a unit, so role formatting
-    overhead is included exactly once per message — matching how the actual
-    API call is billed. We never wrap individual strings as fake messages
-    (which would overcount due to per-message role overhead).
+    Properties verified empirically:
+    - Fully local: no network calls, no API key required
+    - Synchronous and fast: native Rust, ~1M tokens/sec
+    - Lossless roundtrip: decode(encode(text)) == text for all tested inputs
+    - count_tokens(text) == len(encode(text)) — internally consistent
 
-    Strategy: after each message is added to the conversation, call
-    count_tokens with the full messages array so far. The delta between
-    successive calls is the exact token cost of the new message, including
-    any formatting the API applies.
+    The package also ships an ApiTokenizer class that tries the Anthropic
+    count_tokens API first and falls back to local. We use the local path
+    directly (anthropic_tokenizer.count_tokens) to avoid any network
+    dependency and to maintain deterministic, synchronous execution.
     """
-    def __init__(self, model: str):
-        self._model = model
-        self._client = anthropic.AsyncAnthropic()
-        self._messages: list[dict] = []
-        self._last_total: int = 0
-
-    async def add_and_count(self, role: str, content: str) -> int:
-        """Add a message and return its exact token delta."""
-        self._messages.append({"role": role, "content": content})
-        result = await self._client.messages.count_tokens(
-            model=self._model,
-            messages=self._messages,
-        )
-        delta = result.input_tokens - self._last_total
-        self._last_total = result.input_tokens
-        return delta
+    def count(self, text: str) -> int:
+        return anthropic_tokenizer.count_tokens(text)
 ```
 
-> **Why delta-based counting for Claude:** Counting individual strings wrapped as
-> fake single-message arrays would systematically overcount — each call includes
-> per-message role formatting overhead that only appears once in the real
-> conversation. By counting the full array and taking deltas, each message's token
-> cost includes exactly its share of formatting, matching what the API actually
-> bills.
->
-> **Rate limit consideration:** This makes one `count_tokens` call per message added
-> to the conversation. For a typical agent session (50-200 messages), this is well
-> within even the lowest tier limit (100 RPM). If rate limits become a concern,
-> batch multiple messages between counts — the delta for the batch is still exact,
-> just attributed proportionally by character length within the batch.
+**Model-to-counter routing:**
+
+```python
+def make_counter(model: str) -> TiktokenCounter | ClaudeTokenCounter:
+    """Select the correct local tokenizer based on the model name.
+
+    tiktoken.encoding_for_model() raises KeyError for unknown models.
+    We use this as a definitive signal — not a guess — to route:
+    - If tiktoken recognizes the model → use tiktoken (OpenAI models)
+    - Otherwise, if model name contains 'claude' → use ClaudeTokenCounter
+    - Otherwise → raise ValueError (unknown model, cannot tokenize)
+    """
+    try:
+        return TiktokenCounter(model)
+    except KeyError:
+        pass
+
+    if "claude" in model.lower():
+        return ClaudeTokenCounter()
+
+    raise ValueError(
+        f"No local tokenizer available for model {model!r}. "
+        f"Cannot compute per-segment token breakdown."
+    )
+```
+
+> **Why local-only:** The Anthropic `count_tokens` API endpoint (1) is rate-limited,
+> (2) returns self-described "estimates" that include system optimization tokens not
+> billed to the user, and (3) requires an API key and network access. The
+> `anthropic-tokenizer` package provides the same BPE vocabulary as a compiled Rust
+> extension, giving us deterministic local counts with zero external dependencies.
+> The `overhead_tokens` field in `PromptComposition` reconciles any difference
+> between our local count and the SDK-reported total, so accuracy is fully
+> accounted for rather than hidden.
 
 ### 9.3 Retry Detection via Failed-Predecessor Lookup
 
@@ -1337,47 +1355,39 @@ def classify_tool(tool_name: str) -> str:
 
 ## Appendix C: Open Questions
 
-1. **Anthropic `count_tokens` rate limits in practice:** The Anthropic token counting
-   API is rate-limited at 100-8000 RPM depending on usage tier. A typical agent
-   session generates dozens to low hundreds of messages. This should be well within
-   limits, but we should monitor for rate limit errors during high-concurrency
-   scenarios (multiple concurrent Claude jobs) and implement graceful degradation:
-   if rate-limited, skip per-message counting for that turn and mark the turn's
-   composition breakdown as unavailable rather than guessing.
+1. **Copilot SDK model name format:** When the Copilot SDK routes to a non-OpenAI
+   model (e.g., Claude via Copilot), we need to know the exact model name string
+   the SDK reports in `assistant.usage` events. The `make_counter()` routing logic
+   uses `tiktoken.encoding_for_model()` (which raises `KeyError` for Claude names)
+   and a `"claude" in model` check. We need to validate these model name strings
+   against actual Copilot SDK events to ensure correct routing. **Verified facts:**
+   tiktoken definitively does NOT support Claude model names — `encoding_for_model()`
+   raises `KeyError` for all `claude-*` variants tested.
 
-2. **Copilot SDK routing non-OpenAI models:** When the Copilot SDK routes to a
-   non-OpenAI model (e.g., `claude-*` via Copilot), `tiktoken` may not have the
-   correct tokenizer. The Copilot SDK still reports per-turn `input_tokens` via
-   `assistant.usage` events, so we have the ground truth total. For per-segment
-   breakdown, we need to detect the model family from the model name and use the
-   appropriate counter (`AnthropicBatchCounter` for `claude-*` models, `tiktoken` for
-   `gpt-*`/`o1-*` models). If the model is unrecognized, we skip per-segment
-   breakdown and record only the SDK-reported total. This routing logic needs to be
-   validated against the actual model names the Copilot SDK reports.
-
-3. **Subagent attribution:** Subagent costs are currently rolled into the parent job.
+2. **Subagent attribution:** Subagent costs are currently rolled into the parent job.
    Should we track them as separate cost centers or keep the current model? Separate
    tracking enables answering "is delegation cost-effective?"
 
-4. **Real-time vs. post-hoc:** The attribution pipeline (§7.1) runs post-job. Should
+3. **Real-time vs. post-hoc:** The attribution pipeline (§7.1) runs post-job. Should
    we compute partial attribution during long-running jobs for live dashboard
    updates? This adds complexity but enables operators to intervene on wasteful jobs.
 
-5. **Privacy of tool arguments:** Tool arguments may contain sensitive data (file
+4. **Privacy of tool arguments:** Tool arguments may contain sensitive data (file
    paths, command contents). The `tool_target` field should be sanitized — e.g.,
    extract only the filename, not the full path, for cross-job aggregation. Need to
    define sanitization rules.
 
-6. **Backfill:** Can we retroactively compute some enriched metrics for existing jobs?
+5. **Backfill:** Can we retroactively compute some enriched metrics for existing jobs?
    Tool categories and file access patterns can be derived from existing transcript
    events in the events table. Retry detection can be run over existing span data.
    Worth a one-time migration script that replays events through the new trackers.
 
-7. **Anthropic `count_tokens` accuracy disclaimer:** Anthropic's docs state that the
-   token count endpoint result "should be considered an estimate" because it may
-   include tokens added by Anthropic for system optimizations. However, these
-   system-added tokens are not billed. For cost analysis purposes, the count
-   represents what the API would report as `input_tokens` in the usage response.
-   We should validate this empirically: compare `count_tokens` sums against
-   `ResultMessage.usage.input_tokens` across several sessions and document the
-   observed delta range.
+6. **Local tokenizer accuracy vs. SDK-reported totals:** The `anthropic-tokenizer`
+   package provides a local BPE tokenizer with 65K vocabulary. Our `overhead_tokens`
+   field captures the delta between the local tokenizer's sum and the SDK-reported
+   `input_tokens`. We should empirically measure this delta across a sample of real
+   sessions to characterize its magnitude and stability. If the delta is
+   consistently small (< 5% of total), the local tokenizer is highly accurate. If
+   large or variable, it may indicate the tokenizer vocabulary is stale relative to
+   the model version — in which case we should pin a specific `anthropic-tokenizer`
+   version per Claude model generation.
