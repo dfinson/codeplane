@@ -332,10 +332,10 @@ sum and the SDK-reported total.
   must equal the SDK-reported `input_tokens` for every turn (validated on each
   `assistant.usage` event). Any discrepancy is logged as a structured warning.
 - **Claude:** The ledger's cumulative input token sum is reconciled against
-  `ResultMessage.usage.input_tokens` at session end. Per-turn breakdowns are
-  based on `count_tokens` API calls and are as accurate as that endpoint. The
-  `prompt_overhead_tokens` field absorbs any formatting delta between the sum of
-  individual message counts and the API-reported total.
+  `ResultMessage.usage.input_tokens` at session end. Per-turn breakdowns use
+  the local `anthropic-tokenizer` BPE tokenizer. The `prompt_overhead_tokens`
+  field absorbs any delta between the local tokenizer's sum and the
+  SDK-reported total.
 
 ### 5.3 Enriched Tool Call Tracking
 
@@ -1073,8 +1073,8 @@ log against transcript events.
 The adapter maintains a `ConversationLedger` that records the token count of every
 message added to the conversation. Token counts are computed by the caller and
 passed in — the ledger is a pure data structure, not responsible for tokenization.
-This keeps the ledger synchronous and testable regardless of whether the tokenizer
-is local (tiktoken) or remote (Anthropic API).
+This keeps the ledger synchronous and testable, decoupled from the tokenizer
+implementation chosen at the adapter level.
 
 ```python
 class ConversationLedger:
