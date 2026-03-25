@@ -71,6 +71,7 @@ def _print_qr_code(url: str) -> None:
     except ImportError:
         pass
 
+
 _EVENT_PERSIST_MAX_ATTEMPTS = 3
 _EVENT_PERSIST_RETRY_DELAY_S = 0.05
 _DEAD_LETTER_RETRY_INTERVAL_S = 5.0
@@ -444,7 +445,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # before the live display takes over the terminal.
     banner_args = getattr(app.state, "banner_args", None)
     if banner_args:
-        _print_qr_code(banner_args.get("tunnel_url") or f"http://{banner_args.get('host', '127.0.0.1')}:{banner_args.get('port', 8080)}")
+        tunnel_url = banner_args.get("tunnel_url")
+        local_url = f"http://{banner_args.get('host', '127.0.0.1')}:{banner_args.get('port', 8080)}"
+        _print_qr_code(tunnel_url or local_url)
     if dashboard is not None:
         if banner_args:
             host = banner_args.get("host", "127.0.0.1")
