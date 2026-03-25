@@ -96,9 +96,11 @@ class TestEnvPersistenceInstructions:
 
 
 class TestPreflightCheck:
+    @patch("backend.services.setup_service._build_agent_check_result")
     @patch("backend.services.setup_service._check_command")
-    def test_all_found(self, mock_check) -> None:
+    def test_all_found(self, mock_check, mock_agent) -> None:
         mock_check.return_value = (True, "v1.0")
+        mock_agent.return_value = CheckResult("FakeAgent", CheckStatus.passed, "ok", category="agent")
         results = verify_requirements()
         assert not any(r.status == CheckStatus.fail for r in results)
 
@@ -114,14 +116,16 @@ class TestPreflightCheck:
         results = verify_requirements()
         assert any(r.status == CheckStatus.fail for r in results)
 
+    @patch("backend.services.setup_service._build_agent_check_result")
     @patch("backend.services.setup_service._check_command")
-    def test_optional_missing_still_ok(self, mock_check) -> None:
+    def test_optional_missing_still_ok(self, mock_check, mock_agent) -> None:
         def side_effect(cmd: str):
             if cmd == "devtunnel":
                 return (False, None)
             return (True, "v1.0")
 
         mock_check.side_effect = side_effect
+        mock_agent.return_value = CheckResult("FakeAgent", CheckStatus.passed, "ok", category="agent")
         results = verify_requirements()
         assert not any(r.status == CheckStatus.fail for r in results)
 
