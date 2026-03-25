@@ -257,9 +257,7 @@ class TestMergeInProgress:
         mock_git.add_intent_to_add.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_normal_path_uses_working_tree_diff(
-        self, diff_service: DiffService, mock_git: AsyncMock
-    ) -> None:
+    async def test_normal_path_uses_working_tree_diff(self, diff_service: DiffService, mock_git: AsyncMock) -> None:
         mock_git.is_merge_in_progress.return_value = False
         mock_git.merge_base.return_value = "abc123"
         mock_git.diff.return_value = SIMPLE_DIFF

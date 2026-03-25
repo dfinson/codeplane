@@ -71,6 +71,7 @@ def _print_qr_code(url: str) -> None:
     except ImportError:
         pass
 
+
 _EVENT_PERSIST_MAX_ATTEMPTS = 3
 _EVENT_PERSIST_RETRY_DELAY_S = 0.05
 _DEAD_LETTER_RETRY_INTERVAL_S = 5.0

@@ -81,6 +81,7 @@ async def test_resolve_job_publishes_after_commit() -> None:
     assert published_events[0] is event  # job_resolved
     # Second event is a DomainEvent with kind=job_completed
     from backend.models.events import DomainEventKind
+
     assert published_events[1].kind == DomainEventKind.job_completed
 
 

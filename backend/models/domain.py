@@ -72,8 +72,8 @@ _VALID_TRANSITIONS: dict[str | None, set[str]] = {
     },
     # Review: agent exited cleanly, awaiting operator decision
     JobState.review: {
-        JobState.running,      # operator reruns / sends follow-up
-        JobState.completed,    # operator resolves (merge, PR, discard)
+        JobState.running,  # operator reruns / sends follow-up
+        JobState.completed,  # operator resolves (merge, PR, discard)
         JobState.canceled,
     },
     # Terminal states can transition back to running for job resumption

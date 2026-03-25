@@ -34,6 +34,7 @@ except Exception:
 def _normalize_model_key(model: str) -> str:
     """Lowercase, collapse non-alnum to hyphens — matches LiteLLM keys."""
     import re
+
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", model.lower())).strip("-")
 
 

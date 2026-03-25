@@ -637,8 +637,9 @@ class RuntimeService:
             await self._finalize_diff_safe(job_id, worktree_path, base_ref)
 
             # Run optional verify / self-review follow-up turns
-            await self._run_verify_review(job_id, config, session_id, worktree_path, base_ref,
-                                          session_number=session_number)
+            await self._run_verify_review(
+                job_id, config, session_id, worktree_path, base_ref, session_number=session_number
+            )
 
             final_resolution = Resolution.unresolved
             final_pr_url: str | None = None
@@ -885,9 +886,7 @@ class RuntimeService:
                     from backend.persistence.event_repo import EventRepository
 
                     event_repo = EventRepository(session)
-                    log_events = await event_repo.list_by_job(
-                        job_id, [DomainEventKind.log_line_emitted], limit=10000
-                    )
+                    log_events = await event_repo.list_by_job(job_id, [DomainEventKind.log_line_emitted], limit=10000)
                     if log_events:
                         await artifact_svc.store_log_artifact(
                             job_id,
@@ -1352,7 +1351,12 @@ class RuntimeService:
             for turn in range(1, max_turns + 1):
                 log.info("verify_turn_start", job_id=job_id, turn=turn, max_turns=max_turns)
                 new_sid, error = await self._run_followup_turn(
-                    job_id, verify_prompt, base_config, current_session_id, worktree_path, base_ref,
+                    job_id,
+                    verify_prompt,
+                    base_config,
+                    current_session_id,
+                    worktree_path,
+                    base_ref,
                     session_number=session_number,
                 )
                 if new_sid:
@@ -1365,7 +1369,12 @@ class RuntimeService:
         if do_self_review:
             log.info("self_review_start", job_id=job_id)
             new_sid, error = await self._run_followup_turn(
-                job_id, self_review_prompt, base_config, current_session_id, worktree_path, base_ref,
+                job_id,
+                self_review_prompt,
+                base_config,
+                current_session_id,
+                worktree_path,
+                base_ref,
                 session_number=session_number,
             )
             if new_sid:
