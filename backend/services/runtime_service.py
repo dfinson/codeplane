@@ -22,6 +22,7 @@ import structlog
 
 from backend.config import build_session_config
 from backend.models.domain import (
+    TERMINAL_STATES,
     Job,
     JobState,
     Resolution,
@@ -62,6 +63,18 @@ class _AgentSession:
     async def send_message(self, message: str) -> None:
         if self._adapter and self._session_id:
             await self._adapter.send_message(self._session_id, message)
+
+    async def interrupt(self) -> None:
+        if self._adapter and self._session_id:
+            await self._adapter.interrupt_session(self._session_id)
+
+    def pause_tools(self) -> None:
+        if self._adapter and self._session_id:
+            self._adapter.pause_tools(self._session_id)
+
+    def resume_tools(self) -> None:
+        if self._adapter and self._session_id:
+            self._adapter.resume_tools(self._session_id)
 
     async def abort(self) -> None:
         if self._adapter and self._session_id:
@@ -205,6 +218,7 @@ class RuntimeService:
         self._agent_sessions: dict[str, _AgentSession] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, float] = {}
+        self._waiting_for_approval: set[str] = set()
         self._session_ids: dict[str, str] = {}
         self._permission_overrides: dict[str, str] = {}  # job_id → permission_mode
         self._dequeue_lock = asyncio.Lock()
@@ -467,7 +481,7 @@ class RuntimeService:
                 session_config = dataclasses.replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
 
             task = asyncio.create_task(
-                self._run_job(job.id, agent_session, session_config),
+                self._run_job(job.id, agent_session, session_config, session_number=job.session_count),
                 name=f"job-{job.id}",
             )
         except Exception:
@@ -491,6 +505,7 @@ class RuntimeService:
         job_id: str,
         agent_session: _AgentSession,
         config: SessionConfig,
+        session_number: int = 1,
     ) -> None:
         """Execute the agent session, translate events, and handle completion."""
         import time
@@ -574,6 +589,7 @@ class RuntimeService:
                 config,
                 worktree_path,
                 base_ref,
+                session_number=session_number,
             )
             session_id = result.session_id
             error_reason = result.error_reason
@@ -585,31 +601,32 @@ class RuntimeService:
                     config,
                     worktree_path,
                     base_ref,
+                    session_number=session_number,
                 )
                 session_id = result.session_id
                 error_reason = result.error_reason
 
-            # Model downgrade (from either attempt): finish diff, succeed with note, skip verify
+            # Model downgrade (from either attempt): finish diff, move to review with note, skip verify
             if result.downgrade is not None:
                 requested, actual = result.downgrade
                 await self._finalize_diff_safe(job_id, worktree_path, base_ref)
                 reason = f"Model downgraded: requested {requested} but received {actual}"
                 async with self._session_factory() as session:
                     svc = self._make_job_service(session)
-                    await svc.transition_state(job_id, JobState.succeeded, failure_reason=reason)
+                    await svc.transition_state(job_id, JobState.review, failure_reason=reason)
                     from backend.persistence.job_repo import JobRepository
 
                     job_repo = JobRepository(session)
                     await job_repo.update_resolution(job_id, Resolution.unresolved)
                     await session.commit()
 
-                self._set_progress_terminal_state(job_id, JobState.succeeded)
+                self._set_progress_terminal_state(job_id, JobState.review)
                 await self._event_bus.publish(
                     DomainEvent(
                         event_id=DomainEvent.make_event_id(),
                         job_id=job_id,
                         timestamp=datetime.now(UTC),
-                        kind=DomainEventKind.job_succeeded,
+                        kind=DomainEventKind.job_review,
                         payload={
                             "resolution": Resolution.unresolved,
                             "model_downgraded": True,
@@ -618,7 +635,7 @@ class RuntimeService:
                         },
                     )
                 )
-                log.info("job_moved_to_signoff_model_downgrade", job_id=job_id)
+                log.info("job_moved_to_review_model_downgrade", job_id=job_id)
                 return
 
             if error_reason:
@@ -632,14 +649,16 @@ class RuntimeService:
             await self._finalize_diff_safe(job_id, worktree_path, base_ref)
 
             # Run optional verify / self-review follow-up turns
-            await self._run_verify_review(job_id, config, session_id, worktree_path, base_ref)
+            await self._run_verify_review(
+                job_id, config, session_id, worktree_path, base_ref, session_number=session_number
+            )
 
             final_resolution = Resolution.unresolved
             final_pr_url: str | None = None
             final_merge_status: str | None = None
             resolution_event = None
 
-            # Strategy completed normally → succeeded
+            # Strategy completed normally → review
             #
             # Commit the state transition BEFORE running merge resolution.
             # Merge operations open their own sessions to persist merge_status
@@ -647,7 +666,7 @@ class RuntimeService:
             # SQLite will deadlock on the jobs table write lock.
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
-                await svc.transition_state(job_id, JobState.succeeded)
+                await svc.transition_state(job_id, JobState.review)
                 if not post_conflict_merge_requested or self._merge_service is None:
                     from backend.persistence.job_repo import JobRepository
 
@@ -690,7 +709,7 @@ class RuntimeService:
                 final_pr_url = updated_job.pr_url
 
             if final_resolution == Resolution.unresolved:
-                log.info("job_awaiting_sign_off", job_id=job_id)
+                log.info("job_awaiting_review", job_id=job_id)
             else:
                 log.info(
                     "job_completed_with_resolution",
@@ -699,13 +718,22 @@ class RuntimeService:
                     merge_status=final_merge_status,
                 )
 
-            self._set_progress_terminal_state(job_id, JobState.succeeded)
+            # Determine final state — execute_resolve may have already
+            # transitioned review → completed for successful merges.
+            final_state = JobState.review
+            if final_resolution in (Resolution.merged, Resolution.pr_created, Resolution.discarded):
+                final_state = JobState.completed
+            final_event_kind = (
+                DomainEventKind.job_completed if final_state == JobState.completed else DomainEventKind.job_review
+            )
+
+            self._set_progress_terminal_state(job_id, final_state)
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=DomainEvent.make_event_id(),
                     job_id=job_id,
                     timestamp=datetime.now(UTC),
-                    kind=DomainEventKind.job_succeeded,
+                    kind=final_event_kind,
                     payload={
                         "resolution": final_resolution,
                         "merge_status": final_merge_status,
@@ -714,7 +742,7 @@ class RuntimeService:
                 )
             )
             log.info(
-                "job_succeeded",
+                final_event_kind.value,
                 job_id=job_id,
                 resolution=final_resolution,
                 merge_status=final_merge_status,
@@ -744,7 +772,7 @@ class RuntimeService:
                     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
                     # Determine status from job state
-                    status = "succeeded"
+                    status = "review"
                     try:
                         svc = self._make_job_service(session)
                         job_final = await svc.get_job(job_id)
@@ -754,6 +782,8 @@ class RuntimeService:
                                 status = "failed"
                             elif "cancel" in st:
                                 status = "cancelled"
+                            elif st == "completed":
+                                status = "completed"
                     except Exception:
                         pass
 
@@ -862,6 +892,22 @@ class RuntimeService:
                 except Exception:
                     log.debug("approval_artifact_failed", job_id=job_id, exc_info=True)
 
+                # Agent log artifact — snapshot of all log_line_emitted events as
+                # a plain-text file, grouped by session for jobs with handoffs.
+                try:
+                    from backend.persistence.event_repo import EventRepository
+
+                    event_repo = EventRepository(session)
+                    log_events = await event_repo.list_by_job(job_id, [DomainEventKind.log_line_emitted], limit=10000)
+                    if log_events:
+                        await artifact_svc.store_log_artifact(
+                            job_id,
+                            [e.payload for e in log_events],
+                            slug=slug,
+                        )
+                except Exception:
+                    log.debug("log_artifact_failed", job_id=job_id, exc_info=True)
+
                 await session.commit()
         except Exception:
             log.warning("post_completion_artifacts_failed", job_id=job_id, exc_info=True)
@@ -900,6 +946,7 @@ class RuntimeService:
         self._tasks.pop(job_id, None)
         self._agent_sessions.pop(job_id, None)
         self._last_activity.pop(job_id, None)
+        self._waiting_for_approval.discard(job_id)
         self._session_ids.pop(job_id, None)
         self._echo_suppress.pop(job_id, None)
         self._pending_starts.pop(job_id, None)
@@ -933,6 +980,8 @@ class RuntimeService:
             await svc.transition_state(job_id, JobState.waiting_for_approval)
             await sess.commit()
 
+        self._waiting_for_approval.add(job_id)
+
         await self._event_bus.publish(domain_event)
 
         approval_id = domain_event.payload.get("approval_id", "")
@@ -956,6 +1005,7 @@ class RuntimeService:
             svc = self._make_job_service(sess)
             await svc.transition_state(job_id, JobState.running)
             await sess.commit()
+        self._waiting_for_approval.discard(job_id)
         await self._publish_state_event(job_id, JobState.waiting_for_approval, JobState.running)
         self._last_activity[job_id] = time.monotonic()
 
@@ -967,6 +1017,7 @@ class RuntimeService:
         config: SessionConfig,
         worktree_path: str | None,
         base_ref: str | None,
+        session_number: int = 1,
     ) -> _SessionAttemptResult:
         """Try a fresh session after a failed resume."""
         import dataclasses
@@ -996,6 +1047,7 @@ class RuntimeService:
             fallback_config,
             worktree_path,
             base_ref,
+            session_number=session_number,
         )
         return fallback_result
 
@@ -1016,7 +1068,7 @@ class RuntimeService:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 current = await svc.get_job(job_id)
-                if current and current.state != JobState.canceled:
+                if current and current.state not in TERMINAL_STATES:
                     await svc.transition_state(job_id, JobState.canceled)
                     await session.commit()
                     self._set_progress_terminal_state(job_id, JobState.canceled)
@@ -1116,6 +1168,7 @@ class RuntimeService:
         config: SessionConfig,
         worktree_path: str | None,
         base_ref: str | None,
+        session_number: int = 1,
     ) -> _SessionAttemptResult:
         session_id: str | None = None
         error_reason: str | None = None
@@ -1177,6 +1230,11 @@ class RuntimeService:
                 tool_intent = str(domain_event.payload.get("tool_intent") or "")
                 self._progress_tracking.feed_transcript(job_id, role, content, tool_intent)
 
+            # Tag log lines with the current session number so callers can filter
+            # by session when a job has been resumed one or more times.
+            if domain_event.kind == DomainEventKind.log_line_emitted:
+                domain_event.payload.setdefault("session_number", session_number)
+
             await self._event_bus.publish(domain_event)
 
         return _SessionAttemptResult(
@@ -1194,6 +1252,7 @@ class RuntimeService:
         resume_session_id: str | None,
         worktree_path: str | None,
         base_ref: str | None,
+        session_number: int = 1,
     ) -> tuple[str | None, str | None]:
         """Run a single follow-up agent turn (verify or self-review).
 
@@ -1243,6 +1302,9 @@ class RuntimeService:
                     self._session_ids[job_id] = new_session_id
                     await self._persist_sdk_session_id(job_id, new_session_id)
 
+                if domain_event.kind == DomainEventKind.log_line_emitted:
+                    domain_event.payload.setdefault("session_number", session_number)
+
                 await self._event_bus.publish(domain_event)
         except Exception:
             log.warning("followup_turn_failed", job_id=job_id, exc_info=True)
@@ -1257,6 +1319,7 @@ class RuntimeService:
         session_id: str | None,
         worktree_path: str | None,
         base_ref: str | None,
+        session_number: int = 1,
     ) -> None:
         """Run optional verify and self-review turns after the main agent session."""
         job: Job | None = None
@@ -1300,7 +1363,13 @@ class RuntimeService:
             for turn in range(1, max_turns + 1):
                 log.info("verify_turn_start", job_id=job_id, turn=turn, max_turns=max_turns)
                 new_sid, error = await self._run_followup_turn(
-                    job_id, verify_prompt, base_config, current_session_id, worktree_path, base_ref
+                    job_id,
+                    verify_prompt,
+                    base_config,
+                    current_session_id,
+                    worktree_path,
+                    base_ref,
+                    session_number=session_number,
                 )
                 if new_sid:
                     current_session_id = new_sid
@@ -1312,7 +1381,13 @@ class RuntimeService:
         if do_self_review:
             log.info("self_review_start", job_id=job_id)
             new_sid, error = await self._run_followup_turn(
-                job_id, self_review_prompt, base_config, current_session_id, worktree_path, base_ref
+                job_id,
+                self_review_prompt,
+                base_config,
+                current_session_id,
+                worktree_path,
+                base_ref,
+                session_number=session_number,
             )
             if new_sid:
                 current_session_id = new_sid
@@ -1338,6 +1413,8 @@ class RuntimeService:
                 since_last = time.monotonic() - last
 
                 if since_last >= _HEARTBEAT_TIMEOUT_S:
+                    if job_id in self._waiting_for_approval:
+                        continue
                     log.warning("job_heartbeat_timeout", job_id=job_id, idle_s=since_last)
                     await self._fail_job(job_id, "heartbeat_timeout")
                     task = self._tasks.get(job_id)
@@ -1345,7 +1422,7 @@ class RuntimeService:
                         task.cancel()
                     return
 
-                if since_last >= _HEARTBEAT_WARNING_S:
+                if since_last >= _HEARTBEAT_WARNING_S and job_id not in self._waiting_for_approval:
                     log.warning("job_heartbeat_warning", job_id=job_id, idle_s=since_last)
 
                 session_id = self._session_ids.get(job_id, "")
@@ -1392,6 +1469,8 @@ class RuntimeService:
         agent_session = self._agent_sessions.get(job_id)
         if agent_session is None:
             return await self._resume_orphaned(job_id, message)
+        # Lift any tool block from a previous pause before sending.
+        agent_session.resume_tools()
         now = datetime.now(UTC)
         await agent_session.send_message(message)
         # Publish immediately so the operator message appears in the transcript
@@ -1445,7 +1524,7 @@ class RuntimeService:
             log.warning("send_message_job_not_found", job_id=job_id)
             return False
 
-        if job.state not in TERMINAL_STATES:
+        if job.state not in TERMINAL_STATES and job.state != JobState.review:
             # Orphaned non-terminal job — recover it in place.
             log.warning(
                 "send_message_orphaned_non_terminal",
@@ -1468,10 +1547,12 @@ class RuntimeService:
         return True
 
     async def pause_job(self, job_id: str) -> bool:
-        """Send a silent pause instruction to the agent. Returns True if sent.
+        """Forcefully pause a running agent. Returns True if sent.
 
-        The pause message is never shown in the transcript — the agent receives
-        the instruction to stop and wait for further operator input.
+        Immediately blocks all tool execution for the session so the agent
+        cannot take further actions, interrupts the current turn (on SDKs
+        that support it), and sends a follow-up message instructing the
+        agent to wait.  The pause message is never shown in the transcript.
         """
         _pause_msg = (
             "Please stop what you are doing right now and wait. "
@@ -1481,6 +1562,13 @@ class RuntimeService:
         if agent_session is None:
             log.warning("pause_job_no_session", job_id=job_id)
             return False
+        # Block all tool calls immediately so the agent cannot act.
+        agent_session.pause_tools()
+        # Interrupt the current turn so the agent stops immediately.
+        try:
+            await agent_session.interrupt()
+        except Exception:
+            log.warning("pause_interrupt_failed", job_id=job_id, exc_info=True)
         # Pre-register the echo suppression before sending so the SDK echo
         # (if any) is discarded and never appears in the transcript.
         self._echo_suppress.setdefault(job_id, set()).add(_pause_msg)
@@ -1572,19 +1660,17 @@ class RuntimeService:
         except Exception:
             log.warning("clear_sdk_session_id_failed", job_id=job_id, exc_info=True)
 
-    async def _build_resume_handoff_prompt_for_job(
+    async def _load_handoff_context_for_job(
         self,
         session: AsyncSession,
         job: Job,
-        instruction: str,
-        session_number: int,
-    ) -> str:
+    ) -> tuple[str | None, list[str]]:
         from pathlib import Path
 
         from backend.persistence.artifact_repo import ArtifactRepository
         from backend.persistence.event_repo import EventRepository
         from backend.services.artifact_service import ArtifactService
-        from backend.services.summarization_service import _build_resume_prompt, _extract_changed_files
+        from backend.services.summarization_service import _extract_changed_files
 
         artifact_repo = ArtifactRepository(session)
         artifact_svc = ArtifactService(artifact_repo)
@@ -1662,7 +1748,30 @@ class RuntimeService:
             except Exception:
                 log.warning("summary_read_failed", job_id=job.id, exc_info=True)
 
+        return summary_text, changed_files
+
+    async def _build_resume_handoff_prompt_for_job(
+        self,
+        session: AsyncSession,
+        job: Job,
+        instruction: str,
+        session_number: int,
+    ) -> str:
+        from backend.services.summarization_service import _build_resume_prompt
+
+        summary_text, changed_files = await self._load_handoff_context_for_job(session, job)
         return _build_resume_prompt(summary_text, changed_files, instruction, session_number, job.id, job.prompt)
+
+    async def _build_followup_handoff_prompt_for_job(
+        self,
+        session: AsyncSession,
+        job: Job,
+        instruction: str,
+    ) -> str:
+        from backend.services.summarization_service import _build_followup_prompt
+
+        summary_text, changed_files = await self._load_handoff_context_for_job(session, job)
+        return _build_followup_prompt(summary_text, changed_files, instruction, job.id, job.prompt)
 
     async def _build_resume_handoff_prompt(self, job_id: str, instruction: str) -> str:
         """Build the opaque handoff prompt used when native resume is unavailable."""
@@ -1676,8 +1785,50 @@ class RuntimeService:
                 raise JobNotFoundError(f"Job {job_id} does not exist.")
             return await self._build_resume_handoff_prompt_for_job(session, job, instruction, job.session_count)
 
+    async def create_followup_job(self, job_id: str, instruction: str) -> Job:
+        """Create and start a new follow-up job with parent-job handoff context."""
+        from backend.models.domain import PermissionMode
+        from backend.services.job_service import JobNotFoundError
+
+        normalized_instruction = instruction.strip()
+        if not normalized_instruction:
+            raise ValueError("Follow-up instruction must not be empty")
+
+        async with self._session_factory() as session:
+            svc = self._make_job_service(session)
+            original = await svc.get_job(job_id)
+            if original is None:
+                raise JobNotFoundError(f"Job {job_id} does not exist.")
+
+            override_prompt = await self._build_followup_handoff_prompt_for_job(
+                session,
+                original,
+                normalized_instruction,
+            )
+            followup = await svc.create_job(
+                repo=original.repo,
+                prompt=normalized_instruction,
+                base_ref=original.base_ref,
+                permission_mode=original.permission_mode or PermissionMode.auto,
+                model=original.model,
+                sdk=original.sdk,
+                verify=original.verify,
+                self_review=original.self_review,
+                max_turns=original.max_turns,
+                verify_prompt=original.verify_prompt,
+                self_review_prompt=original.self_review_prompt,
+            )
+            await session.commit()
+
+        if followup.state != JobState.failed:
+            await self.start_or_enqueue(followup, override_prompt=override_prompt)
+            async with self._session_factory() as session:
+                followup = await self._make_job_service(session).get_job(followup.id)
+
+        return followup
+
     async def resume_job(self, job_id: str, instruction: str | None = None) -> Job:
-        """Resume a terminal job in-place.
+        """Resume a terminal or review job in-place.
 
         Primary path: reconnect to the existing Copilot SDK session (full conversation history
         intact, no summarization cost). Fallback: use LLM-generated session summary when the
@@ -1687,6 +1838,7 @@ class RuntimeService:
         from backend.persistence.job_repo import JobRepository
         from backend.services.job_service import JobNotFoundError, StateConflictError
 
+        resumable_states = TERMINAL_STATES | {JobState.review}
         normalized_instruction = _normalize_resume_instruction(instruction)
 
         async with self._session_factory() as session:
@@ -1694,8 +1846,8 @@ class RuntimeService:
             job = await job_repo.get(job_id)
             if job is None:
                 raise JobNotFoundError(f"Job {job_id} does not exist.")
-            if job.state not in TERMINAL_STATES:
-                raise StateConflictError(f"Job {job_id} is not in a terminal state (current: {job.state}).")
+            if job.state not in resumable_states:
+                raise StateConflictError(f"Job {job_id} is not in a resumable state (current: {job.state}).")
 
             previous_state = job.state
             previous_session_count = job.session_count

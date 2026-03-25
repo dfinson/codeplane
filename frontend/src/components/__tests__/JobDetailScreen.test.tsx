@@ -77,7 +77,7 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     repo: "/repos/test",
     prompt: "Fix the bug",
     title: "Fix bug",
-    state: "succeeded",
+    state: "review",
     baseRef: "main",
     worktreePath: "/repos/test/.cpl-worktrees/job-1",
     branch: "fix/bug",
@@ -192,7 +192,7 @@ describe("JobDetailScreen", () => {
     ] as any);
     vi.mocked(resolveJob).mockResolvedValueOnce({ resolution: "merged", conflictFiles: null, prUrl: null } as any);
     vi.mocked(fetchJob).mockResolvedValueOnce(
-      makeJob({ resolution: "merged", mergeStatus: "merged", updatedAt: "2025-01-01T03:00:00Z" }) as any,
+      makeJob({ state: "completed", resolution: "merged", mergeStatus: "merged", updatedAt: "2025-01-01T03:00:00Z" }) as any,
     );
 
     render(
@@ -341,6 +341,7 @@ describe("JobDetailScreen", () => {
     useStore.setState({
       jobs: {
         "job-1": makeJob({
+          state: "completed",
           resolution: "merged",
           mergeStatus: "conflict",
           conflictFiles: ["README.md"],
@@ -355,6 +356,7 @@ describe("JobDetailScreen", () => {
 
     vi.mocked(fetchJob).mockResolvedValueOnce(
       makeJob({
+        state: "completed",
         resolution: "merged",
         mergeStatus: "conflict",
         conflictFiles: ["README.md"],

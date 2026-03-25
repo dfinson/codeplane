@@ -63,7 +63,7 @@ export function NavMenuSlideout() {
                 {sessionCount}
               </span>
             )}
-            <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
+            <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
               Ctrl+`
             </kbd>
           </button>
@@ -79,7 +79,7 @@ export function NavMenuSlideout() {
           >
             <BarChart3 size={15} className="shrink-0" />
             <span className="flex-1 text-left font-medium">Analytics</span>
-            <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
+            <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
               Alt+A
             </kbd>
           </button>
@@ -110,7 +110,7 @@ export function NavMenuSlideout() {
           >
             <Settings size={15} className="shrink-0" />
             <span className="flex-1 text-left font-medium">Settings</span>
-            <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
+            <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
               ⌘,
             </kbd>
           </button>

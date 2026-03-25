@@ -310,7 +310,7 @@ class ProgressTrackingService:
         if not terminal_outcome or not last_steps:
             return
 
-        succeeded = terminal_outcome == JobState.succeeded
+        succeeded = terminal_outcome in (JobState.review, JobState.completed)
         final_steps = []
         for s in last_steps:
             status = s.get("status", "pending")

@@ -359,6 +359,24 @@ class TestBuildCanUseTool:
         assert isinstance(result, _FakePermissionResultAllow)
 
     @pytest.mark.asyncio
+    async def test_paused_session_denies_all_tools(self, adapter: ClaudeAdapter) -> None:
+        """When a session is paused, all tool calls are immediately denied."""
+        config = _make_config(permission_mode=PermissionMode.auto)
+        callback = adapter._build_can_use_tool(config, "sess-1")
+
+        adapter.pause_tools("sess-1")
+
+        # Even read tools should be denied while paused
+        for tool in ("Read", "Bash", "Edit", "Glob"):
+            result = await callback(tool, {}, None)
+            assert isinstance(result, _FakePermissionResultDeny), f"{tool} should be denied while paused"
+
+        # After resuming, tools work again
+        adapter.resume_tools("sess-1")
+        result = await callback("Read", {}, None)
+        assert isinstance(result, _FakePermissionResultAllow)
+
+    @pytest.mark.asyncio
     async def test_approval_required_routes_to_operator_approved(self) -> None:
         approval_svc = MagicMock()
         approval_svc.is_trusted = MagicMock(return_value=False)

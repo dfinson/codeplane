@@ -297,8 +297,10 @@ class JobRepository(BaseRepository):
                     [
                         JobState.queued,
                         JobState.running,
+                        # Active review state allowed for resume
+                        JobState.review,
                         # Terminal states allowed for resume
-                        JobState.succeeded,
+                        JobState.completed,
                         JobState.failed,
                         JobState.canceled,
                     ]
@@ -342,7 +344,7 @@ class JobRepository(BaseRepository):
     async def list_auto_archive_candidates(self, cutoff: datetime) -> builtins.list[Job]:
         """Return resolved jobs eligible for auto-archiving."""
         stmt = select(JobRow).where(
-            JobRow.state == JobState.succeeded,
+            JobRow.state == JobState.completed,
             JobRow.resolution.in_([Resolution.merged, Resolution.pr_created, Resolution.discarded]),
             JobRow.archived_at.is_(None),
             JobRow.completed_at < cutoff,

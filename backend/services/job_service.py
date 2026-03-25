@@ -433,18 +433,6 @@ class JobService:
             sdk=original.sdk,
         )
 
-    async def continue_job(self, job_id: str, instruction: str) -> Job:
-        """Create a follow-up job using a new instruction on the same repo/config."""
-        original = await self.get_job(job_id)
-        return await self.create_job(
-            repo=original.repo,
-            prompt=instruction,
-            base_ref=original.base_ref,
-            permission_mode=original.permission_mode,
-            model=original.model,
-            sdk=original.sdk,
-        )
-
     async def count_active_jobs(self) -> int:
         """Count currently active (non-terminal) jobs."""
         jobs = await self._job_repo.list(
@@ -465,8 +453,8 @@ class JobService:
         prevents the requested action.
         """
         job = await self.get_job(job_id)
-        if job.state != JobState.succeeded:
-            raise StateConflictError(f"Job {job_id} is in state {job.state!r}, not 'succeeded'")
+        if job.state != JobState.review:
+            raise StateConflictError(f"Job {job_id} is in state {job.state!r}, not 'review'")
         if job.resolution not in (None, Resolution.unresolved, Resolution.conflict):
             raise StateConflictError(f"Job {job_id} already resolved as {job.resolution!r}")
         return job
@@ -478,6 +466,10 @@ class JobService:
         merge_service: Any,
     ) -> tuple[str, str | None, list[str] | None, str | None]:
         """Execute merge/PR/discard resolution and persist the outcome.
+
+        On successful resolution (merged, pr_created, discarded), the job
+        transitions from ``review`` → ``completed``.  On conflict, it stays
+        in ``review`` with resolution ``conflict``.
 
         Returns (resolution, pr_url, conflict_files, error).
         """
@@ -516,6 +508,11 @@ class JobService:
 
         # Persist resolution
         await self._job_repo.update_resolution(job.id, resolution, pr_url=result.pr_url)
+
+        # Transition review → completed for final resolutions
+        final_resolutions = (Resolution.merged, Resolution.pr_created, Resolution.discarded)
+        if resolution in final_resolutions and job.state == JobState.review:
+            await self.transition_state(job.id, JobState.completed)
 
         return resolution, result.pr_url, result.conflict_files, result.error
 
@@ -576,9 +573,3 @@ class JobService:
             kind=DomainEventKind.job_archived,
             payload={},
         )
-
-    async def unarchive_job(self, job_id: str) -> Job:
-        """Unarchive a job (show on Kanban board again)."""
-        await self.get_job(job_id)
-        await self._job_repo.update_archived_at(job_id, None)
-        return await self.get_job(job_id)

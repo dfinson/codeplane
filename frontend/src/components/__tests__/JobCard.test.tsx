@@ -64,10 +64,10 @@ describe("JobCard", () => {
   it("renders state badge", () => {
     render(
       <MemoryRouter>
-        <JobCard job={makeJob({ state: "succeeded" })} />
+        <JobCard job={makeJob({ state: "review" })} />
       </MemoryRouter>,
     );
-    expect(screen.getByText("Succeeded")).toBeInTheDocument();
+    expect(screen.getByText("In Review")).toBeInTheDocument();
   });
 
   it("shows repo name (last path segment)", () => {
@@ -127,12 +127,12 @@ describe("JobCard", () => {
     expect(screen.getByText("fix/auth-bug")).toBeInTheDocument();
   });
 
-  it("shows persisted preview for succeeded jobs", () => {
+  it("shows persisted preview for review jobs", () => {
     render(
       <MemoryRouter>
         <JobCard
           job={makeJob({
-            state: "succeeded",
+            state: "review",
             progressHeadline: "Audit and improve keyboard shortcuts",
             progressSummary: "Reviewed the shortcut map and captured follow-up changes for the final pass.",
           })}

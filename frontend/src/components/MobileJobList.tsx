@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
-import { PlayCircle, CheckCircle2, Search } from "lucide-react";
-import { useStore, selectJobs, selectApprovals } from "../store";
+import { useNavigate } from "react-router-dom";
+import { PlayCircle, CheckCircle2, Search, Plus } from "lucide-react";
+import { useStore, selectJobs } from "../store";
 import type { JobSummary } from "../store";
 import { JobCard } from "./JobCard";
 import { cn } from "../lib/utils";
 import { KANBAN_COLUMNS } from "../constants/kanban";
 import type { KanbanColumn } from "../constants/kanban";
 import { Input } from "./ui/input";
+import { Button } from "./ui/button";
 
 const TABS = [
   KANBAN_COLUMNS.IN_PROGRESS,
@@ -24,7 +26,7 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: KanbanColumn): JobS
           return (
             !j.archivedAt &&
             (j.state === "waiting_for_approval" ||
-              j.state === "succeeded" ||
+              j.state === "review" ||
               j.state === "canceled")
           );
         case KANBAN_COLUMNS.FAILED:
@@ -37,11 +39,14 @@ function filterForTab(jobs: Record<string, JobSummary>, tab: KanbanColumn): JobS
 }
 
 export function MobileJobList() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<KanbanColumn>(KANBAN_COLUMNS.IN_PROGRESS);
   const [query, setQuery] = useState("");
   const jobs = useStore(selectJobs);
-  const approvals = useStore(selectApprovals);
-  const pendingCount = Object.values(approvals).filter((a) => !a.resolvedAt).length;
+  const awaitingCount = useMemo(
+    () => Object.values(jobs).filter((j) => !j.archivedAt && j.state === "waiting_for_approval").length,
+    [jobs],
+  );
 
   const filtered = useMemo(() => {
     const tabJobs = filterForTab(jobs, tab);
@@ -58,7 +63,7 @@ export function MobileJobList() {
   }, [jobs, tab, query]);
 
   return (
-    <div className="sm:hidden">
+    <div className="sm:hidden pb-24">
       <div className="relative mb-3">
         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
         <Input
@@ -71,8 +76,8 @@ export function MobileJobList() {
       <div className="flex rounded-lg bg-muted p-1 mb-4 gap-0.5">
         {TABS.map((t) => {
           const label =
-            t === KANBAN_COLUMNS.AWAITING_INPUT && pendingCount > 0
-              ? `${KANBAN_COLUMNS.AWAITING_INPUT} (${pendingCount})`
+            t === KANBAN_COLUMNS.AWAITING_INPUT && awaitingCount > 0
+              ? `${KANBAN_COLUMNS.AWAITING_INPUT} (${awaitingCount})`
               : t;
           return (
             <button
@@ -103,6 +108,10 @@ export function MobileJobList() {
                     <p className="text-sm font-medium text-muted-foreground">No jobs running</p>
                     <p className="text-xs text-muted-foreground/70 mt-1">Create a new job to get started</p>
                   </div>
+                  <Button size="sm" onClick={() => navigate("/jobs/new")}>
+                    <Plus size={14} />
+                    New Job
+                  </Button>
                 </div>
               );
             }

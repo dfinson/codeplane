@@ -71,6 +71,19 @@ _GIT_RESET_HARD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Strips the *contents* of shell string literals so that `git reset --hard`
+# appearing only inside a quoted argument (e.g. a ``git commit -m "..."``
+# message) is not mistakenly matched as a real command invocation.
+_QUOTED_STRING_RE = re.compile(
+    r'"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\'',
+    re.DOTALL,
+)
+
+
+def _strip_quoted_strings(cmd: str) -> str:
+    """Replace the contents of every quoted string with an empty placeholder."""
+    return _QUOTED_STRING_RE.sub('""', cmd)
+
 
 def is_git_reset_hard(command: str) -> bool:
     """Return True if *command* contains a ``git reset --hard`` invocation.
@@ -78,8 +91,12 @@ def is_git_reset_hard(command: str) -> bool:
     This is used to enforce the platform-level hard block: no agent may run
     ``git reset --hard`` without explicit operator approval, regardless of
     the active permission mode or whether the job has been trusted.
+
+    Quoted string contents (e.g. a ``git commit -m "..."`` message) are
+    stripped before matching so that literal text inside arguments does not
+    cause false positives.
     """
-    return bool(_GIT_RESET_HARD_RE.search(command))
+    return bool(_GIT_RESET_HARD_RE.search(_strip_quoted_strings(command)))
 
 
 # ---------------------------------------------------------------------------

@@ -260,7 +260,7 @@ class TestSendMessage:
         seed_job: SeedJobFn,
         mock_runtime_service: AsyncMock,
     ) -> None:
-        job_id = await seed_job(state="succeeded")
+        job_id = await seed_job(state="review")
         mock_runtime_service.send_message.return_value = False
 
         resp = await client.post(

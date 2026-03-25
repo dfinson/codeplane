@@ -168,7 +168,7 @@ def _mount_spa_fallback(app: FastAPI) -> None:
         path = request.url.path
         if (
             request.method in ("GET", "HEAD")
-            and not path.startswith(("/api", "/mcp"))
+            and not path.startswith(("/api", "/mcp", "/assets"))
             and "\x00" not in path
             and ".." not in path
         ):

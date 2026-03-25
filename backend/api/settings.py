@@ -326,16 +326,29 @@ async def list_sdks() -> SDKListResponse:
 
         # Run auth check in a thread to avoid blocking the event loop on subprocess.
         auth = await asyncio.to_thread(_check_agent_auth, sdk.value)
-        status = "not_configured" if auth.authenticated is False else "ready"
+
+        if auth.authenticated is True:
+            status = "ready"
+            enabled = True
+            hint = ""
+        elif auth.authenticated is False:
+            status = "not_configured"
+            enabled = False
+            hint = auth.hint
+        else:
+            # Unknown auth — allow selection but surface a hint
+            status = "ready"
+            enabled = True
+            hint = auth.hint or "Auth status could not be verified"
 
         items.append(
             SDKInfoResponse(
                 id=sdk.value,
                 name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
-                enabled=cli.ready,
+                enabled=enabled,
                 status=status,
                 authenticated=auth.authenticated,
-                hint=auth.hint,
+                hint=hint,
             )
         )
 

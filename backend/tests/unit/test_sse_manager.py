@@ -89,10 +89,10 @@ class TestBuildSSEData:
         assert parsed["message"] == "hello"
 
     def test_serializes_job_state_changed(self) -> None:
-        event = _make_event(kind=DomainEventKind.job_succeeded)
+        event = _make_event(kind=DomainEventKind.job_review)
         result = _build_sse_data(event, "job_state_changed")
         parsed = json.loads(result)
-        assert parsed["newState"] == "succeeded"
+        assert parsed["newState"] == "review"
         assert "jobId" in parsed
 
     def test_job_created_maps_to_running(self) -> None:
@@ -260,7 +260,7 @@ class TestSSEManager:
         conn = SSEConnection()
         mgr.register(conn)
 
-        await mgr.broadcast_domain_event(_make_event(kind=DomainEventKind.job_succeeded))
+        await mgr.broadcast_domain_event(_make_event(kind=DomainEventKind.job_review))
         assert not conn.queue.empty()
 
     @pytest.mark.asyncio
@@ -540,7 +540,8 @@ class TestSSEManager:
             DomainEventKind.diff_updated,
             DomainEventKind.approval_requested,
             DomainEventKind.approval_resolved,
-            DomainEventKind.job_succeeded,
+            DomainEventKind.job_review,
+            DomainEventKind.job_completed,
             DomainEventKind.job_failed,
             DomainEventKind.job_canceled,
             DomainEventKind.session_heartbeat,
@@ -562,10 +563,10 @@ class TestSSEManager:
         while not conn.queue.empty():
             frames.append(conn.queue.get_nowait())
 
-        # 12 kinds. approval_requested/resolved produce 2 each (secondary job_state_changed).
-        # job_succeeded/job_failed produce 2 each (secondary job_state_changed).
-        # That's 12 primary + 4 secondary = 16 total.
-        assert len(frames) == 16
+        # 13 kinds. approval_requested/resolved produce 2 each (secondary job_state_changed).
+        # job_review/job_completed/job_failed produce 2 each (secondary job_state_changed).
+        # That's 13 primary + 5 secondary = 18 total.
+        assert len(frames) == 18
 
     @pytest.mark.asyncio
     async def test_approval_resolved_secondary_frame_has_no_id(self) -> None:

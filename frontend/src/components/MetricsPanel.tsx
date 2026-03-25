@@ -29,6 +29,7 @@ interface LLMCall {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  cost?: number;
   durationMs: number;
   offsetSec?: number;
   isSubagent: boolean;
@@ -526,14 +527,15 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
   // Aggregate sub-agent calls by model
   const subAgentGroups = useMemo(() => {
-    const map = new Map<string, { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; durationMs: number; calls: LLMCall[] }>();
+    const map = new Map<string, { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number; durationMs: number; calls: LLMCall[] }>();
     for (const c of subCalls) {
       const key = c.model || "unknown";
-      const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, durationMs: 0, calls: [] };
+      const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0, durationMs: 0, calls: [] };
       g.count++;
       g.inputTokens += c.inputTokens;
       g.outputTokens += c.outputTokens;
       g.cacheReadTokens += c.cacheReadTokens;
+      g.cost += c.cost ?? 0;
       g.durationMs += c.durationMs;
       g.calls.push(c);
       map.set(key, g);
@@ -546,6 +548,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     inputTokens: mainCalls.reduce((s, c) => s + c.inputTokens, 0),
     outputTokens: mainCalls.reduce((s, c) => s + c.outputTokens, 0),
     cacheReadTokens: mainCalls.reduce((s, c) => s + c.cacheReadTokens, 0),
+    cost: mainCalls.reduce((s, c) => s + (c.cost ?? 0), 0),
     durationMs: mainCalls.reduce((s, c) => s + c.durationMs, 0),
   }), [mainCalls]);
 
@@ -596,11 +599,14 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
               </div>
 
               {/* Stat cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className={cn("grid grid-cols-2 gap-3", (data.totalCost ?? 0) > 0 ? "sm:grid-cols-5" : "sm:grid-cols-4")}>
                 <StatCard icon={<Clock size={14} />} label="Duration" value={formatDuration(data.durationMs ?? 0)} color="text-blue-400" />
                 <StatCard icon={<Cpu size={14} />} label="Tokens" value={formatTokens(data.totalTokens ?? 0)} color="text-violet-400" />
                 <StatCard icon={<Brain size={14} />} label="LLM Calls" value={String(data.llmCallCount ?? 0)} color="text-blue-400" />
                 <StatCard icon={<Wrench size={14} />} label="Tools" value={`${data.toolCallCount ?? 0}${fails ? ` (${fails} fail)` : ""}`} color="text-yellow-400" />
+                {(data.totalCost ?? 0) > 0 && (
+                  <StatCard icon={<Zap size={14} />} label="Total Cost" value={formatUsd(data.totalCost ?? 0)} color="text-green-400" />
+                )}
               </div>
 
               {/* Token breakdown */}
@@ -821,6 +827,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                             <span>{formatTokens(mainTotals.inputTokens)} in</span>
                             <span>{formatTokens(mainTotals.outputTokens)} out</span>
                             {mainTotals.cacheReadTokens > 0 && <span>{formatTokens(mainTotals.cacheReadTokens)} cache</span>}
+                            {mainTotals.cost > 0 && <span className="text-green-400">{formatUsd(mainTotals.cost)}</span>}
                             <span>{formatDuration(mainTotals.durationMs)}</span>
                           </span>
                         </button>
@@ -871,6 +878,9 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                               <span>{subCalls.length} calls</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.inputTokens, 0))} in</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.outputTokens, 0))} out</span>
+                              {subAgentGroups.reduce((s, g) => s + g.cost, 0) > 0 && (
+                                <span className="text-green-400">{formatUsd(subAgentGroups.reduce((s, g) => s + g.cost, 0))}</span>
+                              )}
                               <span>{formatDuration(subCalls.reduce((s, c) => s + c.durationMs, 0))}</span>
                             </span>
                           </button>
@@ -909,7 +919,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
 }
 
 function SubAgentGroup({ group }: {
-  group: { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; durationMs: number; calls: LLMCall[] };
+  group: { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number; durationMs: number; calls: LLMCall[] };
 }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -925,6 +935,7 @@ function SubAgentGroup({ group }: {
           <span>{formatTokens(group.inputTokens)} in</span>
           <span>{formatTokens(group.outputTokens)} out</span>
           {group.cacheReadTokens > 0 && <span>{formatTokens(group.cacheReadTokens)} cache</span>}
+          {group.cost > 0 && <span className="text-green-400">{formatUsd(group.cost)}</span>}
           <span>{formatDuration(group.durationMs)}</span>
         </span>
       </button>

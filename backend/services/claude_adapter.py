@@ -74,26 +74,40 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._consumer_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_to_job: dict[str, str] = {}
         self._tool_start_times: dict[str, float] = {}
+        self._tool_call_buffer: dict[str, dict[str, str]] = {}
+        self._current_turn_id: str = ""
         self._approval_service = approval_service
         self._event_bus = event_bus
         self._session_factory = session_factory
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
+        self._paused_sessions: set[str] = set()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _cleanup_session(self, session_id: str) -> None:
+        self._paused_sessions.discard(session_id)
         job_id = self._session_to_job.pop(session_id, None)
-        self._clients.pop(session_id, None)
+        client = self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
         task = self._consumer_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
+        if client is not None:
+            asyncio.ensure_future(self._disconnect_client(client))
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+
+    @staticmethod
+    async def _disconnect_client(client: ClaudeSDKClient) -> None:
+        """Disconnect a ClaudeSDKClient, terminating its backing subprocess."""
+        try:
+            await asyncio.wait_for(client.disconnect(), timeout=10)
+        except Exception:
+            log.warning("claude_client_disconnect_failed", exc_info=True)
 
     def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
         """Schedule an async DB write from a synchronous or async context."""
@@ -176,6 +190,10 @@ class ClaudeAdapter(AgentAdapterInterface):
             input_data: dict[str, Any],
             context: object,
         ) -> PermissionResultAllow | PermissionResultDeny:
+            # Paused — immediately deny all tools so the agent cannot act.
+            if session_id in self._paused_sessions:
+                return PermissionResultDeny(message="Session is paused — waiting for operator")
+
             mode = config.permission_mode
             job_id = self._session_to_job.get(session_id)
 
@@ -350,6 +368,9 @@ class ClaudeAdapter(AgentAdapterInterface):
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
 
+        # Each AssistantMessage starts a new turn for grouping
+        self._current_turn_id = str(uuid.uuid4())
+
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and job_id not in self._job_main_models:
             self._job_main_models[job_id] = model
@@ -364,7 +385,11 @@ class ClaudeAdapter(AgentAdapterInterface):
                     session_id,
                     SessionEvent(
                         kind=SessionEventKind.transcript,
-                        payload={"role": "agent", "content": text},
+                        payload={
+                            "role": "agent",
+                            "content": text,
+                            "turn_id": self._current_turn_id,
+                        },
                     ),
                 )
 
@@ -382,14 +407,51 @@ class ClaudeAdapter(AgentAdapterInterface):
         seq: list[int],
         job_id: str | None,
     ) -> None:
-        """Handle a ToolUseBlock — emit tool start log + record start time."""
+        """Handle a ToolUseBlock — emit tool_running transcript + log + record start time."""
         tool_name = getattr(block, "name", "") or "tool"
         tool_id = getattr(block, "id", "") or str(uuid.uuid4())
+        tool_input = getattr(block, "input", None)
+
+        # Serialize tool arguments
+        args_str: str | None = None
+        if isinstance(tool_input, dict):
+            try:
+                args_str = json.dumps(tool_input)
+            except Exception:
+                args_str = str(tool_input)
 
         # Record start time for duration calculation
         self._tool_start_times[tool_id] = time.monotonic()
 
+        # Synthesize a turn_id for grouping (one per AssistantMessage stream)
+        if not self._current_turn_id:
+            self._current_turn_id = str(uuid.uuid4())
+        turn_id = self._current_turn_id
+
+        # Buffer for the completion event
+        self._tool_call_buffer[tool_id] = {
+            "tool_name": tool_name,
+            "tool_args": args_str or "",
+            "turn_id": turn_id,
+        }
+
         if tool_name not in _HIDDEN_TOOLS:
+            from backend.services.tool_formatters import format_tool_display
+
+            self._enqueue(
+                session_id,
+                SessionEvent(
+                    kind=SessionEventKind.transcript,
+                    payload={
+                        "role": "tool_running",
+                        "content": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": args_str,
+                        "turn_id": turn_id,
+                        "tool_display": format_tool_display(tool_name, args_str),
+                    },
+                ),
+            )
             self._enqueue_log(session_id, f"Tool started: {tool_name}", "debug", seq)
 
     def _process_tool_result_block(
@@ -404,11 +466,11 @@ class ClaudeAdapter(AgentAdapterInterface):
         content = getattr(block, "content", "")
         is_error = getattr(block, "is_error", False)
 
-        # Resolve tool name from the parent ToolUseBlock if we can
-        # (Claude SDK doesn't directly link result→name, but we can look
-        # up from the preceding blocks in the same message)
-        tool_name = "tool"
-        tool_args_str: str | None = None
+        # Resolve tool name + args from the buffer populated by _process_tool_use_block
+        buffered = self._tool_call_buffer.pop(tool_use_id, {})
+        tool_name = buffered.get("tool_name", "tool")
+        tool_args_str = buffered.get("tool_args") or None
+        turn_id = buffered.get("turn_id") or None
 
         # Calculate duration
         start = self._tool_start_times.pop(tool_use_id, time.monotonic())
@@ -449,12 +511,14 @@ class ClaudeAdapter(AgentAdapterInterface):
                         "tool_result": result_text,
                         "tool_success": success,
                         "tool_issue": tool_issue,
+                        "turn_id": turn_id,
                         "tool_display": format_tool_display(
                             tool_name,
                             tool_args_str,
                             tool_result=result_text or None,
                             tool_success=success,
                         ),
+                        "tool_duration_ms": int(duration_ms),
                     },
                 ),
             )
@@ -688,6 +752,21 @@ class ClaudeAdapter(AgentAdapterInterface):
             await client.query(message)
         except Exception:
             log.warning("claude_send_message_failed", session_id=session_id, exc_info=True)
+
+    async def interrupt_session(self, session_id: str) -> None:
+        client = self._clients.get(session_id)
+        if client is None:
+            return
+        try:
+            await client.interrupt()
+        except Exception:
+            log.warning("claude_interrupt_failed", session_id=session_id, exc_info=True)
+
+    def pause_tools(self, session_id: str) -> None:
+        self._paused_sessions.add(session_id)
+
+    def resume_tools(self, session_id: str) -> None:
+        self._paused_sessions.discard(session_id)
 
     async def abort_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)

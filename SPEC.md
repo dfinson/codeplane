@@ -838,7 +838,7 @@ data: {json_payload}
 | `progress_headline` | `{ jobId, headline }` |
 | `model_downgraded` | `{ jobId, requestedModel, actualModel }` |
 | `tool_group_summary` | `{ jobId, turnId, summary }` |
-| `job_succeeded` | `{ jobId, prUrl?, mergeStatus?, resolution? }` |
+| `job_review` | `{ jobId, prUrl?, mergeStatus?, resolution? }` |
 | `job_failed` | `{ jobId, reason }` |
 
 ### 5.3.1 Domain Event to SSE Event Mapping
@@ -855,7 +855,7 @@ The `SSEManager` translates internal domain events into SSE events as follows:
 | `DiffUpdated` | `diff_update` | 1:1 mapping |
 | `ApprovalRequested` | `approval_requested` + `job_state_changed` | Two SSE events emitted |
 | `ApprovalResolved` | `approval_resolved` + `job_state_changed` | Two SSE events emitted |
-| `JobSucceeded` | `job_succeeded` + `job_state_changed` | Two SSE events emitted |
+| `JobReview` | `job_review` + `job_state_changed` | Two SSE events emitted |
 | `JobFailed` | `job_failed` + `job_state_changed` | Two SSE events emitted |
 | `JobCanceled` | `job_state_changed` | `new_state: canceled` |
 | `JobStateChanged` | `job_state_changed` | 1:1 mapping |
@@ -940,7 +940,7 @@ When a job is created:
 5. `RuntimeService` is asked to run the job and creates an asyncio task
 6. The task starts the agent session and consumes yielded events
 7. Each event is translated into a domain event and published to the event bus
-8. When the session completes, the job transitions to `succeeded`, `failed`, or `canceled`
+8. When the session completes, the job transitions to `review`, `failed`, or `canceled`
 
 ### 6.2 Runtime Service
 
@@ -1167,12 +1167,12 @@ When a job completes successfully, CodePlane instructs the agent to create a pul
 
 The flow:
 
-1. Job reaches `succeeded` state
+1. Job reaches `review` state
 2. During the `post_completion` phase, the agent is instructed to push the branch and open a PR using whichever GitHub tooling is available:
    - **GitHub MCP server** (if configured in `.vscode/mcp.json` or `tools.mcp` global config) — the agent uses the MCP `create_pull_request` tool
    - **`gh` CLI** (if available on `$PATH`) — the agent runs `gh pr create` with the branch name, prompt-derived title, and a summary body
 3. If neither `gh` CLI nor GitHub MCP tools are available, the step is skipped silently and the branch remains on disk for the operator to push manually
-4. The PR URL (if created) is included in the `JobSucceeded` event payload and displayed on the Job Detail screen
+4. The PR URL (if created) is included in the `JobReview` event payload and displayed on the Job Detail screen
 
 This is a best-effort operation — if PR creation fails (e.g., no remote configured, auth issues), the job is still considered successful. The failure is logged as a warning.
 
@@ -1181,21 +1181,21 @@ Completed branches are **not** auto-deleted after merge. The branch remains on d
 ### 8.8 Job Resolution
 
 When a job succeeds with `completion.strategy = "manual"`, it enters
-the Review column with `resolution = "unresolved"`. The operator resolves it via:
+the Review column with `resolution = "unresolved"` in the `review` state. The operator resolves it via:
 
     POST /api/jobs/{id}/resolve
     Body: { "action": "merge" | "create_pr" | "discard" }
 
 **Merge**: Attempts fast-forward merge, then regular merge. On success, resolution
-becomes `merged`, worktree is cleaned up, and branch is deleted. On conflict, the
+becomes `merged`, job transitions to `completed`, worktree is cleaned up, and branch is deleted. On conflict, the
 merge is aborted (worktree stays clean), resolution becomes `conflict`, and the job
-stays in Review with a conflict badge showing the affected files.
+stays in `review` with a conflict badge showing the affected files.
 
 **Create PR**: Pushes the branch to origin and creates a PR via `gh pr create`.
-Resolution becomes `pr_created`, worktree is cleaned up (branch kept on remote).
+Resolution becomes `pr_created`, job transitions to `completed`, worktree is cleaned up (branch kept on remote).
 
 **Discard**: Removes the worktree and deletes the branch. Resolution becomes
-`discarded`.
+`discarded`, job transitions to `completed`.
 
 Jobs with `resolution = "conflict"` can be further resolved with `create_pr` or
 `discard` (but not `merge`).
@@ -1574,11 +1574,12 @@ Sequential integers are preferred over UUIDs because:
 | `queued` | Job accepted but not yet started (at capacity) |
 | `running` | Agent session is active |
 | `waiting_for_approval` | Session paused, awaiting operator decision |
-| `succeeded` | Session completed successfully |
+| `review` | Agent session exited cleanly; awaiting operator review and resolution |
+| `completed` | Operator resolved the job (merged, PR created, or discarded) |
 | `failed` | Session terminated with an error |
 | `canceled` | Operator canceled the job |
 
-Succeeded jobs carry a **resolution status** that tracks how the job's changes were handled: `unresolved` (awaiting operator decision), `merged` (changes merged into base branch), `pr_created` (PR was created), `discarded` (changes thrown away), or `conflict` (merge attempted but conflicts detected). Jobs in `unresolved` or `conflict` state appear in the Review column for operator action.
+Jobs in `review` carry a **resolution status** that tracks how the job's changes were handled: `unresolved` (awaiting operator decision), `conflict` (merge attempted but conflicts detected). Jobs move to `completed` when the operator resolves them with `merged`, `pr_created`, or `discarded`.
 
 ### 12.2 State Transition Table
 
@@ -1589,16 +1590,19 @@ Succeeded jobs carry a **resolution status** that tracks how the job's changes w
 | `queued` | Capacity opens | `running` |
 | `queued` | `JobCanceled` | `canceled` |
 | `running` | `ApprovalRequested` | `waiting_for_approval` |
-| `running` | `JobSucceeded` | `succeeded` |
+| `running` | `JobReview` (agent done) | `review` |
 | `running` | `JobFailed` | `failed` |
 | `running` | `JobCanceled` | `canceled` |
 | `waiting_for_approval` | `ApprovalResolved` (approved) | `running` |
 | `waiting_for_approval` | `ApprovalResolved` (rejected) | `failed` |
 | `waiting_for_approval` | `JobCanceled` | `canceled` |
+| `review` | Operator resolves (merge/PR/discard) | `completed` |
+| `review` | Operator resumes with instructions | `running` |
+| `review` | `JobCanceled` | `canceled` |
 
-Terminal states (`succeeded`, `failed`, `canceled`) have no further transitions.
+Terminal states (`completed`, `failed`, `canceled`) can transition back to `running` for job resumption.
 
-After reaching `succeeded`, the job enters a resolution lifecycle managed by `POST /api/jobs/{id}/resolve`. Resolution transitions: `unresolved` → `merged|pr_created|discarded|conflict`, `conflict` → `pr_created|discarded`.
+After reaching `review`, the job enters a resolution lifecycle managed by `POST /api/jobs/{id}/resolve`. A successful resolution (merge, PR, discard) transitions the job to `completed`. Resolution transitions: `unresolved` → `merged|pr_created|discarded|conflict`, `conflict` → `pr_created|discarded`.
 
 ### 12.3 Rerun
 
@@ -1612,7 +1616,7 @@ Rerunning a job creates a new job record. The original job is not mutated. The n
 |---|---|---|
 | `environment_setup` | Workspace creation, branch, dependency install | `WorkspacePrepared`, `LogLineEmitted` |
 | `agent_reasoning` | Agent reads code, thinks, plans, and writes changes | `TranscriptUpdated`, `DiffUpdated`, `ApprovalRequested` |
-| `finalization` | Final diff snapshot, artifact collection | `DiffUpdated`, `JobSucceeded` |
+| `finalization` | Final diff snapshot, artifact collection | `DiffUpdated`, `JobReview` |
 | `post_completion` | Operator reviews, approves, or reruns | _(no agent events)_ |
 
 Artifacts and timeline entries carry the phase in which they were produced. The frontend uses phase labels to group the execution timeline.
@@ -1630,13 +1634,13 @@ Columns:
 | Column | States shown |
 |---|---|
 | Active | `queued`, `running` |
-| Review | `waiting_for_approval`, or `succeeded` with resolution `unresolved` or `conflict` |
+| Review | `waiting_for_approval`, `review` |
 | Failed | `failed`, `canceled` |
-| History | `succeeded` with resolution `merged`, `pr_created`, or `discarded` (excludes archived) |
+| History | `completed` (excludes archived) |
 
 Each card displays: job ID, repository name, prompt excerpt, elapsed time, and status badge.
 
-The History column shows the most recent 50 jobs by default. A "Load more" button fetches the next page via `GET /api/jobs?state=succeeded,canceled&limit=50&cursor={last_id}`. The column uses virtualized rendering for smooth scrolling.
+The History column shows the most recent 50 jobs by default. A "Load more" button fetches the next page via `GET /api/jobs?state=completed,canceled&limit=50&cursor={last_id}`. The column uses virtualized rendering for smooth scrolling.
 
 **Mobile layout: Filtered job list** (viewport width < 1024px)
 

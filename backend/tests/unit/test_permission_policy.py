@@ -54,16 +54,15 @@ class TestIsGitResetHard:
             "git reset --mixed HEAD",
             "git status",
             "git checkout -- .",
-            "echo 'git reset --hard' is dangerous",  # inside a quoted string — we still detect it
+            # quoted strings — the text is not a live command invocation
+            "echo 'git reset --hard' is dangerous",
+            'git commit -m "Document hard-gated commands (git reset --hard, merge, rebase)"',
+            "git commit -m 'fix: mention git reset --hard in docs'",
             "grep 'hard' file.txt",
             "git reset",
         ],
     )
     def test_ignores_non_hard_reset(self, cmd: str) -> None:
-        # The grep/echo lines contain the text but we verify the non-reset lines are not matched.
-        # Note: "echo 'git reset --hard'" would be caught — that is intentional and conservative.
-        if "git reset --hard" in cmd.lower():
-            return  # conservative detection is expected; skip
         assert not is_git_reset_hard(cmd), f"Expected no detection for: {cmd!r}"
 
 

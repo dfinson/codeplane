@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
-import { ArrowLeft, Search, RotateCcw } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import { useStore, selectArchivedJobs, enrichJob } from "../store";
 import type { JobSummary } from "../store";
-import { fetchJobs, unarchiveJob } from "../api/client";
+import { fetchJobs } from "../api/client";
 import { StateBadge } from "./StateBadge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -31,7 +31,7 @@ export function HistoryScreen() {
   // Load archived jobs on mount
   useEffect(() => {
     setLoading(true);
-    fetchJobs({ state: "succeeded,failed,canceled", limit: 100, archived: true } as Parameters<typeof fetchJobs>[0])
+    fetchJobs({ state: "review,completed,failed,canceled", limit: 100, archived: true } as Parameters<typeof fetchJobs>[0])
       .then((result) => {
         useStore.setState((state) => {
           const updated = { ...state.jobs };
@@ -58,22 +58,6 @@ export function HistoryScreen() {
       setHasMore(result.hasMore);
     } catch { /* user can retry */ }
   }, [cursor]);
-
-  const handleUnarchive = useCallback(async (jobId: string) => {
-    try {
-      await unarchiveJob(jobId);
-      useStore.setState((state) => {
-        const existing = state.jobs[jobId];
-        if (!existing) return state;
-        return {
-          jobs: {
-            ...state.jobs,
-            [jobId]: { ...existing, archivedAt: null },
-          },
-        };
-      });
-    } catch { /* ignore */ }
-  }, []);
 
   const filtered = useMemo(() => {
     let jobs = archivedJobs;
@@ -147,7 +131,7 @@ export function HistoryScreen() {
       ) : (
         <div className="space-y-2">
           {filtered.map((job) => (
-            <HistoryRow key={job.id} job={job} onNavigate={() => navigate(`/jobs/${job.id}`)} onUnarchive={() => handleUnarchive(job.id)} />
+            <HistoryRow key={job.id} job={job} onNavigate={() => navigate(`/jobs/${job.id}`)} />
           ))}
           {hasMore && (
             <Button variant="ghost" className="w-full" onClick={loadMore}>
@@ -160,7 +144,7 @@ export function HistoryScreen() {
   );
 }
 
-function HistoryRow({ job, onNavigate, onUnarchive }: { job: JobSummary; onNavigate: () => void; onUnarchive: () => void }) {
+function HistoryRow({ job, onNavigate }: { job: JobSummary; onNavigate: () => void }) {
   const repoName = job.repo.split("/").pop() ?? job.repo;
   const resolutionColor: Record<string, string> = {
     merged: "text-green-500",
@@ -190,15 +174,6 @@ function HistoryRow({ job, onNavigate, onUnarchive }: { job: JobSummary; onNavig
         </div>
         <p className="text-xs text-foreground/60 truncate mt-0.5">{job.prompt}</p>
       </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="shrink-0 h-7 text-xs gap-1"
-        onClick={(e) => { e.stopPropagation(); onUnarchive(); }}
-      >
-        <RotateCcw size={12} />
-        Unarchive
-      </Button>
     </div>
   );
 }

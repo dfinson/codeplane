@@ -50,6 +50,7 @@ export function JobCreationScreen() {
   const [selfReview, setSelfReview] = useState(false);
   const [branchSuggesting, setBranchSuggesting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Resolve the active SDK — default to what the store says once it's loaded
@@ -149,7 +150,7 @@ export function JobCreationScreen() {
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!repo || !prompt.trim()) return;
+    if (!repo || !prompt.trim() || voiceState !== "idle") return;
     setSubmitting(true);
     try {
       const result = await createJob({
@@ -170,7 +171,7 @@ export function JobCreationScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [repo, prompt, baseRef, branch, model, navigate, permissionMode, activeSdk, defaultSdk, verify, selfReview]);
+  }, [repo, prompt, voiceState, baseRef, branch, model, navigate, permissionMode, activeSdk, defaultSdk, verify, selfReview]);
 
   const enabledSdks = sdks.filter((s) => s.enabled);
   const showSdkSelector = enabledSdks.length > 1;
@@ -226,6 +227,7 @@ export function JobCreationScreen() {
             value={prompt}
             onChange={setPrompt}
             error={errors.prompt}
+            onStateChange={setVoiceState}
             onBlur={(e) => validateField("prompt", e.target.value)}
             onKeyDown={(e) => {
               if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
@@ -362,7 +364,7 @@ export function JobCreationScreen() {
               Cancel
             </Button>
             <Button
-              disabled={!repo || !prompt.trim()}
+              disabled={!repo || !prompt.trim() || voiceState !== "idle" || !!sdkNotReady}
               loading={submitting}
               onClick={handleSubmit}
             >

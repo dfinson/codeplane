@@ -62,6 +62,8 @@ async def analytics_overview(
         "period": period,
         "totalJobs": agg.get("total_jobs", 0),
         "succeeded": agg.get("succeeded", 0),
+        "review": agg.get("review", 0),
+        "completed": agg.get("completed", 0),
         "failed": agg.get("failed", 0),
         "cancelled": agg.get("cancelled", 0),
         "running": agg.get("running", 0),

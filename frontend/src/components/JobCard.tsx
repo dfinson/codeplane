@@ -66,7 +66,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
           <span className="text-sm font-semibold text-primary flex-1 min-w-0 break-words" title={job.id}>{job.id}</span>
         )}
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-          {job.resolution && <ResolutionBadge resolution={job.resolution} />}
+          {job.resolution && !(job.state === "review" && job.resolution === "unresolved") && <ResolutionBadge resolution={job.resolution} />}
           <StateBadge state={job.state} />
         </div>
       </div>
@@ -114,7 +114,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
       )}
 
       {/* Success outcome */}
-      {job.state === "succeeded" && job.resolution && job.resolution !== "unresolved" && (
+      {(job.state === "review" || job.state === "completed") && job.resolution && job.resolution !== "unresolved" && (
         <div className="flex items-start gap-1.5 text-xs text-green-600 mb-2 rounded bg-green-500/10 px-2 py-1.5">
           <CheckCircle2 size={12} className="shrink-0 mt-0.5" />
           <span>

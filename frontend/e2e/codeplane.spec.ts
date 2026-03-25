@@ -115,10 +115,11 @@ const JOB_FIXTURE = {
   prUrl: null,
 };
 
-const SUCCEEDED_JOB_FIXTURE = {
+const COMPLETED_JOB_FIXTURE = {
   ...JOB_FIXTURE,
   id: "e2e-job-done-02",
-  state: "succeeded",
+  state: "completed",
+  resolution: "merged",
   completedAt: new Date(Date.now() - 5_000).toISOString(),
 };
 
@@ -156,7 +157,7 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          items: [JOB_FIXTURE, SUCCEEDED_JOB_FIXTURE],
+          items: [JOB_FIXTURE, COMPLETED_JOB_FIXTURE],
           cursor: null,
           hasMore: false,
         }),
@@ -172,9 +173,9 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
       timeout: 5_000,
     });
 
-    // The succeeded job only appears in the History kanban column — the mobile
+    // The completed job only appears in the History kanban column — the mobile
     // list defaults to the Active tab so there is exactly one DOM match.
-    await expect(page.getByText(SUCCEEDED_JOB_FIXTURE.id)).toBeVisible({
+    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id)).toBeVisible({
       timeout: 5_000,
     });
 
@@ -235,7 +236,7 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
     // (setTimeout instead of queueMicrotask) ensures these are dispatched as
     // separate macrotasks even when buffered together.
     const snapshotPayload = JSON.stringify({
-      jobs: [JOB_FIXTURE, SUCCEEDED_JOB_FIXTURE],
+      jobs: [JOB_FIXTURE, COMPLETED_JOB_FIXTURE],
       pendingApprovals: [],
     });
     await page.route("**/api/events*", async (route) => {
@@ -259,7 +260,7 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
     await expect(page.getByText(JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 8_000,
     });
-    await expect(page.getByText(SUCCEEDED_JOB_FIXTURE.id)).toBeVisible({
+    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id)).toBeVisible({
       timeout: 8_000,
     });
 

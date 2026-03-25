@@ -129,6 +129,72 @@ class ArtifactService:
             collected.append(await self._repo.create(artifact))
         return collected
 
+    async def collect_from_session_storage(
+        self,
+        job_id: str,
+        sdk_session_id: str,
+        config_dir: Path | None = None,
+    ) -> list[Artifact]:
+        """Collect markdown files the agent created in its Copilot session-state folder.
+
+        Scans the top-level of ``{config_dir}/session-state/{sdk_session_id}/`` and
+        the ``files/`` subdirectory for ``*.md`` files, storing each as a ``document``
+        artifact.  Other subdirectories (e.g. ``checkpoints/``) are intentionally
+        skipped to avoid capturing auto-generated files.
+        """
+        collected: list[Artifact] = []
+        base = config_dir if config_dir is not None else (Path.home() / ".copilot")
+        session_dir = base / "session-state" / sdk_session_id
+        if not session_dir.is_dir():
+            return collected
+
+        # Scan the top-level directory and the designated files/ subdirectory.
+        # Other subdirectories (e.g. checkpoints/) are intentionally skipped to
+        # avoid capturing auto-generated files.
+        scan_dirs = [session_dir, session_dir / "files"]
+        for scan_dir in scan_dirs:
+            if not scan_dir.is_dir():
+                continue
+            for entry in sorted(scan_dir.iterdir()):
+                if not entry.is_file() or entry.is_symlink():
+                    continue
+                if entry.suffix.lower() != ".md":
+                    continue
+                # Guard against symlink escape (resolved path must stay inside session_dir)
+                if not entry.resolve().is_relative_to(session_dir.resolve()):
+                    log.warning("session_storage_artifact_outside_dir", path=str(entry))
+                    continue
+                entry_size = entry.stat().st_size
+                if entry_size > _MAX_WORKSPACE_ARTIFACT_BYTES:
+                    log.warning("session_storage_artifact_too_large", path=str(entry), size=entry_size)
+                    continue
+
+                artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+                disk_dir = _ARTIFACTS_BASE / job_id
+                disk_dir.mkdir(parents=True, exist_ok=True)
+                # Preserve the relative sub-path in the artifact name so that two
+                # files with the same filename in different directories remain
+                # distinguishable in the UI (e.g. "plan.md" vs "files/plan.md").
+                relative_name = str(entry.relative_to(session_dir))
+                dest = disk_dir / f"{artifact_id}-{entry.name}"
+                dest.write_bytes(entry.read_bytes())
+
+                mime = _guess_mime(entry.name)
+                art_type = _classify_artifact(entry.name)
+                artifact = Artifact(
+                    id=artifact_id,
+                    job_id=job_id,
+                    name=relative_name,
+                    type=art_type,
+                    mime_type=mime,
+                    size_bytes=dest.stat().st_size,
+                    disk_path=str(dest),
+                    phase=ExecutionPhase.post_completion,
+                    created_at=datetime.now(UTC),
+                )
+                collected.append(await self._repo.create(artifact))
+        return collected
+
     async def list_for_job(self, job_id: str) -> list[Artifact]:
         """Return all artifacts for a job.
 
@@ -389,6 +455,75 @@ class ArtifactService:
 
         # Sort by creation time — names are no longer guaranteed to contain a numeric session ID.
         return max(snapshots, key=lambda a: a.created_at)
+
+    async def store_log_artifact(
+        self,
+        job_id: str,
+        log_events: list[dict[str, Any]],
+        *,
+        slug: str = "",
+    ) -> Artifact:
+        """Write agent log lines as a plain-text downloadable artifact.
+
+        ``log_events`` is a list of ``log_line_emitted`` event payloads, each
+        expected to have ``timestamp``, ``level``, ``message``,
+        ``session_number`` (optional), and ``context`` (optional) keys.
+
+        Lines are grouped by session_number so handoff boundaries are visible.
+        The resulting ``.log`` file is registered as a ``document`` artifact
+        with ``text/plain`` MIME type so the ArtifactViewer can preview it in-
+        browser and offer a download link.
+        """
+        import re as _re
+
+        tag = _re.sub(r"[^a-z0-9]+", "-", (slug or "").lower()).strip("-")[:40]
+        if not tag:
+            tag = job_id[:12]
+        name = f"{tag}-agent.log"
+
+        # Sort by sequence number (or timestamp as fallback).
+        # Events without session_number (legacy) are treated as session 1.
+        sorted_events = sorted(log_events, key=lambda e: (e.get("session_number") or 1, e.get("seq") or 0))
+
+        lines: list[str] = []
+        current_session: int | None = None
+        for evt in sorted_events:
+            sess_num = evt.get("session_number") or 1
+            if sess_num != current_session:
+                current_session = sess_num
+                lines.append(f"\n── session {sess_num} ──────────────────────────────────────\n")
+            ts = evt.get("timestamp", "")
+            if hasattr(ts, "isoformat"):
+                ts = ts.isoformat()
+            level = str(evt.get("level", "info")).upper().ljust(5)
+            message = evt.get("message", "")
+            ctx = evt.get("context")
+            ctx_str = ""
+            if ctx:
+                ctx_str = "  " + "  ".join(f"{k}={v}" for k, v in ctx.items())
+            lines.append(f"{ts}  {level}  {message}{ctx_str}\n")
+
+        content = f"# CodePlane agent log — job {job_id}\n" + "".join(lines)
+
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        disk_dir = _ARTIFACTS_BASE / job_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path.write_text(content, encoding="utf-8")
+
+        artifact = Artifact(
+            id=artifact_id,
+            job_id=job_id,
+            name=name,
+            type=ArtifactType.document,
+            mime_type="text/plain",
+            size_bytes=disk_path.stat().st_size,
+            disk_path=str(disk_path),
+            phase=ExecutionPhase.post_completion,
+            created_at=datetime.now(UTC),
+        )
+        log.info("log_artifact_stored", job_id=job_id, name=name, size=artifact.size_bytes)
+        return await self._repo.create(artifact)
 
     async def store_telemetry_report(
         self,

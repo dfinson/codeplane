@@ -205,6 +205,8 @@ export interface AnalyticsOverview {
   period: number;
   totalJobs: number;
   succeeded: number;
+  review: number;
+  completed: number;
   failed: number;
   cancelled: number;
   running: number;
@@ -502,12 +504,6 @@ export function resolveJob(
 
 export function archiveJob(jobId: string): Promise<void> {
   return request(`/jobs/${encodeURIComponent(jobId)}/archive`, {
-    method: "POST",
-  });
-}
-
-export function unarchiveJob(jobId: string): Promise<void> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/unarchive`, {
     method: "POST",
   });
 }

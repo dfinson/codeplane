@@ -49,7 +49,7 @@ describe("AppStore", () => {
 
   describe("applySnapshot", () => {
     it("replaces jobs and approvals", () => {
-      const jobs = [makeJob({ id: "job-1" }), makeJob({ id: "job-2" })];
+      const jobs = [makeJob({ id: "job-1", state: "waiting_for_approval" }), makeJob({ id: "job-2" })];
       const approvals: ApprovalRequest[] = [
         {
           id: "apr-1",
@@ -69,6 +69,28 @@ describe("AppStore", () => {
       expect(Object.keys(selectJobs(state))).toHaveLength(2);
       expect(Object.keys(selectApprovals(state))).toHaveLength(1);
     });
+
+    it("drops approvals whose job is not in waiting_for_approval", () => {
+      const jobs = [makeJob({ id: "job-1", state: "running" })];
+      const approvals: ApprovalRequest[] = [
+        {
+          id: "apr-1",
+          jobId: "job-1",
+          description: "Stale approval",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+      ];
+
+      useStore.getState().applySnapshot(jobs, approvals);
+      const state = useStore.getState();
+
+      expect(Object.keys(selectJobs(state))).toHaveLength(1);
+      expect(Object.keys(selectApprovals(state))).toHaveLength(0);
+    });
   });
 
   describe("dispatchSSEEvent", () => {
@@ -79,19 +101,19 @@ describe("AppStore", () => {
 
       useStore.getState().dispatchSSEEvent("job_state_changed", {
         jobId: "job-1",
-        newState: "succeeded",
+        newState: "review",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
       expect(selectJobs(useStore.getState())["job-1"]!.state).toBe(
-        "succeeded"
+        "review"
       );
     });
 
     it("ignores job_state_changed for unknown job", () => {
       useStore.getState().dispatchSSEEvent("job_state_changed", {
         jobId: "job-999",
-        newState: "succeeded",
+        newState: "review",
         timestamp: "2025-01-01T01:00:00Z",
       });
 
@@ -286,7 +308,7 @@ describe("AppStore", () => {
       useStore.setState({
         jobs: {
           "job-1": makeJob({
-            state: "succeeded",
+            state: "review",
             resolution: "discarded",
             conflictFiles: ["src/app.ts"],
             failureReason: "old failure",
@@ -326,7 +348,7 @@ describe("AppStore", () => {
       useStore.setState({
         jobs: {
           "job-1": makeJob({
-            state: "succeeded",
+            state: "review",
             resolution: "conflict",
             conflictFiles: ["a.ts"],
             modelDowngraded: true,

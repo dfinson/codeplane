@@ -13,9 +13,9 @@ describe("StateBadge", () => {
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
-  it("shows Succeeded state", () => {
-    render(<StateBadge state="succeeded" />);
-    expect(screen.getByText("Succeeded")).toBeInTheDocument();
+  it("shows In Review state", () => {
+    render(<StateBadge state="review" />);
+    expect(screen.getByText("In Review")).toBeInTheDocument();
   });
 
   it("shows Failed state", () => {

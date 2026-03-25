@@ -126,6 +126,148 @@ class TestCollectFromWorkspace:
         assert result == []
 
 
+class TestCollectFromSessionStorage:
+    @pytest.mark.asyncio
+    async def test_collects_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            session_dir.mkdir(parents=True)
+            (session_dir / "plan.md").write_text("# Plan\nDo things")
+            (session_dir / "notes.md").write_text("# Notes")
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert len(result) == 2
+            names = {a.name for a in result}
+            assert names == {"plan.md", "notes.md"}
+            assert all(a.type == ArtifactType.document for a in result)
+            assert all(a.mime_type == "text/markdown" for a in result)
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_ignores_non_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            session_dir.mkdir(parents=True)
+            (session_dir / "plan.md").write_text("# Plan")
+            (session_dir / "data.json").write_text('{"x": 1}')
+            (session_dir / "notes.txt").write_text("notes")
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert len(result) == 1
+            assert result[0].name == "plan.md"
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_ignores_other_subdirectory_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        """checkpoints/ and other subdirs (except files/) must be skipped."""
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            (session_dir / "checkpoints").mkdir(parents=True)
+            (session_dir / "checkpoints" / "index.md").write_text("# Index")
+            (session_dir / "plan.md").write_text("# Plan")
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert len(result) == 1
+            assert result[0].name == "plan.md"
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_collects_files_subdir_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        """files/ subdirectory is explicitly scanned; names are prefixed with 'files/'."""
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            files_dir = session_dir / "files"
+            files_dir.mkdir(parents=True)
+            (session_dir / "plan.md").write_text("# Plan")
+            (files_dir / "dummy.md").write_text("# Dummy")
+            (files_dir / "notes.md").write_text("# Notes")
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert len(result) == 3
+            names = {a.name for a in result}
+            assert names == {"plan.md", "files/dummy.md", "files/notes.md"}
+            assert all(a.type == ArtifactType.document for a in result)
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_files_subdir_name_collision(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        """Same filename in top-level and files/ produces two distinct artifacts."""
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            files_dir = session_dir / "files"
+            files_dir.mkdir(parents=True)
+            (session_dir / "plan.md").write_text("# Top-level plan")
+            (files_dir / "plan.md").write_text("# Files plan")
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert len(result) == 2
+            names = {a.name for a in result}
+            assert names == {"plan.md", "files/plan.md"}
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_skips_symlinks(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        import backend.services.artifact_service as mod
+
+        orig_base = mod._ARTIFACTS_BASE
+        mod._ARTIFACTS_BASE = tmp_path / "store"
+        try:
+            session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
+            session_dir.mkdir(parents=True)
+            target = tmp_path / "secret.md"
+            target.write_text("# Secret")
+            (session_dir / "link.md").symlink_to(target)
+
+            result = await artifact_service.collect_from_session_storage(
+                "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
+            )
+            assert result == []
+        finally:
+            mod._ARTIFACTS_BASE = orig_base
+
+    @pytest.mark.asyncio
+    async def test_missing_session_dir_returns_empty(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+        result = await artifact_service.collect_from_session_storage(
+            "job-1", "nonexistent-session", config_dir=tmp_path / ".copilot"
+        )
+        assert result == []
+
+
 class TestListAndGet:
     @pytest.mark.asyncio
     async def test_list_for_job(self, artifact_service: ArtifactService, mock_repo: AsyncMock) -> None:

@@ -696,12 +696,12 @@ class TestHintListCodeUsages:
 
 
 class TestFormatToolDisplay:
-    def test_unknown_tool_returns_raw_name(self):
-        assert format_tool_display("unknown_tool", None) == "unknown_tool"
+    def test_unknown_tool_returns_humanized_name(self):
+        assert format_tool_display("unknown_tool", None) == "Unknown tool"
 
     def test_unknown_tool_with_result_no_hint(self):
         result = format_tool_display("unknown_tool", None, tool_result="some output")
-        assert result == "unknown_tool"
+        assert result == "Unknown tool"
 
     def test_mcp_prefix_stripped(self):
         result = format_tool_display("github/bash", json.dumps({"command": "echo hi"}))

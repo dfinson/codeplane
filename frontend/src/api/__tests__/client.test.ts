@@ -21,7 +21,6 @@ import {
   rerunJob,
   resolveJob,
   archiveJob,
-  unarchiveJob,
   pauseJob,
   continueJob,
   resumeJob,
@@ -244,19 +243,12 @@ describe("resolveJob", () => {
   });
 });
 
-describe("archiveJob / unarchiveJob", () => {
+describe("archiveJob", () => {
   it("archives a job (204)", async () => {
     mockFetch.mockResolvedValueOnce(noContentResponse());
     const result = await archiveJob("j-1");
     expect(result).toBeUndefined();
     expect(getFirstFetchUrl()).toBe("/api/jobs/j-1/archive");
-  });
-
-  it("unarchives a job (204)", async () => {
-    mockFetch.mockResolvedValueOnce(noContentResponse());
-    const result = await unarchiveJob("j-1");
-    expect(result).toBeUndefined();
-    expect(getFirstFetchUrl()).toBe("/api/jobs/j-1/unarchive");
   });
 });
 

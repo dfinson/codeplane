@@ -51,7 +51,9 @@ class CopilotAdapter(AgentAdapterInterface):
     ) -> None:
         self._queues: dict[str, asyncio.Queue[SessionEvent | None]] = {}
         self._sessions: dict[str, CopilotSession] = {}
+        self._clients: dict[str, Any] = {}  # session_id → CopilotClient (owns CLI server process)
         self._session_to_job: dict[str, str] = {}  # session_id → job_id for telemetry
+        self._paused_sessions: set[str] = set()
         self._tool_start_times: dict[str, float] = {}  # tool_call_id → start monotonic
         # Buffers tool.execution_start data so we can emit a combined entry on complete
         self._tool_call_buffer: dict[str, dict[str, str]] = {}  # tool_call_id → {tool_name, tool_args, turn_id}
@@ -102,13 +104,35 @@ class CopilotAdapter(AgentAdapterInterface):
             log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
 
     def _cleanup_session(self, session_id: str) -> None:
-        """Remove session and queue references for a completed/aborted session."""
+        """Remove session and queue references for a completed/aborted session.
+
+        Also stops the CopilotClient that owns the backing CLI server process
+        to prevent leaked child processes from accumulating over time.
+        """
+        self._paused_sessions.discard(session_id)
         job_id = self._session_to_job.pop(session_id, None)
         self._sessions.pop(session_id, None)
         self._queues.pop(session_id, None)
+        client = self._clients.pop(session_id, None)
+        if client is not None:
+            asyncio.ensure_future(self._stop_client(client))
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+
+    @staticmethod
+    async def _stop_client(client: Any) -> None:  # noqa: ANN401
+        """Stop a CopilotClient, terminating its CLI server process."""
+        try:
+            await asyncio.wait_for(client.stop(), timeout=10)
+        except TimeoutError:
+            log.warning("copilot_client_stop_timeout_forcing")
+            with contextlib.suppress(Exception):
+                await client.force_stop()
+        except Exception:
+            log.warning("copilot_client_stop_failed", exc_info=True)
+            with contextlib.suppress(Exception):
+                await client.force_stop()
 
     async def _handle_permission_request(
         self,
@@ -127,6 +151,10 @@ class CopilotAdapter(AgentAdapterInterface):
         kind_val = request.kind.value if request.kind else "unknown"
         mode = config.permission_mode
         sid = invocation.get("session_id", "")
+
+        # Paused — immediately deny all tools so the agent cannot act.
+        if sid in self._paused_sessions:
+            return _Result(kind="denied-interactively-by-user")
 
         # ----------------------------------------------------------------
         # Hard block: git reset --hard always requires explicit operator
@@ -316,6 +344,7 @@ class CopilotAdapter(AgentAdapterInterface):
         # assistant.reasoning is intentionally NOT mapped — it duplicates
         # the reasoning_text already embedded in assistant.message.
         "tool.execution_complete": SessionEventKind.transcript,
+        "tool.execution_start": SessionEventKind.transcript,
         "session.workspace_file_changed": SessionEventKind.file_changed,
     }
 
@@ -671,6 +700,28 @@ class CopilotAdapter(AgentAdapterInterface):
                         "role": "operator",
                         "content": content,
                     }
+                elif kind_str == "tool.execution_start":
+                    tool_id = (data.tool_call_id or "") if data else ""
+                    buffered = self._tool_call_buffer.get(tool_id, {})
+                    tool_name = buffered.get("tool_name", "tool")
+                    # Drop SDK-internal tools from transcript
+                    if tool_name in ("report_intent",):
+                        return
+                    from backend.services.tool_formatters import format_tool_display
+
+                    turn_id = buffered.get("turn_id") or (
+                        str(data.turn_id) if data and hasattr(data, "turn_id") and data.turn_id else None
+                    )
+                    event_payload = {
+                        "role": "tool_running",
+                        "content": tool_name,
+                        "tool_name": tool_name,
+                        "tool_args": buffered.get("tool_args"),
+                        "turn_id": turn_id,
+                        "tool_intent": buffered.get("tool_intent"),
+                        "tool_title": buffered.get("tool_title"),
+                        "tool_display": format_tool_display(tool_name, buffered.get("tool_args")),
+                    }
                 elif kind_str == "tool.execution_complete":
                     tool_id = (data.tool_call_id or "") if data else ""
                     buffered = self._tool_call_buffer.pop(tool_id, {})
@@ -699,6 +750,11 @@ class CopilotAdapter(AgentAdapterInterface):
                     tool_args_str = buffered.get("tool_args")
                     success = bool(data.success) if data and data.success is not None else True
                     tool_issue = extract_tool_issue(result_text) if not success else None
+                    # Compute tool execution duration
+                    import time as _time
+
+                    _start = self._tool_start_times.get(tool_id)
+                    dur_ms = int((_time.monotonic() - _start) * 1000) if _start is not None else None
                     event_payload = {
                         "role": "tool_call",
                         "content": tool_name,
@@ -716,6 +772,7 @@ class CopilotAdapter(AgentAdapterInterface):
                             tool_result=result_text or None,
                             tool_success=success,
                         ),
+                        "tool_duration_ms": dur_ms,
                     }
             else:
                 event_payload = payload if isinstance(payload, dict) else {}
@@ -779,6 +836,7 @@ class CopilotAdapter(AgentAdapterInterface):
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
         self._sessions[session_id] = session
+        self._clients[session_id] = client
 
         # Wire telemetry mapping before registering the callback so
         # no early SDK events are lost.
@@ -881,6 +939,12 @@ class CopilotAdapter(AgentAdapterInterface):
         except Exception:
             log.warning("copilot_send_message_failed", session_id=session_id, exc_info=True)
 
+    def pause_tools(self, session_id: str) -> None:
+        self._paused_sessions.add(session_id)
+
+    def resume_tools(self, session_id: str) -> None:
+        self._paused_sessions.discard(session_id)
+
     async def abort_session(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
         if session is None:
@@ -902,6 +966,7 @@ class CopilotAdapter(AgentAdapterInterface):
         tmp_session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[tmp_session_id] = queue
+        self._clients[tmp_session_id] = client
 
         async def _noop_permission(request: object, invocation: dict[str, str]) -> PermissionRequestResult:
             return _Result(kind="approved")

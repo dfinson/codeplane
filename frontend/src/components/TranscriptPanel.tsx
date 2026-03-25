@@ -1,9 +1,9 @@
-import { useRef, useEffect, useState, useCallback, memo } from "react";
+import { useRef, useEffect, useState, useCallback, memo, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Send, Bot, User, PauseCircle, ChevronDown, Brain, X,
   ShieldQuestion, CheckCircle2, XCircle as XCircleIcon,
-  ArrowDown, Wrench,
+  ArrowDown, Search,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,7 +16,9 @@ import { SdkIcon } from "./SdkBadge";
 import { MicButton } from "./VoiceButton";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
+import { Codicon } from "./ui/codicon";
 import { cn } from "../lib/utils";
+import { resolveToolIcon, type ToolIconDef } from "../lib/toolIcons";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { ConfirmDialog } from "./ui/confirm-dialog";
 
@@ -61,7 +63,7 @@ function buildDisplayItems(
       continue;
     }
 
-    // agent | reasoning | tool_call — group into turns
+    // agent | reasoning | tool_call | tool_running — group into turns
     let turnId = entry.turnId;
 
     if (!turnId) {
@@ -72,7 +74,7 @@ function buildDisplayItems(
         turnId = openTurnKey ?? `msg-${entry.seq}-${entry.timestamp}`;
         openTurnKey = null; // message closes the turn
       } else {
-        // reasoning or tool_call without turnId — keep grouping
+        // reasoning, tool_call, or tool_running without turnId — keep grouping
         if (!openTurnKey) {
           openTurnKey = `auto-${entry.seq}-${entry.timestamp}`;
         }
@@ -100,7 +102,7 @@ function buildDisplayItems(
     }
     const turn = turns.get(turnId)!;
     if (entry.role === "reasoning") turn.reasoning = entry;
-    else if (entry.role === "tool_call") turn.toolCalls.push(entry);
+    else if (entry.role === "tool_call" || entry.role === "tool_running") turn.toolCalls.push(entry);
     else if (entry.role === "agent") turn.message = entry;
   }
 
@@ -215,7 +217,7 @@ function ReasoningBlock({ entry }: { entry: TranscriptEntry }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tool call chips + detail panel
+// Tool step list — vertical list with codicon glyphs (replaces chips)
 // ---------------------------------------------------------------------------
 
 function prettifyJson(raw: string | undefined): string {
@@ -245,175 +247,290 @@ function TruncatedPayload({ content, maxLength = 500 }: { content: string; maxLe
   );
 }
 
-/** Group sequential identical tool names into counted chips. */
-function chipify(calls: TranscriptEntry[]): { name: string; display: string; count: number; entries: TranscriptEntry[] }[] {
-  const chips: { name: string; display: string; count: number; entries: TranscriptEntry[] }[] = [];
-  for (const tc of calls) {
-    const name = tc.toolName ?? tc.content;
-    const display = tc.toolDisplay ?? name;
-    const last = chips[chips.length - 1];
-    if (last && last.name === name) {
-      last.count++;
-      last.entries.push(tc);
-    } else {
-      chips.push({ name, display, count: 1, entries: [tc] });
-    }
-  }
-  return chips;
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function ToolChips({ calls, autoExpand }: { calls: TranscriptEntry[]; autoExpand?: boolean }) {
-  const [expanded, setExpanded] = useState<TranscriptEntry | null>(() =>
-    autoExpand ? (calls[0] ?? null) : null
-  );
-  const chips = chipify(calls);
-  const anyFailed = calls.some((c) => c.toolSuccess === false);
-  const firstIssue = calls.find((c) => c.toolSuccess === false)?.toolIssue;
+function stripMcpPrefix(name: string): string {
+  return name.includes("/") ? name.split("/").pop()! : name;
+}
 
-  return (
-    <div className="space-y-1.5 mb-1">
-      <div className="flex flex-wrap gap-1">
-        {chips.map((chip, i) => {
-          const hasFail = chip.entries.some((e) => e.toolSuccess === false);
-          return (
-            <button
-              key={i}
-              onClick={() => {
-                const target = chip.entries[0] ?? null;
-                setExpanded((prev) => prev === target ? null : target);
-              }}
-              className={cn(
-                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-mono transition-colors",
-                "border border-border/60 hover:border-border hover:bg-muted/50",
-                hasFail
-                  ? "text-red-400 border-red-500/30 bg-red-500/5"
-                  : "text-muted-foreground bg-muted/20",
-              )}
-            >
-              <span>{chip.display}</span>
-              {chip.count > 1 && (
-                <span className="text-xs opacity-60">×{chip.count}</span>
-              )}
-            </button>
-          );
-        })}
-        {anyFailed && (
-          <span className="text-xs text-red-400 self-center ml-0.5">
-            {firstIssue ? `issue: ${firstIssue}` : "reported issue"}
-          </span>
-        )}
-      </div>
+function parseArgs(toolArgs?: string): Record<string, unknown> {
+  if (!toolArgs) return {};
+  try {
+    const parsed = JSON.parse(toolArgs);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
-      {/* Expanded detail panel */}
-      {expanded && (
-        <div className="rounded-md border border-border/60 bg-background overflow-hidden text-xs">
-          <div className="flex items-center justify-between px-2.5 py-1.5 bg-muted/30 border-b border-border/40">
-            <span className="font-mono font-medium text-foreground/80">
-              {expanded.toolName ?? expanded.content}
-            </span>
-            <div className="flex items-center gap-2">
-              <span className={cn(
-                "text-xs font-medium",
-                expanded.toolSuccess !== false ? "text-green-500" : "text-red-400",
-              )}>
-                {expanded.toolSuccess !== false ? "ok" : "issue"}
-              </span>
-              {/* Navigation within the chip group */}
-              {calls.length > 1 && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <button
-                    onClick={() => {
-                      const idx = calls.indexOf(expanded);
-                      if (idx > 0) setExpanded(calls[idx - 1] ?? null);
-                    }}
-                    disabled={calls.indexOf(expanded) === 0}
-                    className="hover:text-foreground disabled:opacity-30"
-                  >
-                    ‹
-                  </button>
-                  <span>{calls.indexOf(expanded) + 1}/{calls.length}</span>
-                  <button
-                    onClick={() => {
-                      const idx = calls.indexOf(expanded);
-                      if (idx < calls.length - 1) setExpanded(calls[idx + 1] ?? null);
-                    }}
-                    disabled={calls.indexOf(expanded) === calls.length - 1}
-                    className="hover:text-foreground disabled:opacity-30"
-                  >
-                    ›
-                  </button>
-                </div>
-              )}
-              <button onClick={() => setExpanded(null)} className="text-muted-foreground hover:text-foreground">
-                <X size={11} />
-              </button>
+function countLines(text?: string): number | undefined {
+  if (!text) return undefined;
+  return text.split("\n").filter((l) => l.trim()).length;
+}
+
+function abbreviatePath(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts.length <= 2 ? path : parts.slice(-2).join("/");
+}
+
+// Structured rendering per tool type
+function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
+  const toolName = stripMcpPrefix(entry.toolName ?? "");
+  const args = parseArgs(entry.toolArgs);
+
+  switch (toolName) {
+    case "bash":
+    case "run_in_terminal": {
+      const command = (args.command as string) ?? "";
+      return (
+        <div className="font-mono text-xs">
+          <div className={cn(
+            "px-3 py-1.5 border-b border-border/30",
+            entry.toolSuccess === false ? "bg-red-950/30" : "bg-zinc-950/50",
+          )}>
+            <span className="text-muted-foreground">$ </span>
+            <span className="text-foreground/90">{command}</span>
+          </div>
+          {entry.toolResult && (
+            <div className="px-3 py-1.5">
+              <TruncatedPayload content={entry.toolResult} maxLength={600} />
             </div>
-          </div>
-          <div className="divide-y divide-border/30">
-            {expanded.toolSuccess === false && expanded.toolIssue && (
-              <div className="px-2.5 py-2 bg-red-500/5">
-                <p className="text-xs font-semibold text-red-400 uppercase tracking-wide mb-1">Issue</p>
-                <p className="text-red-200/90 whitespace-pre-wrap break-words">{expanded.toolIssue}</p>
-              </div>
-            )}
-            {expanded.toolArgs && (
-              <div className="px-2.5 py-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Input</p>
-                <TruncatedPayload content={prettifyJson(expanded.toolArgs)} />
-              </div>
-            )}
-            {expanded.toolResult && (
-              <div className="px-2.5 py-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Output</p>
-                <TruncatedPayload content={expanded.toolResult} />
-              </div>
-            )}
-            {!expanded.toolArgs && !expanded.toolResult && (
-              <div className="px-2.5 py-2 text-muted-foreground italic">No input/output recorded</div>
-            )}
-          </div>
+          )}
         </div>
+      );
+    }
+    case "read_file": {
+      const filePath = (args.filePath ?? args.file_path ?? "") as string;
+      const startLine = (args.startLine ?? args.start_line) as number | undefined;
+      const endLine = (args.endLine ?? args.end_line) as number | undefined;
+      const lines = countLines(entry.toolResult);
+      const shortPath = abbreviatePath(filePath);
+      const range = startLine && endLine ? `lines ${startLine}–${endLine}` : null;
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="file-code" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{shortPath}</span>
+          {range && <span className="text-muted-foreground">{range}</span>}
+          {lines != null && <span className="text-muted-foreground/60">({lines} lines)</span>}
+        </div>
+      );
+    }
+    case "replace_string_in_file":
+    case "multi_replace_string_in_file":
+    case "str_replace_based_edit_tool": {
+      const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
+      const shortPath = abbreviatePath(filePath);
+      return (
+        <div className="px-3 py-1.5 text-xs">
+          <div className="flex items-center gap-2">
+            <Codicon name="edit" size={11} className="text-amber-400/70 shrink-0" />
+            <span className="font-mono text-foreground/80">{shortPath}</span>
+            <span className="text-muted-foreground">
+              {entry.toolSuccess !== false ? "→ applied" : "→ failed"}
+            </span>
+          </div>
+          {typeof args.old_str === "string" && typeof args.new_str === "string" && (
+            <div className="mt-1.5 font-mono text-[11px] leading-relaxed pl-5">
+              <div className="text-red-400/80">- {args.old_str.slice(0, 80)}{args.old_str.length > 80 ? "…" : ""}</div>
+              <div className="text-green-400/80">+ {args.new_str.slice(0, 80)}{args.new_str.length > 80 ? "…" : ""}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "grep_search":
+    case "semantic_search":
+    case "file_search": {
+      const query = (args.query ?? args.pattern ?? "") as string;
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="search" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">&ldquo;{query}&rdquo;</span>
+          {lines != null && <span className="text-muted-foreground">→ {lines} matches</span>}
+        </div>
+      );
+    }
+    case "create_file":
+    case "write": {
+      const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="edit" size={11} className="text-green-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{abbreviatePath(filePath)}</span>
+          <span className="text-muted-foreground">→ {toolName === "write" ? "written" : "created"}</span>
+        </div>
+      );
+    }
+    case "view": {
+      const path = (args.path as string) ?? "";
+      const viewRange = args.view_range as [number, number] | undefined;
+      const lines = countLines(entry.toolResult);
+      const range = Array.isArray(viewRange) && viewRange.length >= 2
+        ? `lines ${viewRange[0]}–${viewRange[1] === -1 ? "end" : viewRange[1]}`
+        : null;
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="file-code" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{abbreviatePath(path)}</span>
+          {range && <span className="text-muted-foreground">{range}</span>}
+          {lines != null && <span className="text-muted-foreground/60">({lines} lines)</span>}
+        </div>
+      );
+    }
+    case "glob": {
+      const pattern = (args.pattern as string) ?? "";
+      const searchPath = (args.path as string) ?? "";
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="search" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">{pattern}</span>
+          {searchPath && <span className="text-muted-foreground/60">in {abbreviatePath(searchPath)}</span>}
+          {lines != null && <span className="text-muted-foreground">→ {lines} files</span>}
+        </div>
+      );
+    }
+    case "grep": {
+      const pattern = (args.pattern ?? args.query ?? "") as string;
+      const searchPath = (args.path as string) ?? "";
+      const globFilter = (args.glob as string) ?? "";
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+          <Codicon name="search" size={11} className="text-blue-400/70 shrink-0" />
+          <span className="font-mono text-foreground/80">&ldquo;{pattern}&rdquo;</span>
+          {(globFilter || searchPath) && (
+            <span className="text-muted-foreground/60">in {globFilter || abbreviatePath(searchPath)}</span>
+          )}
+          {lines != null && <span className="text-muted-foreground">→ {lines} matches</span>}
+        </div>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+function hasStructuredRenderer(toolName?: string): boolean {
+  if (!toolName) return false;
+  const name = stripMcpPrefix(toolName);
+  return [
+    "bash", "run_in_terminal", "read_file",
+    "replace_string_in_file", "multi_replace_string_in_file", "str_replace_based_edit_tool",
+    "grep_search", "semantic_search", "file_search",
+    "create_file", "write",
+    "view", "glob", "grep",
+  ].includes(name);
+}
+
+function ToolDetail({ entry }: { entry: TranscriptEntry }) {
+  return (
+    <div className="ml-0 mt-1 mb-2 rounded border border-border/40 bg-muted/20 text-xs overflow-hidden">
+      {entry.toolSuccess === false && entry.toolIssue && (
+        <div className="px-3 py-1.5 bg-red-500/5 border-b border-border/30">
+          <span className="text-red-400 font-medium">{entry.toolIssue}</span>
+        </div>
+      )}
+      <StructuredToolContent entry={entry} />
+      {!hasStructuredRenderer(entry.toolName) && (
+        <>
+          {entry.toolArgs && (
+            <div className="px-3 py-1.5 border-b border-border/30">
+              <span className="text-muted-foreground font-medium text-[10px] uppercase">Input</span>
+              <pre className="mt-0.5 whitespace-pre-wrap break-all text-xs">{prettifyJson(entry.toolArgs)}</pre>
+            </div>
+          )}
+          {entry.toolResult && (
+            <div className="px-3 py-1.5">
+              <span className="text-muted-foreground font-medium text-[10px] uppercase">Output</span>
+              <TruncatedPayload content={entry.toolResult} />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Collapsible tool group section (wraps ToolChips with a summary header)
-// ---------------------------------------------------------------------------
-
-function truncateLabel(label: string, maxWords = 8): string {
-  const words = label.trim().split(/\s+/);
-  if (words.length <= maxWords) return label.trim();
-  return words.slice(0, maxWords).join(" ") + "…";
+function ToolIconGlyph({ icon, className }: { icon: ToolIconDef; className?: string }) {
+  if (icon.kind === "codicon") {
+    return <Codicon name={icon.name} size={11} className={className} />;
+  }
+  const Icon = icon.icon;
+  return <Icon size={11} className={className} />;
 }
 
-function deriveToolGroupLabel(calls: TranscriptEntry[]): string {
-  // 1. SDK-provided intent string (deterministic, human-authored by the SDK/MCP manifest)
-  const withIntent = calls.find((c) => c.toolIntent);
-  if (withIntent?.toolIntent) return truncateLabel(withIntent.toolIntent);
+function ToolStep({ entry, isActive }: {
+  entry: TranscriptEntry;
+  isActive: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const failed = entry.toolSuccess === false;
+  const isRunning = entry.role === "tool_running";
+  const label = entry.toolDisplay ?? entry.toolName ?? entry.content;
+  const icon = resolveToolIcon(entry.toolName);
 
-  // 2. SDK-provided display title
-  const withTitle = calls.find((c) => c.toolTitle);
-  if (withTitle?.toolTitle) {
-    const chips = chipify(calls);
-    const counts = chips.map((c) => c.count > 1 ? `${c.name} ×${c.count}` : c.name).join(", ");
-    return truncateLabel(`${withTitle.toolTitle}: ${counts}`);
-  }
+  return (
+    <div className="relative pl-5">
+      <div className={cn(
+        "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
+        (isActive || isRunning) && "animate-pulse",
+      )}>
+        <ToolIconGlyph icon={icon} className={cn(
+          failed ? "text-red-400"
+            : (isActive || isRunning) ? "text-blue-400"
+            : "text-muted-foreground/50",
+        )} />
+      </div>
+      <button
+        onClick={() => !isRunning && setExpanded(!expanded)}
+        className={cn("w-full text-left group", isRunning && "cursor-default")}
+      >
+        <div className="flex items-baseline gap-2 py-0.5">
+          <span className={cn(
+            "text-xs font-mono",
+            failed ? "text-red-400"
+              : (isActive || isRunning) ? "text-blue-400"
+              : "text-foreground/80",
+          )}>
+            {label}{isRunning ? "…" : ""}
+          </span>
+          {entry.toolDurationMs != null && (
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatDuration(entry.toolDurationMs)}
+            </span>
+          )}
+          {failed && entry.toolIssue && (
+            <span className="text-[10px] text-red-400 truncate max-w-[200px]">
+              {entry.toolIssue}
+            </span>
+          )}
+        </div>
+      </button>
+      {expanded && !isRunning && <ToolDetail entry={entry} />}
+    </div>
+  );
+}
 
-  // 3. Deterministic per-tool display labels
-  const withDisplay = calls.filter((c) => c.toolDisplay);
-  if (withDisplay.length > 0) {
-    // Show up to 3 unique display labels
-    const unique = [...new Set(withDisplay.map((c) => c.toolDisplay!))];
-    const shown = unique.slice(0, 3).join(", ");
-    const suffix = unique.length > 3 ? "…" : "";
-    return truncateLabel(`${shown}${suffix}`);
-  }
-
-  // 4. Fallback: per-tool counts from chipify
-  const chips = chipify(calls);
-  return chips.map((c) => c.count > 1 ? `${c.name} ×${c.count}` : c.name).join(", ");
+function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive: boolean }) {
+  return (
+    <div className="relative ml-1">
+      <div className="absolute left-[7px] top-2 bottom-2 w-px border-l border-dotted border-border/60" />
+      <div className="space-y-0.5">
+        {calls.map((call, i) => (
+          <ToolStep
+            key={call.seq}
+            entry={call}
+            isActive={isActive && i === calls.length - 1}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Extract the intent string from a leading report_intent tool call, if present. */
@@ -428,41 +545,70 @@ function extractReportIntent(calls: TranscriptEntry[]): string | null {
   }
 }
 
-function ToolGroupSection({ calls }: { calls: TranscriptEntry[] }) {
-  const [open, setOpen] = useState(false);
-  const anyFailed = calls.some((c) => c.toolSuccess === false);
-  const intentLabel = extractReportIntent(calls);
-  const label = intentLabel ?? deriveToolGroupLabel(calls);
+// ---------------------------------------------------------------------------
+// Relative time display
+// ---------------------------------------------------------------------------
+
+function RelativeTime({ ts, className }: { ts: string; className?: string }) {
+  const [, forceUpdate] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceUpdate((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const diff = Date.now() - new Date(ts).getTime();
+  const label = diff < 60_000 ? "just now"
+    : diff < 3_600_000 ? `${Math.floor(diff / 60_000)}m ago`
+    : new Date(ts).toLocaleTimeString();
+  return <span className={className}>{label}</span>;
+}
+
+// ---------------------------------------------------------------------------
+// Agent message block — plain text with progressive reveal
+// ---------------------------------------------------------------------------
+
+function AgentMessageBlock({ entry, isNew }: { entry: TranscriptEntry; isNew?: boolean }) {
+  const content = entry.content.replace(/:$/, "");
+  const isLong = content.length > 300;
+  const shouldReveal = isNew && isLong;
+  const [revealed, setRevealed] = useState(shouldReveal ? 0 : content.length);
+
+  useEffect(() => {
+    if (revealed >= content.length) return;
+    const id = requestAnimationFrame(() => {
+      setRevealed((prev) => Math.min(prev + 50, content.length));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [revealed, content.length]);
+
+  const visibleContent = shouldReveal && revealed < content.length
+    ? content.slice(0, revealed)
+    : content;
 
   return (
-    <div className={cn(
-      "rounded-lg border overflow-hidden mb-1",
-      anyFailed ? "border-red-500/30 bg-red-500/5" : "border-border/50 bg-muted/30",
-    )}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-start gap-2 px-3 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors"
-      >
-        <Wrench size={11} className={cn("shrink-0 mt-0.5", anyFailed ? "text-red-400" : "text-blue-400/70")} />
-        <span className={cn("font-medium break-words min-w-0", anyFailed ? "text-red-400" : "text-muted-foreground")}>
-          {label}
-        </span>
-        <ChevronDown
-          size={11}
-          className={cn("ml-auto shrink-0 transition-transform text-muted-foreground mt-0.5", open && "rotate-180")}
-        />
-      </button>
-      {open && (
-        <div className="px-2 pb-2 pt-1.5 border-t border-border/50">
-          <ToolChips calls={calls} autoExpand={calls.length === 1} />
-        </div>
+    <div className="text-sm leading-relaxed">
+      {entry.title && (
+        <p className="text-xs text-muted-foreground font-medium mb-1.5 tracking-wide">
+          {entry.title}
+        </p>
       )}
+      <AgentMarkdown content={visibleContent} />
+      <RelativeTime ts={entry.timestamp} className="text-xs text-muted-foreground mt-1 block" />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Agent turn (reasoning + tool chips + message)
+// Active indicator — shows what tool is running right now
+// ---------------------------------------------------------------------------
+
+function ActiveIndicator({ turn }: { turn: AgentTurnData }) {
+  const runningTool = turn.toolCalls.find((c) => c.role === "tool_running");
+  if (runningTool) return null; // tool_running entries are rendered inline in the step list
+  return <div className="text-xs text-muted-foreground animate-pulse px-1">working…</div>;
+}
+
+// ---------------------------------------------------------------------------
+// Agent turn (reasoning + tool steps + message)
 // ---------------------------------------------------------------------------
 
 function AgentTurn({
@@ -475,33 +621,25 @@ function AgentTurn({
   isLast?: boolean;
 }) {
   const msg = turn.message;
-  const ts = msg?.timestamp ?? turn.firstTimestamp;
+  const intentLabel = extractReportIntent(turn.toolCalls);
+  const isActive = !!isLast && !msg;
+
   return (
-    <div className="flex gap-2">
-      <div className="w-6 h-6 rounded-full bg-blue-900/50 flex items-center justify-center shrink-0 mt-1">
-        <SdkIcon sdk={sdk} size={14} fallback={<Bot size={14} />} />
+    <div className="flex gap-3 py-2">
+      <div className="w-5 h-5 rounded-full bg-blue-900/50 flex items-center justify-center shrink-0 mt-0.5">
+        <SdkIcon sdk={sdk} size={12} fallback={<Bot size={12} />} />
       </div>
-      <div className="flex-1 min-w-0 space-y-0.5">
+      <div className="flex-1 min-w-0 space-y-1">
+        {intentLabel && (
+          <div className="text-xs font-medium text-muted-foreground">{intentLabel}</div>
+        )}
         {turn.reasoning && <ReasoningBlock entry={turn.reasoning} />}
         {turn.toolCalls.length > 0 && (
-          <ToolGroupSection calls={turn.toolCalls} />
+          <ToolStepList calls={turn.toolCalls} isActive={isActive} />
         )}
-        {msg && (
-          <div className="bg-muted rounded-xl rounded-tl-sm px-3 py-2 text-sm leading-relaxed">
-            {msg.title && (
-              <p className="text-xs text-muted-foreground font-medium mb-1.5 tracking-wide">
-                {msg.title}
-              </p>
-            )}
-            <AgentMarkdown content={msg.content.replace(/:$/, "")} />
-            <span className="text-xs text-muted-foreground mt-1 block">
-              {new Date(ts).toLocaleTimeString()}
-            </span>
-          </div>
-        )}
-        {/* Only the last turn shows "working…" when it has no message yet */}
-        {isLast && !msg && (turn.reasoning || turn.toolCalls.length > 0) && (
-          <div className="text-xs text-muted-foreground animate-pulse px-1">working…</div>
+        {msg && <AgentMessageBlock entry={msg} isNew={isLast} />}
+        {isActive && (turn.reasoning || turn.toolCalls.length > 0) && (
+          <ActiveIndicator turn={turn} />
         )}
       </div>
     </div>
@@ -619,7 +757,7 @@ export function TranscriptPanel({
   const allApprovals = useStore(selectApprovals);
   const jobApprovals = Object.values(allApprovals).filter((a) => a.jobId === jobId);
 
-  const entries: TranscriptEntry[] = [
+  const entries = useMemo<TranscriptEntry[]>(() => [
     ...(prompt
       ? [{ jobId, seq: -1, timestamp: promptTimestamp ?? "", role: "operator", content: prompt }]
       : []),
@@ -630,9 +768,7 @@ export function TranscriptPanel({
       if (prompt && e.role === "operator" && e.content === prompt) return false;
       return true;
     }),
-  ];
-
-  const displayItems = buildDisplayItems(entries, jobApprovals);
+  ], [rawEntries, jobId, prompt, promptTimestamp]);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -642,8 +778,24 @@ export function TranscriptPanel({
   const [pausing, setPausing] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [micState, setMicState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const agentMessageCount = rawEntries.filter((e) => e.role === "agent").length;
+
+  // Filter entries by search query
+  const filteredEntries = useMemo(() => {
+    if (!searchQuery.trim()) return entries;
+    const q = searchQuery.toLowerCase();
+    return entries.filter((e) =>
+      e.content?.toLowerCase().includes(q) ||
+      e.toolDisplay?.toLowerCase().includes(q) ||
+      e.toolName?.toLowerCase().includes(q) ||
+      e.toolArgs?.toLowerCase().includes(q),
+    );
+  }, [entries, searchQuery]);
+
+  const displayItems = buildDisplayItems(filteredEntries, jobApprovals);
 
   const virtualizer = useVirtualizer({
     count: displayItems.length,
@@ -673,7 +825,7 @@ export function TranscriptPanel({
     }
   }, [displayItems.length, virtualizer]);
 
-  const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
+  const isTerminal = ["review", "completed", "failed", "canceled"].includes(jobState ?? "");
 
   const handleSend = useCallback(async () => {
     if (!msg.trim()) return;
@@ -703,7 +855,7 @@ export function TranscriptPanel({
     setPausing(true);
     try {
       await pauseJob(jobId);
-      toast.info("Pause instruction sent — agent will stop when ready");
+      toast.info("Agent paused");
     } catch (e) {
       toast.error(String(e));
     } finally {
@@ -717,6 +869,33 @@ export function TranscriptPanel({
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
         <span className="text-sm font-semibold text-muted-foreground">Transcript</span>
         <div className="flex items-center gap-2">
+          {searchOpen ? (
+            <div className="flex items-center gap-1">
+              <Search size={12} className="text-muted-foreground" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search…"
+                className="bg-transparent text-xs text-foreground placeholder:text-muted-foreground border-b border-border focus:border-primary outline-none w-32"
+                autoFocus
+              />
+              <button
+                onClick={() => { setSearchOpen(false); setSearchQuery(""); }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Search transcript"
+            >
+              <Search size={14} />
+            </button>
+          )}
           {pausable && (
             <Button
               size="sm"
@@ -778,14 +957,12 @@ export function TranscriptPanel({
 
                   {item.type === "operator" && (
                     <div className="flex gap-2 flex-row-reverse">
-                      <div className="w-6 h-6 rounded-full bg-green-900/50 flex items-center justify-center shrink-0 mt-1">
-                        <User size={14} />
+                      <div className="w-5 h-5 rounded-full bg-green-900/50 flex items-center justify-center shrink-0 mt-1">
+                        <User size={12} />
                       </div>
                       <div className="max-w-[80%] rounded-xl rounded-tr-sm px-3 py-2 text-sm leading-relaxed bg-blue-900/30">
                         <div className="whitespace-pre-wrap break-words">{item.entry.content}</div>
-                        <span className="text-xs text-muted-foreground mt-1 block">
-                          {new Date(item.entry.timestamp).toLocaleTimeString()}
-                        </span>
+                        <RelativeTime ts={item.entry.timestamp} className="text-xs text-muted-foreground mt-1 block" />
                       </div>
                     </div>
                   )}

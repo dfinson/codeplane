@@ -130,6 +130,10 @@ _SIMPLE_SPECS: dict[str, _FmtSpec] = {
     "get_terminal_output": _FmtSpec(("id",), "Read terminal", "Read terminal"),
     "tool_search_tool_regex": _FmtSpec(("pattern",), "Find tools:", "Find tools", truncate=40, quote=True),
     "vscode_listCodeUsages": _FmtSpec(("symbol", "query"), "Usages:", "Find usages", truncate=45),
+    "glob": _FmtSpec(("pattern",), "Glob:", "Glob", truncate=50),
+    "grep": _FmtSpec(("pattern", "query"), "Grep:", "Grep", truncate=40, quote=True),
+    "write": _FmtSpec(("path",), "Write", "Write file", use_path=True),
+    "str_replace_based_edit_tool": _FmtSpec(("path",), "Edit", "Edit file", use_path=True),
 }
 
 
@@ -209,6 +213,20 @@ def _fmt_rename_symbol(args: ToolArgs) -> str:
     return "Rename symbol"
 
 
+def _fmt_view(args: ToolArgs) -> str:
+    path = args.get("path", "")
+    if not path:
+        return "View file"
+    short = _short_path(path)
+    view_range = args.get("view_range")
+    if isinstance(view_range, list) and len(view_range) >= 2:
+        start, end = view_range[0], view_range[1]
+        if end is not None and end != -1:
+            return f"View {short}:{start}-{end}"
+        return f"View {short}:{start}–end"
+    return f"View {short}"
+
+
 # -- Result hint formatters ---------------------------------------------------
 # Each takes the raw result string and returns a terse suffix like "→ 12 matches".
 
@@ -279,6 +297,7 @@ _FORMATTERS.update(
         "get_errors": _fmt_get_errors,
         "fetch_webpage": _fmt_fetch_webpage,
         "vscode_renameSymbol": _fmt_rename_symbol,
+        "view": _fmt_view,
     }
 )
 
@@ -302,7 +321,25 @@ _RESULT_HINTS: dict[str, Callable[[str, bool], str]] = {
     "memory": _hint_memory,
     "vscode_renameSymbol": _static_hint("→ renamed"),
     "vscode_listCodeUsages": _count_hint("usages", empty="→ none"),
+    "glob": _count_hint("files", empty="→ no matches"),
+    "grep": _count_hint("matches", empty="→ no matches"),
+    "view": _count_hint("lines", empty="→ empty"),
+    "write": _static_hint("→ written"),
+    "str_replace_based_edit_tool": _hint_replace_string,
 }
+
+
+def _humanize_tool_name(name: str) -> str:
+    """Turn snake_case or camelCase tool names into human-readable labels.
+
+    ``search_code`` → ``"Search code"``, ``listAllFiles`` → ``"List all files"``.
+    """
+    import re
+
+    parts = re.sub(r"([a-z])([A-Z])", r"\1 \2", name).replace("_", " ").split()
+    if not parts:
+        return name
+    return parts[0].capitalize() + (" " + " ".join(p.lower() for p in parts[1:]) if len(parts) > 1 else "")
 
 
 def format_tool_display(
@@ -321,7 +358,7 @@ def format_tool_display(
     lookup_name = tool_name.rsplit("/", 1)[-1] if "/" in tool_name else tool_name
     formatter = _FORMATTERS.get(lookup_name)
     if formatter is None:
-        label = tool_name
+        label = _humanize_tool_name(lookup_name)
     else:
         args = _parse_args(tool_args)
         try:

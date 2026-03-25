@@ -254,7 +254,9 @@ class TelemetrySummaryRepo(BaseRepository):
             text(f"""
                 SELECT
                     COUNT(*) as total_jobs,
-                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as succeeded,
+                    SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) as review,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END) as succeeded,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
                     SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
                     SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
@@ -296,7 +298,7 @@ class TelemetrySummaryRepo(BaseRepository):
                 SELECT
                     repo,
                     COUNT(*) as job_count,
-                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) as succeeded,
+                    SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END) as succeeded,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
                     COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
                     COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,

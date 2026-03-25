@@ -20,7 +20,8 @@ class DomainEventKind(StrEnum):
     diff_updated = "DiffUpdated"
     approval_requested = "ApprovalRequested"
     approval_resolved = "ApprovalResolved"
-    job_succeeded = "JobSucceeded"
+    job_review = "JobReview"
+    job_completed = "JobCompleted"
     job_failed = "JobFailed"
     job_canceled = "JobCanceled"
     job_state_changed = "JobStateChanged"
@@ -72,6 +73,7 @@ class TranscriptPayloadDict(TypedDict, total=False):
     tool_intent: str | None
     tool_title: str | None
     tool_display: str | None
+    tool_duration_ms: int | None
 
 
 class DiffPayloadDict(TypedDict, total=False):
@@ -97,13 +99,19 @@ class JobStatePayloadDict(TypedDict, total=False):
     previous_state: str | None
 
 
-class JobSucceededPayloadDict(TypedDict, total=False):
+class JobReviewPayloadDict(TypedDict, total=False):
     pr_url: str | None
     merge_status: str | None  # Git merge operation outcome
     resolution: str | None  # Overall job disposition
     model_downgraded: bool
     requested_model: str | None
     actual_model: str | None
+
+
+class JobCompletedPayloadDict(TypedDict, total=False):
+    resolution: str | None
+    merge_status: str | None
+    pr_url: str | None
 
 
 class JobFailedPayloadDict(TypedDict, total=False):
@@ -192,7 +200,8 @@ EventPayload = (
     | ApprovalRequestedPayloadDict
     | ApprovalResolvedPayloadDict
     | JobStatePayloadDict
-    | JobSucceededPayloadDict
+    | JobReviewPayloadDict
+    | JobCompletedPayloadDict
     | JobFailedPayloadDict
     | SessionHeartbeatPayloadDict
     | MergeCompletedPayloadDict

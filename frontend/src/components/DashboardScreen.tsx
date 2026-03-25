@@ -35,14 +35,23 @@ export function DashboardScreen() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Jobs</h3>
-        <Button size="sm" onClick={() => navigate("/jobs/new")}>
+        <Button size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/jobs/new")}>
           <Plus size={16} />
           New Job
-          <kbd className="ml-1 hidden sm:inline rounded border border-white/20 px-1 py-px font-mono text-[10px] leading-none opacity-70">Alt+N</kbd>
+          <kbd className="ml-1 rounded border border-white/20 px-1 py-px font-mono text-[10px] leading-none opacity-70">Alt+N</kbd>
         </Button>
       </div>
       <KanbanBoard />
       <MobileJobList />
+      {/* Mobile FAB — thumb-zone primary action, hidden on tablet/desktop */}
+      <Button
+        size="icon"
+        className="sm:hidden fixed bottom-6 right-6 z-50 h-14 w-14 rounded-full shadow-lg"
+        onClick={() => navigate("/jobs/new")}
+        aria-label="New Job"
+      >
+        <Plus size={22} />
+      </Button>
     </div>
   );
 }

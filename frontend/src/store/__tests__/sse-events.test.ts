@@ -56,16 +56,16 @@ beforeEach(() => {
 // ---- Additional SSE event types -------------------------------------------
 
 describe("dispatchSSEEvent — additional events", () => {
-  it("handles job_succeeded with prUrl and resolution", () => {
+  it("handles job_review with prUrl and resolution", () => {
     useStore.setState({ jobs: { "job-1": makeJob({ progressHeadline: "Audit", progressSummary: "Reviewing shortcuts" }) } });
-    useStore.getState().dispatchSSEEvent("job_succeeded", {
+    useStore.getState().dispatchSSEEvent("job_review", {
       jobId: "job-1",
       prUrl: "https://github.com/pr/1",
       resolution: "merged",
       mergeStatus: "merged",
     });
     const job = selectJobs(useStore.getState())["job-1"]!;
-    expect(job.state).toBe("succeeded");
+    expect(job.state).toBe("review");
     expect(job.prUrl).toBe("https://github.com/pr/1");
     expect(job.resolution).toBe("merged");
     expect(job.failureReason).toBeNull();
@@ -73,9 +73,9 @@ describe("dispatchSSEEvent — additional events", () => {
     expect(job.progressSummary).toBe("Reviewing shortcuts");
   });
 
-  it("handles job_succeeded with model downgrade", () => {
+  it("handles job_review with model downgrade", () => {
     useStore.setState({ jobs: { "job-1": makeJob() } });
-    useStore.getState().dispatchSSEEvent("job_succeeded", {
+    useStore.getState().dispatchSSEEvent("job_review", {
       jobId: "job-1",
       modelDowngraded: true,
       requestedModel: "gpt-4",
@@ -86,8 +86,8 @@ describe("dispatchSSEEvent — additional events", () => {
     expect(job.requestedModel).toBe("gpt-4");
   });
 
-  it("ignores job_succeeded for unknown job", () => {
-    useStore.getState().dispatchSSEEvent("job_succeeded", {
+  it("ignores job_review for unknown job", () => {
+    useStore.getState().dispatchSSEEvent("job_review", {
       jobId: "unknown",
     });
     expect(Object.keys(selectJobs(useStore.getState()))).toHaveLength(0);
@@ -124,7 +124,7 @@ describe("dispatchSSEEvent — additional events", () => {
   });
 
   it("handles job_resolved", () => {
-    useStore.setState({ jobs: { "job-1": makeJob({ state: "succeeded" }) } });
+    useStore.setState({ jobs: { "job-1": makeJob({ state: "review" }) } });
     useStore.getState().dispatchSSEEvent("job_resolved", {
       jobId: "job-1",
       resolution: "merged",
@@ -138,7 +138,7 @@ describe("dispatchSSEEvent — additional events", () => {
   });
 
   it("handles job_resolved with conflict", () => {
-    useStore.setState({ jobs: { "job-1": makeJob({ state: "succeeded" }) } });
+    useStore.setState({ jobs: { "job-1": makeJob({ state: "review" }) } });
     useStore.getState().dispatchSSEEvent("job_resolved", {
       jobId: "job-1",
       resolution: "conflict",
@@ -149,7 +149,7 @@ describe("dispatchSSEEvent — additional events", () => {
   });
 
   it("stores unresolved job_resolved errors", () => {
-    useStore.setState({ jobs: { "job-1": makeJob({ state: "succeeded" }) } });
+    useStore.setState({ jobs: { "job-1": makeJob({ state: "review" }) } });
     useStore.getState().dispatchSSEEvent("job_resolved", {
       jobId: "job-1",
       resolution: "unresolved",
@@ -169,7 +169,7 @@ describe("dispatchSSEEvent — additional events", () => {
   });
 
   it("handles job_archived", () => {
-    useStore.setState({ jobs: { "job-1": makeJob({ state: "succeeded" }) } });
+    useStore.setState({ jobs: { "job-1": makeJob({ state: "review" }) } });
     useStore.getState().dispatchSSEEvent("job_archived", {
       jobId: "job-1",
     });
@@ -321,7 +321,7 @@ describe("column selectors", () => {
       jobs: {
         "j-1": makeJob({ id: "j-1", state: "queued" }),
         "j-2": makeJob({ id: "j-2", state: "running" }),
-        "j-3": makeJob({ id: "j-3", state: "succeeded" }),
+        "j-3": makeJob({ id: "j-3", state: "review" }),
         "j-4": makeJob({ id: "j-4", state: "running", archivedAt: "2025-01-01" }),
       },
     });
@@ -329,14 +329,14 @@ describe("column selectors", () => {
     expect(active.map((j) => j.id).sort()).toEqual(["j-1", "j-2"]);
   });
 
-  it("selectSignoffJobs returns waiting_for_approval and succeeded, not canceled", () => {
+  it("selectSignoffJobs returns waiting_for_approval and review, not canceled", () => {
     useStore.setState({
       jobs: {
         "j-1": makeJob({ id: "j-1", state: "waiting_for_approval" }),
-        "j-2": makeJob({ id: "j-2", state: "succeeded" }),
+        "j-2": makeJob({ id: "j-2", state: "review" }),
         "j-3": makeJob({ id: "j-3", state: "canceled" }),
         "j-4": makeJob({ id: "j-4", state: "running" }),
-        "j-5": makeJob({ id: "j-5", state: "succeeded", archivedAt: "2025-01-01" }),
+        "j-5": makeJob({ id: "j-5", state: "review", archivedAt: "2025-01-01" }),
       },
     });
     const signoff = selectSignoffJobs(useStore.getState());
@@ -358,7 +358,7 @@ describe("column selectors", () => {
   it("selectArchivedJobs returns only archived", () => {
     useStore.setState({
       jobs: {
-        "j-1": makeJob({ id: "j-1", state: "succeeded", archivedAt: "2025-01-01" }),
+        "j-1": makeJob({ id: "j-1", state: "review", archivedAt: "2025-01-01" }),
         "j-2": makeJob({ id: "j-2", state: "running" }),
       },
     });
@@ -391,6 +391,156 @@ describe("column selectors", () => {
     expect(secondJob).toBeDefined();
     expect(firstJob?.id).toBe("j-2");
     expect(secondJob?.id).toBe("j-1");
+  });
+});
+
+// ---- Stale approval eviction on job_state_changed -------------------------
+
+describe("job_state_changed evicts stale approvals", () => {
+  it("clears unresolved approvals when job leaves waiting_for_approval (server-restart recovery)", () => {
+    useStore.setState({
+      jobs: { "job-1": makeJob({ state: "waiting_for_approval" }) },
+      approvals: {
+        "a-1": {
+          id: "a-1",
+          jobId: "job-1",
+          description: "Approve action",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+      },
+    });
+
+    // Server recovery sends job_state_changed back to running, no approval_resolved
+    useStore.getState().dispatchSSEEvent("job_state_changed", {
+      jobId: "job-1",
+      newState: "running",
+      timestamp: "2025-01-01T00:01:00Z",
+    });
+
+    const state = useStore.getState();
+    expect(state.jobs["job-1"]?.state).toBe("running");
+    expect(Object.keys(state.approvals)).toHaveLength(0);
+  });
+
+  it("keeps resolved approvals intact when job transitions state", () => {
+    useStore.setState({
+      jobs: { "job-1": makeJob({ state: "waiting_for_approval" }) },
+      approvals: {
+        "a-1": {
+          id: "a-1",
+          jobId: "job-1",
+          description: "Approve action",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: "2025-01-01T00:01:00Z",
+          resolution: "approved",
+          requiresExplicitApproval: false,
+        },
+      },
+    });
+
+    useStore.getState().dispatchSSEEvent("job_state_changed", {
+      jobId: "job-1",
+      newState: "running",
+      timestamp: "2025-01-01T00:01:00Z",
+    });
+
+    const state = useStore.getState();
+    expect(state.jobs["job-1"]?.state).toBe("running");
+    // Already-resolved approval is not removed
+    expect(state.approvals["a-1"]).toBeDefined();
+  });
+
+  it("does not evict approvals for other jobs", () => {
+    useStore.setState({
+      jobs: {
+        "job-1": makeJob({ id: "job-1", state: "waiting_for_approval" }),
+        "job-2": makeJob({ id: "job-2", state: "waiting_for_approval" }),
+      },
+      approvals: {
+        "a-1": {
+          id: "a-1",
+          jobId: "job-1",
+          description: "job-1 approval",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+        "a-2": {
+          id: "a-2",
+          jobId: "job-2",
+          description: "job-2 approval",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+      },
+    });
+
+    useStore.getState().dispatchSSEEvent("job_state_changed", {
+      jobId: "job-1",
+      newState: "running",
+      timestamp: "2025-01-01T00:01:00Z",
+    });
+
+    const state = useStore.getState();
+    expect(state.approvals["a-1"]).toBeUndefined();
+    expect(state.approvals["a-2"]).toBeDefined();
+  });
+});
+
+// ---- Snapshot SSE event filters stale approvals ---------------------------
+
+describe("snapshot SSE event", () => {
+  it("drops approvals whose job is not in waiting_for_approval (snapshot-only reconnect)", () => {
+    useStore.getState().dispatchSSEEvent("snapshot", {
+      jobs: [{ ...makeJob({ id: "job-1", state: "running" }) }],
+      pendingApprovals: [
+        {
+          id: "a-1",
+          jobId: "job-1",
+          description: "Stale approval",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+      ],
+    });
+
+    const state = useStore.getState();
+    expect(state.jobs["job-1"]?.state).toBe("running");
+    expect(Object.keys(state.approvals)).toHaveLength(0);
+  });
+
+  it("keeps approvals for jobs in waiting_for_approval", () => {
+    useStore.getState().dispatchSSEEvent("snapshot", {
+      jobs: [{ ...makeJob({ id: "job-1", state: "waiting_for_approval" }) }],
+      pendingApprovals: [
+        {
+          id: "a-1",
+          jobId: "job-1",
+          description: "Live approval",
+          proposedAction: null,
+          requestedAt: "2025-01-01T00:00:00Z",
+          resolvedAt: null,
+          resolution: null,
+          requiresExplicitApproval: false,
+        },
+      ],
+    });
+
+    const state = useStore.getState();
+    expect(state.approvals["a-1"]).toBeDefined();
   });
 });
 

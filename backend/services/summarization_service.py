@@ -305,6 +305,11 @@ class SummarizationService:
                     if collected:
                         log.info("workspace_artifacts_collected", job_id=job_id, count=len(collected))
 
+                if job.sdk_session_id:
+                    md_collected = await artifact_svc.collect_from_session_storage(job_id, job.sdk_session_id)
+                    if md_collected:
+                        log.info("session_storage_markdowns_collected", job_id=job_id, count=len(md_collected))
+
                 await session.commit()
 
             log.info("session_log_stored", job_id=job_id, session=job.session_count, turns=len(turns))
@@ -446,4 +451,29 @@ def _build_resume_prompt(
         "The working directory already contains all changes from the previous session.\n"
         "Do not re-describe the summary back to the operator.\n"
         "Act on the instruction directly."
+    )
+
+
+def _build_followup_prompt(
+    summary_text: str | None,
+    changed_files: list[str],
+    instruction: str,
+    parent_job_id: str,
+    original_task: str,
+) -> str:
+    """Build the startup prompt for a new follow-up job created from a finished parent job."""
+    summary_section = summary_text or ("(no summary available — inspect the repo and prior job artifacts for context)")
+    files_section = "\n".join(f"  - {f}" for f in changed_files) if changed_files else "  (no file changes recorded)"
+
+    return (
+        f"[FOLLOW-UP JOB derived from completed job {parent_job_id}]\n\n"
+        f"## Original task\n{original_task}\n\n"
+        f"## What the previous job accomplished\n{summary_section}\n\n"
+        f"## Files touched by the previous job\n{files_section}\n\n"
+        f"## New instruction from the operator\n{instruction}\n\n"
+        "---\n"
+        "This is a new job, not a resumed session.\n"
+        "Do not assume the previous job's uncommitted worktree still exists.\n"
+        "Use the summary and file list as context, inspect the repository's current state, "
+        "and then carry out the new instruction."
     )

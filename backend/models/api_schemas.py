@@ -95,6 +95,7 @@ class TranscriptRole(StrEnum):
     agent = "agent"
     operator = "operator"
     tool_call = "tool_call"
+    tool_running = "tool_running"
     reasoning = "reasoning"
     divider = "divider"
 
@@ -154,6 +155,12 @@ class ResumeJobRequest(CamelModel):
 
 class ContinueJobRequest(CamelModel):
     instruction: str = Field(min_length=1, max_length=10_000)
+
+    @model_validator(mode="after")
+    def _validate_instruction_not_blank(self) -> ContinueJobRequest:
+        if not self.instruction.strip():
+            raise ValueError("Instruction must not be blank")
+        return self
 
 
 class ResolveApprovalRequest(CamelModel):
@@ -362,6 +369,7 @@ class LogLinePayload(CamelModel):
     level: LogLevel
     message: str
     context: dict[str, Any] | None = None
+    session_number: int | None = None
 
 
 class TranscriptPayload(CamelModel):
@@ -381,6 +389,7 @@ class TranscriptPayload(CamelModel):
     tool_intent: str | None = None  # role=tool_call: SDK-provided intent string
     tool_title: str | None = None  # role=tool_call: SDK-provided display title
     tool_display: str | None = None  # role=tool_call: deterministic per-tool label
+    tool_duration_ms: int | None = None  # role=tool_call: execution time in milliseconds
     tool_group_summary: str | None = None  # AI-generated summary for the tool group turn
 
 
@@ -497,7 +506,9 @@ class JobFailedPayload(CamelModel):
     timestamp: datetime
 
 
-class JobSucceededPayload(CamelModel):
+class JobReviewPayload(CamelModel):
+    """Emitted when the agent session exits cleanly and the job enters review."""
+
     job_id: str
     pr_url: str | None = None
     merge_status: str | None = None
@@ -507,6 +518,15 @@ class JobSucceededPayload(CamelModel):
     model_downgraded: bool = False
     requested_model: str | None = None
     actual_model: str | None = None
+    timestamp: datetime
+
+
+class JobCompletedPayload(CamelModel):
+    """Emitted when an operator resolves a review job to a final state."""
+
+    job_id: str
+    resolution: str | None = None
+    pr_url: str | None = None
     timestamp: datetime
 
 

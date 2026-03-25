@@ -97,12 +97,12 @@ async def test_summary_finalize(session: AsyncSession) -> None:
     await repo.init_job("job-1", sdk="copilot")
     await session.commit()
 
-    await repo.finalize("job-1", status="succeeded", duration_ms=12345)
+    await repo.finalize("job-1", status="review", duration_ms=12345)
     await session.commit()
 
     row = await repo.get("job-1")
     assert row is not None
-    assert row["status"] == "succeeded"
+    assert row["status"] == "review"
     assert row["duration_ms"] == 12345
     assert row["completed_at"] is not None
 
@@ -132,12 +132,12 @@ async def test_summary_aggregate(session: AsyncSession) -> None:
     repo = TelemetrySummaryRepo(session)
     await repo.init_job("job-1", sdk="copilot", model="gpt-4o")
     await repo.increment("job-1", input_tokens=1000, output_tokens=500)
-    await repo.finalize("job-1", status="succeeded", duration_ms=5000)
+    await repo.finalize("job-1", status="completed", duration_ms=5000)
     await session.commit()
 
     agg = await repo.aggregate(period_days=7)
     assert agg["total_jobs"] == 1
-    assert agg["succeeded"] == 1
+    assert agg["completed"] == 1
 
 
 # ---------------------------------------------------------------------------

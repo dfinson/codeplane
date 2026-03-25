@@ -34,6 +34,7 @@ from backend.persistence.database import _set_sqlite_pragmas
 from backend.services.approval_service import ApprovalService
 from backend.services.event_bus import EventBus
 from backend.services.git_service import GitService
+from backend.services.job_service import JobNotFoundError
 from backend.services.merge_service import MergeService
 from backend.services.platform_adapter import PlatformRegistry
 from backend.services.runtime_service import RuntimeService
@@ -109,6 +110,7 @@ def mock_git_service() -> AsyncMock:
 def mock_runtime_service() -> AsyncMock:
     svc = AsyncMock(spec=RuntimeService)
     svc.start_or_enqueue.return_value = None
+    svc.create_followup_job.side_effect = JobNotFoundError("Job ghost does not exist.")
     svc.cancel.return_value = None
     svc.pause_job.return_value = True
     svc.send_message.return_value = True

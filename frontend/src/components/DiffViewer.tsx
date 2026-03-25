@@ -145,7 +145,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
   const [askMsg, setAskMsg] = useState("");
   const [askSending, setAskSending] = useState(false);
   const { canAsk, reason: disabledReason } = computeAskState();
-  const isTerminal = ["succeeded", "failed", "canceled"].includes(jobState ?? "");
+  const isTerminal = ["review", "completed", "failed", "canceled"].includes(jobState ?? "");
 
   // Voice input state
   const waveformContainerRef = useRef<HTMLDivElement>(null);

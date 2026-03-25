@@ -17,7 +17,7 @@ def _make_job(job_id: str, *, resolution: Resolution | None = Resolution.unresol
         id=job_id,
         repo="/tmp/repo",
         prompt="prompt",
-        state=JobState.succeeded,
+        state=JobState.review,
         base_ref="main",
         branch="feat/test",
         worktree_path="/tmp/repo/.wt",
@@ -49,9 +49,11 @@ async def test_resolve_job_publishes_after_commit() -> None:
     runtime_service = SimpleNamespace(resume_job=AsyncMock())
     merge_service = object()
 
+    published_events: list[object] = []
+
     async def _publish(published_event: object) -> None:
         assert committed is True
-        assert published_event is event
+        published_events.append(published_event)
 
     event_bus = SimpleNamespace(publish=AsyncMock(side_effect=_publish))
 
@@ -74,7 +76,13 @@ async def test_resolve_job_publishes_after_commit() -> None:
         conflict_files=None,
         error=None,
     )
-    event_bus.publish.assert_awaited_once()
+    # Two events: job_resolved + job_completed
+    assert event_bus.publish.await_count == 2
+    assert published_events[0] is event  # job_resolved
+    # Second event is a DomainEvent with kind=job_completed
+    from backend.models.events import DomainEventKind
+
+    assert published_events[1].kind == DomainEventKind.job_completed
 
 
 @pytest.mark.asyncio

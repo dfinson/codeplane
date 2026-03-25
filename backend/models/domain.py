@@ -14,7 +14,8 @@ class JobState(StrEnum):
     queued = "queued"
     running = "running"
     waiting_for_approval = "waiting_for_approval"
-    succeeded = "succeeded"
+    review = "review"
+    completed = "completed"
     failed = "failed"
     canceled = "canceled"
 
@@ -22,7 +23,7 @@ class JobState(StrEnum):
 # Terminal states have no further transitions
 TERMINAL_STATES: frozenset[JobState] = frozenset(
     {
-        JobState.succeeded,
+        JobState.completed,
         JobState.failed,
         JobState.canceled,
     }
@@ -34,6 +35,7 @@ ACTIVE_STATES: frozenset[JobState] = frozenset(
         JobState.queued,
         JobState.running,
         JobState.waiting_for_approval,
+        JobState.review,
     }
 )
 
@@ -59,7 +61,7 @@ _VALID_TRANSITIONS: dict[str | None, set[str]] = {
     JobState.queued: {JobState.running, JobState.canceled},
     JobState.running: {
         JobState.waiting_for_approval,
-        JobState.succeeded,
+        JobState.review,
         JobState.failed,
         JobState.canceled,
     },
@@ -68,8 +70,14 @@ _VALID_TRANSITIONS: dict[str | None, set[str]] = {
         JobState.failed,
         JobState.canceled,
     },
+    # Review: agent exited cleanly, awaiting operator decision
+    JobState.review: {
+        JobState.running,  # operator reruns / sends follow-up
+        JobState.completed,  # operator resolves (merge, PR, discard)
+        JobState.canceled,
+    },
     # Terminal states can transition back to running for job resumption
-    JobState.succeeded: {JobState.running},
+    JobState.completed: {JobState.running},
     JobState.failed: {JobState.running},
     JobState.canceled: {JobState.running},
 }

@@ -92,6 +92,7 @@ export interface TranscriptEntry {
   toolIntent?: string;   // tool_call: SDK-provided intent string (deterministic label)
   toolTitle?: string;    // tool_call: SDK-provided display title
   toolDisplay?: string;  // tool_call: deterministic per-tool label (e.g. "$ ls -la", "Read src/main.py")
+  toolDurationMs?: number;  // tool_call: execution time in milliseconds
   // AI-generated group summary — patched in asynchronously via tool_group_summary SSE
   toolGroupSummary?: string;
 }
@@ -375,11 +376,16 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  applySnapshot: (jobs, approvals) =>
+  applySnapshot: (jobs, approvals) => {
+    const jobMap = Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)]));
+    const validApprovals = approvals.filter(
+      (a) => jobMap[a.jobId]?.state === "waiting_for_approval",
+    );
     set({
-      jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
-      approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
-    }),
+      jobs: jobMap,
+      approvals: Object.fromEntries(validApprovals.map((a) => [a.id, a])),
+    });
+  },
 
   hydrateJob: (snapshot) => {
     const jobId = snapshot.job.id;
@@ -421,6 +427,22 @@ export const useStore = create<AppState>((set, get) => ({
             const isCanceled = newState === "canceled";
             const existingPlan = isCanceled ? state.plans[jobId] : undefined;
             const finalPlan = finalizePlanSteps(existingPlan, "skipped");
+
+            // If the job is leaving waiting_for_approval without an
+            // approval_resolved event (e.g. server-restart recovery), evict any
+            // stale unresolved approvals for this job so the mobile badge stays
+            // in sync with the column content.
+            let approvals = state.approvals;
+            if (newState !== "waiting_for_approval") {
+              const staleIds = Object.keys(state.approvals).filter(
+                (id) => state.approvals[id]?.jobId === jobId && !state.approvals[id]?.resolvedAt,
+              );
+              if (staleIds.length > 0) {
+                approvals = { ...state.approvals };
+                for (const id of staleIds) delete approvals[id];
+              }
+            }
+
             return {
               jobs: {
                 ...state.jobs,
@@ -431,6 +453,7 @@ export const useStore = create<AppState>((set, get) => ({
                 },
               },
               ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
+              ...(approvals !== state.approvals && { approvals }),
             };
           }
           return null;
@@ -471,8 +494,31 @@ export const useStore = create<AppState>((set, get) => ({
             toolIntent: payload.toolIntent as string | undefined,
             toolTitle: payload.toolTitle as string | undefined,
             toolDisplay: payload.toolDisplay as string | undefined,
+            toolDurationMs: payload.toolDurationMs as number | undefined,
           };
           const existing = state.transcript[jobId] ?? [];
+
+          // When a tool_call arrives, replace any matching tool_running entry
+          // (same toolName, and same turnId when both are present) so the
+          // in-progress placeholder is superseded.
+          let base = existing;
+          if (entry.role === "tool_call") {
+            const before = base.length;
+            base = base.filter((e) => {
+              if (e.role !== "tool_running" || e.toolName !== entry.toolName) return true;
+              // If both entries have a turnId, they must match to be considered the same call.
+              if (entry.turnId && e.turnId && entry.turnId !== e.turnId) return true;
+              return false;
+            });
+            // If we replaced something, emit directly — no further dedup needed.
+            if (base.length < before) {
+              const updated = [...base, entry];
+              return {
+                transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
+              };
+            }
+          }
+
           // Deduplicate: two SSE connections (global + job-scoped) may deliver
           // the same event; skip if identical role+content+timestamp already present.
           if (existing.some((e) => e.timestamp === entry.timestamp && e.role === entry.role && e.content === entry.content)) {
@@ -520,10 +566,19 @@ export const useStore = create<AppState>((set, get) => ({
 
         case "snapshot": {
           const jobs = (payload.jobs as JobSummary[]) ?? [];
-          const approvals =
+          const rawApprovals =
             (payload.pendingApprovals as ApprovalRequest[]) ?? [];
+          const jobMap = Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)]));
+          // Drop approvals whose job is no longer in waiting_for_approval.
+          // This covers the server-restart recovery path where the backend resets
+          // the job to running without resolving its pending approval in the DB,
+          // and the SSE gap is large enough that only a snapshot is sent (no
+          // job_state_changed replay event to trigger the in-flight eviction).
+          const approvals = rawApprovals.filter(
+            (a) => jobMap[a.jobId]?.state === "waiting_for_approval",
+          );
           return {
-            jobs: Object.fromEntries(jobs.map((j) => [j.id, enrichJob(j)])),
+            jobs: jobMap,
             approvals: Object.fromEntries(approvals.map((a) => [a.id, a])),
           };
         }
@@ -535,7 +590,7 @@ export const useStore = create<AppState>((set, get) => ({
           return null;
         }
 
-        case "job_succeeded": {
+        case "job_review": {
           const jobId = payload.jobId as string;
           const prUrl = (payload.prUrl as string | null) ?? null;
           const resolution = (payload.resolution as string | null) ?? null;
@@ -552,7 +607,7 @@ export const useStore = create<AppState>((set, get) => ({
                 ...state.jobs,
                 [jobId]: {
                   ...existing,
-                  state: "succeeded",
+                  state: "review",
                   ...(prUrl && { prUrl }),
                   ...(resolution && { resolution }),
                   ...(mergeStatus && { mergeStatus }),
@@ -561,6 +616,27 @@ export const useStore = create<AppState>((set, get) => ({
                 },
               },
               ...(finalPlan && { plans: { ...state.plans, [jobId]: finalPlan } }),
+            };
+          }
+          return null;
+        }
+
+        case "job_completed": {
+          const jobId = payload.jobId as string;
+          const resolution = (payload.resolution as string | null) ?? null;
+          const prUrl = (payload.prUrl as string | null) ?? null;
+          const existing = state.jobs[jobId];
+          if (existing) {
+            return {
+              jobs: {
+                ...state.jobs,
+                [jobId]: {
+                  ...existing,
+                  state: "completed",
+                  ...(resolution && { resolution }),
+                  ...(prUrl && { prUrl }),
+                },
+              },
             };
           }
           return null;
@@ -988,7 +1064,7 @@ export const selectActiveJobs = (state: AppState): JobSummary[] =>
 
 /** Sign-off: everything that needs operator attention before archival.
  *  - waiting_for_approval
- *  - succeeded (any resolution) — not archived
+ *  - review (agent done, awaiting operator decision) — not archived
  */
 export const selectSignoffJobs = (state: AppState): JobSummary[] =>
   sortByUpdatedDesc(
@@ -996,7 +1072,7 @@ export const selectSignoffJobs = (state: AppState): JobSummary[] =>
       (j) =>
         !j.archivedAt &&
         (j.state === "waiting_for_approval" ||
-          j.state === "succeeded"),
+          j.state === "review"),
     ),
   );
 

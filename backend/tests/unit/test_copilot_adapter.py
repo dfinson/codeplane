@@ -1462,3 +1462,57 @@ class TestHandlePermissionRequestGitResetHard:
         # In auto mode, non-git-reset-hard commands are approved without hitting approval service
         assert result.kind == "approved"
         approval_service.create_request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: pause_tools / resume_tools — tool blocking
+# ---------------------------------------------------------------------------
+
+
+class TestPauseTools:
+    _SESSION_ID = "test-session-pause"
+
+    @pytest.mark.asyncio
+    async def test_paused_session_denies_all_tools(self) -> None:
+        """When a session is paused, all permission requests are immediately denied."""
+        adapter = CopilotAdapter()
+        adapter.set_job_id(self._SESSION_ID, "job-pause")
+        adapter.pause_tools(self._SESSION_ID)
+
+        config = _make_config(permission_mode=PermissionMode.auto)
+
+        for kind in ("shell", "write", "url"):
+            request = _FakePermissionRequest(kind=kind, full_command_text="echo hello")
+            result = await adapter._handle_permission_request(
+                request,
+                {"session_id": self._SESSION_ID},
+                config,
+            )
+            assert result.kind == "denied-interactively-by-user", f"{kind} should be denied while paused"
+
+    @pytest.mark.asyncio
+    async def test_resume_tools_lifts_block(self) -> None:
+        """After resume_tools, permission requests go through the normal path."""
+        adapter = CopilotAdapter()
+        adapter.set_job_id(self._SESSION_ID, "job-pause")
+
+        adapter.pause_tools(self._SESSION_ID)
+        adapter.resume_tools(self._SESSION_ID)
+
+        config = _make_config(permission_mode=PermissionMode.auto)
+        request = _FakePermissionRequest(kind="shell", full_command_text="echo hello")
+        result = await adapter._handle_permission_request(
+            request,
+            {"session_id": self._SESSION_ID},
+            config,
+        )
+        assert result.kind == "approved"
+
+    def test_cleanup_clears_paused_state(self) -> None:
+        """_cleanup_session removes the session from the paused set."""
+        adapter = CopilotAdapter()
+        adapter.pause_tools(self._SESSION_ID)
+        assert self._SESSION_ID in adapter._paused_sessions
+
+        adapter._cleanup_session(self._SESSION_ID)
+        assert self._SESSION_ID not in adapter._paused_sessions

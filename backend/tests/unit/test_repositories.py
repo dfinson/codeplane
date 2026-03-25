@@ -66,7 +66,7 @@ async def test_job_get_returns_none_for_missing(session: AsyncSession) -> None:
 async def test_job_list_all(session: AsyncSession) -> None:
     repo = JobRepository(session)
     await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
-    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="review", worktree_path="/repos/test"))
     await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
@@ -78,7 +78,7 @@ async def test_job_list_all(session: AsyncSession) -> None:
 async def test_job_list_filter_by_state(session: AsyncSession) -> None:
     repo = JobRepository(session)
     await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
-    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="review", worktree_path="/repos/test"))
     await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
@@ -91,11 +91,11 @@ async def test_job_list_filter_by_state(session: AsyncSession) -> None:
 async def test_job_list_filter_multi_state(session: AsyncSession) -> None:
     repo = JobRepository(session)
     await repo.create(make_job(id="job-1", state="running", worktree_path="/repos/test"))
-    await repo.create(make_job(id="job-2", state="succeeded", worktree_path="/repos/test"))
+    await repo.create(make_job(id="job-2", state="review", worktree_path="/repos/test"))
     await repo.create(make_job(id="job-3", state="failed", worktree_path="/repos/test"))
     await session.commit()
 
-    jobs = await repo.list(state="succeeded,failed")
+    jobs = await repo.list(state="review,failed")
     assert len(jobs) == 2
 
 
@@ -130,12 +130,12 @@ async def test_job_update_state(session: AsyncSession) -> None:
     await session.commit()
 
     now = datetime.now(UTC)
-    await repo.update_state("job-1", "succeeded", now, completed_at=now)
+    await repo.update_state("job-1", "review", now, completed_at=now)
     await session.commit()
 
     job = await repo.get("job-1")
     assert job is not None
-    assert job.state == "succeeded"
+    assert job.state == "review"
     assert job.completed_at is not None
 
 

@@ -1,14 +1,15 @@
 import { memo } from "react";
 import {
   type LucideIcon,
-  Loader2, Clock, ShieldQuestion, CheckCircle2, XCircle, Ban,
+  Loader2, Clock, ShieldQuestion, CheckCircle2, XCircle, Ban, Eye,
 } from "lucide-react";
 
 const STATE_CONFIG: Record<string, { bg: string; text: string; label: string; Icon: LucideIcon }> = {
   queued: { bg: "bg-yellow-900/30", text: "text-yellow-400", label: "Queued", Icon: Clock },
   running: { bg: "bg-blue-900/30", text: "text-blue-400", label: "Running", Icon: Loader2 },
   waiting_for_approval: { bg: "bg-orange-900/30", text: "text-orange-400", label: "Approval", Icon: ShieldQuestion },
-  succeeded: { bg: "bg-green-900/30", text: "text-green-400", label: "Succeeded", Icon: CheckCircle2 },
+  review: { bg: "bg-cyan-900/30", text: "text-cyan-400", label: "In Review", Icon: Eye },
+  completed: { bg: "bg-green-900/30", text: "text-green-400", label: "Completed", Icon: CheckCircle2 },
   failed: { bg: "bg-red-900/30", text: "text-red-400", label: "Failed", Icon: XCircle },
   canceled: { bg: "bg-gray-800/50", text: "text-gray-400", label: "Canceled", Icon: Ban },
 };

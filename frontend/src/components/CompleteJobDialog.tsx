@@ -33,7 +33,7 @@ export function CompleteJobDialog({ job, open, onClose, onArchived }: CompleteJo
   const merged = job.resolution === "merged";
   const prCreated = job.resolution === "pr_created";
   const discarded = job.resolution === "discarded";
-  const hasUnmergedChanges = !merged && !prCreated && !discarded && job.state === "succeeded";
+  const hasUnmergedChanges = !merged && !prCreated && !discarded && job.state === "review";
 
   const handleConfirm = useCallback(async () => {
     setLoading(true);
@@ -66,7 +66,7 @@ export function CompleteJobDialog({ job, open, onClose, onArchived }: CompleteJo
 
         <DialogBody className="space-y-3">
           {/* Merge / resolution status */}
-          {job.state === "succeeded" && (
+          {(job.state === "review" || job.state === "completed") && (
             <div className="space-y-2">
               {merged && (
                 <StatusRow icon={<CheckCircle2 size={16} className="text-green-500" />} text="Changes merged to base branch" />

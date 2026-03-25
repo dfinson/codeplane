@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -31,6 +33,7 @@ from backend.models.db import Base
 from backend.models.domain import (
     Job,
     JobState,
+    PermissionMode,
     Resolution,
     SessionConfig,
     SessionEvent,
@@ -65,6 +68,9 @@ class FakeAgentAdapter(AgentAdapterInterface):
     def __init__(self, delay: float = 0.1) -> None:
         self._delay = delay
         self._aborted: set[str] = set()
+        self._interrupted: set[str] = set()
+        self._messages: list[tuple[str, str]] = []  # (session_id, message)
+        self._paused: set[str] = set()
 
     async def create_session(self, config: SessionConfig) -> str:
         import uuid
@@ -101,7 +107,17 @@ class FakeAgentAdapter(AgentAdapterInterface):
             yield event
 
     async def send_message(self, session_id: str, message: str) -> None:
+        self._messages.append((session_id, message))
         log.debug("fake_adapter_message", session_id=session_id, message=message)
+
+    async def interrupt_session(self, session_id: str) -> None:
+        self._interrupted.add(session_id)
+
+    def pause_tools(self, session_id: str) -> None:
+        self._paused.add(session_id)
+
+    def resume_tools(self, session_id: str) -> None:
+        self._paused.discard(session_id)
 
     async def abort_session(self, session_id: str) -> None:
         self._aborted.add(session_id)
@@ -237,6 +253,50 @@ async def _create_db_job(
         )
         session.add(row)
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_create_followup_job_uses_parent_handoff_context(runtime: RuntimeService) -> None:
+    parent = _make_job(job_id="parent", state=JobState.review)
+    parent.permission_mode = PermissionMode.read_only
+    parent.model = "gpt-5.4"
+    parent.sdk = "claude"
+    parent.verify = True
+    parent.self_review = True
+    parent.max_turns = 4
+    parent.verify_prompt = "Verify this carefully"
+    parent.self_review_prompt = "Review your work"
+
+    child = _make_job(job_id="child", state=JobState.queued)
+    child.prompt = "Add regression coverage"
+
+    fake_service = SimpleNamespace(
+        get_job=AsyncMock(side_effect=[parent, child]),
+        create_job=AsyncMock(return_value=child),
+    )
+    runtime._make_job_service = lambda session: fake_service  # type: ignore[assignment, return-value]
+    runtime._build_followup_handoff_prompt_for_job = AsyncMock(return_value="FOLLOWUP HANDOFF")  # type: ignore[method-assign]
+    runtime.start_or_enqueue = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await runtime.create_followup_job("parent", "  Add regression coverage  ")
+
+    assert result is child
+    assert fake_service.get_job.await_args_list[0].args == ("parent",)
+    fake_service.create_job.assert_awaited_once_with(
+        repo=parent.repo,
+        prompt="Add regression coverage",
+        base_ref=parent.base_ref,
+        permission_mode=PermissionMode.read_only,
+        model="gpt-5.4",
+        sdk="claude",
+        verify=True,
+        self_review=True,
+        max_turns=4,
+        verify_prompt="Verify this carefully",
+        self_review_prompt="Review your work",
+    )
+    runtime.start_or_enqueue.assert_awaited_once_with(child, override_prompt="FOLLOWUP HANDOFF")
+    assert fake_service.get_job.await_args_list[1].args == ("child",)
 
 
 class ResumeFallbackAdapter(AgentAdapterInterface):
@@ -434,12 +494,12 @@ class TestJobLifecycle:
         await runtime.start_or_enqueue(job)
         await asyncio.sleep(0.5)
 
-        # Should have log, transcript events + job_succeeded
+        # Should have log, transcript events + job_review
         # (diff_updated events now come from DiffService which requires a real git worktree)
         kinds = [e.kind for e in published]
         assert DomainEventKind.log_line_emitted in kinds
         assert DomainEventKind.transcript_updated in kinds
-        assert DomainEventKind.job_succeeded in kinds
+        assert DomainEventKind.job_review in kinds
 
     async def test_cancel_running_job(
         self, runtime: RuntimeService, session_factory: async_sessionmaker[AsyncSession], config: CPLConfig
@@ -522,8 +582,8 @@ class TestJobLifecycle:
 
         event_bus.subscribe(_collect)
 
-        # Insert a succeeded job with no in-memory session
-        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        # Insert a review job with no in-memory session
+        job = _make_job(repo=config.repos[0], state=JobState.review)
         await _create_db_job(session_factory, job)
 
         result = await runtime.send_message(job.id, "please continue")
@@ -570,14 +630,14 @@ class TestJobLifecycle:
         assert DomainEventKind.job_failed not in kinds
         assert DomainEventKind.session_resumed in kinds
 
-        # DB should end in a terminal state (succeeded after the resumed run)
+        # DB should end in review/failed/canceled after the resumed run
         async with session_factory() as session:
             from backend.persistence.job_repo import JobRepository
 
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state in (JobState.succeeded, JobState.failed, JobState.canceled)
+            assert row.state in (JobState.review, JobState.failed, JobState.canceled)
 
     async def test_send_message_returns_false_for_nonexistent_job(
         self,
@@ -588,6 +648,66 @@ class TestJobLifecycle:
         """send_message returns False (not an error) for a job that doesn't exist."""
         result = await runtime.send_message("nonexistent-job", "hello")
         assert result is False
+
+    async def test_pause_job_no_session_returns_false(
+        self,
+        runtime: RuntimeService,
+    ) -> None:
+        """pause_job returns False when no agent session is running."""
+        result = await runtime.pause_job("nonexistent-job")
+        assert result is False
+
+    async def test_pause_job_blocks_tools_and_interrupts(
+        self,
+        runtime: RuntimeService,
+        adapter: FakeAgentAdapter,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        """pause_job blocks tools, interrupts the session, and sends the pause message."""
+        slow_adapter = FakeAgentAdapter(delay=5.0)
+        runtime._adapter_registry._fake = slow_adapter
+
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        await runtime.start_or_enqueue(job)
+        await asyncio.sleep(0.1)
+        assert runtime.running_count == 1
+
+        result = await runtime.pause_job(job.id)
+        assert result is True
+
+        # Adapter should have been interrupted
+        assert len(slow_adapter._interrupted) == 1
+        # Adapter should have been told to pause tools
+        assert len(slow_adapter._paused) == 1
+        # A pause message should have been sent
+        assert any("stop what you are doing" in msg for _, msg in slow_adapter._messages)
+
+    async def test_send_message_clears_pause(
+        self,
+        runtime: RuntimeService,
+        adapter: FakeAgentAdapter,
+        session_factory: async_sessionmaker[AsyncSession],
+        config: CPLConfig,
+    ) -> None:
+        """Sending a follow-up message after pause lifts the tool block."""
+        slow_adapter = FakeAgentAdapter(delay=5.0)
+        runtime._adapter_registry._fake = slow_adapter
+
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        await runtime.start_or_enqueue(job)
+        await asyncio.sleep(0.1)
+
+        await runtime.pause_job(job.id)
+        assert len(slow_adapter._paused) == 1
+
+        await runtime.send_message(job.id, "continue working")
+        # Tool block should be cleared
+        assert len(slow_adapter._paused) == 0
 
 
 class TestResumeFallback:
@@ -628,7 +748,7 @@ class TestResumeFallback:
 
         event_bus.subscribe(_collect)
 
-        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        job = _make_job(repo=config.repos[0], state=JobState.review)
         job.branch = "cpl/job-1"
         job.completed_at = datetime.now(UTC)
         job.resolution = Resolution.conflict
@@ -648,14 +768,14 @@ class TestResumeFallback:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.succeeded
+            assert row.state == JobState.completed
             assert row.resolution == Resolution.merged
             assert row.merge_status == Resolution.merged
 
-        succeeded_events = [event for event in published if event.kind == DomainEventKind.job_succeeded]
-        assert succeeded_events
-        assert succeeded_events[-1].payload["resolution"] == Resolution.merged
-        assert succeeded_events[-1].payload["merge_status"] == Resolution.merged
+        completed_events = [event for event in published if event.kind == DomainEventKind.job_completed]
+        assert completed_events
+        assert completed_events[-1].payload["resolution"] == Resolution.merged
+        assert completed_events[-1].payload["merge_status"] == Resolution.merged
 
         await runtime.shutdown()
 
@@ -680,7 +800,7 @@ class TestResumeFallback:
 
         event_bus.subscribe(_collect)
 
-        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        job = _make_job(repo=config.repos[0], state=JobState.review)
         job.completed_at = datetime.now(UTC)
         job.session_count = 4
         job.resolution = Resolution.unresolved
@@ -700,7 +820,7 @@ class TestResumeFallback:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.succeeded
+            assert row.state == JobState.review
             assert row.session_count == 4
             assert row.resolution == Resolution.unresolved
             assert row.completed_at is not None
@@ -822,7 +942,7 @@ class TestResumeFallback:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.succeeded
+            assert row.state == JobState.review
             assert row.sdk_session_id == "resume-2"
 
         await runtime.shutdown()
@@ -876,7 +996,7 @@ class TestResumeFallback:
             config=config,
         )
 
-        job = _make_job(repo=config.repos[0], state=JobState.succeeded)
+        job = _make_job(repo=config.repos[0], state=JobState.completed)
         job.completed_at = datetime.now(UTC)
         job.resolution = Resolution.merged
         await _create_db_job(session_factory, job)
@@ -945,7 +1065,7 @@ class TestRecovery:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.succeeded
+            assert row.state == JobState.review
 
         resumed_events = [e for e in published if e.kind == DomainEventKind.session_resumed]
         assert len(resumed_events) == 1
@@ -996,7 +1116,7 @@ class TestRecovery:
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
-            assert row.state == JobState.succeeded
+            assert row.state == JobState.review
 
 
 # ---------------------------------------------------------------------------
@@ -1110,6 +1230,20 @@ class TestAgentSession:
             break  # start but don't finish
 
         await session.abort()
+
+    async def test_pause_and_resume_tools(self) -> None:
+        adapter = FakeAgentAdapter(delay=0.0)
+        session = _AgentSession()
+        config = SessionConfig(workspace_path="/tmp", prompt="test")
+
+        async for _ in session.execute(config, adapter):
+            pass
+
+        session.pause_tools()
+        assert session.session_id in adapter._paused
+
+        session.resume_tools()
+        assert session.session_id not in adapter._paused
 
 
 # ---------------------------------------------------------------------------
@@ -1448,10 +1582,10 @@ class TestErrorEventCausesFailure:
         await runtime.start_or_enqueue(job)
         await asyncio.sleep(0.5)
 
-        # Should have a job_failed event, NOT job_succeeded
+        # Should have a job_failed event, NOT job_review
         kinds = [e.kind for e in published]
         assert DomainEventKind.job_failed in kinds
-        assert DomainEventKind.job_succeeded not in kinds
+        assert DomainEventKind.job_review not in kinds
 
         # DB state should be failed
         from backend.models.db import JobRow
@@ -1499,5 +1633,113 @@ class TestStartOrEnqueueCapacitySafety:
 
         # Should only have 1 running (max_concurrent=1)
         assert runtime.running_count <= config.runtime.max_concurrent_jobs
+
+        await runtime.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat: waiting_for_approval pauses the timeout
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeatWaitingForApproval:
+    async def test_heartbeat_timeout_skipped_while_waiting_for_approval(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> None:
+        """Jobs in waiting_for_approval must not be failed by the heartbeat timeout."""
+        import time
+
+        import backend.services.runtime_service as rs_mod
+
+        failed_jobs: list[str] = []
+
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter()),
+            config=config,
+        )
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        original_fail = runtime._fail_job
+
+        async def _capture_fail(job_id: str, reason: str) -> None:
+            failed_jobs.append(job_id)
+            await original_fail(job_id, reason)
+
+        runtime._fail_job = _capture_fail  # type: ignore[method-assign]
+
+        # Simulate the job in waiting_for_approval with a stale activity timestamp
+        runtime._waiting_for_approval.add(job.id)
+        runtime._last_activity[job.id] = time.monotonic() - (rs_mod._HEARTBEAT_TIMEOUT_S + 10)
+
+        # Run the heartbeat loop with the interval zeroed so it triggers immediately
+        original_interval = rs_mod._HEARTBEAT_INTERVAL_S
+        rs_mod._HEARTBEAT_INTERVAL_S = 0
+        try:
+            heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
+            await asyncio.sleep(0.05)
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+        finally:
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval
+
+        # The loop must have looped (not exited early) and must NOT have failed the job
+        assert job.id not in failed_jobs
+
+        await runtime.shutdown()
+
+    async def test_heartbeat_timeout_fires_when_not_waiting_for_approval(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> None:
+        """Jobs NOT in waiting_for_approval are failed when the timeout expires."""
+        import time
+
+        import backend.services.runtime_service as rs_mod
+
+        failed_jobs: list[str] = []
+
+        runtime = RuntimeService(
+            session_factory=session_factory,
+            event_bus=event_bus,
+            adapter_registry=FakeAdapterRegistry(FakeAgentAdapter()),
+            config=config,
+        )
+        job = _make_job(repo=config.repos[0])
+        await _create_db_job(session_factory, job)
+
+        original_fail = runtime._fail_job
+
+        async def _capture_fail(job_id: str, reason: str) -> None:
+            failed_jobs.append(job_id)
+            await original_fail(job_id, reason)
+
+        runtime._fail_job = _capture_fail  # type: ignore[method-assign]
+
+        # Seed stale activity — past the timeout threshold — and no approval wait
+        runtime._last_activity[job.id] = time.monotonic() - (rs_mod._HEARTBEAT_TIMEOUT_S + 10)
+        assert job.id not in runtime._waiting_for_approval
+
+        # Patch interval to 0 so the loop triggers immediately
+        original_interval = rs_mod._HEARTBEAT_INTERVAL_S
+        rs_mod._HEARTBEAT_INTERVAL_S = 0
+        try:
+            heartbeat_task = asyncio.create_task(runtime._heartbeat_loop(job.id))
+            await asyncio.sleep(0.05)
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+        finally:
+            rs_mod._HEARTBEAT_INTERVAL_S = original_interval
+
+        assert job.id in failed_jobs
 
         await runtime.shutdown()

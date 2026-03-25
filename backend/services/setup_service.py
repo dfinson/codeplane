@@ -355,8 +355,14 @@ def _check_agent_auth(sdk_id: str) -> AgentAuthStatus:
         if shutil.which("claude") is None:
             return AgentAuthStatus(sdk_id, None, "claude CLI not available")
         try:
+            # --text: human-readable output (JSON is the default since CLI ~2.x).
+            # Sample authenticated output:
+            #   Login method: Claude Pro Account
+            #   Organization: user@example.com's Organization
+            #   Email: user@example.com
+            # Sample unauthenticated: exit code 1, "Not logged in" on stderr.
             result = subprocess.run(
-                ["claude", "auth", "status"],
+                ["claude", "auth", "status", "--text"],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -367,10 +373,18 @@ def _check_agent_auth(sdk_id: str) -> AgentAuthStatus:
         output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         lowered = output.lower()
-        if result.returncode == 0 or "logged in" in lowered or "authenticated" in lowered:
-            detail = lines[0] if lines else "authenticated"
+
+        if result.returncode == 0:
+            # Extract email from "Email: user@example.com" line.
+            email = ""
+            for line in lines:
+                if line.lower().startswith("email:"):
+                    email = line.split(":", 1)[1].strip()
+                    break
+            detail = f"Logged in as {email}" if email else "authenticated"
             return AgentAuthStatus(sdk_id, True, detail)
-        if any(token in lowered for token in ("not logged in", "login required", "unauth", "authenticate")):
+
+        if "not logged in" in lowered or "login required" in lowered:
             detail = lines[0] if lines else "not authenticated"
             return AgentAuthStatus(sdk_id, False, detail, "Run: claude auth login")
         return AgentAuthStatus(sdk_id, None, lines[0] if lines else "Unable to determine auth status")
@@ -391,65 +405,54 @@ def _build_agent_check_result(sdk_id: str) -> CheckResult:
 
     auth = _check_agent_auth(sdk_id)
     if auth.authenticated is False:
-        detail = f"{cli.detail} (auth not detected)"
         return CheckResult(
             cli.name,
             CheckStatus.warn,
-            detail,
+            f"{cli.detail} (not authenticated)",
             hint=auth.hint,
-            category="agent_auth",
+            category="agent",
+        )
+    if auth.authenticated is None:
+        return CheckResult(
+            cli.name,
+            CheckStatus.warn,
+            f"{cli.detail} (auth unknown)",
+            hint=auth.hint or "Unable to verify authentication",
+            category="agent",
         )
 
-    return CheckResult(cli.name, CheckStatus.passed, cli.detail, category="agent")
+    return CheckResult(cli.name, CheckStatus.passed, auth.detail, category="agent")
 
 
 def check_agent_cli(sdk_id: str) -> AgentCLIStatus:
     """Unified check for an agent CLI.
 
     Used by preflight, setup wizard, and the /api/sdks endpoint.
-    Does NOT verify auth — that is the CLI's responsibility.
+    SDKs are pre-packaged with CodePlane so import checks are skipped;
+    only CLI reachability is verified.  Auth is checked separately.
     """
     if sdk_id == "copilot":
-        try:
-            import copilot  # noqa: F401
-
-            installed = True
-        except ImportError:
-            installed = False
-        # Copilot SDK is the entry point (no separate binary)
-        cli_reachable = installed
-        ready = installed
+        # Copilot uses the gh CLI as its entry point.
+        cli_reachable = shutil.which("gh") is not None
+        ready = cli_reachable
         if ready:
-            ver = getattr(copilot, "__version__", "installed")
-            detail = f"github-copilot-sdk {ver}"
+            detail = "gh CLI installed"
             hint = ""
         else:
-            detail = "not installed"
-            hint = "Install: uv add github-copilot-sdk"
-        return AgentCLIStatus("copilot", "GitHub Copilot", installed, cli_reachable, ready, detail, hint)
+            detail = "gh CLI not found"
+            hint = "Install: https://cli.github.com/"
+        return AgentCLIStatus("copilot", "GitHub Copilot", True, cli_reachable, ready, detail, hint)
 
     if sdk_id == "claude":
-        try:
-            import claude_code_sdk  # noqa: F401
-
-            installed = True
-        except ImportError:
-            installed = False
         cli_reachable = shutil.which("claude") is not None
-        ready = installed and cli_reachable
+        ready = cli_reachable
         if ready:
-            detail = "claude CLI and SDK installed"
+            detail = "claude CLI installed"
             hint = ""
-        elif cli_reachable and not installed:
-            detail = "claude CLI found, Python SDK missing"
-            hint = "Install: uv add claude-code-sdk"
-        elif installed and not cli_reachable:
-            detail = "Python SDK installed, claude CLI not on PATH"
-            hint = "Install CLI: npm install -g @anthropic-ai/claude-code"
         else:
-            detail = "not installed"
-            hint = "Install CLI: npm install -g @anthropic-ai/claude-code\nInstall SDK: uv add claude-code-sdk"
-        return AgentCLIStatus("claude", "Claude Code", installed, cli_reachable, ready, detail, hint)
+            detail = "claude CLI not on PATH"
+            hint = "Install CLI: npm install -g @anthropic-ai/claude-code"
+        return AgentCLIStatus("claude", "Claude Code", True, cli_reachable, ready, detail, hint)
 
     return AgentCLIStatus(sdk_id, sdk_id, False, False, False, "unknown agent", "")
 
@@ -556,8 +559,24 @@ def verify_requirements(
             )
 
     # --- Agent CLIs ---
+    agent_results: list[CheckResult] = []
     for sdk_id in ("copilot", "claude"):
-        results.append(_build_agent_check_result(sdk_id))
+        agent_results.append(_build_agent_check_result(sdk_id))
+    results.extend(agent_results)
+
+    # At least one agent CLI must be authenticated.
+    any_agent_ready = any(r.status == CheckStatus.passed for r in agent_results)
+    if not any_agent_ready:
+        results.append(
+            CheckResult(
+                "Agent Auth",
+                CheckStatus.fail,
+                "no authenticated agent CLI",
+                hint="At least one agent CLI must be authenticated.\n"
+                "Run: gh auth login (GitHub Copilot) or claude auth login (Claude Code)",
+                category="agent",
+            )
+        )
 
     # --- Environment ---
     if DEFAULT_CONFIG_PATH.exists():
@@ -732,8 +751,8 @@ def render_summary(results: list[CheckResult]) -> None:
 # Map (category, label-substring) → shell commands that can fix the issue.
 _INLINE_FIX_COMMANDS: dict[str, list[str]] = {
     "claude_cli": ["npm", "install", "-g", "@anthropic-ai/claude-code"],
-    "claude_sdk": ["uv", "add", "claude-code-sdk"],
-    "copilot_sdk": ["uv", "add", "github-copilot-sdk"],
+    "gh_auth": ["gh", "auth", "login"],
+    "claude_auth": ["claude", "auth", "login"],
 }
 
 
@@ -810,10 +829,18 @@ def _offer_inline_fix(warning: CheckResult) -> str:
         if cli.sdk_id == "claude":
             if not cli.cli_reachable:
                 fixes.append(("Install claude CLI", _INLINE_FIX_COMMANDS["claude_cli"]))
-            if not cli.installed:
-                fixes.append(("Install claude-code-sdk", _INLINE_FIX_COMMANDS["claude_sdk"]))
-        elif cli.sdk_id == "copilot" and not cli.installed:
-            fixes.append(("Install github-copilot-sdk", _INLINE_FIX_COMMANDS["copilot_sdk"]))
+            else:
+                # CLI is installed but auth may be missing
+                auth = _check_agent_auth("claude")
+                if auth.authenticated is not True:
+                    fixes.append(("Authenticate claude CLI", _INLINE_FIX_COMMANDS["claude_auth"]))
+        elif cli.sdk_id == "copilot":
+            if not cli.cli_reachable:
+                fixes.append(("Install GitHub CLI", ["gh", "auth", "login"]))
+            else:
+                auth = _check_agent_auth("copilot")
+                if auth.authenticated is not True:
+                    fixes.append(("Authenticate GitHub CLI", _INLINE_FIX_COMMANDS["gh_auth"]))
 
     if not fixes:
         # No automated fix available — just ask continue/abort

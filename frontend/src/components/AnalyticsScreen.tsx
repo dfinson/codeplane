@@ -61,7 +61,8 @@ function formatRelativeTime(iso: string): string {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  succeeded: "#22c55e",
+  review: "#06b6d4",
+  completed: "#22c55e",
   failed: "#ef4444",
   cancelled: "#f59e0b",
   running: "#3b82f6",
@@ -125,10 +126,11 @@ function CostTrendChart({ data }: { data: { date: string; cost: number; jobs: nu
 
 function JobStatusPie({ overview }: { overview: AnalyticsOverview }) {
   const data = [
-    { name: "Succeeded", value: overview.succeeded },
-    { name: "Failed", value: overview.failed },
-    { name: "Cancelled", value: overview.cancelled },
-    { name: "Running", value: overview.running },
+    { name: "In Review", value: overview.review, color: STATUS_COLORS.review },
+    { name: "Completed", value: overview.completed, color: STATUS_COLORS.completed },
+    { name: "Failed", value: overview.failed, color: STATUS_COLORS.failed },
+    { name: "Cancelled", value: overview.cancelled, color: STATUS_COLORS.cancelled },
+    { name: "Running", value: overview.running, color: STATUS_COLORS.running },
   ].filter((d) => d.value > 0);
 
   if (!data.length) return null;
@@ -138,7 +140,7 @@ function JobStatusPie({ overview }: { overview: AnalyticsOverview }) {
       <PieChart>
         <Pie data={data} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={2}>
           {data.map((entry) => (
-            <Cell key={entry.name} fill={STATUS_COLORS[entry.name.toLowerCase()] || "#666"} />
+            <Cell key={entry.name} fill={entry.color} />
           ))}
         </Pie>
         <RTooltip
@@ -496,7 +498,7 @@ export function AnalyticsScreen() {
   if (!overview) return null;
 
   const successRate = overview.totalJobs
-    ? ((overview.succeeded / overview.totalJobs) * 100).toFixed(0)
+    ? (((overview.review + overview.completed) / overview.totalJobs) * 100).toFixed(0)
     : "—";
 
   return (
@@ -571,7 +573,8 @@ export function AnalyticsScreen() {
           <JobStatusPie overview={overview} />
           <div className="flex flex-wrap gap-3 justify-center mt-2">
             {[
-              { label: "Succeeded", color: STATUS_COLORS.succeeded, count: overview.succeeded },
+              { label: "In Review", color: STATUS_COLORS.review, count: overview.review },
+              { label: "Completed", color: STATUS_COLORS.completed, count: overview.completed },
               { label: "Failed", color: STATUS_COLORS.failed, count: overview.failed },
               { label: "Cancelled", color: STATUS_COLORS.cancelled, count: overview.cancelled },
             ]

@@ -158,7 +158,7 @@ export function App() {
         >
           <span className="flex items-center gap-2">
             <Search size={14} />
-            <span>Search all jobs…</span>
+            <span>Search or navigate...</span>
           </span>
           <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs">⌘K</kbd>
         </button>

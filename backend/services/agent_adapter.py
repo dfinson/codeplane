@@ -82,6 +82,26 @@ class AgentAdapterInterface(ABC):
     async def abort_session(self, session_id: str) -> None:
         """Abort the current message processing and destroy the session."""
 
+    async def interrupt_session(self, session_id: str) -> None:  # noqa: B027
+        """Interrupt the current turn without destroying the session.
+
+        After interruption the session remains alive and a new turn can be
+        started via ``send_message``.  The default implementation is a no-op
+        (adapters that don't support non-destructive interruption simply
+        fall through).
+        """
+
+    def pause_tools(self, session_id: str) -> None:
+        """Block all tool execution for the given session.
+
+        While paused, permission callbacks immediately deny every tool
+        request so the agent cannot take actions.  Call ``resume_tools``
+        to lift the block.
+        """
+
+    def resume_tools(self, session_id: str) -> None:
+        """Lift the tool block set by ``pause_tools``."""
+
     @abstractmethod
     async def complete(self, prompt: str) -> str | None:
         """Non-agentic single-turn completion. Returns the full response text, or None on error."""

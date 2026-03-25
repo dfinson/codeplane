@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
@@ -243,18 +244,10 @@ async def pause_job(
 async def continue_job(
     job_id: str,
     body: ContinueJobRequest,
-    svc: FromDishka[JobService],
-    session: FromDishka[AsyncSession],
     runtime_service: FromDishka[RuntimeService],
 ) -> CreateJobResponse:
-    """Create a follow-up job with a new instruction on the same repo/config."""
-    job = await svc.continue_job(job_id, body.instruction)
-
-    await session.commit()
-
-    if job.state != JobState.failed:
-        await runtime_service.start_or_enqueue(job)
-        job = await svc.get_job(job.id)
+    """Create a follow-up job with a new instruction and parent-job handoff context."""
+    job = await runtime_service.create_followup_job(job_id, body.instruction)
 
     return CreateJobResponse(
         id=job.id,
@@ -294,6 +287,7 @@ async def get_job_logs(
     svc: FromDishka[JobService],
     level: Annotated[str, Query(pattern="^(debug|info|warn|error)$")] = "debug",
     limit: Annotated[int, Query(ge=1, le=5000)] = 2000,
+    session: Annotated[int | None, Query(ge=1, description="Filter to a specific session number (1-based)")] = None,
 ) -> list[LogLinePayload]:
     """Return historical log lines for a job, filtered by minimum severity.
 
@@ -302,22 +296,35 @@ async def get_job_logs(
     - ``info``   → info, warn, error
     - ``warn``   → warn, error
     - ``error``  → error only
+
+    ``session`` optionally restricts results to a single session number.
+    Session 1 is the initial run; subsequent numbers correspond to resume/
+    handoff sessions.  Omit to return logs from all sessions.
     """
     _level_order = {"debug": 0, "info": 1, "warn": 2, "error": 3}
     min_priority = _level_order.get(level, 0)
     events = await svc.list_events_by_job(job_id, [DomainEventKind.log_line_emitted], limit=limit)
-    return [
-        LogLinePayload(
-            job_id=event.job_id,
-            seq=event.payload.get("seq", 0),
-            timestamp=event.payload.get("timestamp", event.timestamp),
-            level=event.payload.get("level", "info"),
-            message=event.payload.get("message", ""),
-            context=event.payload.get("context"),
+    lines = []
+    for event in events:
+        p = event.payload
+        event_level = p.get("level", "info")
+        if _level_order.get(event_level, 1) < min_priority:
+            continue
+        event_session = p.get("session_number")
+        if session is not None and (event_session or 1) != session:
+            continue
+        lines.append(
+            LogLinePayload(
+                job_id=event.job_id,
+                seq=p.get("seq", 0),
+                timestamp=p.get("timestamp", event.timestamp),
+                level=event_level,
+                message=p.get("message", ""),
+                context=p.get("context"),
+                session_number=event_session,
+            )
         )
-        for event in events
-        if _level_order.get(event.payload.get("level", "info"), 1) >= min_priority
-    ]
+    return lines
 
 
 @router.get("/jobs/{job_id}/diff", response_model=list[DiffFileModel])
@@ -399,6 +406,7 @@ async def get_job_transcript(
             tool_intent=event.payload.get("tool_intent"),
             tool_title=event.payload.get("tool_title"),
             tool_display=event.payload.get("tool_display"),
+            tool_duration_ms=event.payload.get("tool_duration_ms"),
             tool_group_summary=group_summary_by_turn.get(event.payload.get("turn_id") or ""),
         )
         for event in events
@@ -503,6 +511,7 @@ async def get_job_snapshot(
             tool_intent=e.payload.get("tool_intent"),
             tool_title=e.payload.get("tool_title"),
             tool_display=e.payload.get("tool_display"),
+            tool_duration_ms=e.payload.get("tool_duration_ms"),
             tool_group_summary=group_summary_by_turn.get(e.payload.get("turn_id") or ""),
         )
         for e in transcript_events
@@ -700,7 +709,7 @@ async def resolve_job(
     merge_service: FromDishka[MergeService],
     event_bus: FromDishka[EventBus],
 ) -> ResolveJobResponse:
-    """Resolve a succeeded job: merge, create PR, discard, or resolve with agent."""
+    """Resolve a review job: merge, create PR, discard, or resolve with agent."""
     job = await svc.resolve_job(job_id, body.action)
 
     # agent_merge: hand the conflict back to the agent to resolve
@@ -739,6 +748,8 @@ async def resolve_job(
         merge_service=merge_service,
     )
     await session.commit()
+
+    # Publish job_resolved event (resolution details)
     await event_bus.publish(
         svc.build_job_resolved_event(
             job.id,
@@ -748,6 +759,24 @@ async def resolve_job(
             error=error,
         )
     )
+
+    # If the job transitioned to completed, publish the terminal event
+    if resolution in (Resolution.merged, Resolution.pr_created, Resolution.discarded):
+        from backend.models.events import DomainEvent
+
+        await event_bus.publish(
+            DomainEvent(
+                event_id=DomainEvent.make_event_id(),
+                job_id=job.id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.job_completed,
+                payload={
+                    "resolution": resolution,
+                    "merge_status": resolution,
+                    "pr_url": pr_url,
+                },
+            )
+        )
 
     return ResolveJobResponse(
         resolution=resolution,
@@ -774,8 +803,7 @@ async def archive_job(
 async def unarchive_job(
     job_id: str,
     svc: FromDishka[JobService],
-    session: FromDishka[AsyncSession],
 ) -> None:
-    """Unarchive a job (show on Kanban board again)."""
-    await svc.unarchive_job(job_id)
-    await session.commit()
+    """Archived jobs are final and cannot be returned to the active board."""
+    await svc.get_job(job_id)
+    raise HTTPException(status_code=409, detail="Archived jobs are complete; create a follow-up job instead.")

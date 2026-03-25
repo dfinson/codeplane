@@ -282,6 +282,7 @@ export function JobDetailScreen() {
   if (!jobId) return null;
 
   if (loading && showSkeleton) return <JobDetailSkeleton />;
+  if (loading) return null;
 
   if (!job) {
     return (
@@ -295,8 +296,8 @@ export function JobDetailScreen() {
     );
   }
 
-  const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
-  const canResume = job.state === "failed";
+  const canCancel = ["queued", "running", "waiting_for_approval", "review"].includes(job.state);
+  const canResume = job.state === "failed" || job.state === "review";
   const isRunning = job.state === "running";
   const hasMergeConflict =
     !["merged", "pr_created", "discarded"].includes(job.resolution ?? "") &&
@@ -308,14 +309,14 @@ export function JobDetailScreen() {
       ? (job.resolutionError ?? null)
       : null;
   const needsResolution =
-    job.state === "succeeded" &&
+    job.state === "review" &&
     (job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution);
   const isResolved =
-    job.state === "succeeded" &&
+    job.state === "completed" &&
     !!job.resolution &&
     job.resolution !== "unresolved" &&
     job.resolution !== "conflict";
-  const canArchive = (job.state === "failed" || job.state === "canceled") && !job.archivedAt;
+  const canArchive = (job.state === "failed" || job.state === "canceled" || job.state === "completed") && !job.archivedAt;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -518,8 +519,8 @@ export function JobDetailScreen() {
           </div>
         )}
 
-        {/* Success banner */}
-        {job.state === "succeeded" && (() => {
+        {/* Review banner */}
+        {job.state === "review" && (() => {
           const isConflict = hasMergeConflict;
           const isSignOff = job.resolution === "unresolved" || !job.resolution;
           return (
@@ -534,14 +535,11 @@ export function JobDetailScreen() {
                 )}
                 <div>
                   <p className={`text-sm font-medium ${isConflict ? "text-amber-500" : isSignOff ? "text-blue-500" : "text-green-500"}`}>
-                    {isConflict ? "Merge conflict — user input required" : isSignOff ? "Sign off required" : "Job succeeded"}
+                    {isConflict ? "Merge conflict — user input required" : isSignOff ? "Review required" : "Ready for resolution"}
                   </p>
                   <p className={`text-sm mt-0.5 ${isConflict ? "text-amber-400" : isSignOff ? "text-blue-400" : "text-green-400"}`}>
                     {isConflict
                       ? "Merge conflict detected. Resolve with the agent, create a PR to fix manually, or discard."
-                      : job.resolution === "merged" ? "Changes merged into base branch."
-                      : job.resolution === "pr_created" ? "Pull request created."
-                      : job.resolution === "discarded" ? (hasChanges ? "Changes discarded." : "Completed — no changes to merge.")
                       : null}
                     {!isConflict && isSignOff && (
                       hasChanges
@@ -559,6 +557,24 @@ export function JobDetailScreen() {
             </div>
           );
         })()}
+
+        {/* Completed banner */}
+        {job.state === "completed" && (
+          <div className="mt-3 rounded-md border border-green-500/30 bg-green-500/10 p-3">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 size={16} className="text-green-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-green-500">Job completed</p>
+                <p className="text-sm mt-0.5 text-green-400">
+                  {job.resolution === "merged" ? "Changes merged into base branch."
+                    : job.resolution === "pr_created" ? "Pull request created."
+                    : job.resolution === "discarded" ? (hasChanges ? "Changes discarded." : "Completed — no changes to merge.")
+                    : null}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Canceled banner */}
         {job.state === "canceled" && (

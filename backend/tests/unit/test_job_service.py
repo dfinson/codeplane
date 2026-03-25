@@ -77,7 +77,7 @@ class TestStateMachine:
 
     def test_invalid_initial_transition(self) -> None:
         with pytest.raises(InvalidStateTransitionError):
-            validate_state_transition(None, JobState.succeeded)
+            validate_state_transition(None, JobState.review)
 
     def test_queued_to_running(self) -> None:
         validate_state_transition(JobState.queued, JobState.running)
@@ -85,12 +85,12 @@ class TestStateMachine:
     def test_queued_to_canceled(self) -> None:
         validate_state_transition(JobState.queued, JobState.canceled)
 
-    def test_queued_to_succeeded_invalid(self) -> None:
+    def test_queued_to_review_invalid(self) -> None:
         with pytest.raises(InvalidStateTransitionError):
-            validate_state_transition(JobState.queued, JobState.succeeded)
+            validate_state_transition(JobState.queued, JobState.review)
 
-    def test_running_to_succeeded(self) -> None:
-        validate_state_transition(JobState.running, JobState.succeeded)
+    def test_running_to_review(self) -> None:
+        validate_state_transition(JobState.running, JobState.review)
 
     def test_running_to_failed(self) -> None:
         validate_state_transition(JobState.running, JobState.failed)
@@ -124,7 +124,7 @@ class TestStateMachine:
                     validate_state_transition(terminal, invalid)
 
     def test_terminal_states_values(self) -> None:
-        assert JobState.succeeded in TERMINAL_STATES
+        assert JobState.completed in TERMINAL_STATES
         assert JobState.failed in TERMINAL_STATES
         assert JobState.canceled in TERMINAL_STATES
 
@@ -132,6 +132,7 @@ class TestStateMachine:
         assert JobState.queued in ACTIVE_STATES
         assert JobState.running in ACTIVE_STATES
         assert JobState.waiting_for_approval in ACTIVE_STATES
+        assert JobState.review in ACTIVE_STATES
 
 
 # --- JobService Tests ---
@@ -439,7 +440,7 @@ class TestJobService:
         assert job.completed_at is not None
 
     @pytest.mark.asyncio
-    async def test_transition_state_running_to_succeeded(
+    async def test_transition_state_running_to_review(
         self,
         job_service: JobService,
         session: AsyncSession,
@@ -463,9 +464,10 @@ class TestJobService:
 
         # Phase 4: jobs start as queued, must transition through running first
         await job_service.transition_state(created.id, JobState.running)
-        job = await job_service.transition_state(created.id, JobState.succeeded)
-        assert job.state == JobState.succeeded
-        assert job.completed_at is not None
+        job = await job_service.transition_state(created.id, JobState.review)
+        assert job.state == JobState.review
+        # review is active, not terminal — completed_at should be None
+        assert job.completed_at is None
 
     @pytest.mark.asyncio
     async def test_transition_state_invalid(
