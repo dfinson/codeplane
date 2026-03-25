@@ -174,7 +174,7 @@ class ConsoleDashboard:
         self._live = Live(
             _DashboardView(self),
             console=self._console,
-            refresh_rate=4,
+            refresh_per_second=4,
             screen=False,
             auto_refresh=True,
         )
