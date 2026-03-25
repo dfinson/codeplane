@@ -147,6 +147,13 @@ class ConsoleDashboard:
         self._warning_count = 0
         self._start_time = time.monotonic()
         self._log_file_path = log_file_path
+        self._server_url: str | None = None
+        self._tunnel_url: str | None = None
+
+    def set_server_info(self, *, server_url: str | None = None, tunnel_url: str | None = None) -> None:
+        """Set server URLs for the dashboard header."""
+        self._server_url = server_url
+        self._tunnel_url = tunnel_url
 
     # ------------------------------------------------------------------
     # Factory
@@ -175,8 +182,9 @@ class ConsoleDashboard:
             _DashboardView(self),
             console=self._console,
             refresh_per_second=4,
-            screen=False,
+            screen=True,
             auto_refresh=True,
+            vertical_overflow="crop",
         )
         self._live.start(refresh=True)
 
@@ -305,10 +313,16 @@ class ConsoleDashboard:
         m, s = divmod(rem, 60)
         uptime_str = f"{h}h {m}m" if h else f"{m}m {s}s"
         log_hint = f"  ·  logs → {self._log_file_path}" if self._log_file_path else ""
+        url_hint = ""
+        if self._tunnel_url:
+            url_hint = f"  ·  {self._tunnel_url}"
+        elif self._server_url:
+            url_hint = f"  ·  {self._server_url}"
         header_text = Text.assemble(
             ("CodePlane", "bold cyan"),
             "  up ",
             (uptime_str, "green"),
+            (url_hint, "bold"),
             (log_hint, "dim"),
         )
         header_panel = Panel(header_text, box=ROUNDED, padding=(0, 1))

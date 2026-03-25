@@ -423,6 +423,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _print_startup_banner(**banner_args)
 
     if dashboard is not None:
+        if banner_args:
+            host = banner_args.get("host", "127.0.0.1")
+            port = banner_args.get("port", 8080)
+            dashboard.set_server_info(
+                server_url=f"http://{host}:{port}",
+                tunnel_url=banner_args.get("tunnel_url"),
+            )
         dashboard.start()
 
     yield
