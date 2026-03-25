@@ -399,6 +399,10 @@ export const useStore = create<AppState>((set, get) => ({
       const keptApprovals = Object.fromEntries(
         Object.entries(s.approvals).filter(([, a]) => a.jobId !== jobId),
       );
+      // Drop any in-flight streaming state for this job
+      const streamingMessages = Object.fromEntries(
+        Object.entries(s.streamingMessages).filter(([k]) => !k.startsWith(`${jobId}:`)),
+      );
       return {
         jobs: { ...s.jobs, [jobId]: enrichJob(snapshot.job) },
         logs: { ...s.logs, [jobId]: snapshot.logs },
@@ -412,6 +416,7 @@ export const useStore = create<AppState>((set, get) => ({
           ...keptApprovals,
           ...Object.fromEntries(snapshot.approvals.map((a) => [a.id, a])),
         },
+        streamingMessages,
       };
     });
   },
@@ -548,8 +553,8 @@ export const useStore = create<AppState>((set, get) => ({
 
           // When a complete agent message arrives, clear streaming state for that turn.
           let streamingMessages = state.streamingMessages;
-          if (entry.role === "agent" && entry.turnId) {
-            const key = `${jobId}:${entry.turnId}`;
+          if (entry.role === "agent") {
+            const key = entry.turnId ? `${jobId}:${entry.turnId}` : `${jobId}:__default__`;
             if (key in streamingMessages) {
               streamingMessages = { ...streamingMessages };
               delete streamingMessages[key];

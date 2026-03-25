@@ -311,7 +311,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       const range = startLine && endLine ? `lines ${startLine}–${endLine}` : null;
       return (
         <div className="font-mono text-xs">
-          <div className="px-3 py-1.5 flex items-center gap-2 border-b border-border/30">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
             <Codicon name="file-code" size={11} className="text-blue-400 shrink-0" />
             <span className="text-foreground/80">{shortPath}</span>
             {range && <span className="text-muted-foreground">{range}</span>}
@@ -355,7 +355,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       const lines = countLines(entry.toolResult);
       return (
         <div className="font-mono text-xs">
-          <div className="px-3 py-1.5 flex items-center gap-2 border-b border-border/30">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
             <Codicon name="search" size={11} className="text-blue-400 shrink-0" />
             <span className="text-foreground/80">&ldquo;{query}&rdquo;</span>
             {lines != null && <span className="text-muted-foreground">→ {lines} matches</span>}
@@ -388,7 +388,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         : null;
       return (
         <div className="font-mono text-xs">
-          <div className="px-3 py-1.5 flex items-center gap-2 border-b border-border/30">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
             <Codicon name="file-code" size={11} className="text-blue-400 shrink-0" />
             <span className="text-foreground/80">{abbreviatePath(path)}</span>
             {range && <span className="text-muted-foreground">{range}</span>}
@@ -408,7 +408,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       const lines = countLines(entry.toolResult);
       return (
         <div className="font-mono text-xs">
-          <div className="px-3 py-1.5 flex items-center gap-2 border-b border-border/30">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
             <Codicon name="search" size={11} className="text-blue-400 shrink-0" />
             <span className="text-foreground/80">{pattern}</span>
             {searchPath && <span className="text-muted-foreground/60">in {abbreviatePath(searchPath)}</span>}
@@ -429,7 +429,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       const lines = countLines(entry.toolResult);
       return (
         <div className="font-mono text-xs">
-          <div className="px-3 py-1.5 flex items-center gap-2 border-b border-border/30">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
             <Codicon name="search" size={11} className="text-blue-400 shrink-0" />
             <span className="text-foreground/80">&ldquo;{pattern}&rdquo;</span>
             {(globFilter || searchPath) && (
@@ -1011,7 +1011,16 @@ export function TranscriptPanel({
                       sdk={sdk}
                       turn={item.turn}
                       isLast={virtualRow.index === displayItems.length - 1}
-                      streamingText={streamingMessages[`${jobId}:${item.turn.key}`] ?? streamingMessages[`${jobId}:__default__`]}
+                      streamingText={(() => {
+                        const byTurn = streamingMessages[`${jobId}:${item.turn.key}`];
+                        if (byTurn !== undefined) return byTurn;
+                        // Only use the no-turn-id fallback for the very last item
+                        // so in-progress deltas don't bleed into completed prior turns.
+                        if (virtualRow.index === displayItems.length - 1) {
+                          return streamingMessages[`${jobId}:__default__`];
+                        }
+                        return undefined;
+                      })()}
                     />
                   )}
 
