@@ -107,16 +107,16 @@ class CostAttributionRepo(BaseRepository):
             text(f"""
                 SELECT
                     bucket,
-                    SUM(cost_usd) as total_cost_usd,
-                    SUM(input_tokens) as total_input_tokens,
-                    SUM(output_tokens) as total_output_tokens,
-                    SUM(call_count) as total_calls,
+                    SUM(cost_usd) as cost_usd,
+                    SUM(input_tokens) as input_tokens,
+                    SUM(output_tokens) as output_tokens,
+                    SUM(call_count) as call_count,
                     COUNT(DISTINCT job_id) as job_count
                 FROM job_cost_attribution
                 WHERE dimension = :dimension
                     AND created_at >= datetime('now', '-{int(period_days)} days')
                 GROUP BY bucket
-                ORDER BY total_cost_usd DESC
+                ORDER BY cost_usd DESC
                 LIMIT :limit
             """),
             {"dimension": dimension, "limit": limit},
@@ -130,14 +130,16 @@ class CostAttributionRepo(BaseRepository):
                 SELECT
                     dimension,
                     bucket,
-                    SUM(cost_usd) as total_cost_usd,
-                    SUM(call_count) as total_calls,
+                    SUM(cost_usd) as cost_usd,
+                    SUM(input_tokens) as input_tokens,
+                    SUM(output_tokens) as output_tokens,
+                    SUM(call_count) as call_count,
                     COUNT(DISTINCT job_id) as job_count,
                     AVG(cost_usd) as avg_cost_per_job
                 FROM job_cost_attribution
                 WHERE created_at >= datetime('now', '-{int(period_days)} days')
                 GROUP BY dimension, bucket
-                ORDER BY total_cost_usd DESC
+                ORDER BY cost_usd DESC
                 LIMIT 100
             """),
         )

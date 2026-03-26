@@ -7,11 +7,13 @@ Also computes derived summary stats (turn economics, file I/O waste).
 
 from __future__ import annotations
 
-import structlog
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.persistence.cost_attribution_repo import CostAttributionRepo
 from backend.persistence.file_access_repo import FileAccessRepo

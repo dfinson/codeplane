@@ -121,3 +121,4 @@ class AgentAdapterInterface(ABC):
 
     def set_execution_phase(self, job_id: str, phase: str) -> None:
         """Update the current execution phase for a job (used by cost analytics)."""
+        raise NotImplementedError

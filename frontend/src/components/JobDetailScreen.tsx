@@ -12,7 +12,6 @@ import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { MetricsPanel } from "./MetricsPanel";
-import CostDriversPanel from "./CostDriversPanel";
 import { ExecutionTimeline } from "./ExecutionTimeline";
 import { PlanPanel } from "./PlanPanel";
 import { CompleteJobDialog } from "./CompleteJobDialog";
@@ -691,7 +690,6 @@ export function JobDetailScreen() {
             <PlanPanel jobId={jobId} />
             <ExecutionTimeline jobId={jobId} />
             <MetricsPanel jobId={jobId} isRunning={isRunning} />
-            <CostDriversPanel jobId={jobId} />
           </div>
         </div>
       )}

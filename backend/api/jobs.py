@@ -597,6 +597,8 @@ async def get_job_telemetry(
     import json
     from datetime import UTC, datetime
 
+    from backend.persistence.cost_attribution_repo import CostAttributionRepo
+    from backend.persistence.file_access_repo import FileAccessRepo
     from backend.persistence.job_repo import JobRepository
     from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
@@ -623,6 +625,9 @@ async def get_job_telemetry(
 
     # Load span detail for tool/LLM call breakdowns
     spans = await TelemetrySpansRepo(session).list_for_job(job_id)
+    attribution_rows = await CostAttributionRepo(session).for_job(job_id)
+    file_stats = await FileAccessRepo(session).reread_stats(job_id)
+    top_files = await FileAccessRepo(session).most_accessed_files(job_id=job_id)
     tool_calls = []
     llm_calls = []
     for span in spans:
@@ -650,6 +655,24 @@ async def get_job_telemetry(
                     "offsetSec": float(span.get("started_at", 0)),
                 }
             )
+
+    grouped_dimensions: dict[str, list[dict[str, object]]] = {}
+    turn_curve: list[dict[str, object]] = []
+    for row in attribution_rows:
+        bucket = {
+            "dimension": row.get("dimension", "unknown"),
+            "bucket": row.get("bucket", "unknown"),
+            "costUsd": float(row.get("cost_usd", 0) or 0),
+            "inputTokens": int(row.get("input_tokens", 0) or 0),
+            "outputTokens": int(row.get("output_tokens", 0) or 0),
+            "callCount": int(row.get("call_count", 0) or 0),
+        }
+        dimension = str(row.get("dimension", "unknown"))
+        grouped_dimensions.setdefault(dimension, []).append(bucket)
+        if dimension == "turn":
+            turn_curve.append(bucket)
+
+    turn_curve.sort(key=lambda item: int(str(item.get("bucket", "0"))) if str(item.get("bucket", "0")).isdigit() else 0)
 
     # For running jobs, compute live duration from created_at instead of
     # the stored 0 which is only finalized when the job completes.
@@ -692,6 +715,36 @@ async def get_job_telemetry(
         "agentMessages": summary.get("agent_messages", 0),
         "operatorMessages": summary.get("operator_messages", 0),
         "premiumRequests": float(summary.get("premium_requests", 0)),
+        "costDrivers": {
+            "phase": grouped_dimensions.get("phase", []),
+            "toolCategory": grouped_dimensions.get("tool_category", []),
+        },
+        "turnEconomics": {
+            "totalTurns": int(summary.get("total_turns", 0) or 0),
+            "peakTurnCostUsd": float(summary.get("peak_turn_cost_usd", 0) or 0),
+            "avgTurnCostUsd": float(summary.get("avg_turn_cost_usd", 0) or 0),
+            "costFirstHalfUsd": float(summary.get("cost_first_half_usd", 0) or 0),
+            "costSecondHalfUsd": float(summary.get("cost_second_half_usd", 0) or 0),
+            "turnCurve": turn_curve,
+        },
+        "fileAccess": {
+            "stats": {
+                "totalAccesses": int(file_stats.get("total_accesses", 0) or 0),
+                "uniqueFiles": int(file_stats.get("unique_files", 0) or 0),
+                "totalReads": int(file_stats.get("total_reads", 0) or 0),
+                "totalWrites": int(file_stats.get("total_writes", 0) or 0),
+                "rereadCount": int(file_stats.get("reread_count", 0) or 0),
+            },
+            "topFiles": [
+                {
+                    "filePath": str(row.get("file_path", "")),
+                    "accessCount": int(row.get("access_count", 0) or 0),
+                    "readCount": int(row.get("read_count", 0) or 0),
+                    "writeCount": int(row.get("write_count", 0) or 0),
+                }
+                for row in top_files
+            ],
+        },
     }
     if quota_snapshots is not None:
         # Convert snake_case keys from DB JSON to camelCase for the frontend

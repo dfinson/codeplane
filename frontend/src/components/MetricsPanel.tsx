@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
-  BarChart3, BookOpen, CheckCircle, XCircle, Zap,
+  BarChart3, BookOpen, CheckCircle, XCircle, Zap, TrendingUp, Layers, FileText,
 } from "lucide-react";
 import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
 import { Badge } from "./ui/badge";
@@ -66,6 +66,48 @@ interface TelemetryData {
   premiumRequests?: number;
   // Copilot: per-resource quota snapshots
   quotaSnapshots?: Record<string, QuotaSnapshotData>;
+  costDrivers?: CostDriversData;
+  turnEconomics?: TurnEconomicsData;
+  fileAccess?: FileAccessData;
+}
+
+interface CostDriverBucket {
+  dimension: string;
+  bucket: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  callCount: number;
+}
+
+interface CostDriversData {
+  phase?: CostDriverBucket[];
+  toolCategory?: CostDriverBucket[];
+}
+
+interface TurnEconomicsData {
+  totalTurns: number;
+  peakTurnCostUsd: number;
+  avgTurnCostUsd: number;
+  costFirstHalfUsd: number;
+  costSecondHalfUsd: number;
+  turnCurve: CostDriverBucket[];
+}
+
+interface FileAccessData {
+  stats: {
+    totalAccesses: number;
+    uniqueFiles: number;
+    totalReads: number;
+    totalWrites: number;
+    rereadCount: number;
+  };
+  topFiles: Array<{
+    filePath: string;
+    accessCount: number;
+    readCount: number;
+    writeCount: number;
+  }>;
 }
 
 interface QuotaSnapshotData {
@@ -546,6 +588,11 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
   // Dynamic model pricing from backend
   const modelPricing = useModelPricing(data?.model ?? data?.mainModel);
+  const phaseBuckets = data?.costDrivers?.phase ?? [];
+  const toolCategoryBuckets = data?.costDrivers?.toolCategory ?? [];
+  const turnEconomics = data?.turnEconomics;
+  const fileAccess = data?.fileAccess;
+  const turnCurve = turnEconomics?.turnCurve ?? [];
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -670,6 +717,129 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
               {/* Cost / quota — shown for copilot and claude sdk jobs */}
               <CostSection data={data} />
+
+              {/* Integrated economics / efficiency */}
+              {(turnEconomics?.totalTurns || phaseBuckets.length > 0 || toolCategoryBuckets.length > 0 || (fileAccess?.stats.totalAccesses ?? 0) > 0) ? (
+                <div className="space-y-4">
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                    <TrendingUp size={12} className="text-blue-400" /> Economics & Efficiency
+                  </h4>
+
+                  {turnEconomics && turnEconomics.totalTurns > 0 && (
+                    <div className="space-y-3 rounded-md border border-border bg-background p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <TrendingUp size={12} className="text-blue-400" /> Turn Economics
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <CompactStat label="Total Turns" value={String(turnEconomics.totalTurns)} />
+                        <CompactStat label="Avg Cost/Turn" value={formatUsd(turnEconomics.avgTurnCostUsd)} />
+                        <CompactStat label="Peak Turn" value={formatUsd(turnEconomics.peakTurnCostUsd)} />
+                        <CompactStat
+                          label="1st/2nd Half"
+                          value={turnEconomics.costSecondHalfUsd > 0 ? `${(turnEconomics.costFirstHalfUsd / turnEconomics.costSecondHalfUsd).toFixed(2)}x` : "—"}
+                        />
+                      </div>
+                      {turnCurve.length > 1 && (
+                        <div className="space-y-1">
+                          {turnCurve.map((bucket) => {
+                            const maxCost = Math.max(...turnCurve.map((entry) => entry.costUsd), 0);
+                            const widthPct = maxCost > 0 ? (bucket.costUsd / maxCost) * 100 : 0;
+                            return (
+                              <div key={bucket.bucket} className="space-y-1">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-muted-foreground">Turn {bucket.bucket}</span>
+                                  <span className="tabular-nums">{formatUsd(bucket.costUsd)}</span>
+                                </div>
+                                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max(widthPct, 4)}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(phaseBuckets.length > 0 || toolCategoryBuckets.length > 0) && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {phaseBuckets.length > 0 && (
+                        <div className="rounded-md border border-border bg-background p-3 space-y-2">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                            <Layers size={12} className="text-blue-400" /> Cost by Phase
+                          </div>
+                          {phaseBuckets
+                            .slice()
+                            .sort((a, b) => b.costUsd - a.costUsd)
+                            .map((bucket) => {
+                              const total = phaseBuckets.reduce((sum, entry) => sum + entry.costUsd, 0);
+                              const widthPct = total > 0 ? (bucket.costUsd / total) * 100 : 0;
+                              return (
+                                <div key={bucket.bucket} className="space-y-1">
+                                  <div className="flex items-center justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground">{bucket.bucket.replace(/_/g, " ")}</span>
+                                    <span className="tabular-nums">{formatUsd(bucket.costUsd)}</span>
+                                  </div>
+                                  <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                                    <div className="h-full rounded-full bg-sky-500" style={{ width: `${Math.max(widthPct, 4)}%` }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      )}
+
+                      {toolCategoryBuckets.length > 0 && (
+                        <div className="rounded-md border border-border bg-background p-3 space-y-2">
+                          <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                            <Wrench size={12} className="text-yellow-400" /> Tool Categories
+                          </div>
+                          {toolCategoryBuckets
+                            .slice()
+                            .sort((a, b) => b.callCount - a.callCount)
+                            .map((bucket) => (
+                              <div key={bucket.bucket} className="flex items-center justify-between gap-2 text-xs">
+                                <div className="min-w-0">
+                                  <div className="truncate text-foreground">{bucket.bucket}</div>
+                                  <div className="text-muted-foreground">{bucket.callCount} calls</div>
+                                </div>
+                                <div className="text-right tabular-nums">
+                                  <div>{formatUsd(bucket.costUsd)}</div>
+                                  <div className="text-muted-foreground">{formatTokens(bucket.inputTokens + bucket.outputTokens)}</div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {fileAccess && fileAccess.stats.totalAccesses > 0 && (
+                    <div className="rounded-md border border-border bg-background p-3 space-y-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <FileText size={12} className="text-yellow-400" /> File I/O
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <CompactStat label="Reads" value={String(fileAccess.stats.totalReads)} />
+                        <CompactStat label="Writes" value={String(fileAccess.stats.totalWrites)} />
+                        <CompactStat label="Unique Files" value={String(fileAccess.stats.uniqueFiles)} />
+                        <CompactStat label="Rereads" value={String(fileAccess.stats.rereadCount)} warn={fileAccess.stats.rereadCount > fileAccess.stats.uniqueFiles} />
+                      </div>
+                      {fileAccess.topFiles.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-[11px] font-medium text-muted-foreground">Most Accessed Files</div>
+                          {fileAccess.topFiles.slice(0, 6).map((entry) => (
+                            <div key={entry.filePath} className="flex items-center justify-between gap-2 text-xs font-mono">
+                              <span className="truncate text-muted-foreground">{entry.filePath}</span>
+                              <span className="shrink-0">{entry.readCount}R / {entry.writeCount}W</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
               {/* Session summary — only shown when summaries exist */}
               {checkpoints.length > 0 && (
@@ -906,6 +1076,15 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
         <span className="text-xs font-medium text-muted-foreground">{label}</span>
       </div>
       <p className="text-lg font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function CompactStat({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className={cn("rounded-md border border-border bg-card px-3 py-2", warn && "border-yellow-500/50")}>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className={cn("text-sm font-medium font-mono", warn && "text-yellow-500")}>{value}</div>
     </div>
   );
 }

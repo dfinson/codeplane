@@ -12,11 +12,13 @@ Run periodically or after each job completion.
 
 from __future__ import annotations
 
-import structlog
-from typing import Any
+from typing import TYPE_CHECKING
 
+import structlog
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.persistence.observations_repo import ObservationsRepo
 
@@ -147,18 +149,12 @@ async def _analyse_turn_escalation(session: AsyncSession, repo: ObservationsRepo
     if len(rows) < 3:
         return 0
 
-    total_waste = sum(
-        max(0, r["cost_second_half_usd"] - r["cost_first_half_usd"])
-        for r in rows
-    )
+    total_waste = sum(max(0, r["cost_second_half_usd"] - r["cost_first_half_usd"]) for r in rows)
     await repo.upsert(
         category="turn_escalation",
         severity="warning" if total_waste >= 1.0 else "info",
         title=f"Cost escalation in {len(rows)} jobs",
-        detail=(
-            f"{len(rows)} jobs had 2nd-half costs ≥2x 1st-half costs. "
-            f"Estimated waste: ${total_waste:.2f}."
-        ),
+        detail=(f"{len(rows)} jobs had 2nd-half costs ≥2x 1st-half costs. Estimated waste: ${total_waste:.2f}."),
         evidence={
             "affected_jobs": [dict(r) for r in rows[:5]],
             "total_jobs": len(rows),
@@ -241,10 +237,7 @@ async def _analyse_phase_imbalance(session: AsyncSession, repo: ObservationsRepo
     if len(rows) < 2:
         return 0
 
-    total_excess = sum(
-        max(0, r["verification_cost"] - r["reasoning_cost"])
-        for r in rows
-    )
+    total_excess = sum(max(0, r["verification_cost"] - r["reasoning_cost"]) for r in rows)
     await repo.upsert(
         category="phase_imbalance",
         severity="warning" if total_excess >= 0.5 else "info",
