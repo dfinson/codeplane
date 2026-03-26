@@ -104,6 +104,10 @@ class ClaudeAdapter(AgentAdapterInterface):
             self._current_phases.pop(job_id, None)
             self._retry_trackers.pop(job_id, None)
 
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        """Update the current execution phase for cost analytics span tagging."""
+        self._current_phases[job_id] = phase
+
     def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
         """Schedule an async DB write from a synchronous or async context."""
         try:

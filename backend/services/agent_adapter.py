@@ -86,3 +86,6 @@ class AgentAdapterInterface(ABC):
     async def complete(self, prompt: str) -> str | None:
         """Non-agentic single-turn completion. Returns the full response text, or None on error."""
         return None
+
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        """Update the current execution phase for a job (used by cost analytics)."""

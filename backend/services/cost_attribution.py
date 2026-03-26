@@ -86,9 +86,10 @@ async def compute_attribution(session: AsyncSession, job_id: str) -> None:
     if total_turns > 0:
         peak = max(turn_costs)
         avg = sum(turn_costs) / total_turns
+        sorted_turns = sorted(by_turn.keys())
         mid = total_turns // 2
-        first_half = sum(sorted(by_turn.keys())[:mid] and [by_turn[t]["cost_usd"] for t in sorted(by_turn.keys())[:mid]])
-        second_half = sum([by_turn[t]["cost_usd"] for t in sorted(by_turn.keys())[mid:]])
+        first_half = sum(by_turn[t]["cost_usd"] for t in sorted_turns[:mid])
+        second_half = sum(by_turn[t]["cost_usd"] for t in sorted_turns[mid:])
     else:
         peak = avg = first_half = second_half = 0.0
 

@@ -553,6 +553,7 @@ class RuntimeService:
         asyncio.create_task(_init_telemetry_row())
 
         # Emit environment_setup phase
+        self._resolve_adapter(config.sdk).set_execution_phase(job_id, "environment_setup")
         await self._event_bus.publish(
             DomainEvent(
                 event_id=DomainEvent.make_event_id(),
@@ -582,6 +583,7 @@ class RuntimeService:
         error_reason: str | None = None
         try:
             # Emit agent_reasoning phase before main session execution
+            self._resolve_adapter(config.sdk).set_execution_phase(job_id, "agent_reasoning")
             await self._event_bus.publish(
                 DomainEvent(
                     event_id=DomainEvent.make_event_id(),
@@ -764,6 +766,7 @@ class RuntimeService:
 
             # Emit finalization phase
             try:
+                self._resolve_adapter(config.sdk).set_execution_phase(job_id, "finalization")
                 await self._event_bus.publish(
                     DomainEvent(
                         event_id=DomainEvent.make_event_id(),
@@ -1344,6 +1347,7 @@ class RuntimeService:
         )
 
         # Emit verification phase change
+        self._resolve_adapter(base_config.sdk).set_execution_phase(job_id, "verification")
         await self._event_bus.publish(
             DomainEvent(
                 event_id=DomainEvent.make_event_id(),

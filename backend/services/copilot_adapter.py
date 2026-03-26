@@ -120,6 +120,10 @@ class CopilotAdapter(AgentAdapterInterface):
             self._current_phases.pop(job_id, None)
             self._retry_trackers.pop(job_id, None)
 
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        """Update the current execution phase for cost analytics span tagging."""
+        self._current_phases[job_id] = phase
+
     async def _handle_permission_request(
         self,
         request: PermissionRequest,
