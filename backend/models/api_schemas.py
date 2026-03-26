@@ -93,6 +93,7 @@ class WorkspaceEntryType(StrEnum):
 
 class TranscriptRole(StrEnum):
     agent = "agent"
+    agent_delta = "agent_delta"  # incremental text chunk streamed before the complete agent message
     operator = "operator"
     tool_call = "tool_call"
     tool_running = "tool_running"

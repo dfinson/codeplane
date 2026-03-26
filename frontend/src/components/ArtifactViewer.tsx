@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { type LucideIcon, Download, FileText, FileCode, ChevronDown, ChevronRight, BookOpen, ScrollText, ListChecks, Activity, ShieldCheck } from "lucide-react";
+import { type LucideIcon, Download, FileText, FileCode, ChevronDown, ChevronRight, BookOpen, ScrollText, ListChecks, Activity, ShieldCheck, ClipboardList, Archive } from "lucide-react";
 import { fetchArtifacts, downloadArtifactUrl, fetchArtifactText } from "../api/client";
-import { Badge } from "./ui/badge";
 import { Spinner } from "./ui/spinner";
 
 interface Artifact {
@@ -17,12 +16,26 @@ interface Artifact {
 
 const TYPE_ICON: Record<string, LucideIcon> = {
   diff_snapshot: FileCode,
+  session_snapshot: Archive,
   session_log: ScrollText,
+  agent_summary: ClipboardList,
   agent_plan: ListChecks,
   telemetry_report: Activity,
   approval_history: ShieldCheck,
   document: BookOpen,
   custom: FileText,
+};
+
+const TYPE_LABEL: Record<string, string> = {
+  diff_snapshot: "Diff Snapshots",
+  session_snapshot: "Session Snapshots",
+  session_log: "Session Logs",
+  agent_summary: "Agent Summaries",
+  agent_plan: "Agent Plans",
+  telemetry_report: "Telemetry Reports",
+  approval_history: "Approval History",
+  document: "Documents",
+  custom: "Custom",
 };
 
 const PREVIEWABLE_MIMES = new Set([
@@ -72,8 +85,8 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
 
   return (
     <>
-      <tr className="border-b border-border/50 hover:bg-accent/30">
-        <td className="px-4 py-2.5">
+      <tr className="border-b border-border/50 last:border-0 hover:bg-accent/30">
+        <td className="pl-10 pr-4 py-2.5">
           <div className="flex items-center gap-2">
             {canPreview ? (
               <button
@@ -92,10 +105,7 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
             )}
           </div>
         </td>
-        <td className="px-4 py-2.5 hidden sm:table-cell">
-          <Badge variant="secondary">{artifact.type}</Badge>
-        </td>
-        <td className="px-4 py-2.5 text-muted-foreground">{formatSize(artifact.sizeBytes)}</td>
+        <td className="px-4 py-2.5 text-muted-foreground text-xs">{formatSize(artifact.sizeBytes)}</td>
         <td className="px-4 py-2.5 text-muted-foreground text-xs hidden sm:table-cell">{new Date(artifact.createdAt).toLocaleString()}</td>
         <td className="px-4 py-2.5 text-right">
           <a
@@ -110,12 +120,47 @@ function ArtifactRow({ artifact }: { artifact: Artifact }) {
       </tr>
       {expanded && canPreview && (
         <tr>
-          <td colSpan={5} className="px-4 py-3">
+          <td colSpan={4} className="pl-10 pr-4 py-3">
             <ArtifactPreview artifact={artifact} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+function ArtifactGroup({ type, artifacts }: { type: string; artifacts: Artifact[] }) {
+  const [open, setOpen] = useState(false);
+  const Icon = TYPE_ICON[type] ?? FileText;
+  const label = TYPE_LABEL[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return (
+    <div className="border-b border-border/50 last:border-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2.5 px-4 py-2.5 hover:bg-accent/30 transition-colors text-left"
+      >
+        {open ? (
+          <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight size={13} className="text-muted-foreground shrink-0" />
+        )}
+        <Icon size={14} className="text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium">{label}</span>
+        <span className="text-xs text-muted-foreground ml-1">({artifacts.length})</span>
+      </button>
+      {open && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <tbody>
+              {artifacts.map((a) => (
+                <ArtifactRow key={a.id} artifact={a} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -142,26 +187,16 @@ export default function ArtifactViewer({ jobId }: Props) {
     );
   }
 
+  const groups = artifacts.reduce<Record<string, Artifact[]>>((acc, a) => {
+    (acc[a.type] ??= []).push(a);
+    return acc;
+  }, {});
+
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border">
-              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Name</th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground hidden sm:table-cell">Type</th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground">Size</th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold text-muted-foreground hidden sm:table-cell">Created</th>
-              <th className="px-4 py-2.5 text-right text-xs font-semibold text-muted-foreground" />
-            </tr>
-          </thead>
-          <tbody>
-            {artifacts.map((a) => (
-              <ArtifactRow key={a.id} artifact={a} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {Object.entries(groups).map(([type, items]) => (
+        <ArtifactGroup key={type} type={type} artifacts={items} />
+      ))}
     </div>
   );
 }

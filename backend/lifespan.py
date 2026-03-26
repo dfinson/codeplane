@@ -114,6 +114,16 @@ def _init_event_infrastructure(
     # Persist-then-broadcast subscriber: ensures event.db_id is set
     # (monotonic autoincrement) before SSE frames are built.
     async def _persist_and_broadcast(event: DomainEvent) -> None:
+        # agent_delta events are ephemeral streaming chunks — broadcast
+        # immediately without writing to DB (the complete agent message
+        # that follows is the canonical persisted record).
+        if (
+            event.kind == DomainEventKind.transcript_updated
+            and event.payload.get("role") == "agent_delta"
+        ):
+            await sse_manager.broadcast_domain_event(event)
+            return
+
         try:
             await _persist_event_with_retry(
                 event=event,

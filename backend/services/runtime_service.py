@@ -1223,12 +1223,13 @@ class RuntimeService:
                 downgrade = (requested, actual)
                 break
 
-            # Progress tracking (main loop only)
+            # Progress tracking (main loop only) — skip ephemeral delta chunks
             if domain_event.kind == DomainEventKind.transcript_updated and self._progress_tracking is not None:
                 role = domain_event.payload.get("role", "")
-                content = domain_event.payload.get("content", "")
-                tool_intent = str(domain_event.payload.get("tool_intent") or "")
-                self._progress_tracking.feed_transcript(job_id, role, content, tool_intent)
+                if role != "agent_delta":
+                    content = domain_event.payload.get("content", "")
+                    tool_intent = str(domain_event.payload.get("tool_intent") or "")
+                    self._progress_tracking.feed_transcript(job_id, role, content, tool_intent)
 
             # Tag log lines with the current session number so callers can filter
             # by session when a job has been resumed one or more times.

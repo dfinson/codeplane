@@ -234,6 +234,10 @@ interface AppState {
   diffs: Record<string, DiffFileModel[]>; // keyed by jobId
   timelines: Record<string, TimelineEntry[]>; // keyed by jobId
   plans: Record<string, PlanStep[]>; // keyed by jobId
+  /** Accumulated streaming text for in-progress agent messages, keyed by
+   * "${jobId}:${turnId}" (or "${jobId}:__default__" when turnId is absent).
+   * Cleared when the complete agent message arrives for that turn. */
+  streamingMessages: Record<string, string>;
   /** Monotonically-increasing counter per job, bumped on each telemetry_updated
    * SSE event. Components watching this trigger a telemetry re-fetch. */
   telemetryVersions: Record<string, number>; // keyed by jobId
@@ -301,6 +305,7 @@ export const useStore = create<AppState>((set, get) => ({
   diffs: {},
   timelines: {},
   plans: {},
+  streamingMessages: {},
   telemetryVersions: {},
   connectionStatus: "reconnecting",
   reconnectAttempt: 0,
@@ -394,10 +399,29 @@ export const useStore = create<AppState>((set, get) => ({
       const keptApprovals = Object.fromEntries(
         Object.entries(s.approvals).filter(([, a]) => a.jobId !== jobId),
       );
+      // Drop any in-flight streaming state for this job
+      const streamingMessages = Object.fromEntries(
+        Object.entries(s.streamingMessages).filter(([k]) => !k.startsWith(`${jobId}:`)),
+      );
+      // Deduplicate transcript: remove tool_running entries whose tool has a
+      // completed tool_call — both are persisted but only one should render.
+      // Use turnId-scoped keys when available to avoid false-positive removal
+      // of in-flight tool_running entries for the same tool name.
+      const completedCallKeys = new Set<string>();
+      for (const e of snapshot.transcript) {
+        if (e.role === "tool_call" && e.toolName) {
+          completedCallKeys.add(e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName);
+        }
+      }
+      const deduped = snapshot.transcript.filter((e) => {
+        if (e.role !== "tool_running" || !e.toolName) return true;
+        const key = e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName;
+        return !completedCallKeys.has(key);
+      });
       return {
         jobs: { ...s.jobs, [jobId]: enrichJob(snapshot.job) },
         logs: { ...s.logs, [jobId]: snapshot.logs },
-        transcript: { ...s.transcript, [jobId]: snapshot.transcript },
+        transcript: { ...s.transcript, [jobId]: deduped },
         diffs: { ...s.diffs, [jobId]: snapshot.diff },
         timelines: {
           ...s.timelines,
@@ -407,6 +431,7 @@ export const useStore = create<AppState>((set, get) => ({
           ...keptApprovals,
           ...Object.fromEntries(snapshot.approvals.map((a) => [a.id, a])),
         },
+        streamingMessages,
       };
     });
   },
@@ -478,11 +503,26 @@ export const useStore = create<AppState>((set, get) => ({
 
         case "transcript_update": {
           const jobId = payload.jobId as string;
+          const role = payload.role as string;
+
+          // agent_delta: accumulate streaming text per turn, don't add to transcript
+          if (role === "agent_delta") {
+            const turnId = (payload.turnId as string | undefined) ?? "__default__";
+            const key = `${jobId}:${turnId}`;
+            const delta = (payload.content as string) ?? "";
+            return {
+              streamingMessages: {
+                ...state.streamingMessages,
+                [key]: (state.streamingMessages[key] ?? "") + delta,
+              },
+            };
+          }
+
           const entry: TranscriptEntry = {
             jobId,
             seq: payload.seq as number,
             timestamp: payload.timestamp as string,
-            role: payload.role as string,
+            role,
             content: payload.content as string,
             title: payload.title as string | undefined,
             turnId: payload.turnId as string | undefined,
@@ -525,8 +565,20 @@ export const useStore = create<AppState>((set, get) => ({
             return null;
           }
           const updated = [...existing, entry];
+
+          // When a complete agent message arrives, clear streaming state for that turn.
+          let streamingMessages = state.streamingMessages;
+          if (entry.role === "agent") {
+            const key = entry.turnId ? `${jobId}:${entry.turnId}` : `${jobId}:__default__`;
+            if (key in streamingMessages) {
+              streamingMessages = { ...streamingMessages };
+              delete streamingMessages[key];
+            }
+          }
+
           return {
             transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
+            streamingMessages,
           };
         }
 

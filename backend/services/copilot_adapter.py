@@ -340,6 +340,7 @@ class CopilotAdapter(AgentAdapterInterface):
         "session.shutdown": SessionEventKind.done,
         "session.error": SessionEventKind.error,
         "assistant.message": SessionEventKind.transcript,
+        "assistant.streaming_delta": SessionEventKind.transcript,
         "user.message": SessionEventKind.transcript,
         # assistant.reasoning is intentionally NOT mapped — it duplicates
         # the reasoning_text already embedded in assistant.message.
@@ -688,6 +689,15 @@ class CopilotAdapter(AgentAdapterInterface):
                         "content": content,
                         "title": data.title if data else None,
                         "turn_id": data.turn_id if data else None,
+                    }
+                elif kind_str == "assistant.streaming_delta":
+                    delta = (data.delta_content or "") if data else ""
+                    if not delta:
+                        return
+                    event_payload = {
+                        "role": "agent_delta",
+                        "content": delta,
+                        "turn_id": (str(data.turn_id) if data and data.turn_id else None),
                     }
                 elif kind_str == "user.message":
                     content = (data.content or data.message or "") if data else ""
