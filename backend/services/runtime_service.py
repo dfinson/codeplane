@@ -1231,10 +1231,11 @@ class RuntimeService:
             await self._diff_service.on_worktree_file_modified(job_id, worktree_path, base_ref)
             return _EventAction.skip, None, None
 
-        # Diff recalculation on tool completions
+        # Diff recalculation on tool completions (skip internal markers like report_intent)
         if (
             session_event.kind == SessionEventKind.transcript
             and session_event.payload.get("role") == "tool_call"
+            and session_event.payload.get("tool_name") != "report_intent"
             and self._diff_service is not None
             and worktree_path
             and base_ref
@@ -1811,13 +1812,17 @@ class RuntimeService:
                             _counter += 1
                             _parts.append(f"=== Session {sess_num} ===")
                         for t in _turns:
-                            _counter += 1
                             role = t.get("role", "")
                             if role == "tool_call":
+                                # Skip internal intent markers — they are frontend-only labels
+                                if t.get("tool_name") == "report_intent":
+                                    continue
+                                _counter += 1
                                 display = t.get("tool_display") or t.get("tool_intent") or t.get("tool_name", "tool")
                                 ok = "\u2713" if t.get("tool_success", True) else "\u2717"
                                 _parts.append(f"[{_counter}] TOOL {ok}: {display}")
                             else:
+                                _counter += 1
                                 _parts.append(f"[{_counter}] {role.upper()}: {t.get('content', '')}")
                     transcript_text = "\n---\n".join(_parts) or "(no transcript)"
                     log_changed = log_data.get("all_changed_files") or log_data.get("changed_files", [])

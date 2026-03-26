@@ -549,7 +549,9 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
     }
     case "skill": {
       const skillName = (args.skill as string) ?? "";
-      const displayName = skillName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      const displayName = skillName
+        ? skillName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+        : (entry.toolDisplay ?? entry.toolName ?? "Skill");
       return (
         <div className="font-mono text-xs">
           <div className={cn(
