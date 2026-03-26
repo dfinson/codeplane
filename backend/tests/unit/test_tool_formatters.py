@@ -8,6 +8,7 @@ from backend.services.tool_formatters import (
     _count_lines,
     _parse_args,
     _short_path,
+    _trim_worktree_paths,
     _truncate,
     extract_tool_issue,
     format_tool_display,
@@ -90,6 +91,39 @@ class TestShortPath:
         result = _short_path("a/b/c/")
         # PurePosixPath normalises trailing slash
         assert result == "b/c"
+
+    def test_worktree_path_strips_prefix(self):
+        path = "/home/dave01/wsl-repos/codeplane/.codeplane-worktrees/my-branch/backend/services/tool_formatters.py"
+        assert _short_path(path) == "…/my-branch/backend/services/tool_formatters.py"
+
+    def test_worktree_path_shallow(self):
+        path = "/srv/.codeplane-worktrees/feat-x/file.py"
+        assert _short_path(path) == "…/feat-x/file.py"
+
+
+class TestTrimWorktreePaths:
+    def test_no_worktree_marker_unchanged(self):
+        assert _trim_worktree_paths("cat /tmp/file.py") == "cat /tmp/file.py"
+
+    def test_strips_worktree_prefix_in_command(self):
+        cmd = "cat /home/user/repo/.codeplane-worktrees/my-branch/src/main.py"
+        assert _trim_worktree_paths(cmd) == "cat …/my-branch/src/main.py"
+
+    def test_strips_multiple_occurrences(self):
+        cmd = (
+            "diff /home/user/.codeplane-worktrees/a/f.py "
+            "/home/user/.codeplane-worktrees/b/f.py"
+        )
+        assert _trim_worktree_paths(cmd) == "diff …/a/f.py …/b/f.py"
+
+    def test_preserves_non_path_tokens(self):
+        cmd = "echo hello world"
+        assert _trim_worktree_paths(cmd) == "echo hello world"
+
+    def test_preserves_flag_name_with_equals(self):
+        # --flag= prefix must not be swallowed
+        cmd = "--path=/home/user/.codeplane-worktrees/branch/src/f.py"
+        assert _trim_worktree_paths(cmd) == "--path=…/branch/src/f.py"
 
 
 class TestCountLines:

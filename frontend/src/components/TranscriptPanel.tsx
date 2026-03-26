@@ -287,9 +287,20 @@ function countLines(text?: string): number | undefined {
   return text.split("\n").filter((l) => l.trim()).length;
 }
 
+const WORKTREE_MARKER = "/.codeplane-worktrees/";
+
 function abbreviatePath(path: string): string {
-  const parts = path.replace(/\\/g, "/").split("/");
+  const idx = path.indexOf(WORKTREE_MARKER);
+  if (idx !== -1) return "…/" + path.slice(idx + WORKTREE_MARKER.length);
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts.length <= 2 ? path : parts.slice(-2).join("/");
+}
+
+// Strip worktree path prefixes embedded in arbitrary strings (e.g. shell commands).
+// Anchors on the leading "/" so "--flag=…" prefixes are preserved:
+// --path=/home/user/.codeplane-worktrees/branch/f.py → --path=…/branch/f.py
+function trimWorktreePaths(text: string): string {
+  return text.replace(/\/[^\s]*\.codeplane-worktrees\//g, "…/");
 }
 
 // Structured rendering per tool type
@@ -300,7 +311,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
   switch (toolName) {
     case "bash":
     case "run_in_terminal": {
-      const command = (args.command as string) ?? "";
+      const command = trimWorktreePaths((args.command as string) ?? "");
       return (
         <div className="font-mono text-xs">
           <div className={cn(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -53,13 +54,40 @@ def _extract_issue_from_json(value: Any) -> str | None:
     return None
 
 
+_WORKTREE_MARKER = "/.codeplane-worktrees/"
+
+
 def _short_path(path: str) -> str:
-    """Abbreviate long file paths to last two path components."""
+    """Return a display-friendly path.
+
+    For paths inside a CodePlane worktree, strips the absolute prefix up to
+    and including ``/.codeplane-worktrees/``, yielding ``…/<worktree>/<rest>``.
+    Falls back to the last two components for other absolute paths.
+    """
+    idx = path.find(_WORKTREE_MARKER)
+    if idx != -1:
+        return "…/" + path[idx + len(_WORKTREE_MARKER):]
     p = PurePosixPath(path)
     parts = p.parts
     if len(parts) <= 2:
         return str(p)
     return str(PurePosixPath(*parts[-2:]))
+
+
+def _trim_worktree_paths(text: str) -> str:
+    """Strip worktree path prefixes from an arbitrary string (e.g. a shell command).
+
+    Matches the absolute path up to and including ``/.codeplane-worktrees/``,
+    anchoring on the leading ``/`` so that option names like ``--flag=`` are
+    preserved:
+
+    ``cat /home/user/.codeplane-worktrees/my-branch/src/f.py``
+    → ``cat …/my-branch/src/f.py``
+
+    ``--path=/home/user/.codeplane-worktrees/branch/f.py``
+    → ``--path=…/branch/f.py``
+    """
+    return re.sub(r"/[^\s]*\.codeplane-worktrees/", "…/", text)
 
 
 # -- Formatter / hint factories for common patterns --------------------------
@@ -73,6 +101,7 @@ class _FmtSpec:
     prefix: str  # label prefix (e.g. "Create", "Grep")
     fallback: str  # returned when no arg found
     use_path: bool = False  # apply _short_path to the value
+    trim_paths: bool = False  # apply _trim_worktree_paths (for command strings)
     truncate: int = 0  # apply _truncate (0 = no truncation)
     quote: bool = False  # wrap value in double quotes
     separator: str = " "  # between prefix and value
@@ -86,6 +115,8 @@ def _build_formatter(spec: _FmtSpec) -> Callable[[ToolArgs], str]:
             v = args.get(k, "")
             if v:
                 display = _short_path(v) if spec.use_path else v
+                if spec.trim_paths:
+                    display = _trim_worktree_paths(display)
                 if spec.truncate:
                     display = _truncate(display, spec.truncate)
                 if spec.quote:
@@ -118,8 +149,8 @@ def _static_hint(ok: str, fail: str = "→ FAIL") -> Callable[[str, bool], str]:
 # Declarative specs for simple formatters
 _SIMPLE_SPECS: dict[str, _FmtSpec] = {
     # ---- Copilot / generic snake_case tools ---------------------------------
-    "bash": _FmtSpec(("command",), "$", "bash", truncate=55),
-    "run_in_terminal": _FmtSpec(("command",), "$", "Run command", truncate=55),
+    "bash": _FmtSpec(("command",), "$", "bash", truncate=55, trim_paths=True),
+    "run_in_terminal": _FmtSpec(("command",), "$", "Run command", truncate=55, trim_paths=True),
     "create_file": _FmtSpec(("filePath", "file_path"), "Create", "Create file", use_path=True),
     "replace_string_in_file": _FmtSpec(("filePath", "file_path"), "Edit", "Edit file", use_path=True),
     "grep_search": _FmtSpec(("query", "pattern"), "Grep:", "Grep search", truncate=40, quote=True),
@@ -142,7 +173,7 @@ _SIMPLE_SPECS: dict[str, _FmtSpec] = {
     "run_vs_code_task": _FmtSpec(("task",), "Run task:", "Run task", truncate=40),
     "open_file": _FmtSpec(("filePath", "file_path"), "Open", "Open file", use_path=True),
     # ---- Claude SDK PascalCase tools ----------------------------------------
-    "Bash": _FmtSpec(("command",), "$", "bash", truncate=55),
+    "Bash": _FmtSpec(("command",), "$", "bash", truncate=55, trim_paths=True),
     "Glob": _FmtSpec(("pattern",), "Glob:", "Glob", truncate=50),
     "LS": _FmtSpec(("path",), "List", "List directory", use_path=True),
     "Task": _FmtSpec(("description",), "Task:", "Run task", truncate=50),
@@ -437,8 +468,6 @@ def _humanize_tool_name(name: str) -> str:
 
     ``search_code`` → ``"Search code"``, ``listAllFiles`` → ``"List all files"``.
     """
-    import re
-
     parts = re.sub(r"([a-z])([A-Z])", r"\1 \2", name).replace("_", " ").split()
     if not parts:
         return name
