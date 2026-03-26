@@ -204,7 +204,19 @@ strategic:
   cost**?
 - What is the cost of **retry loops** (failed tool → re-attempt → re-reason)?
 
-### 3.4 Task & Repo Characteristics
+### 3.4 Turn Economics & Session Length
+
+> *"How do turns drive cost, and when does a session become wasteful?"*
+
+- Does cost-per-turn increase as the session progresses (context growth)?
+- Is there an inflection point where turns become disproportionately expensive?
+- Does turn count predict total cost linearly, or is there a non-linear explosion?
+- What fraction of total cost concentrates in the last N turns (diminishing returns)?
+- After a compaction, does cost-per-turn reset or remain elevated?
+- How does the cost curve differ between succeeded vs. failed jobs? Do failed jobs
+  show earlier cost acceleration (spinning without progress)?
+
+### 3.5 Task & Repo Characteristics
 
 > *"What kinds of tasks are expensive?"*
 
@@ -216,7 +228,7 @@ strategic:
   cost?
 - Do verification/self-review passes provide value proportional to their cost?
 
-### 3.5 Model & SDK Efficiency
+### 3.6 Model & SDK Efficiency
 
 > *"Are we using the right model for the job?"*
 
@@ -234,7 +246,7 @@ strategic:
 
 | Gap | Blocking Questions | Difficulty | Approach |
 |-----|-------------------|------------|----------|
-| **Turn-level cost attribution** | 3.1, 3.2, 3.3 | Medium | Link LLM spans to transcript turn sequence numbers |
+| **Turn-level cost attribution** | 3.1, 3.2, 3.3, 3.4 | Medium | Link LLM spans to transcript turn sequence numbers |
 | **Prompt composition breakdown** | 3.1 | Hard | Instrument adapter to capture prompt segment sizes via local tokenizers (`tiktoken`, `anthropic-tokenizer` — neither currently a dependency) |
 | **Tool call arguments in spans** | 3.2 | Easy | Currently tool spans only store `{"success": bool}` in `attrs_json`. Tool args exist in TranscriptUpdated events — copy to span attrs at write time |
 | **Tool result size in spans** | 3.2 | Easy | Tool result text exists in adapter pipeline (both SDKs provide it). Compute `len(result_text)` and store in span attrs |
@@ -242,8 +254,9 @@ strategic:
 | **Phase-tagged cost** | 3.3 | Medium | Tag each span with current execution phase. Note: `ExecutionPhaseChanged` is currently only emitted for verification — must extend to all phases (setup, reasoning, finalization) |
 | **Retry/rework detection** | 3.3 | Medium | Deterministic: same (tool, target) pair where prior invocation failed |
 | **Post-compaction re-read cost** | 3.1, 3.3 | Hard | Track pre-compaction file set, detect re-reads |
-| **Task complexity features** | 3.4 | Medium | Extract features from prompt + repo at job start |
-| **Output efficiency** | 3.5 | Easy but blocked | Compute from diff LOC / cost. **Requires activating diff_snapshots** — table exists but is never populated (dead code) |
+| **Turn economics / cost curve** | 3.4 | Easy | Per-turn cost is derivable from `turn_number` + LLM span cost. Compute half-session cost split, acceleration ratio, peak turn in attribution pipeline |
+| **Task complexity features** | 3.5 | Medium | Extract features from prompt + repo at job start |
+| **Output efficiency** | 3.6 | Easy but blocked | Compute from diff LOC / cost. **Requires activating diff_snapshots** — table exists but is never populated (dead code) |
 | **Cross-job aggregation** | All | Medium | New query layer over existing tables |
 | **Activate dead OTel instruments** | 3.3 | Easy | `cp.approvals` counter and `cp.approval.wait` histogram are defined but never called — wire into approval flow |
 
@@ -584,6 +597,15 @@ CREATE TABLE job_cost_attribution (
     subagent_cost_usd       REAL DEFAULT 0,
     subagent_fraction       REAL DEFAULT 0,
     
+    -- Turn economics
+    total_turns             INTEGER DEFAULT 0,
+    avg_cost_per_turn       REAL DEFAULT 0,
+    cost_first_half_turns   REAL DEFAULT 0,   -- cost of turns 1..N/2
+    cost_second_half_turns  REAL DEFAULT 0,   -- cost of turns N/2+1..N
+    avg_input_tokens_per_turn INTEGER DEFAULT 0,
+    peak_turn_cost          REAL DEFAULT 0,   -- single most expensive turn
+    peak_turn_number        INTEGER DEFAULT 0, -- which turn was most expensive
+    
     computed_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     UNIQUE(job_id)
@@ -624,6 +646,7 @@ ALTER TABLE job_telemetry_summary ADD COLUMN repeated_file_reads INTEGER DEFAULT
 ALTER TABLE job_telemetry_summary ADD COLUMN subagent_cost_usd REAL DEFAULT 0;
 ALTER TABLE job_telemetry_summary ADD COLUMN diff_lines_added INTEGER DEFAULT 0;
 ALTER TABLE job_telemetry_summary ADD COLUMN diff_lines_removed INTEGER DEFAULT 0;
+ALTER TABLE job_telemetry_summary ADD COLUMN total_turns INTEGER DEFAULT 0;
 ```
 
 ---
@@ -804,6 +827,59 @@ WHERE s.status = 'succeeded'
 ORDER BY s.total_cost_usd DESC;
 ```
 
+**Turn Economics (how does cost evolve over a session):**
+
+```sql
+-- Per-turn cost curve: how does the cost of each successive turn change?
+-- This is the core query for understanding context growth cost.
+SELECT
+    sp.turn_number,
+    COUNT(DISTINCT sp.job_id) as jobs_with_this_turn,
+    AVG(CAST(json_extract(sp.attrs_json, '$.cost') AS REAL)) as avg_turn_cost,
+    AVG(CAST(json_extract(sp.attrs_json, '$.input_tokens') AS INT)) as avg_input_tokens,
+    AVG(CAST(json_extract(sp.attrs_json, '$.output_tokens') AS INT)) as avg_output_tokens
+FROM job_telemetry_spans sp
+WHERE sp.span_type = 'llm'
+  AND sp.turn_number IS NOT NULL
+  AND sp.created_at > datetime('now', '-30 days')
+GROUP BY sp.turn_number
+ORDER BY sp.turn_number;
+
+-- Turn count as cost predictor: does more turns = proportionally more cost,
+-- or is there an inflection point where cost accelerates?
+SELECT
+    a.total_turns,
+    COUNT(*) as job_count,
+    AVG(s.total_cost_usd) as avg_cost,
+    AVG(s.total_cost_usd) / NULLIF(a.total_turns, 0) as avg_cost_per_turn,
+    AVG(a.cost_second_half_turns / NULLIF(a.cost_first_half_turns, 0))
+        as avg_second_half_cost_ratio
+FROM job_cost_attribution a
+JOIN job_telemetry_summary s ON a.job_id = s.job_id
+WHERE s.status IN ('succeeded', 'failed')
+  AND s.completed_at > datetime('now', '-30 days')
+GROUP BY a.total_turns
+ORDER BY a.total_turns;
+
+-- Jobs where later turns got disproportionately expensive
+-- (second-half cost > 2× first-half cost, suggesting context bloat)
+SELECT
+    s.job_id,
+    s.total_cost_usd,
+    a.total_turns,
+    a.cost_first_half_turns,
+    a.cost_second_half_turns,
+    ROUND(a.cost_second_half_turns / NULLIF(a.cost_first_half_turns, 0), 2)
+        as cost_acceleration_ratio,
+    a.compaction_reread_tokens
+FROM job_cost_attribution a
+JOIN job_telemetry_summary s ON a.job_id = s.job_id
+WHERE a.cost_second_half_turns > 2.0 * a.cost_first_half_turns
+  AND a.total_turns >= 4
+  AND s.completed_at > datetime('now', '-30 days')
+ORDER BY cost_acceleration_ratio DESC;
+```
+
 ---
 
 ## 8. Design: Dashboard Views
@@ -922,6 +998,19 @@ Replaces/extends the current MetricsPanel with a cost-attribution view:
 │  │                                                             │   │
 │  │  Output: 45 lines of diff at $0.028/line                   │   │
 │  └─────────────────────────────────────────────────────────────┘   │
+│                                                                    │
+│  TURN ECONOMICS (cost per turn over session lifetime)              │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │ $0.08│            ●                                          │  │
+│  │      │        ●       ● ●                                    │  │
+│  │ $0.04│  ● ●                 ● ●   ●                          │  │
+│  │      │●                           ● ●   ●                    │  │
+│  │ $0.02│                                                       │  │
+│  │      ├──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──                │  │
+│  │       1  2  3  4  5  6  7  8  9 10 11 12 13 (turn)          │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│  Turns: 13 │ Avg $/turn: $0.095 │ Peak: turn 5 ($0.08)           │
+│  1st half: $0.52 │ 2nd half: $0.72 │ Acceleration: 1.4×           │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -939,6 +1028,8 @@ Replaces/extends the current MetricsPanel with a cost-attribution view:
 │  │ ⚠ Retry cost is 23% of total spend (n=156 jobs)             │  │
 │  │ ⚠ Pearson r=0.84 between bash result_size and next-turn     │  │
 │  │   input_tokens (n=847 tool calls, p<0.001)                  │  │
+│  │ ⚠ Cost accelerates after turn 8: avg $/turn is 2.1× higher  │  │
+│  │   in turns 9+ vs turns 1-8 (n=94 jobs with 9+ turns)       │  │
 │  │ ✓ Cache ratio trend: +0.8%/day over 30 days (15% → 38%)    │  │
 │  │ ⚠ Repo "backend-api" mean cost is 2.1σ above fleet mean    │  │
 │  │ ✓ Subagent $/LOC is 40% lower than main-agent (n=45 jobs)  │  │
@@ -948,6 +1039,7 @@ Replaces/extends the current MetricsPanel with a cost-attribution view:
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ Prompt word count         ●──────────────── r=0.42           │  │
 │  │ Files touched             ●─────────────────── r=0.58        │  │
+│  │ Turn count                ●───────────────────────── r=0.76  │  │
 │  │ Tool call count           ●──────────────────────── r=0.73   │  │
 │  │ Compaction count          ●────────────────────── r=0.67     │  │
 │  │ Retry count               ●───────────────── r=0.51          │  │
