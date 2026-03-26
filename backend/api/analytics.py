@@ -253,3 +253,48 @@ async def turn_economics_for_job(
         "costSecondHalfUsd": summary.get("cost_second_half_usd", 0) if summary else 0,
         "turnCurve": turn_data,
     }
+
+
+# ---------------------------------------------------------------------------
+# Statistical Observations
+# ---------------------------------------------------------------------------
+
+
+@router.get("/analytics/observations")
+async def list_observations(
+    session: FromDishka[AsyncSession],
+    category: str | None = None,
+    severity: str | None = None,
+) -> dict[str, object]:
+    """List active cost observations / anomalies."""
+    from backend.persistence.observations_repo import ObservationsRepo
+
+    rows = await ObservationsRepo(session).list_active(
+        category=category, severity=severity
+    )
+    return {"observations": rows}
+
+
+@router.post("/analytics/observations/{observation_id}/dismiss")
+async def dismiss_observation(
+    observation_id: int,
+    session: FromDishka[AsyncSession],
+) -> dict[str, str]:
+    """Dismiss an observation."""
+    from backend.persistence.observations_repo import ObservationsRepo
+
+    await ObservationsRepo(session).dismiss(observation_id)
+    await session.commit()
+    return {"status": "dismissed"}
+
+
+@router.post("/analytics/analyse")
+async def trigger_analysis(
+    session: FromDishka[AsyncSession],
+) -> dict[str, object]:
+    """Manually trigger the statistical analysis pass."""
+    from backend.services.statistical_analysis import run_analysis
+
+    count = await run_analysis(session)
+    await session.commit()
+    return {"observations_written": count}

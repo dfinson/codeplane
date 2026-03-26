@@ -188,3 +188,26 @@ class JobTelemetrySpanRow(Base):
         Index("idx_spans_turn", "job_id", "turn_number"),
         Index("idx_spans_phase", "execution_phase"),
     )
+
+
+class CostObservationRow(Base):
+    """Cross-job cost observation or anomaly."""
+
+    __tablename__ = "cost_observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String, nullable=False)
+    severity = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    detail = Column(Text, nullable=False)
+    evidence_json = Column(Text, nullable=False)
+    job_count = Column(Integer, nullable=False, default=0, server_default="0")
+    total_waste_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    first_seen_at = Column(TZDateTime, nullable=False)
+    last_seen_at = Column(TZDateTime, nullable=False)
+    dismissed = Column(Boolean, nullable=False, default=False, server_default="0")
+
+    __table_args__ = (
+        Index("idx_obs_category", "category"),
+        Index("idx_obs_severity", "severity"),
+    )

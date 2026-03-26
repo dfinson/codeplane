@@ -814,6 +814,15 @@ class RuntimeService:
                 except Exception:
                     log.warning("cost_attribution_failed", job_id=job_id, exc_info=True)
 
+                # Run statistical analysis (fire-and-forget, non-blocking)
+                try:
+                    async with self._session_factory() as session:
+                        from backend.services.statistical_analysis import run_analysis
+                        await run_analysis(session)
+                        await session.commit()
+                except Exception:
+                    log.debug("statistical_analysis_failed", job_id=job_id, exc_info=True)
+
                 # Signal clients that final telemetry is available
                 await self._event_bus.publish(
                     DomainEvent(
