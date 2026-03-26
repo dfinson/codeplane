@@ -172,6 +172,7 @@ _SIMPLE_SPECS: dict[str, _FmtSpec] = {
     "get_changed_files": _FmtSpec((), "", "Get changed files"),
     "run_vs_code_task": _FmtSpec(("task",), "Run task:", "Run task", truncate=40),
     "open_file": _FmtSpec(("filePath", "file_path"), "Open", "Open file", use_path=True),
+    "skill": _FmtSpec(("skill",), "Skill:", "Run skill", truncate=50),
     # ---- Claude SDK PascalCase tools ----------------------------------------
     "Bash": _FmtSpec(("command",), "$", "bash", truncate=55, trim_paths=True),
     "Glob": _FmtSpec(("pattern",), "Glob:", "Glob", truncate=50),
@@ -179,6 +180,7 @@ _SIMPLE_SPECS: dict[str, _FmtSpec] = {
     "Task": _FmtSpec(("description",), "Task:", "Run task", truncate=50),
     "WebSearch": _FmtSpec(("query",), "Search:", "Web search", truncate=40, quote=True),
     "TodoRead": _FmtSpec((), "", "Read todo list"),
+    "TodoWrite": _FmtSpec((), "", "Update todo list"),
     "Think": _FmtSpec(("thought",), "Think:", "Think", truncate=55),
     "NotebookRead": _FmtSpec(("notebook_path",), "Read", "Read notebook", use_path=True),
     "NotebookEdit": _FmtSpec(("notebook_path",), "Edit", "Edit notebook", use_path=True),

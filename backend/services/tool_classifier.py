@@ -49,6 +49,10 @@ TOOL_CATEGORIES: dict[str, str] = {
     "task": "agent",
     "subagent": "agent",
     "Agent": "agent",
+    "runSubagent": "agent",
+    "search_subagent": "agent",
+    "skill": "agent",
+    "Task": "agent",
 }
 
 

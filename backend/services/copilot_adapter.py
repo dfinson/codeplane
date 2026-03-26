@@ -831,8 +831,28 @@ class CopilotAdapter(AgentAdapterInterface):
                     tool_id = (data.tool_call_id or "") if data else ""
                     buffered = self._tool_call_buffer.get(tool_id, {})
                     tool_name = buffered.get("tool_name", "tool")
-                    # Drop SDK-internal tools from transcript
-                    if tool_name in ("report_intent",):
+                    # Emit report_intent as a lightweight completed intent-marker so
+                    # the frontend can extract and display the intent label.  We emit
+                    # it here (at start) because all we need is the args; we never
+                    # need to wait for a result.
+                    if tool_name == "report_intent":
+                        turn_id = buffered.get("turn_id") or (
+                            str(data.turn_id) if data and hasattr(data, "turn_id") and data.turn_id else None
+                        )
+                        event_payload = {
+                            "role": "tool_call",
+                            "content": "report_intent",
+                            "tool_name": "report_intent",
+                            "tool_args": buffered.get("tool_args"),
+                            "tool_result": None,
+                            "tool_success": True,
+                            "turn_id": turn_id,
+                            "tool_intent": None,
+                            "tool_title": None,
+                            "tool_display": None,
+                            "tool_duration_ms": None,
+                        }
+                        queue.put_nowait(SessionEvent(kind=kind, payload=event_payload))
                         return
                     from backend.services.tool_formatters import format_tool_display
 
@@ -932,7 +952,16 @@ class CopilotAdapter(AgentAdapterInterface):
                 "mode": "append",
                 "content": (
                     CODEPLANE_SYSTEM_PROMPT
-                    + " Before making tool calls, call report_intent first to declare your current intent."
+                    + "\n\n"
+                    "**REPORT INTENT — REQUIRED BEFORE EVERY TOOL BURST:**\n"
+                    "Call `report_intent` in parallel with your FIRST tool call whenever you start "
+                    "a new group of related tool calls. The intent you declare is shown to the user "
+                    "in real-time so they understand what you are working on and why. Make it "
+                    "descriptive of the HIGH-LEVEL GOAL of the upcoming calls — not the mechanics "
+                    "(e.g., 'Exploring authentication module to understand token refresh flow' rather "
+                    "than 'reading files'). Call `report_intent` again whenever your focus shifts "
+                    "to a new sub-task. Never call it in isolation — always pair it with at least "
+                    "one other tool call in the same turn."
                 ),
             },
         )

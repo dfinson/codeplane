@@ -309,6 +309,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
   const args = parseArgs(entry.toolArgs);
 
   switch (toolName) {
+    case "Bash":
     case "bash":
     case "run_in_terminal": {
       const command = trimWorktreePaths((args.command as string) ?? "");
@@ -329,8 +330,9 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "Read":
     case "read_file": {
-      const filePath = (args.filePath ?? args.file_path ?? "") as string;
+      const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
       const startLine = (args.startLine ?? args.start_line) as number | undefined;
       const endLine = (args.endLine ?? args.end_line) as number | undefined;
       const lines = countLines(entry.toolResult);
@@ -446,6 +448,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "Write":
     case "create_file":
     case "write": {
       const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
@@ -453,7 +456,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
           <Codicon name="edit" size={11} className="text-green-400 shrink-0" />
           <span className="font-mono text-foreground/80">{abbreviatePath(filePath)}</span>
-          <span className="text-muted-foreground">→ {toolName === "write" ? "written" : "created"}</span>
+          <span className="text-muted-foreground">→ {toolName === "write" || toolName === "Write" ? "written" : "created"}</span>
         </div>
       );
     }
@@ -480,6 +483,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "Glob":
     case "glob": {
       const pattern = (args.pattern as string) ?? "";
       const searchPath = (args.path as string) ?? "";
@@ -500,6 +504,7 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "Grep":
     case "grep": {
       const pattern = (args.pattern ?? args.query ?? "") as string;
       const searchPath = (args.path as string) ?? "";
@@ -523,6 +528,52 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "LS":
+    case "list_dir": {
+      const path = (args.path as string) ?? "";
+      const lines = countLines(entry.toolResult);
+      return (
+        <div className="font-mono text-xs">
+          <div className={cn("px-3 py-1.5 flex items-center gap-2", entry.toolResult && "border-b border-border/30")}>
+            <Codicon name="file-code" size={11} className="text-blue-400 shrink-0" />
+            <span className="text-foreground/80">{abbreviatePath(path) || "."}</span>
+            {lines != null && <span className="text-muted-foreground/60">({lines} entries)</span>}
+          </div>
+          {entry.toolResult && (
+            <div className="px-3 py-1.5">
+              <TruncatedPayload content={entry.toolResult} maxLength={600} />
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "skill": {
+      const skillName = (args.skill as string) ?? "";
+      const displayName = skillName
+        ? skillName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+        : (entry.toolDisplay ?? entry.toolName ?? "Skill");
+      return (
+        <div className="font-mono text-xs">
+          <div className={cn(
+            "px-3 py-1.5 flex items-center gap-2",
+            entry.toolResult && "border-b border-border/30",
+          )}>
+            <Codicon name="robot" size={11} className="text-purple-400 shrink-0" />
+            <span className="text-foreground/80">{displayName}</span>
+            {entry.toolResult && (
+              <span className="text-muted-foreground">
+                {entry.toolSuccess !== false ? "→ done" : "→ failed"}
+              </span>
+            )}
+          </div>
+          {entry.toolResult && (
+            <div className="px-3 py-1.5">
+              <TruncatedPayload content={entry.toolResult} maxLength={400} />
+            </div>
+          )}
+        </div>
+      );
+    }
     default:
       return null;
   }
@@ -532,12 +583,17 @@ function hasStructuredRenderer(toolName?: string): boolean {
   if (!toolName) return false;
   const name = stripMcpPrefix(toolName);
   return [
-    "bash", "run_in_terminal", "read_file",
+    "bash", "run_in_terminal", "Bash",
+    "read_file", "Read",
     "replace_string_in_file", "multi_replace_string_in_file", "str_replace_based_edit_tool",
     "Edit", "insert_edit_into_file", "MultiEdit",
+    "create_file", "write", "Write",
+    "view",
+    "glob", "Glob",
+    "grep", "Grep",
     "grep_search", "semantic_search", "file_search",
-    "create_file", "write",
-    "view", "glob", "grep",
+    "list_dir", "LS",
+    "skill",
   ].includes(name);
 }
 
@@ -759,21 +815,23 @@ function ToolStep({ entry, isActive }: {
 }
 
 function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive: boolean }) {
+  // Filter out report_intent — it's extracted as the intent label, not a visible tool step
+  const visibleCalls = calls.filter((c) => c.toolName !== "report_intent");
   return (
     <div className="relative ml-1">
       <div className="absolute left-[7px] top-2 bottom-2 w-px border-l border-dotted border-border/60" />
       <div className="space-y-0.5">
-        {calls.map((call, i) => isSubagentTool(call.toolName) ? (
+        {visibleCalls.map((call, i) => isSubagentTool(call.toolName) ? (
           <SubAgentStep
             key={call.seq}
             entry={call}
-            isActive={isActive && i === calls.length - 1}
+            isActive={isActive && i === visibleCalls.length - 1}
           />
         ) : (
           <ToolStep
             key={call.seq}
             entry={call}
-            isActive={isActive && i === calls.length - 1}
+            isActive={isActive && i === visibleCalls.length - 1}
           />
         ))}
       </div>
@@ -781,12 +839,12 @@ function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive:
   );
 }
 
-/** Extract the intent string from a leading report_intent tool call, if present. */
+/** Extract the intent string from a report_intent tool call in this turn, if present. */
 function extractReportIntent(calls: TranscriptEntry[]): string | null {
-  const first = calls[0];
-  if (first?.toolName !== "report_intent" || !first.toolArgs) return null;
+  const intentCall = calls.find((c) => c.toolName === "report_intent");
+  if (!intentCall?.toolArgs) return null;
   try {
-    const args = JSON.parse(first.toolArgs) as Record<string, unknown>;
+    const args = JSON.parse(intentCall.toolArgs) as Record<string, unknown>;
     return typeof args.intent === "string" ? args.intent : null;
   } catch {
     return null;

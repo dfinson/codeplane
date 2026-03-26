@@ -276,10 +276,14 @@ class SummarizationService:
                             }
                         )
                     elif role == "tool_call":
+                        tool_name = ev.payload.get("tool_name", "tool")
+                        # Skip internal intent markers — they are frontend-only labels
+                        if tool_name == "report_intent":
+                            continue
                         turns.append(
                             {
                                 "role": "tool_call",
-                                "tool_name": ev.payload.get("tool_name", "tool"),
+                                "tool_name": tool_name,
                                 "tool_display": ev.payload.get("tool_display", ""),
                                 "tool_intent": ev.payload.get("tool_intent", ""),
                                 "tool_success": ev.payload.get("tool_success", True),

@@ -16,12 +16,19 @@ export type ToolIconDef =
 type ToolCategory = "terminal" | "file-read" | "file-write" | "search" | "agent" | "warning" | "todo" | "web" | "other";
 
 const CATEGORY_MAP: Record<string, ToolCategory> = {
+  // ---- terminal -----------------------------------------------------------
   bash: "terminal",
   run_in_terminal: "terminal",
   get_terminal_output: "terminal",
+  Bash: "terminal",
+  // ---- file-read ----------------------------------------------------------
   read_file: "file-read",
   list_dir: "file-read",
   view: "file-read",
+  Read: "file-read",
+  LS: "file-read",
+  NotebookRead: "file-read",
+  // ---- file-write ---------------------------------------------------------
   create_file: "file-write",
   replace_string_in_file: "file-write",
   multi_replace_string_in_file: "file-write",
@@ -30,18 +37,33 @@ const CATEGORY_MAP: Record<string, ToolCategory> = {
   MultiEdit: "file-write",
   insert_edit_into_file: "file-write",
   write: "file-write",
+  Write: "file-write",
+  NotebookEdit: "file-write",
+  // ---- search -------------------------------------------------------------
   grep_search: "search",
   semantic_search: "search",
   file_search: "search",
   glob: "search",
   grep: "search",
-  get_errors: "warning",
-  manage_todo_list: "todo",
+  Glob: "search",
+  Grep: "search",
+  // ---- web ----------------------------------------------------------------
   fetch_webpage: "web",
+  web_search: "web",
+  WebFetch: "web",
+  WebSearch: "web",
+  // ---- agent / sub-tasks --------------------------------------------------
   runSubagent: "agent",
   search_subagent: "agent",
+  skill: "agent",
   Task: "agent",
   task: "agent",
+  // ---- warnings -----------------------------------------------------------
+  get_errors: "warning",
+  // ---- todo ---------------------------------------------------------------
+  manage_todo_list: "todo",
+  TodoRead: "todo",
+  TodoWrite: "todo",
 };
 
 const CATEGORY_ICON: Record<ToolCategory, ToolIconDef> = {
