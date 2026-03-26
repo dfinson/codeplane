@@ -354,9 +354,15 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
     }
     case "replace_string_in_file":
     case "multi_replace_string_in_file":
-    case "str_replace_based_edit_tool": {
+    case "str_replace_based_edit_tool":
+    case "Edit":
+    case "insert_edit_into_file": {
       const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
       const shortPath = abbreviatePath(filePath);
+      // str_replace_based_edit_tool / Copilot tools use old_str/new_str;
+      // Claude SDK's Edit tool uses old_string/new_string.
+      const oldStr = (args.old_str ?? args.old_string) as string | undefined;
+      const newStr = (args.new_str ?? args.new_string) as string | undefined;
       return (
         <div className="px-3 py-1.5 text-xs">
           <div className="flex items-center gap-2">
@@ -366,10 +372,55 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
               {entry.toolSuccess !== false ? "→ applied" : "→ failed"}
             </span>
           </div>
-          {typeof args.old_str === "string" && typeof args.new_str === "string" && (
+          {typeof oldStr === "string" && typeof newStr === "string" && (
             <div className="mt-1.5 font-mono text-[11px] leading-relaxed pl-5">
-              <div className="text-red-400/80">- {args.old_str.slice(0, 80)}{args.old_str.length > 80 ? "…" : ""}</div>
-              <div className="text-green-400/80">+ {args.new_str.slice(0, 80)}{args.new_str.length > 80 ? "…" : ""}</div>
+              <div className="text-red-400/80">- {oldStr.slice(0, 80)}{oldStr.length > 80 ? "…" : ""}</div>
+              <div className="text-green-400/80">+ {newStr.slice(0, 80)}{newStr.length > 80 ? "…" : ""}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "MultiEdit": {
+      const edits = (args.edits ?? []) as Array<Record<string, unknown>>;
+      const paths: string[] = [...new Set(
+        edits
+          .map((e) => (e.file_path ?? e.path ?? "") as string)
+          .filter(Boolean)
+          .map((p) => abbreviatePath(p)),
+      )];
+      const label = paths.length
+        ? paths.slice(0, 3).join(", ") + (paths.length > 3 ? "…" : "")
+        : `${edits.length} location${edits.length !== 1 ? "s" : ""}`;
+      return (
+        <div className="px-3 py-1.5 text-xs">
+          <div className="flex items-center gap-2">
+            <Codicon name="edit" size={11} className="text-amber-400 shrink-0" />
+            <span className="font-mono text-foreground/80">{label}</span>
+            <span className="text-muted-foreground">
+              {entry.toolSuccess !== false ? "→ applied" : "→ failed"}
+            </span>
+          </div>
+          {edits.slice(0, 3).map((e, i) => {
+            const p = abbreviatePath((e.file_path ?? e.path ?? "") as string);
+            // MultiEdit uses old_string/new_string (Claude SDK naming)
+            const oldStr = (e.old_string ?? e.old_str) as string | undefined;
+            const newStr = (e.new_string ?? e.new_str) as string | undefined;
+            return (
+              <div key={i} className="mt-1.5 pl-5">
+                {paths.length > 1 && <div className="text-muted-foreground/60 font-mono text-[10px]">{p}</div>}
+                {typeof oldStr === "string" && typeof newStr === "string" && (
+                  <div className="font-mono text-[11px] leading-relaxed">
+                    <div className="text-red-400/80">- {oldStr.slice(0, 80)}{oldStr.length > 80 ? "…" : ""}</div>
+                    <div className="text-green-400/80">+ {newStr.slice(0, 80)}{newStr.length > 80 ? "…" : ""}</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {edits.length > 3 && (
+            <div className="mt-1 pl-5 text-muted-foreground/60 text-[10px]">
+              +{edits.length - 3} more edit{edits.length - 3 !== 1 ? "s" : ""}
             </div>
           )}
         </div>
@@ -483,6 +534,7 @@ function hasStructuredRenderer(toolName?: string): boolean {
   return [
     "bash", "run_in_terminal", "read_file",
     "replace_string_in_file", "multi_replace_string_in_file", "str_replace_based_edit_tool",
+    "Edit", "insert_edit_into_file", "MultiEdit",
     "grep_search", "semantic_search", "file_search",
     "create_file", "write",
     "view", "glob", "grep",
