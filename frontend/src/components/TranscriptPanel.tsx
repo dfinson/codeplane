@@ -1153,7 +1153,15 @@ export function TranscriptPanel({
           <div className="flex items-end gap-2">
             <div className="relative flex-1">
               <textarea
-                placeholder={isTerminal ? "Send a message to resume this job…" : "Send instruction to agent…"}
+                placeholder={
+                  jobState === "review"
+                    ? "Tell the agent what to do next, or send to continue…"
+                    : archivedAt
+                      ? "Send a message to create a follow-up job…"
+                      : isTerminal
+                        ? "Send a message to resume this job…"
+                        : "Send instruction to agent…"
+                }
                 value={msg}
                 onChange={(e) => {
                   setMsg(e.currentTarget.value);
