@@ -40,6 +40,9 @@ _HOUSEKEEPING_INTERVAL_S = 30
 # Maximum time to wait for a free session before creating a fresh emergency one
 _CHECKOUT_SPIN_S = 3.0
 _CHECKOUT_SLEEP_S = 0.05
+_UTILITY_TIMEOUT_RETRIES = 1
+_UTILITY_TIMEOUT_BACKOFF_MULTIPLIER = 1.5
+_UTILITY_TIMEOUT_BACKOFF_MIN_S = 15.0
 
 # System prompt injected at session creation so the model understands its role
 _UTILITY_SYSTEM_PROMPT = """\
@@ -120,7 +123,24 @@ class UtilitySessionService:
         try:
             ws = await self._checkout_session()
             try:
-                return await ws.complete(prompt, timeout=timeout)
+                attempt_timeout = timeout
+                for attempt in range(_UTILITY_TIMEOUT_RETRIES + 1):
+                    try:
+                        return await ws.complete(prompt, timeout=attempt_timeout)
+                    except TimeoutError:
+                        log.warning(
+                            "utility_session_complete_timeout",
+                            index=ws.index,
+                            attempt=attempt + 1,
+                            timeout_s=attempt_timeout,
+                        )
+                        if attempt >= _UTILITY_TIMEOUT_RETRIES:
+                            raise
+                        await ws.reconnect()
+                        attempt_timeout = max(
+                            attempt_timeout * _UTILITY_TIMEOUT_BACKOFF_MULTIPLIER,
+                            attempt_timeout + _UTILITY_TIMEOUT_BACKOFF_MIN_S,
+                        )
             except Exception:
                 log.warning("utility_session_complete_failed", index=ws.index, exc_info=True)
                 try:
@@ -380,24 +400,37 @@ class _WarmSession:
             if self._session is None:
                 return ""
 
-            collected: list[str] = []
-            done = asyncio.Event()
+            delta_chunks: list[str] = []
+            final_message: str | None = None
+            activity = asyncio.Event()
+            finished = False
+            last_progress_at = time.monotonic()
 
             def _on_event(sdk_event: SdkSessionEvent) -> None:
+                nonlocal final_message, finished, last_progress_at
                 kind_str = sdk_event.type.value if sdk_event.type else ""
                 payload = sdk_event.data.to_dict() if sdk_event.data else {}
-                if kind_str == "assistant.message":
+                if kind_str == "assistant.streaming_delta":
+                    content = payload.get("delta_content") or payload.get("content") or ""
+                    if content:
+                        delta_chunks.append(content)
+                        last_progress_at = time.monotonic()
+                        activity.set()
+                elif kind_str == "assistant.message":
                     content = payload.get("content") or ""
                     if content:
-                        collected.append(content)
-                    done.set()
+                        final_message = content
+                        last_progress_at = time.monotonic()
+                    finished = True
+                    activity.set()
                 elif kind_str in (
                     "session.task_complete",
                     "session.idle",
                     "session.error",
                     "session.shutdown",
                 ):
-                    done.set()
+                    finished = True
+                    activity.set()
 
             self._session.on(_on_event)
             await self._session.send(
@@ -409,16 +442,34 @@ class _WarmSession:
             )
 
             try:
-                await asyncio.wait_for(done.wait(), timeout=timeout)
+                overall_deadline = time.monotonic() + max(timeout * 2.0, timeout + _UTILITY_TIMEOUT_BACKOFF_MIN_S)
+                while not finished:
+                    now = time.monotonic()
+                    idle_remaining = (last_progress_at + timeout) - now
+                    overall_remaining = overall_deadline - now
+                    wait_timeout = min(idle_remaining, overall_remaining)
+                    if wait_timeout <= 0:
+                        raise TimeoutError
+
+                    activity.clear()
+                    await asyncio.wait_for(activity.wait(), timeout=wait_timeout)
             except TimeoutError:
-                log.warning("utility_complete_timeout", index=self.index)
+                log.warning(
+                    "utility_complete_timeout",
+                    index=self.index,
+                    timeout_s=timeout,
+                    streamed_chars=sum(len(chunk) for chunk in delta_chunks),
+                    had_final_message=bool(final_message),
+                )
                 # Session is in an unknown state after a timeout — kill it so
                 # the pool-level caller triggers a reconnect instead of reusing
                 # a dead session on every subsequent call (death spiral).
                 await self.close()
                 raise
 
-            return "\n".join(collected)
+            if final_message is not None:
+                return final_message
+            return "".join(delta_chunks)
 
     async def reconnect(self) -> None:
         """Close and re-create the session."""

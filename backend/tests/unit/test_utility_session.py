@@ -230,6 +230,24 @@ class TestUtilitySessionComplete:
         assert result == ""
 
     @pytest.mark.asyncio
+    async def test_complete_timeout_retries_after_reconnect(self) -> None:
+        svc = UtilitySessionService()
+        ws = _mock_warm_session()
+        ws.complete = AsyncMock(side_effect=[TimeoutError(), "recovered"])
+        svc._sessions = [ws]
+        svc._started = True
+
+        result = await svc.complete("prompt", timeout=10.0)
+
+        assert result == "recovered"
+        ws.reconnect.assert_awaited_once()
+        assert ws.complete.await_count == 2
+        assert ws.complete.await_args_list[0].kwargs == {"timeout": 10.0}
+        assert ws.complete.await_args_list[0].args == ("prompt",)
+        assert ws.complete.await_args_list[1].kwargs == {"timeout": 25.0}
+        assert ws.complete.await_args_list[1].args == ("prompt",)
+
+    @pytest.mark.asyncio
     async def test_pending_counter_lifecycle(self) -> None:
         svc = UtilitySessionService()
         ws = _mock_warm_session()
@@ -495,6 +513,67 @@ class TestWarmSession:
 
         result = await ws.complete("test prompt", timeout=5.0)
         assert result == "generated text"
+
+    @pytest.mark.asyncio
+    async def test_complete_collects_streaming_delta_until_idle(self) -> None:
+        ws = _WarmSession(model="gpt-4o-mini", index=0)
+        mock_session = AsyncMock()
+        handlers: list = []
+        mock_session.on = MagicMock(side_effect=handlers.append)
+
+        async def _fake_send(msg):
+            handler = handlers[-1]
+
+            evt1 = MagicMock()
+            evt1.type.value = "assistant.streaming_delta"
+            evt1.data.to_dict.return_value = {"delta_content": "hello "}
+            handler(evt1)
+
+            await asyncio.sleep(0.01)
+
+            evt2 = MagicMock()
+            evt2.type.value = "assistant.streaming_delta"
+            evt2.data.to_dict.return_value = {"delta_content": "world"}
+            handler(evt2)
+
+            await asyncio.sleep(0.01)
+
+            evt3 = MagicMock()
+            evt3.type.value = "session.idle"
+            evt3.data.to_dict.return_value = {}
+            handler(evt3)
+
+        mock_session.send = AsyncMock(side_effect=_fake_send)
+        ws._session = mock_session
+
+        result = await ws.complete("test prompt", timeout=0.05)
+        assert result == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_complete_prefers_final_message_over_streaming_delta(self) -> None:
+        ws = _WarmSession(model="gpt-4o-mini", index=0)
+        mock_session = AsyncMock()
+        handlers: list = []
+        mock_session.on = MagicMock(side_effect=handlers.append)
+
+        async def _fake_send(msg):
+            handler = handlers[-1]
+
+            evt1 = MagicMock()
+            evt1.type.value = "assistant.streaming_delta"
+            evt1.data.to_dict.return_value = {"delta_content": "partial"}
+            handler(evt1)
+
+            evt2 = MagicMock()
+            evt2.type.value = "assistant.message"
+            evt2.data.to_dict.return_value = {"content": "final text"}
+            handler(evt2)
+
+        mock_session.send = AsyncMock(side_effect=_fake_send)
+        ws._session = mock_session
+
+        result = await ws.complete("test prompt", timeout=5.0)
+        assert result == "final text"
 
     @pytest.mark.asyncio
     async def test_complete_reconnects_when_session_is_none(self) -> None:
