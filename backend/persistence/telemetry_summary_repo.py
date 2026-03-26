@@ -81,6 +81,11 @@ class TelemetrySummaryRepo(BaseRepository):
         approval_wait_ms: int = 0,
         agent_messages: int = 0,
         operator_messages: int = 0,
+        total_turns: int = 0,
+        retry_count: int = 0,
+        retry_cost_usd: float = 0.0,
+        file_read_count: int = 0,
+        file_write_count: int = 0,
     ) -> None:
         """Atomically increment counters for a job.  Idempotent per field."""
         now = datetime.now(UTC).isoformat()
@@ -104,6 +109,11 @@ class TelemetrySummaryRepo(BaseRepository):
                     approval_wait_ms      = approval_wait_ms + :approval_wait_ms,
                     agent_messages        = agent_messages + :agent_messages,
                     operator_messages     = operator_messages + :operator_messages,
+                    total_turns           = total_turns + :total_turns,
+                    retry_count           = retry_count + :retry_count,
+                    retry_cost_usd        = retry_cost_usd + :retry_cost_usd,
+                    file_read_count       = file_read_count + :file_read_count,
+                    file_write_count      = file_write_count + :file_write_count,
                     updated_at            = :now
                 WHERE job_id = :job_id
             """),
@@ -126,6 +136,11 @@ class TelemetrySummaryRepo(BaseRepository):
                 "approval_wait_ms": approval_wait_ms,
                 "agent_messages": agent_messages,
                 "operator_messages": operator_messages,
+                "total_turns": total_turns,
+                "retry_count": retry_count,
+                "retry_cost_usd": retry_cost_usd,
+                "file_read_count": file_read_count,
+                "file_write_count": file_write_count,
                 "now": now,
             },
         )
@@ -189,6 +204,50 @@ class TelemetrySummaryRepo(BaseRepository):
                 WHERE job_id = :job_id
             """),
             {"job_id": job_id, "status": status, "duration_ms": duration_ms, "now": now},
+        )
+        await self._session.flush()
+
+    async def set_turn_stats(
+        self,
+        job_id: str,
+        *,
+        unique_files_read: int = 0,
+        file_reread_count: int = 0,
+        peak_turn_cost_usd: float = 0.0,
+        avg_turn_cost_usd: float = 0.0,
+        cost_first_half_usd: float = 0.0,
+        cost_second_half_usd: float = 0.0,
+        diff_lines_added: int = 0,
+        diff_lines_removed: int = 0,
+    ) -> None:
+        """Set computed turn economics stats (called by post-job attribution)."""
+        now = datetime.now(UTC).isoformat()
+        await self._session.execute(
+            text("""
+                UPDATE job_telemetry_summary SET
+                    unique_files_read   = :unique_files_read,
+                    file_reread_count   = :file_reread_count,
+                    peak_turn_cost_usd  = :peak_turn_cost_usd,
+                    avg_turn_cost_usd   = :avg_turn_cost_usd,
+                    cost_first_half_usd = :cost_first_half_usd,
+                    cost_second_half_usd= :cost_second_half_usd,
+                    diff_lines_added    = :diff_lines_added,
+                    diff_lines_removed  = :diff_lines_removed,
+                    updated_at          = :now
+                WHERE job_id = :job_id
+            """),
+            {
+                "job_id": job_id,
+                "unique_files_read": unique_files_read,
+                "file_reread_count": file_reread_count,
+                "peak_turn_cost_usd": peak_turn_cost_usd,
+                "avg_turn_cost_usd": avg_turn_cost_usd,
+                "cost_first_half_usd": cost_first_half_usd,
+                "cost_second_half_usd": cost_second_half_usd,
+                "diff_lines_added": diff_lines_added,
+                "diff_lines_removed": diff_lines_removed,
+                "now": now,
+            },
         )
         await self._session.flush()
 
@@ -312,7 +371,7 @@ class TelemetrySummaryRepo(BaseRepository):
         return [dict(r) for r in result.mappings().all()]
 
     async def cost_by_model(self, *, period_days: int = 7) -> list[dict[str, Any]]:
-        """Return per-model cost / job count / token breakdown."""
+        """Return per-model cost / job count / token breakdown with normalized metrics."""
         result = await self._session.execute(
             text(f"""
                 SELECT
@@ -325,7 +384,32 @@ class TelemetrySummaryRepo(BaseRepository):
                     COALESCE(SUM(output_tokens), 0) as output_tokens,
                     COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
-                    COALESCE(SUM(premium_requests), 0) as premium_requests
+                    COALESCE(SUM(premium_requests), 0) as premium_requests,
+                    COALESCE(SUM(total_turns), 0) as total_turns,
+                    COALESCE(SUM(tool_call_count), 0) as total_tool_calls,
+                    COALESCE(SUM(diff_lines_added + diff_lines_removed), 0) as total_diff_lines,
+                    -- Normalized metrics
+                    CASE WHEN COUNT(*) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / COUNT(*)
+                        ELSE 0 END as cost_per_job,
+                    CASE WHEN SUM(duration_ms) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / (SUM(duration_ms) / 60000.0)
+                        ELSE 0 END as cost_per_minute,
+                    CASE WHEN SUM(total_turns) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(total_turns)
+                        ELSE 0 END as cost_per_turn,
+                    CASE WHEN SUM(tool_call_count) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(tool_call_count)
+                        ELSE 0 END as cost_per_tool_call,
+                    CASE WHEN SUM(diff_lines_added + diff_lines_removed) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(diff_lines_added + diff_lines_removed)
+                        ELSE 0 END as cost_per_diff_line,
+                    CASE WHEN SUM(input_tokens + output_tokens) > 0
+                        THEN COALESCE(SUM(total_cost_usd), 0) / (SUM(input_tokens + output_tokens) / 1000000.0)
+                        ELSE 0 END as cost_per_mtok,
+                    CASE WHEN SUM(total_cost_usd) > 0
+                        THEN COALESCE(SUM(cache_read_tokens), 0) * 1.0 / NULLIF(SUM(input_tokens), 0)
+                        ELSE 0 END as cache_hit_rate
                 FROM job_telemetry_summary
                 WHERE created_at >= datetime('now', '-{int(period_days)} days')
                     AND model != ''

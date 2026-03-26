@@ -62,6 +62,10 @@ class CopilotAdapter(AgentAdapterInterface):
         self._job_start_times: dict[str, float] = {}
         # Per-job confirmed main model
         self._job_main_models: dict[str, str] = {}
+        # Cost analytics: per-job turn counter, phase, retry tracker
+        self._turn_counters: dict[str, int] = {}
+        self._current_phases: dict[str, str] = {}
+        self._retry_trackers: dict[str, "RetryTracker"] = {}
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
@@ -97,6 +101,9 @@ class CopilotAdapter(AgentAdapterInterface):
                     await TelemetrySummaryRepo(session).set_context(**kwargs)
                 elif fn_name == "set_quota":
                     await TelemetrySummaryRepo(session).set_quota(**kwargs)
+                elif fn_name == "record_file_access":
+                    from backend.persistence.file_access_repo import FileAccessRepo
+                    await FileAccessRepo(session).record(**kwargs)
                 await session.commit()
         except Exception:
             log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
@@ -109,6 +116,9 @@ class CopilotAdapter(AgentAdapterInterface):
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+            self._turn_counters.pop(job_id, None)
+            self._current_phases.pop(job_id, None)
+            self._retry_trackers.pop(job_id, None)
 
     async def _handle_permission_request(
         self,
@@ -394,8 +404,14 @@ class CopilotAdapter(AgentAdapterInterface):
                 total_cost_usd=cost,
                 llm_call_count=1,
                 total_llm_duration_ms=int(duration_ms),
+                total_turns=1,
             )
         )
+
+        # Advance turn counter for this job
+        turn_num = self._turn_counters.get(job_id, 0) + 1
+        self._turn_counters[job_id] = turn_num
+        current_phase = self._current_phases.get(job_id, "agent_reasoning")
 
         # SQLite span detail
         start_time = self._job_start_times.get(job_id, _time.monotonic())
@@ -416,6 +432,13 @@ class CopilotAdapter(AgentAdapterInterface):
                     "cost": cost,
                     "is_subagent": is_subagent,
                 },
+                turn_number=turn_num,
+                execution_phase=current_phase,
+                input_tokens=input_toks,
+                output_tokens=output_toks,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cost_usd=cost,
             )
         )
 
@@ -489,16 +512,61 @@ class CopilotAdapter(AgentAdapterInterface):
         import time as _time
 
         from backend.services import telemetry as tel
+        from backend.services.tool_classifier import classify_tool, extract_file_paths, extract_tool_target
 
         start = self._tool_start_times.pop(tool_id, _time.monotonic())
         dur = (_time.monotonic() - start) * 1000
         # Prefer the display name buffered at tool.execution_start
-        buffered_name = self._tool_call_buffer.get(tool_id, {}).get("tool_name")
+        buffered = self._tool_call_buffer.get(tool_id, {})
+        buffered_name = buffered.get("tool_name")
         resolved_name = buffered_name or data.tool_name or data.mcp_tool_name or "tool"
         success = bool(data.success) if data.success is not None else True
 
         attrs = {"job_id": job_id, "sdk": "copilot", "tool_name": resolved_name, "success": success}
         tel.tool_duration.record(dur, attrs)
+
+        # Tool classification
+        tool_args_str = buffered.get("tool_args")
+        category = classify_tool(resolved_name)
+        target = extract_tool_target(resolved_name, tool_args_str)
+        current_phase = self._current_phases.get(job_id, "agent_reasoning")
+        turn_num = self._turn_counters.get(job_id, 0)
+
+        # Retry detection
+        from backend.services.retry_tracker import RetryTracker
+
+        if job_id not in self._retry_trackers:
+            self._retry_trackers[job_id] = RetryTracker()
+        # Use a placeholder span_id (0); real id assigned by DB
+        retry_result = self._retry_trackers[job_id].record(
+            resolved_name, target, 0, success
+        )
+
+        # Result size estimation
+        result_text = ""
+        if data.result is not None:
+            result_text = str(data.result) if not isinstance(data.result, str) else data.result
+        result_size = len(result_text.encode("utf-8", errors="replace")) if result_text else None
+
+        # File read/write tracking
+        file_rw_increment = {"file_read_count": 0, "file_write_count": 0}
+        if category in ("file_read", "file_write"):
+            paths = extract_file_paths(resolved_name, tool_args_str)
+            access_type = "write" if category == "file_write" else "read"
+            if access_type == "read":
+                file_rw_increment["file_read_count"] = 1
+            else:
+                file_rw_increment["file_write_count"] = 1
+            for fpath in paths:
+                self._schedule_db_write(
+                    self._db_write(
+                        "record_file_access",
+                        job_id=job_id,
+                        file_path=fpath,
+                        access_type=access_type,
+                        turn_number=turn_num,
+                    )
+                )
 
         # SQLite writes
         self._schedule_db_write(
@@ -508,6 +576,8 @@ class CopilotAdapter(AgentAdapterInterface):
                 tool_call_count=1,
                 tool_failure_count=0 if success else 1,
                 total_tool_duration_ms=int(dur),
+                retry_count=1 if retry_result.is_retry else 0,
+                **file_rw_increment,
             )
         )
 
@@ -522,6 +592,14 @@ class CopilotAdapter(AgentAdapterInterface):
                 started_at=round(offset, 2),
                 duration_ms=dur,
                 attrs={"success": success},
+                tool_category=category,
+                tool_target=target,
+                turn_number=turn_num,
+                execution_phase=current_phase,
+                is_retry=retry_result.is_retry,
+                retries_span_id=retry_result.prior_failure_span_id,
+                tool_args_json=tool_args_str,
+                result_size_bytes=result_size,
             )
         )
 

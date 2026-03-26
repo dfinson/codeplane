@@ -28,16 +28,39 @@ class TelemetrySpansRepo(BaseRepository):
         started_at: float,
         duration_ms: float,
         attrs: dict[str, Any] | None = None,
-    ) -> None:
-        """Record a single LLM or tool call span."""
+        tool_category: str | None = None,
+        tool_target: str | None = None,
+        turn_number: int | None = None,
+        execution_phase: str | None = None,
+        is_retry: bool = False,
+        retries_span_id: int | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        cache_write_tokens: int | None = None,
+        cost_usd: float | None = None,
+        tool_args_json: str | None = None,
+        result_size_bytes: int | None = None,
+    ) -> int:
+        """Record a single LLM or tool call span. Returns the inserted row id."""
         now = datetime.now(UTC).isoformat()
         attrs_json = json.dumps(attrs or {})
-        await self._session.execute(
+        result = await self._session.execute(
             text("""
                 INSERT INTO job_telemetry_spans
-                    (job_id, span_type, name, started_at, duration_ms, attrs_json, created_at)
+                    (job_id, span_type, name, started_at, duration_ms, attrs_json,
+                     tool_category, tool_target, turn_number, execution_phase,
+                     is_retry, retries_span_id,
+                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                     cost_usd, tool_args_json, result_size_bytes,
+                     created_at)
                 VALUES
-                    (:job_id, :span_type, :name, :started_at, :duration_ms, :attrs_json, :now)
+                    (:job_id, :span_type, :name, :started_at, :duration_ms, :attrs_json,
+                     :tool_category, :tool_target, :turn_number, :execution_phase,
+                     :is_retry, :retries_span_id,
+                     :input_tokens, :output_tokens, :cache_read_tokens, :cache_write_tokens,
+                     :cost_usd, :tool_args_json, :result_size_bytes,
+                     :now)
             """),
             {
                 "job_id": job_id,
@@ -46,10 +69,24 @@ class TelemetrySpansRepo(BaseRepository):
                 "started_at": started_at,
                 "duration_ms": duration_ms,
                 "attrs_json": attrs_json,
+                "tool_category": tool_category,
+                "tool_target": tool_target,
+                "turn_number": turn_number,
+                "execution_phase": execution_phase,
+                "is_retry": is_retry,
+                "retries_span_id": retries_span_id,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "cost_usd": cost_usd,
+                "tool_args_json": tool_args_json,
+                "result_size_bytes": result_size_bytes,
                 "now": now,
             },
         )
         await self._session.flush()
+        return result.lastrowid or 0
 
     async def list_for_job(self, job_id: str) -> list[dict[str, Any]]:
         """Return all spans for a job, ordered by start time."""

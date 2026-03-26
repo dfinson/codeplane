@@ -552,6 +552,17 @@ class RuntimeService:
 
         asyncio.create_task(_init_telemetry_row())
 
+        # Emit environment_setup phase
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=DomainEvent.make_event_id(),
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.execution_phase_changed,
+                payload={"phase": "environment_setup"},
+            )
+        )
+
         # Resolve worktree_path and base_ref for diff calculations
         worktree_path: str | None = None
         base_ref: str | None = None
@@ -570,6 +581,17 @@ class RuntimeService:
         session_id: str | None = None
         error_reason: str | None = None
         try:
+            # Emit agent_reasoning phase before main session execution
+            await self._event_bus.publish(
+                DomainEvent(
+                    event_id=DomainEvent.make_event_id(),
+                    job_id=job_id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.execution_phase_changed,
+                    payload={"phase": "agent_reasoning"},
+                )
+            )
+
             result = await self._execute_session_attempt(
                 job_id,
                 agent_session,
@@ -740,6 +762,20 @@ class RuntimeService:
         finally:
             tel.end_job_span(job_id)
 
+            # Emit finalization phase
+            try:
+                await self._event_bus.publish(
+                    DomainEvent(
+                        event_id=DomainEvent.make_event_id(),
+                        job_id=job_id,
+                        timestamp=datetime.now(UTC),
+                        kind=DomainEventKind.execution_phase_changed,
+                        payload={"phase": "finalization"},
+                    )
+                )
+            except Exception:
+                pass
+
             # Finalize the summary row with terminal status and duration.
             try:
                 async with self._session_factory() as session:
@@ -768,6 +804,15 @@ class RuntimeService:
                         duration_ms=duration,
                     )
                     await session.commit()
+
+                # Run post-job cost attribution pipeline
+                try:
+                    async with self._session_factory() as session:
+                        from backend.services.cost_attribution import compute_attribution
+                        await compute_attribution(session, job_id)
+                        await session.commit()
+                except Exception:
+                    log.warning("cost_attribution_failed", job_id=job_id, exc_info=True)
 
                 # Signal clients that final telemetry is available
                 await self._event_bus.publish(

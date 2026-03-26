@@ -661,3 +661,56 @@ class BrowseDirectoryResponse(CamelModel):
 class WorkspaceFileResponse(CamelModel):
     path: str
     content: str
+
+
+# ---------------------------------------------------------------------------
+# Cost Analytics response models
+# ---------------------------------------------------------------------------
+
+
+class CostAttributionBucket(CamelModel):
+    """A single bucket within a cost attribution dimension."""
+
+    dimension: str
+    bucket: str
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    call_count: int = 0
+
+
+class TurnEconomics(CamelModel):
+    """Turn economics summary for a single job."""
+
+    total_turns: int = 0
+    peak_turn_cost_usd: float = 0.0
+    avg_turn_cost_usd: float = 0.0
+    cost_first_half_usd: float = 0.0
+    cost_second_half_usd: float = 0.0
+
+
+class FileAccessStats(CamelModel):
+    """File I/O statistics for a single job."""
+
+    total_accesses: int = 0
+    unique_files: int = 0
+    total_reads: int = 0
+    total_writes: int = 0
+    reread_count: int = 0
+
+
+class NormalizedModelMetrics(CamelModel):
+    """Per-model metrics with normalization toggles."""
+
+    model: str
+    sdk: str
+    job_count: int = 0
+    total_cost_usd: float = 0.0
+    total_tokens: int = 0
+    cost_per_job: float = 0.0
+    cost_per_minute: float = 0.0
+    cost_per_turn: float = 0.0
+    cost_per_tool_call: float = 0.0
+    cost_per_diff_line: float = 0.0
+    cost_per_mtok: float = 0.0
+    cache_hit_rate: float = 0.0

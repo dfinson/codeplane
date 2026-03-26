@@ -166,3 +166,90 @@ async def analytics_pricing(
             entry = _MODEL_PRICING.get(norm)
         result[name] = entry
     return result
+
+
+# ---------------------------------------------------------------------------
+# Cost Analytics Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/analytics/cost-drivers/{job_id}")
+async def cost_drivers_for_job(
+    job_id: str,
+    session: FromDishka[AsyncSession],
+) -> dict[str, object]:
+    """Per-job cost attribution breakdown by dimension."""
+    from backend.persistence.cost_attribution_repo import CostAttributionRepo
+
+    rows = await CostAttributionRepo(session).for_job(job_id)
+    by_dimension: dict[str, list[dict]] = {}
+    for row in rows:
+        dim = row.get("dimension", "unknown")
+        by_dimension.setdefault(dim, []).append(row)
+    return {"jobId": job_id, "dimensions": by_dimension}
+
+
+@router.get("/analytics/cost-drivers")
+async def fleet_cost_drivers(
+    session: FromDishka[AsyncSession],
+    period: Annotated[int, Query(ge=1, le=365)] = 30,
+    dimension: str | None = None,
+) -> dict[str, object]:
+    """Fleet-wide cost attribution: top cost buckets across all dimensions."""
+    from backend.persistence.cost_attribution_repo import CostAttributionRepo
+
+    repo = CostAttributionRepo(session)
+    if dimension:
+        rows = await repo.by_dimension(dimension, period_days=period)
+        return {"period": period, "dimension": dimension, "buckets": rows}
+    summary = await repo.fleet_summary(period_days=period)
+    return {"period": period, "summary": summary}
+
+
+@router.get("/analytics/file-access/{job_id}")
+async def file_access_for_job(
+    job_id: str,
+    session: FromDishka[AsyncSession],
+) -> dict[str, object]:
+    """File access stats for a job — rereads, most-accessed files."""
+    from backend.persistence.file_access_repo import FileAccessRepo
+
+    repo = FileAccessRepo(session)
+    stats = await repo.reread_stats(job_id)
+    top_files = await repo.most_accessed_files(job_id=job_id)
+    return {"jobId": job_id, "stats": stats, "topFiles": top_files}
+
+
+@router.get("/analytics/file-access")
+async def fleet_file_access(
+    session: FromDishka[AsyncSession],
+    period: Annotated[int, Query(ge=1, le=365)] = 30,
+) -> dict[str, object]:
+    """Fleet-wide most-accessed files across all jobs."""
+    from backend.persistence.file_access_repo import FileAccessRepo
+
+    top_files = await FileAccessRepo(session).most_accessed_files(period_days=period)
+    return {"period": period, "topFiles": top_files}
+
+
+@router.get("/analytics/turn-economics/{job_id}")
+async def turn_economics_for_job(
+    job_id: str,
+    session: FromDishka[AsyncSession],
+) -> dict[str, object]:
+    """Per-turn cost curve for a specific job."""
+    from backend.persistence.cost_attribution_repo import CostAttributionRepo
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
+
+    summary = await TelemetrySummaryRepo(session).get(job_id)
+    turns = await CostAttributionRepo(session).for_job(job_id)
+    turn_data = [r for r in turns if r.get("dimension") == "turn"]
+    return {
+        "jobId": job_id,
+        "totalTurns": summary.get("total_turns", 0) if summary else 0,
+        "peakTurnCostUsd": summary.get("peak_turn_cost_usd", 0) if summary else 0,
+        "avgTurnCostUsd": summary.get("avg_turn_cost_usd", 0) if summary else 0,
+        "costFirstHalfUsd": summary.get("cost_first_half_usd", 0) if summary else 0,
+        "costSecondHalfUsd": summary.get("cost_second_half_usd", 0) if summary else 0,
+        "turnCurve": turn_data,
+    }

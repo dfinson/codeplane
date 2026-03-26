@@ -138,6 +138,20 @@ class JobTelemetrySummaryRow(Base):
     current_context_tokens = Column(Integer, nullable=False, default=0)
     quota_json = Column(Text, nullable=True)
     updated_at = Column(TZDateTime, nullable=False)
+    # Cost analytics columns (migration 0009)
+    total_turns = Column(Integer, nullable=False, default=0, server_default="0")
+    retry_count = Column(Integer, nullable=False, default=0, server_default="0")
+    retry_cost_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    file_read_count = Column(Integer, nullable=False, default=0, server_default="0")
+    file_write_count = Column(Integer, nullable=False, default=0, server_default="0")
+    unique_files_read = Column(Integer, nullable=False, default=0, server_default="0")
+    file_reread_count = Column(Integer, nullable=False, default=0, server_default="0")
+    peak_turn_cost_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    avg_turn_cost_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    cost_first_half_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    cost_second_half_usd = Column(Float, nullable=False, default=0.0, server_default="0.0")
+    diff_lines_added = Column(Integer, nullable=False, default=0, server_default="0")
+    diff_lines_removed = Column(Integer, nullable=False, default=0, server_default="0")
 
 
 class JobTelemetrySpanRow(Base):
@@ -153,5 +167,24 @@ class JobTelemetrySpanRow(Base):
     duration_ms = Column(Text, nullable=False)
     attrs_json = Column(Text, nullable=False)
     created_at = Column(TZDateTime, nullable=False)
+    # Cost analytics columns (migration 0008)
+    tool_category = Column(String, nullable=True)
+    tool_target = Column(String, nullable=True)
+    turn_number = Column(Integer, nullable=True)
+    execution_phase = Column(String, nullable=True)
+    is_retry = Column(Boolean, nullable=True, default=False)
+    retries_span_id = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    cache_read_tokens = Column(Integer, nullable=True)
+    cache_write_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=True)
+    tool_args_json = Column(Text, nullable=True)
+    result_size_bytes = Column(Integer, nullable=True)
 
-    __table_args__ = (Index("idx_spans_job", "job_id"),)
+    __table_args__ = (
+        Index("idx_spans_job", "job_id"),
+        Index("idx_spans_category", "tool_category"),
+        Index("idx_spans_turn", "job_id", "turn_number"),
+        Index("idx_spans_phase", "execution_phase"),
+    )

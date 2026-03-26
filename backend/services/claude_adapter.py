@@ -81,6 +81,10 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._session_factory = session_factory
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
+        # Cost analytics: per-job turn counter, phase, retry tracker
+        self._turn_counters: dict[str, int] = {}
+        self._current_phases: dict[str, str] = {}
+        self._retry_trackers: dict[str, "RetryTracker"] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -96,6 +100,9 @@ class ClaudeAdapter(AgentAdapterInterface):
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
+            self._turn_counters.pop(job_id, None)
+            self._current_phases.pop(job_id, None)
+            self._retry_trackers.pop(job_id, None)
 
     def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
         """Schedule an async DB write from a synchronous or async context."""
@@ -122,6 +129,9 @@ class ClaudeAdapter(AgentAdapterInterface):
                     await TelemetrySummaryRepo(session).set_model(**kwargs)
                 elif fn_name == "set_quota":
                     await TelemetrySummaryRepo(session).set_quota(**kwargs)
+                elif fn_name == "record_file_access":
+                    from backend.persistence.file_access_repo import FileAccessRepo
+                    await FileAccessRepo(session).record(**kwargs)
                 await session.commit()
         except Exception:
             log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
@@ -518,6 +528,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         # Telemetry
         if job_id:
             from backend.services import telemetry as tel
+            from backend.services.tool_classifier import classify_tool, extract_file_paths, extract_tool_target
 
             attrs: dict[str, str | bool] = {
                 "job_id": job_id,
@@ -527,6 +538,44 @@ class ClaudeAdapter(AgentAdapterInterface):
             }
             tel.tool_duration.record(duration_ms, attrs)
 
+            # Tool classification
+            category = classify_tool(tool_name)
+            target = extract_tool_target(tool_name, tool_args_str)
+            current_phase = self._current_phases.get(job_id, "agent_reasoning")
+            turn_num = self._turn_counters.get(job_id, 0)
+
+            # Retry detection
+            from backend.services.retry_tracker import RetryTracker
+
+            if job_id not in self._retry_trackers:
+                self._retry_trackers[job_id] = RetryTracker()
+            retry_result = self._retry_trackers[job_id].record(
+                tool_name, target, 0, success
+            )
+
+            # Result size
+            result_size = len(result_text.encode("utf-8", errors="replace")) if result_text else None
+
+            # File access tracking
+            file_rw_increment = {"file_read_count": 0, "file_write_count": 0}
+            if category in ("file_read", "file_write"):
+                paths = extract_file_paths(tool_name, tool_args_str)
+                access_type = "write" if category == "file_write" else "read"
+                if access_type == "read":
+                    file_rw_increment["file_read_count"] = 1
+                else:
+                    file_rw_increment["file_write_count"] = 1
+                for fpath in paths:
+                    self._schedule_db_write(
+                        self._db_write(
+                            "record_file_access",
+                            job_id=job_id,
+                            file_path=fpath,
+                            access_type=access_type,
+                            turn_number=turn_num,
+                        )
+                    )
+
             self._schedule_db_write(
                 self._db_write(
                     "increment",
@@ -534,6 +583,8 @@ class ClaudeAdapter(AgentAdapterInterface):
                     tool_call_count=1,
                     tool_failure_count=0 if success else 1,
                     total_tool_duration_ms=int(duration_ms),
+                    retry_count=1 if retry_result.is_retry else 0,
+                    **file_rw_increment,
                 )
             )
 
@@ -548,6 +599,14 @@ class ClaudeAdapter(AgentAdapterInterface):
                     started_at=round(offset, 2),
                     duration_ms=duration_ms,
                     attrs={"success": success},
+                    tool_category=category,
+                    tool_target=target,
+                    turn_number=turn_num,
+                    execution_phase=current_phase,
+                    is_retry=retry_result.is_retry,
+                    retries_span_id=retry_result.prior_failure_span_id,
+                    tool_args_json=tool_args_str,
+                    result_size_bytes=result_size,
                 )
             )
 
@@ -594,8 +653,14 @@ class ClaudeAdapter(AgentAdapterInterface):
                     total_cost_usd=float(total_cost_usd),
                     llm_call_count=1,
                     total_llm_duration_ms=int(duration_ms),
+                    total_turns=1,
                 )
             )
+
+            # Advance turn counter
+            turn_num = self._turn_counters.get(job_id, 0) + 1
+            self._turn_counters[job_id] = turn_num
+            current_phase = self._current_phases.get(job_id, "agent_reasoning")
 
             job_start = self._job_start_times.get(job_id, time.monotonic())
             offset = time.monotonic() - job_start
@@ -615,6 +680,13 @@ class ClaudeAdapter(AgentAdapterInterface):
                         "cost": float(total_cost_usd),
                         "is_subagent": False,
                     },
+                    turn_number=turn_num,
+                    execution_phase=current_phase,
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                    cache_read_tokens=int(cache_read),
+                    cache_write_tokens=int(cache_write),
+                    cost_usd=float(total_cost_usd),
                 )
             )
 
