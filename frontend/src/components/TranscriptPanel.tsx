@@ -857,6 +857,7 @@ export function TranscriptPanel({
   interactive,
   pausable,
   jobState,
+  archivedAt,
   prompt,
   promptTimestamp,
 }: {
