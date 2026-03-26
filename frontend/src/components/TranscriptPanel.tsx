@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Send, Bot, User, PauseCircle, ChevronDown, Brain, X,
   ShieldQuestion, CheckCircle2, XCircle as XCircleIcon,
-  ArrowDown, Search,
+  ArrowDown, Search, Network,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -578,6 +578,125 @@ function ToolIconGlyph({ icon, className }: { icon: ToolIconDef; className?: str
   return <Icon size={13} className={className} />;
 }
 
+// ---------------------------------------------------------------------------
+// Sub-agent step — collapsible pill (B) that expands into an inset card (A)
+// ---------------------------------------------------------------------------
+
+const SUB_AGENT_TOOLS = new Set(["Task", "task", "runSubagent", "search_subagent"]);
+
+function isSubagentTool(toolName?: string): boolean {
+  if (!toolName) return false;
+  return SUB_AGENT_TOOLS.has(stripMcpPrefix(toolName));
+}
+
+function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const isRunning = entry.role === "tool_running";
+  const failed = entry.toolSuccess === false;
+
+  const args = parseArgs(entry.toolArgs);
+  const rawDescription = typeof args.description === "string" ? args.description
+    : typeof args.prompt === "string" ? args.prompt
+    : typeof args.query === "string" ? args.query
+    : entry.toolDisplay ?? entry.toolName ?? "Sub-agent";
+  // Strip the tool prefix that the backend formatter may prepend (e.g. "Task: do X" → "do X")
+  const label = rawDescription.replace(/^(?:Task|Subagent|Search agent):\s*/i, "");
+  // Show the full prompt in the expanded card only when there's more detail than the label
+  const fullPrompt = rawDescription.length > label.length + 8 ? rawDescription : null;
+
+  const accentColor = failed ? "border-red-500/50" : "border-violet-500/40";
+  const iconColor = failed ? "text-red-400"
+    : isRunning || isActive ? "text-violet-400 animate-pulse"
+    : "text-violet-400/70";
+
+  return (
+    <div className="relative pl-5">
+      {/* Icon column */}
+      <div className={cn(
+        "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
+        (isActive || isRunning) && "animate-pulse",
+      )}>
+        <Network size={13} className={iconColor} />
+      </div>
+
+      {/* Collapsed pill row */}
+      <button
+        onClick={() => !isRunning && setExpanded(!expanded)}
+        className={cn("w-full text-left group", isRunning && "cursor-default")}
+      >
+        <div className="flex items-baseline gap-2 py-0.5">
+          <span className={cn(
+            "text-xs font-mono",
+            failed ? "text-red-400"
+              : isRunning || isActive ? "text-violet-400"
+              : "text-foreground/80",
+          )}>
+            {label}{isRunning ? "…" : ""}
+          </span>
+          {entry.toolDurationMs != null && (
+            <span className="text-[10px] text-muted-foreground/60">
+              {formatDuration(entry.toolDurationMs)}
+            </span>
+          )}
+          {failed && entry.toolIssue && (
+            <span className="text-[10px] text-red-400 truncate max-w-[200px]">
+              {entry.toolIssue}
+            </span>
+          )}
+          {!isRunning && (
+            <ChevronDown
+              size={10}
+              className={cn(
+                "ml-auto shrink-0 text-muted-foreground/50 transition-transform",
+                expanded && "rotate-180",
+              )}
+            />
+          )}
+        </div>
+      </button>
+
+      {/* Expanded inset card */}
+      {expanded && !isRunning && (
+        <div className={cn(
+          "mt-1 mb-2 rounded-r border-l-2 border border-border/30 bg-muted/10 text-xs overflow-hidden",
+          accentColor,
+        )}>
+          {/* Header */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/20 bg-muted/20">
+            <Network size={11} className="shrink-0 text-violet-400/80" />
+            <span className="text-[10px] font-medium text-violet-400/90 uppercase tracking-wide">
+              Sub-agent
+            </span>
+          </div>
+
+          {/* Full description / prompt */}
+          {fullPrompt && (
+            <div className="px-3 py-1.5 border-b border-border/20">
+              <span className="text-muted-foreground font-medium text-[10px] uppercase">Prompt</span>
+              <TruncatedPayload content={fullPrompt} maxLength={400} />
+            </div>
+          )}
+
+          {/* Error banner */}
+          {failed && entry.toolIssue && (
+            <div className="px-3 py-1.5 bg-red-500/5 border-b border-border/20">
+              <span className="text-red-400 font-medium">{entry.toolIssue}</span>
+            </div>
+          )}
+
+          {/* Result */}
+          {entry.toolResult && (
+            <div className="px-3 py-1.5">
+              <span className="text-muted-foreground font-medium text-[10px] uppercase">Result</span>
+              <TruncatedPayload content={entry.toolResult} maxLength={600} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolStep({ entry, isActive }: {
   entry: TranscriptEntry;
   isActive: boolean;
@@ -635,7 +754,13 @@ function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive:
     <div className="relative ml-1">
       <div className="absolute left-[7px] top-2 bottom-2 w-px border-l border-dotted border-border/60" />
       <div className="space-y-0.5">
-        {calls.map((call, i) => (
+        {calls.map((call, i) => isSubagentTool(call.toolName) ? (
+          <SubAgentStep
+            key={call.seq}
+            entry={call}
+            isActive={isActive && i === calls.length - 1}
+          />
+        ) : (
           <ToolStep
             key={call.seq}
             entry={call}

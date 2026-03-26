@@ -40,6 +40,8 @@ const CATEGORY_MAP: Record<string, ToolCategory> = {
   fetch_webpage: "web",
   runSubagent: "agent",
   search_subagent: "agent",
+  Task: "agent",
+  task: "agent",
 };
 
 const CATEGORY_ICON: Record<ToolCategory, ToolIconDef> = {
