@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from backend.services.approval_service import ApprovalService
     from backend.services.event_bus import EventBus
+    from backend.services.retry_tracker import RetryTracker
 
 log = structlog.get_logger()
 
@@ -87,7 +88,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         # Cost analytics: per-job turn counter, phase, retry tracker
         self._turn_counters: dict[str, int] = {}
         self._current_phases: dict[str, str] = {}
-        self._retry_trackers: dict[str, "RetryTracker"] = {}
+        self._retry_trackers: dict[str, RetryTracker] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -152,6 +153,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                     await TelemetrySummaryRepo(session).set_quota(**kwargs)
                 elif fn_name == "record_file_access":
                     from backend.persistence.file_access_repo import FileAccessRepo
+
                     await FileAccessRepo(session).record(**kwargs)
                 await session.commit()
         except Exception:
@@ -602,9 +604,7 @@ class ClaudeAdapter(AgentAdapterInterface):
 
             if job_id not in self._retry_trackers:
                 self._retry_trackers[job_id] = RetryTracker()
-            retry_result = self._retry_trackers[job_id].record(
-                tool_name, target, 0, success
-            )
+            retry_result = self._retry_trackers[job_id].record(tool_name, target, 0, success)
 
             # Result size
             result_size = len(result_text.encode("utf-8", errors="replace")) if result_text else None

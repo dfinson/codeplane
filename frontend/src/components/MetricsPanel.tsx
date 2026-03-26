@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Cpu, Clock, Wrench, MessageSquare, Brain,
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
-  BarChart3, BookOpen, CheckCircle, XCircle, Zap,
+  BarChart3, BookOpen, CheckCircle, XCircle, Zap, TrendingUp,
 } from "lucide-react";
 import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
 import { Badge } from "./ui/badge";
@@ -66,6 +66,47 @@ interface TelemetryData {
   premiumRequests?: number;
   // Copilot: per-resource quota snapshots
   quotaSnapshots?: Record<string, QuotaSnapshotData>;
+  costDrivers?: CostDriversData;
+  turnEconomics?: TurnEconomicsData;
+  fileAccess?: FileAccessData;
+}
+
+interface CostDriverBucket {
+  dimension: string;
+  bucket: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  callCount: number;
+}
+
+interface CostDriversData {
+  activity?: CostDriverBucket[];
+}
+
+interface TurnEconomicsData {
+  totalTurns: number;
+  peakTurnCostUsd: number;
+  avgTurnCostUsd: number;
+  costFirstHalfUsd: number;
+  costSecondHalfUsd: number;
+  turnCurve: CostDriverBucket[];
+}
+
+interface FileAccessData {
+  stats: {
+    totalAccesses: number;
+    uniqueFiles: number;
+    totalReads: number;
+    totalWrites: number;
+    rereadCount: number;
+  };
+  topFiles: Array<{
+    filePath: string;
+    accessCount: number;
+    readCount: number;
+    writeCount: number;
+  }>;
 }
 
 interface QuotaSnapshotData {
@@ -161,6 +202,33 @@ function formatUsd(amount: number): string {
   if (amount < 0.01)  return `$${amount.toFixed(4)}`;
   if (amount < 1)     return `$${amount.toFixed(3)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+function formatActivityBucket(bucket: string): string {
+  switch (bucket) {
+    case "code_changes":
+      return "Code Changes";
+    case "code_reading":
+      return "Code Reading";
+    case "search_discovery":
+      return "Search & Discovery";
+    case "command_execution":
+      return "Command Execution";
+    case "delegation":
+      return "Sub-agents";
+    case "verification":
+      return "Verification";
+    case "reasoning":
+      return "Reasoning";
+    case "setup":
+      return "Setup";
+    case "wrap_up":
+      return "Wrap-up";
+    case "other_tools":
+      return "Other Tools";
+    default:
+      return bucket.replace(/_/g, " ");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +495,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
   const [llmCollapsed, setLlmCollapsed] = useState(true);
   const [llmMainExpanded, setLlmMainExpanded] = useState(false);
   const [llmSubExpanded, setLlmSubExpanded] = useState(false);
+  const [turnsCollapsed, setTurnsCollapsed] = useState(true);
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
@@ -546,6 +615,12 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
   // Dynamic model pricing from backend
   const modelPricing = useModelPricing(data?.model ?? data?.mainModel);
+  const activityBuckets = data?.costDrivers?.activity ?? [];
+  const turnEconomics = data?.turnEconomics;
+  const turnCurve = turnEconomics?.turnCurve ?? [];
+  const showCacheEfficiency = (data?.inputTokens ?? 0) > 0 || (data?.cacheReadTokens ?? 0) > 0 || (data?.cacheWriteTokens ?? 0) > 0;
+  const showTurnEconomics = !isRunning && (turnEconomics?.totalTurns ?? 0) > 0;
+  const showEconomicsSection = showCacheEfficiency || showTurnEconomics || activityBuckets.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-card overflow-hidden">
@@ -606,7 +681,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground mb-2">
                   <Cpu size={12} className="text-violet-400" /> Token Breakdown
                 </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                <div className="grid grid-cols-2 gap-2 text-center text-xs">
                   <div>
                     <p className="text-sm font-bold tabular-nums">{formatTokens(data.inputTokens ?? 0)}</p>
                     <p className="text-muted-foreground">Input</p>
@@ -615,35 +690,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                     <p className="text-sm font-bold tabular-nums">{formatTokens(data.outputTokens ?? 0)}</p>
                     <p className="text-muted-foreground">Output</p>
                   </div>
-                  <div>
-                    <p className="text-sm font-bold tabular-nums">{formatTokens(data.cacheReadTokens ?? 0)}</p>
-                    <Tooltip content={modelPricing && modelPricing.cache_read > 0
-                      ? `Tokens reused from previous turns — billed at $${modelPricing.cache_read}/MTok vs $${modelPricing.input}/MTok regular input.`
-                      : "Tokens reused from previous turns at a reduced rate vs regular input."
-                    }>
-                      <p className="text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline">Cache Read</p>
-                    </Tooltip>
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold tabular-nums">{formatTokens(data.cacheWriteTokens ?? 0)}</p>
-                    <Tooltip content={modelPricing && modelPricing.cache_write > 0
-                      ? `Tokens written to cache — billed at $${modelPricing.cache_write}/MTok. Available for cheaper reuse in subsequent calls.`
-                      : "Tokens written to cache this turn — available for cheaper reuse in subsequent calls."
-                    }>
-                      <p className="text-muted-foreground cursor-help border-b border-dotted border-muted-foreground/40 inline">Cache Write</p>
-                    </Tooltip>
-                  </div>
                 </div>
-                {/* Cache efficiency bar */}
-                {(data.inputTokens ?? 0) > 0 && (
-                  <CacheEfficiencyBar
-                    inputTokens={data.inputTokens ?? 0}
-                    cacheReadTokens={data.cacheReadTokens ?? 0}
-                    outputTokens={data.outputTokens ?? 0}
-                    pricing={modelPricing}
-                    actualCost={data.totalCost}
-                  />
-                )}
               </div>
 
               {/* Context window */}
@@ -670,6 +717,111 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
               {/* Cost / quota — shown for copilot and claude sdk jobs */}
               <CostSection data={data} />
+
+              {/* Integrated economics / efficiency */}
+              {showEconomicsSection ? (
+                <div className="space-y-4">
+                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                    <TrendingUp size={12} className="text-blue-400" /> Economics & Efficiency
+                  </h4>
+
+                  {showCacheEfficiency && (
+                    <div className="space-y-3 rounded-md border border-border bg-background p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <Cpu size={12} className="text-violet-400" /> Cache Efficiency
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        <CompactStat label="Cache Read" value={formatTokens(data.cacheReadTokens ?? 0)} />
+                        <CompactStat label="Cache Write" value={formatTokens(data.cacheWriteTokens ?? 0)} />
+                        <CompactStat label="Input Reuse" value={`${((data.inputTokens ?? 0) > 0 ? ((data.cacheReadTokens ?? 0) / (data.inputTokens ?? 0)) * 100 : 0).toFixed(0)}%`} />
+                      </div>
+                      <CacheEfficiencyBar
+                        inputTokens={data.inputTokens ?? 0}
+                        cacheReadTokens={data.cacheReadTokens ?? 0}
+                        outputTokens={data.outputTokens ?? 0}
+                        pricing={modelPricing}
+                        actualCost={data.totalCost}
+                      />
+                    </div>
+                  )}
+
+                  {showTurnEconomics && turnEconomics && (
+                    <div className="space-y-3 rounded-md border border-border bg-background p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <TrendingUp size={12} className="text-blue-400" /> Turn Economics
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <CompactStat label="Total Turns" value={String(turnEconomics.totalTurns)} />
+                        <CompactStat label="Avg Cost/Turn" value={formatUsd(turnEconomics.avgTurnCostUsd)} />
+                        <CompactStat label="Peak Turn" value={formatUsd(turnEconomics.peakTurnCostUsd)} />
+                      </div>
+                      {turnCurve.length > 1 && (
+                        <div className="space-y-1">
+                          <button
+                            type="button"
+                            onClick={() => setTurnsCollapsed((current) => !current)}
+                            className="flex w-full items-center justify-between gap-2 rounded-md border border-border/80 px-2.5 py-2 text-left text-xs text-muted-foreground hover:bg-accent/30 transition-colors"
+                          >
+                            <span>Turn list</span>
+                            <span>{turnsCollapsed ? `Show ${turnCurve.length} turns` : "Hide turns"}</span>
+                          </button>
+                          {!turnsCollapsed && turnCurve.map((bucket) => {
+                            const maxCost = Math.max(...turnCurve.map((entry) => entry.costUsd), 0);
+                            const widthPct = maxCost > 0 ? (bucket.costUsd / maxCost) * 100 : 0;
+                            return (
+                              <div key={bucket.bucket} className="space-y-1">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="text-muted-foreground">Turn {bucket.bucket}</span>
+                                  <span className="tabular-nums">{formatUsd(bucket.costUsd)}</span>
+                                </div>
+                                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                                  <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max(widthPct, 4)}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {activityBuckets.length > 0 && (
+                    <div className="rounded-md border border-border bg-background p-3 space-y-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <Wrench size={12} className="text-yellow-400" /> Cost by Activity
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Turn cost is allocated to the activities used within that turn. Mixed turns are split across their activities, and reasoning-only turns stay in Reasoning.
+                      </p>
+                      {activityBuckets
+                        .slice()
+                        .sort((a, b) => b.costUsd - a.costUsd)
+                        .map((bucket) => {
+                          const total = activityBuckets.reduce((sum, entry) => sum + entry.costUsd, 0);
+                          const widthPct = total > 0 ? (bucket.costUsd / total) * 100 : 0;
+                          return (
+                            <div key={bucket.bucket} className="space-y-1">
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <div className="min-w-0">
+                                  <div className="truncate text-foreground">{formatActivityBucket(bucket.bucket)}</div>
+                                  <div className="text-muted-foreground">{bucket.callCount} contributing turn{bucket.callCount !== 1 ? "s" : ""}</div>
+                                </div>
+                                <div className="text-right tabular-nums">
+                                  <div>{formatUsd(bucket.costUsd)}</div>
+                                  <div className="text-muted-foreground">{formatTokens(bucket.inputTokens + bucket.outputTokens)}</div>
+                                </div>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div className="h-full rounded-full bg-amber-500" style={{ width: `${Math.max(widthPct, 4)}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
+                </div>
+              ) : null}
 
               {/* Session summary — only shown when summaries exist */}
               {checkpoints.length > 0 && (
@@ -906,6 +1058,15 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
         <span className="text-xs font-medium text-muted-foreground">{label}</span>
       </div>
       <p className="text-lg font-bold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function CompactStat({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className={cn("rounded-md border border-border bg-card px-3 py-2", warn && "border-yellow-500/50")}>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className={cn("text-sm font-medium font-mono", warn && "text-yellow-500")}>{value}</div>
     </div>
   );
 }

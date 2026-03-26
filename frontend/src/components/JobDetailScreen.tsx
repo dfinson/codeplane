@@ -6,13 +6,12 @@ import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
 import type { JobSummary } from "../store";
 import { useSSE } from "../hooks/useSSE";
 import { formatJobTerminalLabel } from "../lib/terminalLabels";
-import { fetchJob, cancelJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts, resumeJob } from "../api/client";
+import { fetchJob, cancelJob, fetchJobTranscript, fetchJobTimeline, fetchJobDiff, fetchApprovals, resolveJob, fetchArtifacts, resumeJob, archiveJob } from "../api/client";
 import { lazyRetry } from "../lib/lazyRetry";
 import { StateBadge } from "./StateBadge";
 import { SdkBadge } from "./SdkBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { MetricsPanel } from "./MetricsPanel";
-import CostDriversPanel from "./CostDriversPanel";
 import { ExecutionTimeline } from "./ExecutionTimeline";
 import { PlanPanel } from "./PlanPanel";
 import { CompleteJobDialog } from "./CompleteJobDialog";
@@ -43,6 +42,7 @@ export function JobDetailScreen() {
   const [completeOpen, setCompleteOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [markDoneOpen, setMarkDoneOpen] = useState(false);
   const [tab, setTab] = useState("live");
   const [overflowOpen, setOverflowOpen] = useState(false);
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
@@ -173,10 +173,15 @@ export function JobDetailScreen() {
 
   const doCancelJob = useCallback(async () => {
     if (!jobId) return;
-    const updated = await cancelJob(jobId);
-    useStore.setState((s) => ({ jobs: { ...s.jobs, [updated.id]: updated } }));
-    toast.success("Job canceled and archived");
-    navigate("/");
+    try {
+      const updated = await cancelJob(jobId);
+      await archiveJob(jobId);
+      useStore.setState((s) => ({
+        jobs: { ...s.jobs, [updated.id]: { ...updated, archivedAt: new Date().toISOString() } },
+      }));
+      toast.success("Job canceled and cleaned up");
+      navigate("/");
+    } catch (e) { toast.error(String(e)); }
   }, [jobId, navigate]);
 
   const handleResume = useCallback(async () => {
@@ -209,7 +214,22 @@ export function JobDetailScreen() {
     finally { setActionLoading(false); }
   }, [jobId, navigate]);
 
-  const handleResolve = useCallback(async (action: "merge" | "smart_merge" | "create_pr" | "discard" | "agent_merge") => {
+  const doDiscardJob = useCallback(async (toastMsg: string) => {
+    if (!jobId) return;
+    try {
+      await resolveJob(jobId, "discard");
+      await archiveJob(jobId);
+      useStore.setState((s) => {
+        const existing = s.jobs[jobId];
+        if (!existing) return s;
+        return { jobs: { ...s.jobs, [jobId]: { ...existing, resolution: "discarded", archivedAt: new Date().toISOString() } } };
+      });
+      toast.success(toastMsg);
+      navigate("/");
+    } catch (e) { toast.error(String(e)); }
+  }, [jobId, navigate]);
+
+  const handleResolve = useCallback(async (action: "merge" | "smart_merge" | "create_pr" | "agent_merge") => {
     if (!jobId) return;
     setResolveLoading(action);
     try {
@@ -269,8 +289,6 @@ export function JobDetailScreen() {
         toast.success("Merged");
       } else if (res.resolution === "pr_created") {
         toast.success("PR created");
-      } else if (res.resolution === "discarded") {
-        toast.success("Discarded");
       } else if (conflictLike) {
         toast.error("Merge conflict detected");
       } else {
@@ -297,8 +315,8 @@ export function JobDetailScreen() {
     );
   }
 
-  const canCancel = ["queued", "running", "waiting_for_approval", "review"].includes(job.state);
-  const canResume = job.state === "failed" || job.state === "review";
+  const canCancel = ["queued", "running", "waiting_for_approval"].includes(job.state);
+  const canResume = job.state === "failed";
   const isRunning = job.state === "running";
   const hasMergeConflict =
     !["merged", "pr_created", "discarded"].includes(job.resolution ?? "") &&
@@ -317,7 +335,7 @@ export function JobDetailScreen() {
     !!job.resolution &&
     job.resolution !== "unresolved" &&
     job.resolution !== "conflict";
-  const canArchive = (job.state === "failed" || job.state === "canceled" || job.state === "completed") && !job.archivedAt;
+  const canArchive = (job.state === "failed" || job.state === "canceled" || (job.state === "completed" && !isResolved)) && !job.archivedAt;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -418,9 +436,7 @@ export function JobDetailScreen() {
                 size="sm"
                 variant="outline"
                 className="gap-1"
-                loading={resolveLoading === "discard"}
-                disabled={resolveLoading !== null}
-                onClick={() => handleResolve("discard")}
+                onClick={() => setMarkDoneOpen(true)}
               >
                 <CheckCircle2 size={14} />
                 Mark Done
@@ -445,7 +461,7 @@ export function JobDetailScreen() {
                 onClick={() => setCompleteOpen(true)}
               >
                 <Archive size={14} />
-                Archive
+                {job.state === "failed" ? "Abandon" : "Archive"}
               </Button>
             )}
           </div>
@@ -691,7 +707,6 @@ export function JobDetailScreen() {
             <PlanPanel jobId={jobId} />
             <ExecutionTimeline jobId={jobId} />
             <MetricsPanel jobId={jobId} isRunning={isRunning} />
-            <CostDriversPanel jobId={jobId} />
           </div>
         </div>
       )}
@@ -718,21 +733,27 @@ export function JobDetailScreen() {
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
         onConfirm={doCancelJob}
-        title="Cancel & Archive Job?"
-        description="This will stop the running agent and archive the job. The worktree and branch will be cleaned up."
-        confirmLabel="Cancel & Archive"
+        title="Cancel & Clean Up?"
+        description="This will stop the running agent, archive the job, and remove the worktree and branch."
+        confirmLabel="Cancel & Clean Up"
       />
 
       <ConfirmDialog
         open={discardOpen}
         onClose={() => setDiscardOpen(false)}
-        onConfirm={async () => {
-          await resolveJob(jobId!, "discard");
-          toast.success("Discarded");
-        }}
-        title="Discard Changes?"
-        description="All changes in the worktree will be deleted. This cannot be undone."
-        confirmLabel="Discard"
+        onConfirm={() => doDiscardJob("Changes discarded and cleaned up")}
+        title="Discard & Clean Up?"
+        description="All changes in the worktree will be deleted and the job will be archived. This cannot be undone."
+        confirmLabel="Discard & Clean Up"
+      />
+
+      <ConfirmDialog
+        open={markDoneOpen}
+        onClose={() => setMarkDoneOpen(false)}
+        onConfirm={() => doDiscardJob("Job completed and archived")}
+        title="Mark as Done?"
+        description="The job will be marked as complete and archived. The worktree and branch will be cleaned up."
+        confirmLabel="Mark Done & Archive"
       />
 
     </div>

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from backend.services.approval_service import ApprovalService
     from backend.services.event_bus import EventBus
+    from backend.services.retry_tracker import RetryTracker
 
 log = structlog.get_logger()
 
@@ -69,7 +70,7 @@ class CopilotAdapter(AgentAdapterInterface):
         # Cost analytics: per-job turn counter, phase, retry tracker
         self._turn_counters: dict[str, int] = {}
         self._current_phases: dict[str, str] = {}
-        self._retry_trackers: dict[str, "RetryTracker"] = {}
+        self._retry_trackers: dict[str, RetryTracker] = {}
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
@@ -109,6 +110,7 @@ class CopilotAdapter(AgentAdapterInterface):
                     await TelemetrySummaryRepo(session).set_quota(**kwargs)
                 elif fn_name == "record_file_access":
                     from backend.persistence.file_access_repo import FileAccessRepo
+
                     await FileAccessRepo(session).record(**kwargs)
                 await session.commit()
         except Exception:
@@ -606,9 +608,7 @@ class CopilotAdapter(AgentAdapterInterface):
         if job_id not in self._retry_trackers:
             self._retry_trackers[job_id] = RetryTracker()
         # Use a placeholder span_id (0); real id assigned by DB
-        retry_result = self._retry_trackers[job_id].record(
-            resolved_name, target, 0, success
-        )
+        retry_result = self._retry_trackers[job_id].record(resolved_name, target, 0, success)
 
         # Result size estimation
         result_text = ""

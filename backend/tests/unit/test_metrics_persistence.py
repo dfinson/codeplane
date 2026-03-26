@@ -155,6 +155,12 @@ async def test_spans_insert_and_list(session: AsyncSession) -> None:
         started_at=0.0,
         duration_ms=50.0,
         attrs={"success": True},
+        tool_category="file_read",
+        tool_target="src/app.py",
+        turn_number=2,
+        execution_phase="agent_reasoning",
+        is_retry=True,
+        retries_span_id=7,
     )
     await repo.insert(
         job_id="job-1",
@@ -163,6 +169,13 @@ async def test_spans_insert_and_list(session: AsyncSession) -> None:
         started_at=0.1,
         duration_ms=1200.0,
         attrs={"input_tokens": 300, "output_tokens": 150},
+        turn_number=3,
+        execution_phase="verification",
+        input_tokens=300,
+        output_tokens=150,
+        cache_read_tokens=25,
+        cache_write_tokens=10,
+        cost_usd=0.42,
     )
     await session.commit()
 
@@ -170,7 +183,20 @@ async def test_spans_insert_and_list(session: AsyncSession) -> None:
     assert len(spans) == 2
     assert spans[0]["name"] == "read_file"
     assert spans[0]["attrs"]["success"] is True
+    assert spans[0]["tool_category"] == "file_read"
+    assert spans[0]["tool_target"] == "src/app.py"
+    assert spans[0]["turn_number"] == 2
+    assert spans[0]["execution_phase"] == "agent_reasoning"
+    assert spans[0]["is_retry"] is True
+    assert spans[0]["retries_span_id"] == 7
     assert spans[1]["name"] == "gpt-4o"
+    assert spans[1]["turn_number"] == 3
+    assert spans[1]["execution_phase"] == "verification"
+    assert spans[1]["input_tokens"] == 300
+    assert spans[1]["output_tokens"] == 150
+    assert spans[1]["cache_read_tokens"] == 25
+    assert spans[1]["cache_write_tokens"] == 10
+    assert spans[1]["cost_usd"] == pytest.approx(0.42)
 
 
 @pytest.mark.asyncio

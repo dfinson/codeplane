@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -185,7 +185,7 @@ async def cost_drivers_for_job(
     from backend.persistence.cost_attribution_repo import CostAttributionRepo
 
     rows = await CostAttributionRepo(session).for_job(job_id)
-    by_dimension: dict[str, list[dict]] = {}
+    by_dimension: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         dim = row.get("dimension", "unknown")
         by_dimension.setdefault(dim, []).append(row)
@@ -272,9 +272,7 @@ async def list_observations(
     """List active cost observations / anomalies."""
     from backend.persistence.observations_repo import ObservationsRepo
 
-    rows = await ObservationsRepo(session).list_active(
-        category=category, severity=severity
-    )
+    rows = await ObservationsRepo(session).list_active(category=category, severity=severity)
     return {"observations": rows}
 
 

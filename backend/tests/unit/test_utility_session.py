@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -518,7 +519,7 @@ class TestWarmSession:
     async def test_complete_collects_streaming_delta_until_idle(self) -> None:
         ws = _WarmSession(model="gpt-4o-mini", index=0)
         mock_session = AsyncMock()
-        handlers: list = []
+        handlers: list[Callable[[object], None]] = []
         mock_session.on = MagicMock(side_effect=handlers.append)
 
         async def _fake_send(msg):
@@ -553,7 +554,7 @@ class TestWarmSession:
     async def test_complete_prefers_final_message_over_streaming_delta(self) -> None:
         ws = _WarmSession(model="gpt-4o-mini", index=0)
         mock_session = AsyncMock()
-        handlers: list = []
+        handlers: list[Callable[[object], None]] = []
         mock_session.on = MagicMock(side_effect=handlers.append)
 
         async def _fake_send(msg):

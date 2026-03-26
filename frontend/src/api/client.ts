@@ -195,6 +195,57 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   totalApprovalWaitMs?: number;
   agentMessages?: number;
   operatorMessages?: number;
+  premiumRequests?: number;
+  quotaSnapshots?: Record<string, {
+    usedRequests: number;
+    entitlementRequests: number;
+    remainingPercentage: number;
+    overage: number;
+    overageAllowed: boolean;
+    isUnlimited: boolean;
+    usageAllowedWithExhaustedQuota: boolean;
+    resetDate: string;
+  }>;
+  costDrivers?: {
+    activity?: Array<{
+      dimension: string;
+      bucket: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      callCount: number;
+    }>;
+  };
+  turnEconomics?: {
+    totalTurns: number;
+    peakTurnCostUsd: number;
+    avgTurnCostUsd: number;
+    costFirstHalfUsd: number;
+    costSecondHalfUsd: number;
+    turnCurve: Array<{
+      dimension: string;
+      bucket: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      callCount: number;
+    }>;
+  };
+  fileAccess?: {
+    stats: {
+      totalAccesses: number;
+      uniqueFiles: number;
+      totalReads: number;
+      totalWrites: number;
+      rereadCount: number;
+    };
+    topFiles: Array<{
+      filePath: string;
+      accessCount: number;
+      readCount: number;
+      writeCount: number;
+    }>;
+  };
 }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/telemetry`);
 }
@@ -570,9 +621,14 @@ export interface CostAttributionBucket {
 
 export interface FleetCostDriversResponse {
   period: number;
-  summary?: CostAttributionBucket[];
+  summary?: Array<CostAttributionBucket & {
+    job_count?: number;
+    avg_cost_per_job?: number;
+  }>;
   dimension?: string;
-  buckets?: CostAttributionBucket[];
+  buckets?: Array<CostAttributionBucket & {
+    job_count?: number;
+  }>;
 }
 
 export interface FileAccessResponse {

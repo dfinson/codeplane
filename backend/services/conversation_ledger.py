@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 
 class MessageCategory(StrEnum):
@@ -65,9 +64,7 @@ class ConversationLedger:
         token_count: int,
     ) -> None:
         """Record a message with its pre-computed token count."""
-        self._messages.append(
-            LedgerEntry(role=role, category=category, tokens=token_count)
-        )
+        self._messages.append(LedgerEntry(role=role, category=category, tokens=token_count))
 
     def composition_at_turn(self, sdk_reported_input_tokens: int) -> PromptComposition:
         """Compute composition breakdown for the current turn.
@@ -140,9 +137,9 @@ class ClaudeTokenCounter(TokenCounter):
     """
 
     def count(self, text: str) -> int:
-        import anthropic_tokenizer
+        import anthropic_tokenizer  # type: ignore[import-untyped]
 
-        return anthropic_tokenizer.count_tokens(text)
+        return int(anthropic_tokenizer.count_tokens(text))
 
 
 def make_counter(model: str) -> TokenCounter:
@@ -162,7 +159,4 @@ def make_counter(model: str) -> TokenCounter:
     if "claude" in model.lower():
         return ClaudeTokenCounter()
 
-    raise ValueError(
-        f"No local tokenizer available for model {model!r}. "
-        f"Cannot compute per-segment token breakdown."
-    )
+    raise ValueError(f"No local tokenizer available for model {model!r}. Cannot compute per-segment token breakdown.")

@@ -891,6 +891,7 @@ class RuntimeService:
                 try:
                     async with self._session_factory() as session:
                         from backend.services.cost_attribution import compute_attribution
+
                         await compute_attribution(session, job_id)
                         await session.commit()
                 except Exception:
@@ -900,6 +901,7 @@ class RuntimeService:
                 try:
                     async with self._session_factory() as session:
                         from backend.services.statistical_analysis import run_analysis
+
                         await run_analysis(session)
                         await session.commit()
                 except Exception:

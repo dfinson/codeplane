@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   BarChart3, DollarSign, Clock, Cpu, Wrench, TrendingUp,
   ArrowUpRight, GitBranch, ChevronUp, ChevronDown,
@@ -285,6 +285,132 @@ function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriversResponse }) {
+  const [dimension, setDimension] = useState<"phase" | "tool_category" | "turn">("phase");
+  const summary = useMemo(() => fleetDrivers.summary ?? [], [fleetDrivers.summary]);
+
+  const topPhase = summary.filter((row) => row.dimension === "phase").sort((a, b) => b.cost_usd - a.cost_usd)[0];
+  const topToolCategory = summary
+    .filter((row) => row.dimension === "tool_category")
+    .sort((a, b) => b.cost_usd - a.cost_usd)[0];
+  const topTurn = summary.filter((row) => row.dimension === "turn").sort((a, b) => b.cost_usd - a.cost_usd)[0];
+
+  const dimensionRows = useMemo(
+    () => summary.filter((row) => row.dimension === dimension).sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 8),
+    [summary, dimension],
+  );
+
+  const labelMap: Record<typeof dimension, string> = {
+    phase: "Phase",
+    tool_category: "Tool Category",
+    turn: "Turn",
+  };
+
+  const metricCards = [
+    {
+      label: "Highest-Cost Phase",
+      bucket: topPhase?.bucket?.replace(/_/g, " ") ?? "—",
+      cost: topPhase?.cost_usd ?? 0,
+      meta: topPhase ? `${topPhase.job_count ?? 0} jobs` : "No data",
+    },
+    {
+      label: "Highest-Cost Tool Category",
+      bucket: topToolCategory?.bucket ?? "—",
+      cost: topToolCategory?.cost_usd ?? 0,
+      meta: topToolCategory ? `${topToolCategory.call_count} calls` : "No data",
+    },
+    {
+      label: "Peak Turn Bucket",
+      bucket: topTurn ? `turn ${topTurn.bucket}` : "—",
+      cost: topTurn?.cost_usd ?? 0,
+      meta: topTurn ? `${topTurn.job_count ?? 0} jobs` : "No data",
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {metricCards.map((card) => (
+          <div key={card.label} className="rounded-md border border-border bg-background p-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{card.label}</div>
+            <div className="mt-1 text-sm font-semibold text-foreground">{card.bucket}</div>
+            <div className="mt-1 text-lg font-bold tabular-nums">{formatUsd(card.cost)}</div>
+            <div className="text-xs text-muted-foreground">{card.meta}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-md border border-border bg-background p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-sm font-medium text-foreground">Cost Driver Drill-down</div>
+            <div className="text-xs text-muted-foreground">Inspect the leading buckets for one dimension at a time.</div>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-[11px]">
+            {(["phase", "tool_category", "turn"] as const).map((key) => (
+              <button
+                key={key}
+                onClick={() => setDimension(key)}
+                className={`px-2 py-0.5 rounded-full border transition-colors ${
+                  dimension === key
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                }`}
+              >
+                {labelMap[key]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {dimensionRows.length > 0 ? (
+          <>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={dimensionRows.map((row) => ({ name: row.bucket, cost: row.cost_usd }))} margin={{ top: 5, right: 10, left: 0, bottom: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#888" }} interval={0} angle={-20} textAnchor="end" height={55} />
+                <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+                <RTooltip
+                  contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
+                  formatter={(v: TooltipValueType | undefined) => [formatUsd(Number(v ?? 0)), "Cost"]}
+                />
+                <Bar dataKey="cost" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground border-b border-border">
+                    <th className="text-left py-1.5 px-2 font-medium">Bucket</th>
+                    <th className="text-right py-1.5 px-2 font-medium">Cost</th>
+                    <th className="text-right py-1.5 px-2 font-medium">Calls</th>
+                    <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
+                    <th className="text-right py-1.5 px-2 font-medium">Avg/Job</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dimensionRows.map((row, i) => (
+                    <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
+                      <td className="py-1.5 px-2 font-mono">{row.bucket}</td>
+                      <td className="text-right py-1.5 px-2">{formatUsd(Number(row.cost_usd) || 0)}</td>
+                      <td className="text-right py-1.5 px-2">{row.call_count}</td>
+                      <td className="text-right py-1.5 px-2">{row.job_count ?? "—"}</td>
+                      <td className="text-right py-1.5 px-2">{formatUsd(Number(row.avg_cost_per_job) || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">No cost-driver data available for this dimension.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -653,35 +779,8 @@ export function AnalyticsScreen() {
       {/* Fleet Cost Drivers */}
       {fleetDrivers?.summary && fleetDrivers.summary.length > 0 && (
         <div className="rounded-lg border border-border bg-card p-4">
-          <h2 className="text-sm font-medium text-foreground mb-3">Top Cost Drivers (Fleet)</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-muted-foreground border-b border-border">
-                  <th className="text-left py-1.5 px-2 font-medium">Dimension</th>
-                  <th className="text-left py-1.5 px-2 font-medium">Bucket</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Total Cost</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Calls</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Avg/Job</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fleetDrivers.summary.slice(0, 15).map((row, i) => (
-                  <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
-                    <td className="py-1.5 px-2">
-                      <Badge variant="outline" className="text-[10px]">{row.dimension}</Badge>
-                    </td>
-                    <td className="py-1.5 px-2 font-mono">{row.bucket}</td>
-                    <td className="text-right py-1.5 px-2">{formatUsd(Number(row.cost_usd) || 0)}</td>
-                    <td className="text-right py-1.5 px-2">{row.call_count}</td>
-                    <td className="text-right py-1.5 px-2">{(row as unknown as Record<string, unknown>).job_count as number ?? "—"}</td>
-                    <td className="text-right py-1.5 px-2">{formatUsd(Number((row as unknown as Record<string, unknown>).avg_cost_per_job) || 0)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <h2 className="text-sm font-medium text-foreground mb-3">Cost Drivers</h2>
+          <FleetCostDriverInsights fleetDrivers={fleetDrivers} />
         </div>
       )}
     </div>

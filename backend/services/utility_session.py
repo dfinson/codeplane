@@ -153,6 +153,7 @@ class UtilitySessionService:
                     ws.in_use = False
         finally:
             self._pending -= 1
+        return ""
 
     async def shutdown(self) -> None:
         """Abort all warm sessions."""

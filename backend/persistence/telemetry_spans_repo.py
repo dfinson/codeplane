@@ -86,13 +86,19 @@ class TelemetrySpansRepo(BaseRepository):
             },
         )
         await self._session.flush()
-        return result.lastrowid or 0
+        inserted_id = getattr(result, "lastrowid", None)
+        return int(inserted_id or 0)
 
     async def list_for_job(self, job_id: str) -> list[dict[str, Any]]:
         """Return all spans for a job, ordered by start time."""
         result = await self._session.execute(
             text("""
-                SELECT id, job_id, span_type, name, started_at, duration_ms, attrs_json, created_at
+                SELECT id, job_id, span_type, name, started_at, duration_ms, attrs_json,
+                       tool_category, tool_target, turn_number, execution_phase,
+                       is_retry, retries_span_id,
+                       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                       cost_usd, tool_args_json, result_size_bytes,
+                       created_at
                 FROM job_telemetry_spans
                 WHERE job_id = :job_id
                 ORDER BY started_at ASC
@@ -103,6 +109,8 @@ class TelemetrySpansRepo(BaseRepository):
         for r in result.mappings().all():
             row = dict(r)
             row["attrs"] = json.loads(row.pop("attrs_json", "{}"))
+            if row.get("is_retry") is not None:
+                row["is_retry"] = bool(row["is_retry"])
             rows.append(row)
         return rows
 
