@@ -638,7 +638,7 @@ function ToolIconGlyph({ icon, className }: { icon: ToolIconDef; className?: str
 // Sub-agent step — collapsible pill (B) that expands into an inset card (A)
 // ---------------------------------------------------------------------------
 
-const SUB_AGENT_TOOLS = new Set(["Task", "task", "runSubagent", "search_subagent"]);
+const SUB_AGENT_TOOLS = new Set(["Task", "task", "runSubagent", "search_subagent", "skill"]);
 
 function isSubagentTool(toolName?: string): boolean {
   if (!toolName) return false;
@@ -658,14 +658,16 @@ function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: b
     ?? (typeof args.description === "string" ? args.description : null)
     ?? (typeof args.prompt === "string" ? args.prompt : null)
     ?? (typeof args.query === "string" ? args.query : null)
+    ?? (typeof args.skill === "string" ? args.skill : null)
     ?? entry.toolName
     ?? "Sub-agent";
-  const label = displaySource.replace(/^(?:Task|Subagent|Search agent):\s*/i, "");
+  const label = displaySource.replace(/^(?:Task|Subagent|Search agent|Skill):\s*/i, "");
 
   // Full prompt for the expanded card — only when args carry more detail than the truncated label.
   const fullDescription = typeof args.description === "string" ? args.description
     : typeof args.prompt === "string" ? args.prompt
     : typeof args.query === "string" ? args.query
+    : typeof args.skill === "string" ? args.skill
     : null;
   const fullPrompt = fullDescription && fullDescription.length > label.length + 4 ? fullDescription : null;
 
