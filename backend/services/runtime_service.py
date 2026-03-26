@@ -754,9 +754,7 @@ class RuntimeService:
                         MergeStatus.skipped: Resolution.unresolved,
                         MergeStatus.error: Resolution.unresolved,
                     }
-                    _auto_resolution = cast(
-                        "Resolution", _status_map.get(result.status, Resolution.unresolved)
-                    )
+                    _auto_resolution = cast("Resolution", _status_map.get(result.status, Resolution.unresolved))
                     final_resolution = _auto_resolution
 
                     job_repo = JobRepository(session)

@@ -951,8 +951,7 @@ class CopilotAdapter(AgentAdapterInterface):
             system_message={
                 "mode": "append",
                 "content": (
-                    CODEPLANE_SYSTEM_PROMPT
-                    + "\n\n"
+                    CODEPLANE_SYSTEM_PROMPT + "\n\n"
                     "**REPORT INTENT — REQUIRED BEFORE EVERY TOOL BURST:**\n"
                     "Call `report_intent` in parallel with your FIRST tool call whenever you start "
                     "a new group of related tool calls. The intent you declare is shown to the user "
