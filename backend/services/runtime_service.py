@@ -722,6 +722,58 @@ class RuntimeService:
                     )
                     await session.commit()
 
+            elif self._merge_service is not None and self._config.completion.strategy != "manual":
+                # Initial auto-resolution: apply the configured completion strategy
+                # (auto_merge or pr_only) without waiting for operator action.
+                from backend.persistence.job_repo import JobRepository
+                from backend.services.merge_service import MergeStatus
+
+                async with self._session_factory() as session:
+                    svc = self._make_job_service(session)
+                    current_job = await svc.get_job(job_id)
+                    if current_job is None:
+                        raise ValueError(f"Job {job_id} not found before auto-resolution")
+
+                    log.info(
+                        "job_attempting_auto_resolution",
+                        job_id=job_id,
+                        strategy=self._config.completion.strategy,
+                    )
+                    result = await self._merge_service.try_merge_back(
+                        job_id=job_id,
+                        repo_path=current_job.repo,
+                        worktree_path=current_job.worktree_path,
+                        branch=current_job.branch,
+                        base_ref=current_job.base_ref,
+                        prompt=current_job.prompt,
+                    )
+                    _status_map = {
+                        MergeStatus.merged: Resolution.merged,
+                        MergeStatus.pr_created: Resolution.pr_created,
+                        MergeStatus.conflict: Resolution.conflict,
+                        MergeStatus.skipped: Resolution.unresolved,
+                        MergeStatus.error: Resolution.unresolved,
+                    }
+                    _auto_resolution = cast(
+                        "Resolution", _status_map.get(result.status, Resolution.unresolved)
+                    )
+                    final_resolution = _auto_resolution
+                    final_pr_url = result.pr_url
+
+                    job_repo = JobRepository(session)
+                    await job_repo.update_resolution(job_id, _auto_resolution, pr_url=result.pr_url)
+
+                    _terminal_resolutions = (Resolution.merged, Resolution.pr_created, Resolution.discarded)
+                    if _auto_resolution in _terminal_resolutions:
+                        await svc.transition_state(job_id, JobState.completed)
+                        resolution_event = svc.build_job_resolved_event(
+                            job_id,
+                            _auto_resolution,
+                            pr_url=result.pr_url,
+                        )
+
+                    await session.commit()
+
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
 
