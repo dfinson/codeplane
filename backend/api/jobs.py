@@ -595,6 +595,7 @@ async def get_job_telemetry(
     Includes per-call span detail (tool calls, LLM calls) when available.
     """
     import json
+    from datetime import UTC, datetime
 
     from backend.persistence.job_repo import JobRepository
     from backend.persistence.telemetry_spans_repo import TelemetrySpansRepo
@@ -650,13 +651,25 @@ async def get_job_telemetry(
                 }
             )
 
+    # For running jobs, compute live duration from created_at instead of
+    # the stored 0 which is only finalized when the job completes.
+    duration_ms = summary.get("duration_ms", 0)
+    if duration_ms == 0 and summary.get("status") == "running" and summary.get("created_at"):
+        try:
+            created = datetime.fromisoformat(summary["created_at"])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            duration_ms = int((datetime.now(UTC) - created).total_seconds() * 1000)
+        except (ValueError, TypeError):
+            pass
+
     result: dict[str, object] = {
         "available": True,
         "jobId": job_id,
         "sdk": sdk,
         "model": summary.get("model", ""),
         "mainModel": summary.get("model", ""),
-        "durationMs": summary.get("duration_ms", 0),
+        "durationMs": duration_ms,
         "inputTokens": input_tok,
         "outputTokens": output_tok,
         "totalTokens": input_tok + output_tok,

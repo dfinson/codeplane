@@ -82,6 +82,8 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
         self._paused_sessions: set[str] = set()
+        # Debounce: last monotonic time a telemetry_updated SSE was fired per job
+        self._last_telemetry_broadcast: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -117,6 +119,8 @@ class ClaudeAdapter(AgentAdapterInterface):
         except RuntimeError:
             pass  # No event loop — skip DB write
 
+    _TELEMETRY_BROADCAST_INTERVAL = 2.0  # seconds — debounce SSE broadcasts
+
     async def _db_write(self, fn_name: str, **kwargs: Any) -> None:
         """Execute a telemetry DB write in its own session."""
         if self._session_factory is None:
@@ -137,6 +141,36 @@ class ClaudeAdapter(AgentAdapterInterface):
                 await session.commit()
         except Exception:
             log.debug("telemetry_db_write_failed", fn=fn_name, exc_info=True)
+            return
+
+        # Broadcast a debounced telemetry_updated SSE for summary changes
+        if fn_name != "insert_span":
+            job_id = kwargs.get("job_id")
+            if job_id:
+                await self._maybe_broadcast_telemetry(job_id)
+
+    async def _maybe_broadcast_telemetry(self, job_id: str) -> None:
+        """Publish telemetry_updated if debounce interval has elapsed."""
+        import time as _time
+
+        from backend.models.events import DomainEvent, DomainEventKind
+
+        if self._event_bus is None:
+            return
+        now = _time.monotonic()
+        last = self._last_telemetry_broadcast.get(job_id, 0.0)
+        if now - last < self._TELEMETRY_BROADCAST_INTERVAL:
+            return
+        self._last_telemetry_broadcast[job_id] = now
+        await self._event_bus.publish(
+            DomainEvent(
+                event_id=DomainEvent.make_event_id(),
+                job_id=job_id,
+                timestamp=datetime.now(UTC),
+                kind=DomainEventKind.telemetry_updated,
+                payload={"job_id": job_id},
+            )
+        )
 
     def _enqueue(self, session_id: str, event: SessionEvent) -> None:
         q = self._queues.get(session_id)

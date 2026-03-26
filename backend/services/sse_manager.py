@@ -95,6 +95,15 @@ _SELECTIVE_SUPPRESSED: frozenset[str] = frozenset(
     }
 )
 
+# Event types delivered only to job-scoped connections, never to global/dashboard.
+# These are high-frequency during execution and only relevant to a user viewing
+# a specific job's detail panel.
+_JOB_SCOPED_ONLY: frozenset[str] = frozenset(
+    {
+        "telemetry_updated",
+    }
+)
+
 # Replay bounds
 MAX_REPLAY_EVENTS = 500
 MAX_REPLAY_AGE = timedelta(minutes=5)
@@ -486,6 +495,10 @@ class SSEManager:
                     continue
                 # Scoped connections always get full streaming
                 await conn.send(frame)
+                continue
+
+            # Global connections: skip job-scoped-only events entirely
+            if sse_type in _JOB_SCOPED_ONLY:
                 continue
 
             # Global connections: apply selective streaming if needed

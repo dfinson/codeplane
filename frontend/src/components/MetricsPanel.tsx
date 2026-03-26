@@ -433,25 +433,17 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
   const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
 
   // Subscribe to the per-job telemetry version counter — bumped whenever a
-  // telemetry_updated SSE event arrives (e.g. when a session ends).
+  // telemetry_updated SSE event arrives (debounced every ~2 s by the backend).
   const telemetryVersion = useStore((s) => s.telemetryVersions[jobId] ?? 0);
 
-  // Fetch telemetry:
-  //   • on mount
-  //   • when the job stops running (isRunning flip)
-  //   • when a telemetry_updated SSE event arrives (telemetryVersion bump)
-  //   • every 5 s while running (for live duration / accumulating totals)
+  // Fetch telemetry on mount, when isRunning changes, or when a
+  // telemetry_updated SSE event bumps telemetryVersion. No polling needed.
   useEffect(() => {
     let cancelled = false;
-    const doFetch = () => {
-      fetchJobTelemetry(jobId)
-        .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
-        .catch(() => { if (!cancelled) { setData((prev) => prev ?? { available: false }); setLoading(false); } });
-    };
-    doFetch();
-    if (!isRunning) return () => { cancelled = true; };
-    const interval = setInterval(doFetch, 5_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    fetchJobTelemetry(jobId)
+      .then((d) => { if (!cancelled) { setData(d); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setData((prev) => prev ?? { available: false }); setLoading(false); } });
+    return () => { cancelled = true; };
   }, [jobId, isRunning, telemetryVersion]);
 
   // Load agent_summary artifacts once on mount and when job stops
