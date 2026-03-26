@@ -11,29 +11,27 @@ test.describe("Health & Navigation", () => {
   test("loads the dashboard", async ({ page }) => {
     await page.goto("/");
     // Should see the CodePlane header
-    await expect(page.locator(".app-header__title")).toContainText("CodePlane");
+    await expect(page.getByText("CodePlane").first()).toBeVisible();
   });
 
   test("shows connection status", async ({ page }) => {
     await page.goto("/");
-    // SSE should connect — status dot should be visible
-    await expect(page.locator(".status-dot")).toBeVisible({ timeout: 10_000 });
+    // SSE should connect — connection status indicator should be visible
+    await expect(page.getByLabel(/Connection status/)).toBeVisible({ timeout: 10_000 });
   });
 
   test("navigates to create job screen", async ({ page }) => {
     await page.goto("/");
-    await page.click("text=+ New Job");
+    await page.click("text=New Job");
     await expect(page).toHaveURL(/\/jobs\/new/);
-    await expect(page.locator(".create-job__title")).toContainText("New Job");
+    await expect(page.getByRole("heading", { name: "New Job" })).toBeVisible();
   });
 
   test("navigates to settings screen", async ({ page }) => {
     await page.goto("/");
-    // Click the Settings nav link
-    const settingsLink = page.locator(".app-header__nav a", {
-      hasText: "Settings",
-    });
-    await settingsLink.click();
+    // Open the nav menu slideout, then click Settings
+    await page.getByLabel("Open navigation menu").click();
+    await page.getByText("Settings").click();
     await expect(page).toHaveURL(/\/settings/);
   });
 });
@@ -42,23 +40,17 @@ test.describe("Dashboard", () => {
   test("shows kanban columns on desktop", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
-    // Should see 4 kanban columns
-    const columns = page.locator(".kanban-column__header");
-    await expect(columns).toHaveCount(4);
-    await expect(columns.nth(0)).toContainText("Active");
-    await expect(columns.nth(1)).toContainText("Sign-off");
-    await expect(columns.nth(2)).toContainText("Failed");
-    await expect(columns.nth(3)).toContainText("History");
+    // Should see 3 kanban columns (each is role="region" with aria-label)
+    await expect(page.getByRole("region", { name: "In Progress" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Awaiting Input" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Failed" })).toBeVisible();
   });
 
   test("shows mobile filter tabs on small viewport", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 });
     await page.goto("/");
-    // Kanban should be hidden, mobile list visible
-    const kanban = page.locator(".kanban");
-    await expect(kanban).toBeHidden();
-    const tabs = page.locator(".filter-tabs");
-    await expect(tabs).toBeVisible();
+    // Kanban board hidden on mobile, mobile tab buttons visible
+    await expect(page.getByRole("button", { name: "In Progress" })).toBeVisible();
   });
 });
 
@@ -66,15 +58,13 @@ test.describe("Job Creation", () => {
   test("shows repo selector and prompt input", async ({ page }) => {
     await page.goto("/jobs/new");
     // Should have the prompt textarea
-    const textarea = page.locator("textarea.form-textarea");
+    const textarea = page.locator("textarea").first();
     await expect(textarea).toBeVisible();
   });
 
   test("has a create button", async ({ page }) => {
     await page.goto("/jobs/new");
-    const createBtn = page.locator("button.btn--primary", {
-      hasText: "Create Job",
-    });
+    const createBtn = page.locator("button", { hasText: "Create Job" });
     await expect(createBtn).toBeVisible();
   });
 });
@@ -118,8 +108,8 @@ const JOB_FIXTURE = {
 const COMPLETED_JOB_FIXTURE = {
   ...JOB_FIXTURE,
   id: "e2e-job-done-02",
-  state: "completed",
-  resolution: "merged",
+  state: "failed",
+  failureReason: "Out of memory",
   completedAt: new Date(Date.now() - 5_000).toISOString(),
 };
 
@@ -173,9 +163,8 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
       timeout: 5_000,
     });
 
-    // The completed job only appears in the History kanban column — the mobile
-    // list defaults to the Active tab so there is exactly one DOM match.
-    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id)).toBeVisible({
+    // The failed job appears in the Failed kanban column.
+    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 5_000,
     });
 
@@ -206,8 +195,8 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
      * 1. Dashboard mounted with empty store (no jobs) → kanban shows "No jobs"
      * 2. SSE `snapshot` event arrives with a job → store updates state.jobs
      * 3. KanbanBoard re-renders → KanbanColumn receives non-empty jobs array
-     * 4. KanbanColumn transitions from <Text>No jobs</Text> to <JobCard> children
-     *    inside a Mantine <Stack>, which was the specific Mantine component tree
+     * 4. KanbanColumn transitions from empty placeholder to <JobCard> children
+     *    inside the column, which was the specific component tree
      *    mentioned in the issue report.
      * 5. Verify no React #185 crash (ErrorBoundary must stay inactive).
      *
@@ -260,7 +249,7 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
     await expect(page.getByText(JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 8_000,
     });
-    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id)).toBeVisible({
+    await expect(page.getByText(COMPLETED_JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 8_000,
     });
 

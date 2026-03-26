@@ -205,8 +205,8 @@ test.describe("Dashboard SSE Integration", () => {
     await expect(page.getByText(MOCK_JOB.id).first()).toBeVisible({ timeout: 8_000 });
 
     // The job card should show "running" state initially — verified by its presence
-    // in the Active kanban column
-    const activeColumn = page.locator(".kanban-column").first();
+    // in the In Progress kanban column
+    const activeColumn = page.getByRole("region", { name: "In Progress" });
     await expect(activeColumn.getByText(MOCK_JOB.id)).toBeVisible();
   });
 });
@@ -245,7 +245,7 @@ test.describe("Job Detail — Live Events", () => {
     // Should display job ID
     await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
     // Should display the prompt
-    await expect(page.getByText("Fix the bug in auth module")).toBeVisible();
+    await expect(page.getByText("Fix the bug in auth module").first()).toBeVisible();
     // Should display branch info
     await expect(page.getByText("cpl/job-1")).toBeVisible();
     // Should display repo name
@@ -260,14 +260,14 @@ test.describe("Job Detail — Live Events", () => {
     await expect(cancelBtn).toBeVisible();
   });
 
-  test("shows tabs: Live, Files, Changes, Artifacts", async ({ page }) => {
+  test("shows tabs: Live, Files, Changes", async ({ page }) => {
     await page.goto("/jobs/job-1");
 
     await expect(page.getByText("job-1", { exact: true })).toBeVisible({ timeout: 5_000 });
     await expect(page.getByRole("tab", { name: "Live" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Changes" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Artifacts" })).toBeVisible();
+    // Artifacts tab only appears when the job has artifacts
   });
 });
 

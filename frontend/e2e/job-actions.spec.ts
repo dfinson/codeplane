@@ -124,6 +124,11 @@ test.describe("Cancel Running Job", () => {
     await expect(cancelBtn).toBeVisible();
     await cancelBtn.click();
 
+    // Cancel opens a confirmation dialog — confirm it
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("button", { hasText: "Cancel & Archive" }).click();
+
     await page.waitForTimeout(500);
     expect(cancelCalled).toBe(true);
   });
@@ -150,40 +155,18 @@ test.describe("Cancel Running Job", () => {
 });
 
 test.describe("Resume Failed Job", () => {
-  test("resume button calls POST /api/jobs/job-1/rerun", async ({ page }) => {
+  test("resume button calls POST /api/jobs/job-1/resume", async ({ page }) => {
     const failedJob = makeJob({ state: "failed", failureReason: "Out of memory" });
     await setupJobDetailMocks(page, failedJob);
 
-    let rerunCalled = false;
-    await page.route("**/api/jobs/job-1/rerun", async (route) => {
-      rerunCalled = true;
+    let resumeCalled = false;
+    await page.route("**/api/jobs/job-1/resume", async (route) => {
+      resumeCalled = true;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ id: "job-2" }),
+        body: JSON.stringify({ ...failedJob, state: "running", updatedAt: NOW }),
       });
-    });
-
-    // Mock the redirect target
-    await page.route("**/api/jobs/job-2", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(makeJob({ id: "job-2", state: "queued" })),
-      });
-    });
-    await page.route("**/api/jobs/job-2/transcript*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-    });
-    await page.route("**/api/jobs/job-2/timeline*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-    });
-    await page.route("**/api/jobs/job-2/diff*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
-    });
-    await page.route("**/api/jobs/job-2/approvals*", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
     });
 
     await page.goto("/jobs/job-1");
@@ -193,9 +176,8 @@ test.describe("Resume Failed Job", () => {
     await expect(resumeBtn).toBeVisible();
     await resumeBtn.click();
 
-    // Should navigate to the new job
-    await expect(page).toHaveURL(/\/jobs\/job-2/, { timeout: 10_000 });
-    expect(rerunCalled).toBe(true);
+    await page.waitForTimeout(500);
+    expect(resumeCalled).toBe(true);
   });
 
   test("resume button is hidden for running jobs", async ({ page }) => {

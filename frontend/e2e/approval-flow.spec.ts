@@ -17,7 +17,7 @@ const MOCK_JOB = {
   id: "job-1",
   title: "Test Job",
   prompt: "Fix the bug in auth module",
-  state: "running",
+  state: "waiting_for_approval",
   createdAt: NOW,
   updatedAt: NOW,
   completedAt: null,
@@ -120,14 +120,14 @@ test.describe("Approval Banner", () => {
 
     await page.goto("/jobs/job-1");
 
-    // Approval banner should appear with the description
+    // Inline approval card should appear with the description
     await expect(page.getByText("Approval Required")).toBeVisible({ timeout: 8_000 });
     await expect(page.getByText("Agent wants to run: npm install lodash")).toBeVisible();
     // Should show the proposed action in a code block
     await expect(page.locator("pre", { hasText: "npm install lodash" })).toBeVisible();
   });
 
-  test("shows pending approval count", async ({ page }) => {
+  test("shows multiple approval cards when multiple pending", async ({ page }) => {
     const secondApproval = {
       ...MOCK_APPROVAL,
       id: "approval-2",
@@ -138,17 +138,19 @@ test.describe("Approval Banner", () => {
 
     await page.goto("/jobs/job-1");
 
-    // Should show "2 pending approvals"
-    await expect(page.getByText("2 pending approvals")).toBeVisible({ timeout: 8_000 });
+    // Both approval descriptions should appear as inline cards
+    await expect(page.getByText("Agent wants to run: npm install lodash")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText("Agent wants to write to package.json")).toBeVisible();
   });
 
-  test("shows Approve All button", async ({ page }) => {
+  test("shows Approve and Reject buttons for each approval", async ({ page }) => {
     await setupApprovalMocks(page);
 
     await page.goto("/jobs/job-1");
 
     await expect(page.getByText("Approval Required")).toBeVisible({ timeout: 8_000 });
-    await expect(page.locator("button", { hasText: "Approve All" })).toBeVisible();
+    await expect(page.locator("button", { hasText: "Approve" }).first()).toBeVisible();
+    await expect(page.locator("button", { hasText: "Reject" })).toBeVisible();
   });
 });
 
@@ -197,36 +199,20 @@ test.describe("Reject Action", () => {
     await page.goto("/jobs/job-1");
 
     await expect(page.getByText("Approval Required")).toBeVisible({ timeout: 8_000 });
+    // Clicking Reject opens a confirmation dialog
     await page.locator("button", { hasText: "Reject" }).click();
+    // Confirm the rejection in the dialog
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("button", { hasText: "Reject" }).click();
 
     await page.waitForTimeout(500);
     expect(resolveApiCalled).toBe(true);
   });
 });
 
-test.describe("Trust Session (Approve All)", () => {
-  test("clicking Approve All calls trust API", async ({ page }) => {
-    await setupApprovalMocks(page);
-
-    let trustApiCalled = false;
-    await page.route("**/api/jobs/job-1/approvals/trust", async (route) => {
-      trustApiCalled = true;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ resolved: 1 }),
-      });
-    });
-
-    await page.goto("/jobs/job-1");
-
-    await expect(page.getByText("1 pending approval")).toBeVisible({ timeout: 8_000 });
-    await page.locator("button", { hasText: "Approve All" }).click();
-
-    await page.waitForTimeout(500);
-    expect(trustApiCalled).toBe(true);
-  });
-});
+// Note: "Approve All" / trust session is not currently exposed in the
+// inline approval cards rendered by TranscriptPanel, so no E2E test here.
 
 test.describe("SSE-Driven Approval Events", () => {
   test("approval_requested SSE event shows banner on job detail", async ({ page }) => {
