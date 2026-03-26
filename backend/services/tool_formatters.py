@@ -66,7 +66,7 @@ def _short_path(path: str) -> str:
     """
     idx = path.find(_WORKTREE_MARKER)
     if idx != -1:
-        return "…/" + path[idx + len(_WORKTREE_MARKER):]
+        return "…/" + path[idx + len(_WORKTREE_MARKER) :]
     p = PurePosixPath(path)
     parts = p.parts
     if len(parts) <= 2:

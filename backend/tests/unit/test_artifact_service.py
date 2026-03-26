@@ -424,7 +424,9 @@ class TestStoreLogArtifactUpsert:
             )
             mock_repo.list_for_job.return_value = [existing]
 
-            events = [{"session_number": 2, "seq": 0, "level": "info", "message": "session 2 started", "timestamp": "t2"}]
+            events = [
+                {"session_number": 2, "seq": 0, "level": "info", "message": "session 2 started", "timestamp": "t2"}
+            ]
             result = await artifact_service.store_log_artifact("job-1", events, slug="my-job")
 
             mock_repo.create.assert_not_called()
@@ -496,8 +498,16 @@ class TestStoreApprovalHistoryUpsert:
         orig = mod._ARTIFACTS_BASE
         mod._ARTIFACTS_BASE = tmp_path
         try:
-            approvals = [{"id": "appr-1", "description": "ok", "proposed_action": "x",
-                          "requested_at": "t1", "resolved_at": None, "resolution": "approved"}]
+            approvals = [
+                {
+                    "id": "appr-1",
+                    "description": "ok",
+                    "proposed_action": "x",
+                    "requested_at": "t1",
+                    "resolved_at": None,
+                    "resolution": "approved",
+                }
+            ]
             result = await artifact_service.store_approval_history("job-1", approvals, slug="my-job")
             assert result is not None
             assert result.type == ArtifactType.approval_history
@@ -525,8 +535,16 @@ class TestStoreApprovalHistoryUpsert:
             )
             mock_repo.list_for_job.return_value = [existing]
 
-            approvals = [{"id": "appr-2", "description": "check", "proposed_action": "y",
-                          "requested_at": "t2", "resolved_at": "t3", "resolution": "approved"}]
+            approvals = [
+                {
+                    "id": "appr-2",
+                    "description": "check",
+                    "proposed_action": "y",
+                    "requested_at": "t2",
+                    "resolved_at": "t3",
+                    "resolution": "approved",
+                }
+            ]
             result = await artifact_service.store_approval_history("job-1", approvals, slug="my-job")
 
             mock_repo.create.assert_not_called()

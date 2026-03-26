@@ -54,7 +54,12 @@ def _build_frontend() -> bool:
         frontend_root / "src",
         frontend_root / "public",
     ]
-    source_files = [package_json, frontend_root / "package-lock.json", frontend_root / "index.html", frontend_root / "vite.config.ts"]
+    source_files = [
+        package_json,
+        frontend_root / "package-lock.json",
+        frontend_root / "index.html",
+        frontend_root / "vite.config.ts",
+    ]
     for root in src_roots:
         if root.exists():
             source_files.extend(path for path in root.rglob("*") if path.is_file())

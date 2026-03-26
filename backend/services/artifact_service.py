@@ -154,9 +154,7 @@ class ArtifactService:
 
         # Pre-load existing document artifacts for this job so we can upsert by name.
         existing_artifacts = await self._repo.list_for_job(job_id)
-        existing_docs_by_name = {
-            a.name: a for a in existing_artifacts if a.type == ArtifactType.document
-        }
+        existing_docs_by_name = {a.name: a for a in existing_artifacts if a.type == ArtifactType.document}
 
         # Scan the top-level directory and the designated files/ subdirectory.
         # Other subdirectories (e.g. checkpoints/) are intentionally skipped to

@@ -110,10 +110,7 @@ class TestTrimWorktreePaths:
         assert _trim_worktree_paths(cmd) == "cat …/my-branch/src/main.py"
 
     def test_strips_multiple_occurrences(self):
-        cmd = (
-            "diff /home/user/.codeplane-worktrees/a/f.py "
-            "/home/user/.codeplane-worktrees/b/f.py"
-        )
+        cmd = "diff /home/user/.codeplane-worktrees/a/f.py /home/user/.codeplane-worktrees/b/f.py"
         assert _trim_worktree_paths(cmd) == "diff …/a/f.py …/b/f.py"
 
     def test_preserves_non_path_tokens(self):
