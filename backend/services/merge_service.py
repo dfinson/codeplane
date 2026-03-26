@@ -129,7 +129,10 @@ class MergeService:
         strategy = self._config.strategy
 
         if strategy == "pr_only":
-            return await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
+            result = await self._create_pr(job_id, repo_path, worktree_path, branch, base_ref, prompt)
+            if result.status == MergeStatus.pr_created:
+                await self._cleanup_worktree_only(job_id, repo_path, worktree_path)
+            return result
 
         # auto_merge: try ff → merge → pr fallback
         return await self._auto_merge(job_id, repo_path, worktree_path, branch, base_ref, prompt)

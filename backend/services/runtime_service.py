@@ -758,7 +758,6 @@ class RuntimeService:
                         "Resolution", _status_map.get(result.status, Resolution.unresolved)
                     )
                     final_resolution = _auto_resolution
-                    final_pr_url = result.pr_url
 
                     job_repo = JobRepository(session)
                     await job_repo.update_resolution(job_id, _auto_resolution, pr_url=result.pr_url)
