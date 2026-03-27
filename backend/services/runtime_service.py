@@ -722,54 +722,6 @@ class RuntimeService:
                     )
                     await session.commit()
 
-            elif self._merge_service is not None and self._config.completion.strategy != "manual":
-                # Initial auto-resolution: apply the configured completion strategy
-                # (auto_merge or pr_only) without waiting for operator action.
-                from backend.persistence.job_repo import JobRepository
-                from backend.services.merge_service import MergeStatus
-
-                async with self._session_factory() as session:
-                    svc = self._make_job_service(session)
-                    current_job = await svc.get_job(job_id)
-                    if current_job is None:
-                        raise ValueError(f"Job {job_id} not found before auto-resolution")
-
-                    log.info(
-                        "job_attempting_auto_resolution",
-                        job_id=job_id,
-                        strategy=self._config.completion.strategy,
-                    )
-                    merge_result = await self._merge_service.try_merge_back(
-                        job_id=job_id,
-                        repo_path=current_job.repo,
-                        worktree_path=current_job.worktree_path,
-                        branch=current_job.branch,
-                        base_ref=current_job.base_ref,
-                        prompt=current_job.prompt,
-                    )
-                    _status_map = {
-                        MergeStatus.merged: Resolution.merged,
-                        MergeStatus.pr_created: Resolution.pr_created,
-                        MergeStatus.conflict: Resolution.conflict,
-                        MergeStatus.skipped: Resolution.unresolved,
-                        MergeStatus.error: Resolution.unresolved,
-                    }
-                    _auto_resolution = _status_map.get(merge_result.status, Resolution.unresolved)
-                    final_resolution = _auto_resolution
-
-                    job_repo = JobRepository(session)
-                    await job_repo.update_resolution(job_id, _auto_resolution, pr_url=merge_result.pr_url)
-
-                    _terminal_resolutions = (Resolution.merged, Resolution.pr_created, Resolution.discarded)
-                    if _auto_resolution in _terminal_resolutions:
-                        await svc.transition_state(job_id, JobState.completed)
-                        resolution_event = svc.build_job_resolved_event(
-                            job_id,
-                            _auto_resolution,
-                            pr_url=merge_result.pr_url,
-                        )
-
-                    await session.commit()
 
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
@@ -1901,9 +1853,12 @@ class RuntimeService:
             return await self._build_resume_handoff_prompt_for_job(session, job, instruction, job.session_count)
 
     async def create_followup_job(self, job_id: str, instruction: str) -> Job:
-        """Create and start a new follow-up job with parent-job handoff context."""
+        """Create and start a new follow-up job with parent-job handoff context.
+
+        Raises ValueError if the parent job has already been merged — once merged,
+        the work is in the base branch and a follow-up must be started as a fresh job.
+        """
         from backend.models.domain import PermissionMode
-        from backend.services.job_service import JobNotFoundError
 
         normalized_instruction = instruction.strip()
         if not normalized_instruction:
@@ -1912,8 +1867,20 @@ class RuntimeService:
         async with self._session_factory() as session:
             svc = self._make_job_service(session)
             original = await svc.get_job(job_id)
-            if original is None:
-                raise JobNotFoundError(f"Job {job_id} does not exist.")
+
+            # Block follow-ups on already-merged jobs — the work is already in the
+            # base branch, so a new job should be started from scratch instead.
+            _merged_resolutions = (Resolution.merged, Resolution.pr_created)
+            if original.resolution in _merged_resolutions:
+                raise ValueError(
+                    f"Job {job_id} has already been merged (resolution={original.resolution.value}). "
+                    "Start a new job instead of creating a follow-up."
+                )
+
+            # Build a naming context hint so the LLM can produce a name that
+            # reflects both the new instruction AND its follow-up relationship.
+            parent_label = original.title or original.id
+            parent_job_context = f"This is a follow-up task continuing work from '{parent_label}' (parent job: {original.id})."
 
             override_prompt = await self._build_followup_handoff_prompt_for_job(
                 session,
@@ -1932,6 +1899,8 @@ class RuntimeService:
                 max_turns=original.max_turns,
                 verify_prompt=original.verify_prompt,
                 self_review_prompt=original.self_review_prompt,
+                parent_job_id=original.id,
+                parent_job_context=parent_job_context,
             )
             await session.commit()
 

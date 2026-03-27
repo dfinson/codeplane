@@ -261,6 +261,7 @@ class JobResponse(CamelModel):
     max_turns: int | None = None
     verify_prompt: str | None = None
     self_review_prompt: str | None = None
+    parent_job_id: str | None = None
 
 
 class JobListResponse(CamelModel):

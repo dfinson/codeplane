@@ -179,6 +179,8 @@ class JobService:
         max_turns: int | None = None,
         verify_prompt: str | None = None,
         self_review_prompt: str | None = None,
+        parent_job_id: str | None = None,
+        parent_job_context: str | None = None,
     ) -> Job:
         """Create a new job, set up workspace, and persist it.
 
@@ -223,6 +225,7 @@ class JobService:
                     prompt,
                     existing_branches=existing_branches,
                     existing_worktrees=existing_worktrees | existing_job_ids,
+                    parent_job_context=parent_job_context,
                 )
                 if branch is None and generated_branch:
                     branch = generated_branch
@@ -248,6 +251,7 @@ class JobService:
                     permission_mode=permission_mode,
                     model=model,
                     failure_reason=f"Naming failed: {exc}",
+                    parent_job_id=parent_job_id,
                 )
                 await self._job_repo.create(job)
                 log.error("job_naming_failed", job_id=job_id, error=str(exc))
@@ -305,6 +309,7 @@ class JobService:
                 model=model,
                 sdk=resolved_sdk,
                 failure_reason=f"Worktree creation failed: {exc}",
+                parent_job_id=parent_job_id,
             )
             await self._job_repo.create(job)
             log.error("job_worktree_failed", job_id=job_id, error=str(exc))
@@ -333,6 +338,7 @@ class JobService:
             max_turns=max_turns,
             verify_prompt=verify_prompt,
             self_review_prompt=self_review_prompt,
+            parent_job_id=parent_job_id,
         )
         try:
             await self._job_repo.create(job)

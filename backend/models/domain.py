@@ -202,6 +202,7 @@ class Job:
     verify_prompt: str | None = None
     self_review_prompt: str | None = None
     version: int = 1
+    parent_job_id: str | None = None
 
 
 @dataclass

@@ -294,6 +294,8 @@ async def test_create_followup_job_uses_parent_handoff_context(runtime: RuntimeS
         max_turns=4,
         verify_prompt="Verify this carefully",
         self_review_prompt="Review your work",
+        parent_job_id="parent",
+        parent_job_context="This is a follow-up task continuing work from 'parent' (parent job: parent).",
     )
     runtime.start_or_enqueue.assert_awaited_once_with(child, override_prompt="FOLLOWUP HANDOFF")
     assert fake_service.get_job.await_args_list[1].args == ("child",)

@@ -143,6 +143,7 @@ class NamingService:
         *,
         existing_branches: set[str] | None = None,
         existing_worktrees: set[str] | None = None,
+        parent_job_context: str | None = None,
     ) -> tuple[str, str, str]:
         """Generate a title, branch name, and worktree name.
 
@@ -153,6 +154,9 @@ class NamingService:
             prompt: The task description.
             existing_branches: Set of branch names that already exist (local + remote).
             existing_worktrees: Set of worktree directory names that already exist.
+            parent_job_context: Optional context about the parent job (for follow-up jobs),
+                e.g. "Follow-up to 'Fix login bug' (fix-login-bug)". Used to guide naming
+                so the generated names reflect the follow-up relationship.
 
         Returns:
             Tuple of (title, branch_name, worktree_name).
@@ -160,11 +164,15 @@ class NamingService:
         branches = existing_branches or set()
         worktrees = existing_worktrees or set()
 
+        effective_prompt = prompt
+        if parent_job_context:
+            effective_prompt = f"{prompt}\n\nContext: {parent_job_context}"
+
         # Retry the full generation until the LLM produces valid output.
         last_error: Exception = NamingError("No attempts made")
         for attempt in range(self.MAX_RETRIES):
             try:
-                title, branch, worktree = await self._attempt_generate(prompt)
+                title, branch, worktree = await self._attempt_generate(effective_prompt)
             except Exception as exc:
                 log.warning("naming_attempt_failed", attempt=attempt + 1, reason=str(exc))
                 last_error = exc
@@ -177,12 +185,12 @@ class NamingService:
                 if not branch_conflict and not worktree_conflict:
                     break
                 if branch_conflict:
-                    new_branch = await self._regenerate_field("branch_name", branch, prompt)
+                    new_branch = await self._regenerate_field("branch_name", branch, effective_prompt)
                     if new_branch and new_branch not in branches:
                         branch = new_branch
                         log.info("naming_branch_regenerated", new_branch=branch)
                 if worktree_conflict:
-                    new_worktree = await self._regenerate_field("worktree_name", worktree, prompt)
+                    new_worktree = await self._regenerate_field("worktree_name", worktree, effective_prompt)
                     if new_worktree and new_worktree not in worktrees:
                         worktree = new_worktree
                         log.info("naming_worktree_regenerated", new_worktree=worktree)

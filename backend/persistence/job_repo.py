@@ -81,6 +81,7 @@ class JobRepository(BaseRepository):
             verify_prompt=cast("str | None", row.verify_prompt),
             self_review_prompt=cast("str | None", row.self_review_prompt),
             version=cast("int", row.version) or 1,
+            parent_job_id=cast("str | None", row.parent_job_id),
         )
 
     async def create(self, job: Job) -> Job:
@@ -113,6 +114,7 @@ class JobRepository(BaseRepository):
             max_turns=job.max_turns,
             verify_prompt=job.verify_prompt,
             self_review_prompt=job.self_review_prompt,
+            parent_job_id=job.parent_job_id,
         )
         self._session.add(row)
         await self._session.flush()

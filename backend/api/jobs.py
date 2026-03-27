@@ -75,6 +75,7 @@ def _job_to_response(job: Job, progress_preview: ProgressPreview | None = None) 
         max_turns=job.max_turns,
         verify_prompt=job.verify_prompt,
         self_review_prompt=job.self_review_prompt,
+        parent_job_id=job.parent_job_id,
     )
 
 
@@ -247,7 +248,10 @@ async def continue_job(
     runtime_service: FromDishka[RuntimeService],
 ) -> CreateJobResponse:
     """Create a follow-up job with a new instruction and parent-job handoff context."""
-    job = await runtime_service.create_followup_job(job_id, body.instruction)
+    try:
+        job = await runtime_service.create_followup_job(job_id, body.instruction)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     return CreateJobResponse(
         id=job.id,

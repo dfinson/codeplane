@@ -48,6 +48,7 @@ class JobRow(Base):
     updated_at = Column(TZDateTime, nullable=False)
     completed_at = Column(TZDateTime, nullable=True)
     version = Column(Integer, nullable=False, default=1, server_default="1")
+    parent_job_id = Column(String, ForeignKey("jobs.id"), nullable=True)
 
 
 class EventRow(Base):
