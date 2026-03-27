@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -48,7 +48,7 @@ from backend.models.domain import JobState, PermissionMode, Resolution
 router = APIRouter(tags=["jobs"], route_class=DishkaRoute)
 
 
-def _resolve_tool_display(payload: dict) -> str | None:  # type: ignore[type-arg]
+def _resolve_tool_display(payload: dict[str, Any]) -> str | None:
     """Return tool_display from payload, recomputing it from args if missing.
 
     Stored events pre-dating the tool_display field have no value in their
@@ -57,13 +57,14 @@ def _resolve_tool_display(payload: dict) -> str | None:  # type: ignore[type-arg
     """
     stored = payload.get("tool_display")
     if stored is not None:
-        return stored  # type: ignore[return-value]
+        return stored
     tool_name: str | None = payload.get("tool_name")
     if not tool_name:
         return None
     tool_args: str | None = payload.get("tool_args")
-    tool_result: str | None = payload.get("tool_result")
-    tool_success: bool = payload.get("tool_success", True)
+    tool_result_raw: str | None = payload.get("tool_result")
+    tool_result = tool_result_raw or None  # normalise empty string → None
+    tool_success: bool = payload.get("tool_success") is not False
     return format_tool_display(tool_name, tool_args, tool_result=tool_result, tool_success=tool_success)
 
 
