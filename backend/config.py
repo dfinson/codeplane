@@ -142,7 +142,7 @@ class RateLimitConfig:
 
 @dataclass
 class CompletionConfig:
-    strategy: str = "manual"
+    strategy: str = "manual"  # manual | auto_merge | pr_only
     auto_push: bool = True
     cleanup_worktree: bool = True
     delete_branch_after_merge: bool = True

@@ -1858,8 +1858,7 @@ class RuntimeService:
         Raises ValueError if the parent job has already been merged — once merged,
         the work is in the base branch and a follow-up must be started as a fresh job.
         """
-        from backend.models.domain import PermissionMode, Resolution
-        from backend.services.job_service import JobNotFoundError
+        from backend.models.domain import PermissionMode
 
         normalized_instruction = instruction.strip()
         if not normalized_instruction:
@@ -1868,8 +1867,6 @@ class RuntimeService:
         async with self._session_factory() as session:
             svc = self._make_job_service(session)
             original = await svc.get_job(job_id)
-            if original is None:
-                raise JobNotFoundError(f"Job {job_id} does not exist.")
 
             # Block follow-ups on already-merged jobs — the work is already in the
             # base branch, so a new job should be started from scratch instead.
