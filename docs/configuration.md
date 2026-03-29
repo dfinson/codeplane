@@ -28,8 +28,8 @@ agent:
 | Permission Mode | Behavior |
 |-----------------|----------|
 | `auto` | SDK handles permissions automatically (default) |
-| `approval_required` | File writes, shell commands, and network access require approval |
 | `read_only` | Agent can only read; all writes require approval |
+| `approval_required` | File writes, shell commands, and network access require approval |
 
 ### Server
 

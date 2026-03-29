@@ -8,7 +8,7 @@ Get CodePlane running and complete your first supervised agent job.
 |-------------|---------|
 | **Python** | 3.11 or later |
 | **Git** | Any recent version |
-| **Agent SDK** | At least one: [GitHub Copilot CLI](https://docs.github.com/en/copilot) or [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) |
+| **Agent SDK** | At least one: [GitHub Copilot CLI](https://docs.github.com/en/copilot) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
 
 You also need a **local Git repository** to run jobs against.
 

@@ -66,8 +66,8 @@ When an agent attempts a risky action, CodePlane can pause execution and ask for
 | Mode | Behavior |
 |------|----------|
 | `auto` | SDK handles permissions automatically (default) |
-| `approval_required` | File writes, shell commands, and network access require your approval |
 | `read_only` | Agent can only read files; all writes require approval |
+| `approval_required` | File writes, shell commands, and network access require your approval |
 
 Set the mode in `~/.codeplane/config.yaml` or per-repo in `.codeplane.yml`:
 
