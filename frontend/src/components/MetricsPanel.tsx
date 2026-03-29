@@ -497,6 +497,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
   const [llmMainExpanded, setLlmMainExpanded] = useState(false);
   const [llmSubExpanded, setLlmSubExpanded] = useState(false);
   const [turnsCollapsed, setTurnsCollapsed] = useState(true);
+  const [economicsCollapsed, setEconomicsCollapsed] = useState(true);
   const [data, setData] = useState<TelemetryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [toolSort, setToolSort] = useState<{ field: SortField; dir: SortDir }>({ field: "totalMs", dir: "desc" });
@@ -785,10 +786,16 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
               {/* Integrated economics / efficiency */}
               {showEconomicsSection ? (
-                <div className="space-y-4">
-                  <h4 className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setEconomicsCollapsed((c) => !c)}
+                    className="flex w-full items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors text-left py-1"
+                  >
+                    {economicsCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
                     <TrendingUp size={12} className="text-blue-400" /> Economics & Efficiency
-                  </h4>
+                  </button>
+                  {!economicsCollapsed && <div className="space-y-4 mt-3">
 
                   {showCacheEfficiency && (
                     <div className="space-y-3 rounded-md border border-border bg-background p-3">
@@ -885,6 +892,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                     </div>
                   )}
 
+                  </div>}
                 </div>
               ) : null}
 

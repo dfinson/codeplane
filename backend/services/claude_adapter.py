@@ -25,7 +25,7 @@ from backend.models.domain import (
     SessionEvent,
     SessionEventKind,
 )
-from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface
+from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface, normalize_model_name
 from backend.services.permission_policy import is_git_reset_hard
 
 if TYPE_CHECKING:
@@ -435,7 +435,7 @@ class ClaudeAdapter(AgentAdapterInterface):
             if not self._model_verified.get(job_id):
                 self._model_verified[job_id] = True
                 requested = self._requested_models.get(job_id, "")
-                if requested and model != requested:
+                if requested and normalize_model_name(model) != normalize_model_name(requested):
                     log.error(
                         "model_mismatch",
                         requested=requested,
@@ -1003,13 +1003,25 @@ class ClaudeAdapter(AgentAdapterInterface):
 
 
 async def _prompt_to_stream(prompt: str) -> Any:  # noqa: ANN401
-    """Wrap a string prompt as an async iterable for Claude SDK streaming mode."""
+    """Wrap a string prompt as an async iterable for Claude SDK streaming mode.
+
+    The generator **must** remain alive after yielding the initial prompt.
+    When the generator returns, the SDK's ``stream_input`` calls
+    ``transport.end_input()`` which closes stdin to the Claude subprocess.
+    With stdin closed the SDK can no longer write control-protocol responses
+    (tool permission results) back to the subprocess, so the first tool call
+    hangs forever waiting for a permission response that will never arrive.
+    """
     yield {
         "type": "user",
         "message": {"role": "user", "content": prompt},
         "parent_tool_use_id": None,
         "session_id": "default",
     }
+    # Keep the stream open so stdin is not closed.
+    # The anyio task running stream_input will be cancelled when the
+    # session disconnects — that is the normal cleanup path.
+    await asyncio.Event().wait()
 
 
 def _summarize_tool_input(tool_name: str, input_data: dict[str, Any]) -> str:

@@ -7,11 +7,13 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
-    name: Create Release
+    name: Build & Publish
     runs-on: ubuntu-latest
+    environment: pypi
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +36,17 @@ jobs:
       - name: Build frontend
         run: cd frontend && npm run build
 
+      - name: Verify frontend assets
+        run: test -f backend/web/index.html
+
       - name: Build Python package
         run: uv build
+
+      - name: Verify frontend in wheel
+        run: python -m zipfile -l dist/*.whl | grep 'backend/web/index.html'
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -143,6 +143,25 @@ async def compute_attribution(session: AsyncSession, job_id: str) -> None:
     # --- File I/O stats ---
     file_stats = await file_repo.reread_stats(job_id)
 
+    # --- Diff line counts from the latest diff snapshot ---
+    diff_added = 0
+    diff_removed = 0
+    try:
+        from backend.persistence.event_repo import EventRepo
+        from backend.models.events import DomainEventKind
+
+        event_repo = EventRepo(session)
+        diff_events = await event_repo.list_by_job(
+            job_id, kinds=[DomainEventKind.diff_updated], limit=100,
+        )
+        if diff_events:
+            changed_files = diff_events[-1].payload.get("changed_files", [])
+            for f in changed_files:
+                diff_added += f.get("additions", 0)
+                diff_removed += f.get("deletions", 0)
+    except Exception:
+        log.debug("diff_lines_extraction_failed", job_id=job_id, exc_info=True)
+
     await summary_repo.set_turn_stats(
         job_id,
         unique_files_read=file_stats.get("unique_files", 0),
@@ -151,6 +170,8 @@ async def compute_attribution(session: AsyncSession, job_id: str) -> None:
         avg_turn_cost_usd=avg,
         cost_first_half_usd=first_half,
         cost_second_half_usd=second_half,
+        diff_lines_added=diff_added,
+        diff_lines_removed=diff_removed,
     )
 
     log.info(

@@ -379,6 +379,7 @@ async def _init_optional_services(
         session_factory=session_factory,
         runtime_service=services.runtime_service,
         approval_service=services.approval_service,
+        utility_session=services.utility_session,
     )
     mcp_app = mcp_server.streamable_http_app()
     app.mount(MCP_PATH, mcp_app)

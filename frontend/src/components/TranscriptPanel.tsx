@@ -355,16 +355,16 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
       );
     }
     case "replace_string_in_file":
-    case "multi_replace_string_in_file":
     case "str_replace_based_edit_tool":
     case "Edit":
     case "insert_edit_into_file": {
       const filePath = (args.filePath ?? args.file_path ?? args.path ?? "") as string;
       const shortPath = abbreviatePath(filePath);
-      // str_replace_based_edit_tool / Copilot tools use old_str/new_str;
-      // Claude SDK's Edit tool uses old_string/new_string.
-      const oldStr = (args.old_str ?? args.old_string) as string | undefined;
-      const newStr = (args.new_str ?? args.new_string) as string | undefined;
+      // str_replace_based_edit_tool uses old_str/new_str;
+      // Claude SDK's Edit tool uses old_string/new_string;
+      // Copilot tools use oldString/newString (camelCase).
+      const oldStr = (args.old_str ?? args.old_string ?? args.oldString) as string | undefined;
+      const newStr = (args.new_str ?? args.new_string ?? args.newString) as string | undefined;
       return (
         <div className="px-3 py-1.5 text-xs">
           <div className="flex items-center gap-2">
@@ -383,11 +383,13 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
         </div>
       );
     }
+    case "multi_replace_string_in_file":
     case "MultiEdit": {
-      const edits = (args.edits ?? []) as Array<Record<string, unknown>>;
+      // Copilot: args.replacements; Claude SDK: args.edits
+      const edits = (args.replacements ?? args.edits ?? []) as Array<Record<string, unknown>>;
       const paths: string[] = [...new Set(
         edits
-          .map((e) => (e.file_path ?? e.path ?? "") as string)
+          .map((e) => (e.filePath ?? e.file_path ?? e.path ?? "") as string)
           .filter(Boolean)
           .map((p) => abbreviatePath(p)),
       )];
@@ -404,10 +406,10 @@ function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
             </span>
           </div>
           {edits.slice(0, 3).map((e, i) => {
-            const p = abbreviatePath((e.file_path ?? e.path ?? "") as string);
-            // MultiEdit uses old_string/new_string (Claude SDK naming)
-            const oldStr = (e.old_string ?? e.old_str) as string | undefined;
-            const newStr = (e.new_string ?? e.new_str) as string | undefined;
+            const p = abbreviatePath((e.filePath ?? e.file_path ?? e.path ?? "") as string);
+            // Claude SDK: old_string/new_string; Copilot: oldString/newString
+            const oldStr = (e.old_string ?? e.old_str ?? e.oldString) as string | undefined;
+            const newStr = (e.new_string ?? e.new_str ?? e.newString) as string | undefined;
             return (
               <div key={i} className="mt-1.5 pl-5">
                 {paths.length > 1 && <div className="text-muted-foreground/60 font-mono text-[10px]">{p}</div>}

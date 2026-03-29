@@ -16,7 +16,7 @@ from backend.models.domain import (
     SessionEvent,
     SessionEventKind,
 )
-from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface
+from backend.services.agent_adapter import CODEPLANE_SYSTEM_PROMPT, AgentAdapterInterface, normalize_model_name
 from backend.services.permission_policy import (
     PolicyDecision,
     evaluate,
@@ -419,7 +419,7 @@ class CopilotAdapter(AgentAdapterInterface):
 
         if not model_verified[0] and requested_model and actual_model:
             model_verified[0] = True
-            if actual_model != requested_model:
+            if normalize_model_name(actual_model) != normalize_model_name(requested_model):
                 log.error(
                     "model_mismatch",
                     requested=requested_model,

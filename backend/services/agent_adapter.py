@@ -30,6 +30,19 @@ class SDKModelMismatchError(ValueError):
     """Raised when a model is incompatible with the selected SDK."""
 
 
+def normalize_model_name(model: str) -> str:
+    """Strip date-version suffix from model names for comparison.
+
+    SDKs often return the fully-qualified model name with a date suffix
+    (e.g. ``claude-haiku-4-5-20251001``) even when the request used the
+    short alias (``claude-haiku-4-5``).  This normalises both forms so
+    that ``requested == actual`` comparisons aren't falsely triggered.
+    """
+    import re
+
+    return re.sub(r"-\d{8}$", "", model)
+
+
 def validate_sdk_model(sdk: str, model: str | None) -> None:
     """Raise SDKModelMismatchError if *model* is incompatible with *sdk*.
 
