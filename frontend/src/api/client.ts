@@ -310,8 +310,6 @@ export interface AnalyticsTools {
     avg_duration_ms: number;
     total_duration_ms: number;
     failure_count: number;
-    agent_error_count: number;
-    tool_error_count: number;
   }[];
 }
 

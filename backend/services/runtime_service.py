@@ -874,19 +874,6 @@ class RuntimeService:
                 except Exception:
                     log.warning("cost_attribution_failed", job_id=job_id, exc_info=True)
 
-                # Batch-classify tool errors via cheap LLM call
-                if self._utility_session is not None:
-                    try:
-                        async with self._session_factory() as session:
-                            from backend.services.tool_error_classifier import classify_tool_errors_batch
-
-                            await classify_tool_errors_batch(
-                                session, job_id, self._utility_session.complete
-                            )
-                            await session.commit()
-                    except Exception:
-                        log.debug("tool_error_classification_failed", job_id=job_id, exc_info=True)
-
                 # Run statistical analysis (fire-and-forget, non-blocking)
                 try:
                     async with self._session_factory() as session:

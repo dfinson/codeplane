@@ -497,10 +497,7 @@ function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
               <Tooltip content="Total number of times this tool was called"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Calls</span></Tooltip>
             </th>
             <th className="text-right py-1.5 px-2 font-medium">
-              <Tooltip content="Agent called the tool with invalid arguments or in an incorrect context"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Agent Err</span></Tooltip>
-            </th>
-            <th className="text-right py-1.5 px-2 font-medium">
-              <Tooltip content="The tool itself returned an error or timed out"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Tool Err</span></Tooltip>
+              <Tooltip content="Number of calls that returned an error or failed"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Errors</span></Tooltip>
             </th>
             <th className="text-right py-1.5 px-2 font-medium">
               <Tooltip content="Percentage of calls that completed without errors"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Success</span></Tooltip>
@@ -515,18 +512,14 @@ function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
         </thead>
         <tbody>
           {tools.map((t, i) => {
-            const successRate = t.count > 0 ? ((t.count - (t.failure_count || 0)) / t.count * 100) : 100;
-            const agentErrors = (t as Record<string, unknown>).agent_error_count as number | undefined ?? 0;
-            const toolErrors = (t as Record<string, unknown>).tool_error_count as number | undefined ?? 0;
+            const failures = t.failure_count || 0;
+            const successRate = t.count > 0 ? ((t.count - failures) / t.count * 100) : 100;
             return (
               <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
                 <td className="py-1.5 px-2 font-mono">{t.name}</td>
                 <td className="text-right py-1.5 px-2">{t.count}</td>
                 <td className="text-right py-1.5 px-2">
-                  {agentErrors ? <span className="text-yellow-400">{agentErrors}</span> : <span className="text-muted-foreground">0</span>}
-                </td>
-                <td className="text-right py-1.5 px-2">
-                  {toolErrors ? <span className="text-red-400">{toolErrors}</span> : <span className="text-muted-foreground">0</span>}
+                  {failures ? <span className="text-red-400">{failures}</span> : <span className="text-muted-foreground">0</span>}
                 </td>
                 <td className="text-right py-1.5 px-2">
                   <span className={successRate >= 95 ? "text-green-400" : successRate >= 80 ? "text-yellow-400" : "text-red-400"}>
@@ -549,54 +542,32 @@ function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
 // ---------------------------------------------------------------------------
 
 function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriversResponse }) {
-  const [dimension, setDimension] = useState<"phase" | "tool_category">("phase");
   const summary = useMemo(() => fleetDrivers.summary ?? [], [fleetDrivers.summary]);
 
-  const phaseLabels: Record<string, string> = {
-    agent_reasoning: "Reasoning",
+  const activityLabels: Record<string, string> = {
+    command_execution: "Command Execution",
+    other_tools: "Other Tools",
+    code_reading: "Code Reading",
     verification: "Verification",
-    environment_setup: "Setup",
-    finalization: "Wrap-up",
-    post_completion: "Post-completion",
-    unknown: "Unattributed",
+    reasoning: "Reasoning",
+    code_changes: "Code Changes",
+    delegation: "Delegation",
+    search_discovery: "Search & Discovery",
+    setup: "Setup",
+    wrap_up: "Wrap-up",
   };
-  const toolCategoryLabels: Record<string, string> = {
-    file_read: "File Reading",
-    file_write: "File Writing",
-    file_search: "File Search",
-    shell: "Shell Commands",
-    agent: "Sub-agents",
-    other: "Other",
-  };
-  const bucketLabels = dimension === "phase" ? phaseLabels : toolCategoryLabels;
 
-  const dimensionRows = useMemo(
-    () => summary.filter((row) => row.dimension === dimension).sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 8),
-    [summary, dimension],
+  const activityRows = useMemo(
+    () => summary.filter((row) => row.dimension === "activity").sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 10),
+    [summary],
   );
-  const labelMap: Record<typeof dimension, string> = { phase: "Phase", tool_category: "Tool Category" };
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5 text-[11px]">
-        {(["phase", "tool_category"] as const).map((key) => (
-          <button
-            key={key}
-            onClick={() => setDimension(key)}
-            className={`px-2 py-0.5 rounded-full border transition-colors ${
-              dimension === key
-                ? "bg-primary text-primary-foreground border-primary"
-                : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
-            }`}
-          >
-            {labelMap[key]}
-          </button>
-        ))}
-      </div>
-      {dimensionRows.length > 0 ? (
+      {activityRows.length > 0 ? (
         <>
           <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={dimensionRows.map((row) => ({ name: bucketLabels[row.bucket] || row.bucket, cost: row.cost_usd }))} margin={{ top: 5, right: 10, left: 0, bottom: 40 }}>
+            <BarChart data={activityRows.map((row) => ({ name: activityLabels[row.bucket] || row.bucket, cost: row.cost_usd }))} margin={{ top: 5, right: 10, left: 0, bottom: 40 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#888" }} interval={0} angle={-20} textAnchor="end" height={55} />
               <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
@@ -611,7 +582,7 @@ function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriv
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-muted-foreground border-b border-border">
-                  <th className="text-left py-1.5 px-2 font-medium">{labelMap[dimension]}</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Activity</th>
                   <th className="text-right py-1.5 px-2 font-medium">Cost</th>
                   <th className="text-right py-1.5 px-2 font-medium">Calls</th>
                   <th className="text-right py-1.5 px-2 font-medium">Jobs</th>
@@ -619,9 +590,9 @@ function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriv
                 </tr>
               </thead>
               <tbody>
-                {dimensionRows.map((row, i) => (
+                {activityRows.map((row, i) => (
                   <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
-                    <td className="py-1.5 px-2">{bucketLabels[row.bucket] || row.bucket}</td>
+                    <td className="py-1.5 px-2">{activityLabels[row.bucket] || row.bucket}</td>
                     <td className="text-right py-1.5 px-2">{formatUsd(Number(row.cost_usd) || 0)}</td>
                     <td className="text-right py-1.5 px-2">{row.call_count}</td>
                     <td className="text-right py-1.5 px-2">{row.job_count ?? "—"}</td>
@@ -633,7 +604,7 @@ function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriv
           </div>
         </>
       ) : (
-        <p className="text-sm text-muted-foreground">No cost-driver data for this dimension.</p>
+        <p className="text-sm text-muted-foreground">No cost-driver data yet.</p>
       )}
     </div>
   );

@@ -33,7 +33,6 @@ async def run_analysis(session: AsyncSession) -> int:
     count += await _analyse_tool_failures(session, repo)
     count += await _analyse_turn_escalation(session, repo)
     count += await _analyse_retry_waste(session, repo)
-    count += await _analyse_phase_imbalance(session, repo)
     log.info("statistical_analysis_complete", observations=count)
     return count
 
@@ -80,7 +79,7 @@ async def _analyse_file_rereads(session: AsyncSession, repo: ObservationsRepo) -
 
 
 async def _analyse_tool_failures(session: AsyncSession, repo: ObservationsRepo) -> int:
-    """Find tools with high failure rates, distinguishing agent errors from tool errors."""
+    """Find tools with high failure rates."""
     result = await session.execute(
         text("""
             SELECT
@@ -89,8 +88,6 @@ async def _analyse_tool_failures(session: AsyncSession, repo: ObservationsRepo) 
                 SUM(CASE WHEN json_extract(attrs_json, '$.success') = 0
                          OR json_extract(attrs_json, '$.success') = 'false'
                     THEN 1 ELSE 0 END) as failures,
-                SUM(CASE WHEN error_kind = 'agent_error' THEN 1 ELSE 0 END) as agent_errors,
-                SUM(CASE WHEN error_kind = 'tool_error' THEN 1 ELSE 0 END) as tool_errors,
                 COUNT(DISTINCT job_id) as job_count
             FROM job_telemetry_spans
             WHERE span_type = 'tool'
@@ -106,76 +103,24 @@ async def _analyse_tool_failures(session: AsyncSession, repo: ObservationsRepo) 
     count = 0
     for r in rows:
         failure_rate = r["failures"] / r["total_calls"] * 100
-        agent_errors = r["agent_errors"] or 0
-        tool_errors = r["tool_errors"] or 0
-        # Distinguish: high agent-error rate is a different observation than high tool-error rate
-        if tool_errors > 0:
-            tool_error_rate = tool_errors / r["total_calls"] * 100
-            await repo.upsert(
-                category="tool_failure",
-                severity="critical" if tool_error_rate >= 50 else "warning",
-                title=f"Tool errors: {r['name']} ({tool_error_rate:.0f}% tool failures)",
-                detail=(
-                    f"Tool '{r['name']}' had {tool_errors} genuine tool failures out of "
-                    f"{r['total_calls']} calls ({tool_error_rate:.1f}%). "
-                    f"Additionally {agent_errors} failures were agent errors (bad args/typos). "
-                    f"Across {r['job_count']} jobs."
-                ),
-                evidence={
-                    "tool_name": r["name"],
-                    "total_calls": r["total_calls"],
-                    "failures": r["failures"],
-                    "agent_errors": agent_errors,
-                    "tool_errors": tool_errors,
-                    "failure_rate_pct": round(failure_rate, 1),
-                    "tool_error_rate_pct": round(tool_error_rate, 1),
-                    "job_count": r["job_count"],
-                },
-                job_count=r["job_count"],
-            )
-            count += 1
-        elif agent_errors > 0:
-            await repo.upsert(
-                category="agent_error",
-                severity="info" if failure_rate < 50 else "warning",
-                title=f"Agent errors: {r['name']} ({failure_rate:.0f}% bad calls)",
-                detail=(
-                    f"Tool '{r['name']}' had {agent_errors} agent errors (bad args, typos, "
-                    f"wrong paths) out of {r['total_calls']} calls ({failure_rate:.1f}%). "
-                    f"These are not tool failures — the agent invoked the tool incorrectly. "
-                    f"Across {r['job_count']} jobs."
-                ),
-                evidence={
-                    "tool_name": r["name"],
-                    "total_calls": r["total_calls"],
-                    "failures": r["failures"],
-                    "agent_errors": agent_errors,
-                    "tool_errors": 0,
-                    "failure_rate_pct": round(failure_rate, 1),
-                    "job_count": r["job_count"],
-                },
-                job_count=r["job_count"],
-            )
-            count += 1
-        else:
-            await repo.upsert(
-                category="tool_failure",
-                severity="critical" if failure_rate >= 50 else "warning",
-                title=f"High failure rate: {r['name']} ({failure_rate:.0f}%)",
-                detail=(
-                    f"Tool '{r['name']}' failed {r['failures']}/{r['total_calls']} times "
-                    f"({failure_rate:.1f}%) across {r['job_count']} jobs."
-                ),
-                evidence={
-                    "tool_name": r["name"],
-                    "total_calls": r["total_calls"],
-                    "failures": r["failures"],
-                    "failure_rate_pct": round(failure_rate, 1),
-                    "job_count": r["job_count"],
-                },
-                job_count=r["job_count"],
-            )
-            count += 1
+        await repo.upsert(
+            category="tool_failure",
+            severity="critical" if failure_rate >= 50 else "warning",
+            title=f"High failure rate: {r['name']} ({failure_rate:.0f}%)",
+            detail=(
+                f"Tool '{r['name']}' failed {r['failures']}/{r['total_calls']} times "
+                f"({failure_rate:.1f}%) across {r['job_count']} jobs."
+            ),
+            evidence={
+                "tool_name": r["name"],
+                "total_calls": r["total_calls"],
+                "failures": r["failures"],
+                "failure_rate_pct": round(failure_rate, 1),
+                "job_count": r["job_count"],
+            },
+            job_count=r["job_count"],
+        )
+        count += 1
     return count
 
 
@@ -262,49 +207,3 @@ async def _analyse_retry_waste(session: AsyncSession, repo: ObservationsRepo) ->
         )
         count += 1
     return count
-
-
-async def _analyse_phase_imbalance(session: AsyncSession, repo: ObservationsRepo) -> int:
-    """Find patterns where verification cost exceeds reasoning cost."""
-    result = await session.execute(
-        text("""
-            SELECT
-                a.job_id,
-                r.cost_usd as reasoning_cost,
-                v.cost_usd as verification_cost,
-                s.total_cost_usd
-            FROM job_cost_attribution a
-            JOIN job_cost_attribution r ON r.job_id = a.job_id
-                AND r.dimension = 'phase' AND r.bucket = 'agent_reasoning'
-            JOIN job_cost_attribution v ON v.job_id = a.job_id
-                AND v.dimension = 'phase' AND v.bucket = 'verification'
-            JOIN job_telemetry_summary s ON s.job_id = a.job_id
-            WHERE a.dimension = 'phase'
-                AND v.cost_usd > r.cost_usd
-                AND a.created_at >= datetime('now', '-30 days')
-            GROUP BY a.job_id
-            ORDER BY (v.cost_usd - r.cost_usd) DESC
-            LIMIT 20
-        """)
-    )
-    rows = result.mappings().all()
-    if len(rows) < 2:
-        return 0
-
-    total_excess = sum(max(0, r["verification_cost"] - r["reasoning_cost"]) for r in rows)
-    await repo.upsert(
-        category="phase_imbalance",
-        severity="warning" if total_excess >= 0.5 else "info",
-        title=f"Verification > Reasoning in {len(rows)} jobs",
-        detail=(
-            f"{len(rows)} jobs spent more on verification than reasoning. "
-            f"Excess verification cost: ${total_excess:.2f}."
-        ),
-        evidence={
-            "affected_jobs": [dict(r) for r in rows[:5]],
-            "total_jobs": len(rows),
-        },
-        job_count=len(rows),
-        total_waste_usd=total_excess,
-    )
-    return 1

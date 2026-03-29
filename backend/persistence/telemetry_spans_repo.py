@@ -127,9 +127,7 @@ class TelemetrySpansRepo(BaseRepository):
                     SUM(duration_ms) as total_duration_ms,
                     SUM(CASE WHEN json_extract(attrs_json, '$.success') = 0
                              OR json_extract(attrs_json, '$.success') = 'false'
-                        THEN 1 ELSE 0 END) as failure_count,
-                    SUM(CASE WHEN error_kind = 'agent_error' THEN 1 ELSE 0 END) as agent_error_count,
-                    SUM(CASE WHEN error_kind = 'tool_error' THEN 1 ELSE 0 END) as tool_error_count
+                        THEN 1 ELSE 0 END) as failure_count
                 FROM job_telemetry_spans
                 WHERE span_type = 'tool'
                     AND created_at >= datetime('now', '-{int(period_days)} days')
@@ -139,42 +137,4 @@ class TelemetrySpansRepo(BaseRepository):
         )
         return [dict(r) for r in result.mappings().all()]
 
-    async def get_unclassified_errors(self, job_id: str) -> list[dict[str, Any]]:
-        """Return failed tool spans that have no error_kind classification yet."""
-        result = await self._session.execute(
-            text("""
-                SELECT id, name, attrs_json
-                FROM job_telemetry_spans
-                WHERE job_id = :job_id
-                  AND span_type = 'tool'
-                  AND (json_extract(attrs_json, '$.success') = 0
-                       OR json_extract(attrs_json, '$.success') = 'false'
-                       OR json_extract(attrs_json, '$.success') = 'False')
-                  AND error_kind IS NULL
-                ORDER BY started_at ASC
-            """),
-            {"job_id": job_id},
-        )
-        rows = []
-        for r in result.mappings().all():
-            row = dict(r)
-            # Extract the error snippet stored by the adapter in attrs_json
-            attrs = json.loads(row.pop("attrs_json", "{}"))
-            row["error_text"] = attrs.get("error_snippet", "")
-            rows.append(row)
-        return rows
 
-    async def batch_update_error_kind(
-        self, updates: list[tuple[int, str]]
-    ) -> None:
-        """Set error_kind for multiple span rows by id."""
-        for span_id, kind in updates:
-            await self._session.execute(
-                text("""
-                    UPDATE job_telemetry_spans
-                    SET error_kind = :kind
-                    WHERE id = :span_id
-                """),
-                {"span_id": span_id, "kind": kind},
-            )
-        await self._session.flush()
