@@ -515,7 +515,21 @@ class RuntimeService:
             if self._shutting_down:
                 log.info("shutdown_task_cancelled", job_id=job_id)
             else:
-                log.info("job_state_changed", job_id=job_id, new_state="canceled")
+                log.info("job_canceled_safety_net", job_id=job_id)
+                # Safety net: _handle_job_canceled inside _run_job may have
+                # been interrupted by a second CancelledError during abort().
+                # Attempt the DB transition here so the job doesn't stay stuck
+                # in 'running'.
+                try:
+                    async with self._session_factory() as session:
+                        svc = self._make_job_service(session)
+                        current = await svc.get_job(job_id)
+                        if current and current.state not in TERMINAL_STATES:
+                            await svc.transition_state(job_id, JobState.canceled)
+                            await session.commit()
+                            self._set_progress_terminal_state(job_id, JobState.canceled)
+                except Exception:
+                    log.error("safety_net_cancel_failed", job_id=job_id, exc_info=True)
         finally:
             log.debug("_run_job_guarded_finally", job_id=job_id, in_tasks=job_id in self._tasks)
             # The inner _run_job finally handles cleanup in the normal case.
@@ -805,7 +819,7 @@ class RuntimeService:
                 # recover_on_startup picks it back up on next launch.
                 log.info("job_interrupted_by_shutdown", job_id=job_id)
                 await self._finalize_diff_safe(job_id, worktree_path, base_ref)
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(Exception, asyncio.CancelledError):
                     await agent_session.abort()
             else:
                 log.info("job_canceled_by_operator", job_id=job_id)
@@ -1149,7 +1163,7 @@ class RuntimeService:
         await self._finalize_diff_safe(job_id, worktree_path, base_ref)
         try:
             await agent_session.abort()
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.warning("agent_abort_failed", job_id=job_id, exc_info=True)
         try:
             async with self._session_factory() as session:
@@ -1170,7 +1184,7 @@ class RuntimeService:
                     )
                 else:
                     await session.commit()
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.warning("job_cancel_transition_failed", job_id=job_id, exc_info=True)
 
     # ------------------------------------------------------------------
@@ -1723,7 +1737,7 @@ class RuntimeService:
                     payload={"reason": reason},
                 )
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.error("fail_job_transition_failed", job_id=job_id, exc_info=True)
 
     async def _persist_sdk_session_id(self, job_id: str, sdk_session_id: str) -> None:
