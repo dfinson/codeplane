@@ -122,6 +122,9 @@ class FakeAgentAdapter(AgentAdapterInterface):
     async def abort_session(self, session_id: str) -> None:
         self._aborted.add(session_id)
 
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        pass
+
     async def complete(self, prompt: str) -> str:
         return "{}"
 
@@ -336,6 +339,9 @@ class ResumeFallbackAdapter(AgentAdapterInterface):
 
     async def complete(self, prompt: str) -> str:
         return "{}"
+
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1551,6 +1557,9 @@ class ErrorAdapter(AgentAdapterInterface):
 
     async def complete(self, prompt: str) -> str:
         return "{}"
+
+    def set_execution_phase(self, job_id: str, phase: str) -> None:
+        pass
 
 
 class TestErrorEventCausesFailure:

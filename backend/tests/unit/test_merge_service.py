@@ -72,6 +72,8 @@ def _git(repo: Path, *args: str) -> None:
 
 def _init_repo(path: Path) -> None:
     _git(path, "init", "-b", "main")
+    _git(path, "config", "user.name", "Test")
+    _git(path, "config", "user.email", "t@t.com")
     (path / "README.md").write_text("# Test\n")
     _git(path, "add", ".")
     _git(path, "commit", "-m", "initial")

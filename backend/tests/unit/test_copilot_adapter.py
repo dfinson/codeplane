@@ -253,16 +253,21 @@ class TestStreamEvents:
         assert collected[0].kind == SessionEventKind.error
 
     @pytest.mark.asyncio
-    async def test_timeout_yields_error(self, adapter: CopilotAdapter) -> None:
+    async def test_queue_exception_triggers_cleanup(self, adapter: CopilotAdapter) -> None:
+        """When queue.get() raises, the generator cleans up session state."""
         sid = "sess-1"
-        adapter._queues[sid] = asyncio.Queue()
+        q: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
+        adapter._queues[sid] = q
+        adapter._sessions[sid] = MagicMock()
 
-        with patch("asyncio.wait_for", side_effect=TimeoutError):
-            collected = []
-            async for event in adapter.stream_events(sid):
-                collected.append(event)
+        with patch.object(q, "get", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                async for _ in adapter.stream_events(sid):
+                    pass
 
-            assert any(e.kind == SessionEventKind.error for e in collected)
+        # Cleanup should have run via the finally block
+        assert sid not in adapter._sessions
+        assert sid not in adapter._queues
 
     @pytest.mark.asyncio
     async def test_cleanup_called_on_exit(self, adapter: CopilotAdapter) -> None:
