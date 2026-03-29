@@ -11,6 +11,8 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.models.api_schemas import ModelComparisonResponse, ScorecardResponse
+
 router = APIRouter(route_class=DishkaRoute, tags=["analytics"])
 log = structlog.get_logger()
 
@@ -267,31 +269,31 @@ async def turn_economics_for_job(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/analytics/scorecard")
+@router.get("/analytics/scorecard", response_model=ScorecardResponse)
 async def analytics_scorecard(
     session: FromDishka[AsyncSession],
     period: Annotated[int, Query(ge=1, le=365)] = 7,
-) -> dict[str, object]:
+):
     """Top-level scorecard: budget per SDK, activity with resolution, quota, cost trend."""
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
     data = await TelemetrySummaryRepo(session).scorecard(period_days=period)
-    return {"period": period, **data}
+    return ScorecardResponse(**data)
 
 
-@router.get("/analytics/model-comparison")
+@router.get("/analytics/model-comparison", response_model=ModelComparisonResponse)
 async def analytics_model_comparison(
     session: FromDishka[AsyncSession],
     period: Annotated[int, Query(ge=1, le=365)] = 30,
     repo: str | None = None,
-) -> dict[str, object]:
+):
     """Per-model comparison with resolution data joined from jobs table."""
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
     rows = await TelemetrySummaryRepo(session).model_comparison(
         period_days=period, repo=repo
     )
-    return {"period": period, "repo": repo, "models": rows}
+    return ModelComparisonResponse(period=period, repo=repo, models=rows)
 
 
 @router.get("/analytics/job-context/{job_id}")

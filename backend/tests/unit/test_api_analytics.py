@@ -108,11 +108,9 @@ async def test_scorecard_returns_data():
 
         result = await analytics_scorecard(session=session, period=7)
 
-    assert result["period"] == 7
-    assert "budget" in result
-    assert "activity" in result
-    assert "cost_trend" in result
-    assert result["budget"][0]["sdk"] == "copilot"
+    assert result.activity.total_jobs == 5
+    assert len(result.budget) > 0
+    assert result.budget[0].sdk == "copilot"
 
 
 # ---------------------------------------------------------------------------
@@ -138,11 +136,11 @@ async def test_model_comparison_returns_models():
 
         result = await analytics_model_comparison(session=session, period=30, repo=None)
 
-    assert result["period"] == 30
-    assert result["repo"] is None
-    assert len(result["models"]) == 1
-    assert result["models"][0]["model"] == "claude-sonnet-4-20250514"
-    assert result["models"][0]["merged"] == 2
+    assert result.period == 30
+    assert result.repo is None
+    assert len(result.models) == 1
+    assert result.models[0].model == "claude-sonnet-4-20250514"
+    assert result.models[0].merged == 2
 
 
 @pytest.mark.asyncio
@@ -164,8 +162,8 @@ async def test_model_comparison_with_repo_filter():
         )
 
     comparison_mock.assert_awaited_once_with(period_days=14, repo="/tmp/my-repo")
-    assert result["repo"] == "/tmp/my-repo"
-    assert result["models"] == []
+    assert result.repo == "/tmp/my-repo"
+    assert result.models == []
 
 
 # ---------------------------------------------------------------------------
