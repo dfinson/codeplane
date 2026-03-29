@@ -11,7 +11,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-alpha">
   <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python ≥3.11">
-  <img src="https://img.shields.io/badge/node-≥20-green" alt="Node ≥20">
   <a href="https://github.com/dfinson/codeplane/actions/workflows/ci.yml"><img src="https://github.com/dfinson/codeplane/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://codecov.io/gh/dfinson/codeplane"><img src="https://codecov.io/gh/dfinson/codeplane/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/github/license/dfinson/codeplane" alt="License">
@@ -21,125 +20,54 @@
 
 > **Pre-alpha** — Under active development. Not yet usable.
 
-CodePlane is a control plane for running and supervising coding agents.
-
-Launch automated coding tasks against real repositories, watch everything the agent does in real time, and intervene when needed. CodePlane gives you visibility into execution progress, code changes, logs, artifacts, and agent reasoning so work can be reviewed and controlled as it happens.
+CodePlane orchestrates coding agents against your repositories. Launch tasks, watch execution in real time, approve risky actions, review diffs, and decide what gets merged — all from a browser.
 
 <p align="center"><img src="docs/images/screenshots/desktop/hero-dashboard.png" alt="CodePlane — dashboard with active jobs" width="800" /></p>
 
-## Features
-
-- **Job orchestration** — Launch coding tasks against local repositories with prompt, model, and SDK selection
-- **Live monitoring** — Watch agent reasoning, logs, timeline, metrics, and code changes as they happen
-- **Approval gating** — Intercept and approve or reject risky actions before they execute
-- **Operator intervention** — Send messages, cancel, pause, resume, or rerun jobs at any time
-- **Workspace isolation** — Git worktrees for concurrent job execution
-- **Code review** — Syntax-highlighted diff viewer and workspace file browser
-- **Merge & PR** — Merge, smart merge, or create a pull request on job completion
-- **Remote access** — Dev Tunnels or Cloudflare Tunnels expose the UI over HTTPS for phone/remote control
-- **Voice input** — Speak prompts and instructions into the browser (local Whisper transcription)
-- **Terminal sessions** — Integrated terminal with multi-tab support
-- **Command palette** — Quick navigation and job search with ⌘K / Ctrl+K
-- **Telemetry & metrics** — OTEL-backed token usage, costs, and execution metrics per job
-- **Rich console dashboard** — Live terminal dashboard showing job states, events, and errors
-- **Analytics dashboard** — Fleet-level analytics with cost trends, model breakdown, and tool health
-- **Job history** — Archive and browse completed jobs
-- **Agent plan tracking** — Visualize the agent's planned steps and progress
-- **Multi-SDK support** — Works with GitHub Copilot and Claude Code SDKs
-- **MCP server** — Expose CodePlane as MCP tools for agent-to-agent orchestration
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Operator Browser                      │
-│              React + TypeScript Frontend                 │
-│          REST (commands/queries) + SSE (live)            │
-└────────────────────────┬─────────────────────────────────┘
-                         │ HTTP / SSE / WebSocket
-              ┌──────────┴──────────┐
-         Dev Tunnels          Cloudflare
-              └──────────┬──────────┘
-┌────────────────────────▼─────────────────────────────────┐
-│               FastAPI Backend (Python)                   │
-│  REST API · SSE · Job orchestration · MCP server         │
-│  Git service · Agent adapters · Approvals · Terminal     │
-│  Voice · OTEL Telemetry · Merge · Analytics              │
-└────┬──────────┬──────────┬──────────┬──────────┬─────────┘
-     │          │          │          │          │
-┌────▼───┐ ┌───▼────┐ ┌───▼─────┐ ┌─▼──────┐ ┌─▼───────┐
-│ SQLite │ │  Git   │ │Copilot  │ │ Claude │ │ Whisper │
-│   DB   │ │  repos │ │  SDK    │ │  SDK   │ │ (local) │
-└────────┘ └────────┘ └─────────┘ └────────┘ └─────────┘
-```
-
 ## Quick Start
 
-> Requires Python 3.11+ and Node.js 20+.
+> Requires Python 3.11+ and Git. You also need at least one agent SDK installed (GitHub Copilot CLI or Claude Code).
 
 ```bash
-git clone https://github.com/dfinson/codeplane.git
-cd codeplane
-uv sync
-cd frontend && npm ci && npm run build
-cd ..
-uv run cpl up                 # start server on localhost:8080
+pip install codeplane
+cpl up                        # start server on localhost:8080
 ```
 
-Or from a cloned repo using the project helpers:
+Open `http://localhost:8080`, register a repository in Settings, and create your first job.
 
-```bash
-git clone https://github.com/dfinson/codeplane.git
-cd codeplane
-make install                  # uv sync + npm ci
-make run                      # build frontend, start server with remote access
-```
+## What It Does
+
+- **Task orchestration** — Launch coding jobs with a prompt, SDK, and model selection against any local repository
+- **Live supervision** — Watch agent reasoning, tool calls, logs, plan progress, and costs in real time
+- **Approval gates** — Risky operations (file writes, shell commands) pause for your review
+- **Diff review & merge** — Syntax-highlighted diffs, workspace browsing, merge/PR/discard controls
+- **Remote access** — Monitor and approve from your phone via Dev Tunnels or Cloudflare Tunnels
+- **Cost analytics** — Track token usage, costs, and model performance across all jobs
+- **Multi-SDK** — Works with GitHub Copilot and Claude Code SDKs
+- **MCP server** — Expose CodePlane as tools for agent-to-agent orchestration
 
 ## CLI
 
 ```bash
-uv run cpl up                                    # start server on localhost:8080
-uv run cpl up --remote                           # enable Dev Tunnels for remote access
-uv run cpl up --remote --provider cloudflare     # use Cloudflare Tunnel instead
-uv run cpl up --dev                              # backend-only (skip frontend build)
-uv run cpl up --port 9090                        # custom port
-uv run cpl up --remote --password SECRET         # tunnel password
-uv run cpl down                                  # gracefully stop the server
-uv run cpl restart                               # stop and restart (preserves sessions)
-uv run cpl info                                  # show connection details and QR code
-uv run cpl version                               # show version
-uv run cpl setup                                 # interactive first-time setup
-uv run cpl doctor                                # diagnose environment issues
+cpl up                                       # start server
+cpl up --remote                              # enable Dev Tunnels for remote access
+cpl up --remote --provider cloudflare        # use Cloudflare Tunnel
+cpl up --port 9090                           # custom port
+cpl down                                     # stop server
+cpl restart                                  # stop and restart
+cpl setup                                    # interactive first-time setup
+cpl doctor                                   # diagnose environment issues
+cpl info                                     # show connection details and QR code
+cpl version                                  # show version
 ```
 
-## Development
+## Documentation
 
-```bash
-make lint        # ruff check + eslint
-make format      # ruff format
-make typecheck   # mypy + tsc
-make test        # pytest + vitest with coverage (70% backend threshold)
-make ci          # all of the above
-```
+Full docs: [dfinson.github.io/codeplane](https://dfinson.github.io/codeplane)
 
-The CI pipeline also runs Playwright E2E tests against the full stack.
+## Contributing
 
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Alt+N` | New job |
-| `Alt+J` | Go to dashboard |
-| `Alt+A` | Analytics |
-| `⌘K` / `Ctrl+K` | Command palette |
-| `⌘,` / `Ctrl+,` | Settings |
-| ``Ctrl+` `` | Toggle terminal |
-| `Ctrl+Enter` | Submit prompt |
-| `/` | Filter jobs (on dashboard) |
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and project structure.
-
-See [SPEC.md](SPEC.md) for the full product specification.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and conventions.
 
 ## License
 
