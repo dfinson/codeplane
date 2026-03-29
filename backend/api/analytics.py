@@ -288,9 +288,7 @@ async def analytics_model_comparison(
     """Per-model comparison with resolution data joined from jobs table."""
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-    rows = await TelemetrySummaryRepo(session).model_comparison(
-        period_days=period, repo=repo
-    )
+    rows = await TelemetrySummaryRepo(session).model_comparison(period_days=period, repo=repo)
     return {"period": period, "repo": repo, "models": rows}
 
 

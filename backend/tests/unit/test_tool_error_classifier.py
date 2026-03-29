@@ -98,10 +98,8 @@ class TestClassifyToolErrorsBatch:
         session = _make_mock_session()
         utility_complete = AsyncMock(return_value="should not be called")
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=[])
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=[])
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
         assert result == 0
@@ -114,17 +112,15 @@ class TestClassifyToolErrorsBatch:
             {"id": 10, "name": "replace_string_in_file", "error_text": "oldString not found in file"},
             {"id": 11, "name": "run_in_terminal", "error_text": "permission denied: /etc/shadow"},
         ]
-        utility_complete = AsyncMock(
-            return_value='["agent_error", "tool_error"]'
-        )
+        utility_complete = AsyncMock(return_value='["agent_error", "tool_error"]')
 
         with (
-            patch(_SPANS_REPO) as MockSpansRepo,
-            patch(_SUMMARY_REPO) as MockSummaryRepo,
+            patch(_SPANS_REPO) as mock_spans_repo,
+            patch(_SUMMARY_REPO) as mock_summary_repo,
         ):
-            MockSpansRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockSpansRepo.return_value.batch_update_error_kind = AsyncMock()
-            MockSummaryRepo.return_value.increment = AsyncMock()
+            mock_spans_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_spans_repo.return_value.batch_update_error_kind = AsyncMock()
+            mock_summary_repo.return_value.increment = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
@@ -137,13 +133,11 @@ class TestClassifyToolErrorsBatch:
         assert "permission denied" in prompt
 
         # Verify DB updates
-        MockSpansRepo.return_value.batch_update_error_kind.assert_called_once_with(
+        mock_spans_repo.return_value.batch_update_error_kind.assert_called_once_with(
             [(10, "agent_error"), (11, "tool_error")]
         )
         # Only 1 agent_error, so increment called with 1
-        MockSummaryRepo.return_value.increment.assert_called_once_with(
-            "job-1", agent_error_count=1
-        )
+        mock_summary_repo.return_value.increment.assert_called_once_with("job-1", agent_error_count=1)
 
     @pytest.mark.asyncio
     async def test_all_tool_errors_skips_summary_increment(self) -> None:
@@ -154,17 +148,17 @@ class TestClassifyToolErrorsBatch:
         utility_complete = AsyncMock(return_value='["tool_error"]')
 
         with (
-            patch(_SPANS_REPO) as MockSpansRepo,
-            patch(_SUMMARY_REPO) as MockSummaryRepo,
+            patch(_SPANS_REPO) as mock_spans_repo,
+            patch(_SUMMARY_REPO) as mock_summary_repo,
         ):
-            MockSpansRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockSpansRepo.return_value.batch_update_error_kind = AsyncMock()
+            mock_spans_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_spans_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
         assert result == 1
         # No agent errors → summary increment should NOT be called
-        MockSummaryRepo.return_value.increment.assert_not_called()
+        mock_summary_repo.return_value.increment.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_llm_returns_empty_string(self) -> None:
@@ -172,16 +166,14 @@ class TestClassifyToolErrorsBatch:
         errors = [{"id": 30, "name": "read_file", "error_text": "some error"}]
         utility_complete = AsyncMock(return_value="")
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockRepo.return_value.batch_update_error_kind = AsyncMock()
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
         assert result == 0
-        MockRepo.return_value.batch_update_error_kind.assert_not_called()
+        mock_repo.return_value.batch_update_error_kind.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_llm_returns_none(self) -> None:
@@ -189,11 +181,9 @@ class TestClassifyToolErrorsBatch:
         errors = [{"id": 31, "name": "read_file", "error_text": "some error"}]
         utility_complete = AsyncMock(return_value=None)
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockRepo.return_value.batch_update_error_kind = AsyncMock()
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
@@ -205,16 +195,14 @@ class TestClassifyToolErrorsBatch:
         errors = [{"id": 40, "name": "grep_search", "error_text": "error"}]
         utility_complete = AsyncMock(side_effect=TimeoutError("LLM timed out"))
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockRepo.return_value.batch_update_error_kind = AsyncMock()
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
         assert result == 0
-        MockRepo.return_value.batch_update_error_kind.assert_not_called()
+        mock_repo.return_value.batch_update_error_kind.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_llm_returns_garbage(self) -> None:
@@ -223,15 +211,11 @@ class TestClassifyToolErrorsBatch:
             {"id": 50, "name": "file_search", "error_text": "not found"},
             {"id": 51, "name": "run_in_terminal", "error_text": "OOM killed"},
         ]
-        utility_complete = AsyncMock(
-            return_value="I think error 1 is an agent error and error 2 is a tool error."
-        )
+        utility_complete = AsyncMock(return_value="I think error 1 is an agent error and error 2 is a tool error.")
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockRepo.return_value.batch_update_error_kind = AsyncMock()
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
@@ -245,15 +229,11 @@ class TestClassifyToolErrorsBatch:
             {"id": 61, "name": "read_file", "error_text": "error b"},
         ]
         # LLM returns 3 items for 2 errors
-        utility_complete = AsyncMock(
-            return_value='["agent_error", "tool_error", "agent_error"]'
-        )
+        utility_complete = AsyncMock(return_value='["agent_error", "tool_error", "agent_error"]')
 
-        with patch(
-            _SPANS_REPO
-        ) as MockRepo:
-            MockRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockRepo.return_value.batch_update_error_kind = AsyncMock()
+        with patch(_SPANS_REPO) as mock_repo:
+            mock_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_repo.return_value.batch_update_error_kind = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
@@ -268,12 +248,12 @@ class TestClassifyToolErrorsBatch:
         utility_complete = AsyncMock(return_value='["agent_error"]')
 
         with (
-            patch(_SPANS_REPO) as MockSpansRepo,
-            patch(_SUMMARY_REPO) as MockSummaryRepo,
+            patch(_SPANS_REPO) as mock_spans_repo,
+            patch(_SUMMARY_REPO) as mock_summary_repo,
         ):
-            MockSpansRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockSpansRepo.return_value.batch_update_error_kind = AsyncMock()
-            MockSummaryRepo.return_value.increment = AsyncMock()
+            mock_spans_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_spans_repo.return_value.batch_update_error_kind = AsyncMock()
+            mock_summary_repo.return_value.increment = AsyncMock()
 
             await classify_tool_errors_batch(session, "job-1", utility_complete)
 
@@ -291,21 +271,17 @@ class TestClassifyToolErrorsBatch:
             {"id": 81, "name": "create_file", "error_text": "file already exists"},
             {"id": 82, "name": "run_in_terminal", "error_text": "disk full"},
         ]
-        utility_complete = AsyncMock(
-            return_value='["agent_error", "agent_error", "tool_error"]'
-        )
+        utility_complete = AsyncMock(return_value='["agent_error", "agent_error", "tool_error"]')
 
         with (
-            patch(_SPANS_REPO) as MockSpansRepo,
-            patch(_SUMMARY_REPO) as MockSummaryRepo,
+            patch(_SPANS_REPO) as mock_spans_repo,
+            patch(_SUMMARY_REPO) as mock_summary_repo,
         ):
-            MockSpansRepo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
-            MockSpansRepo.return_value.batch_update_error_kind = AsyncMock()
-            MockSummaryRepo.return_value.increment = AsyncMock()
+            mock_spans_repo.return_value.get_unclassified_errors = AsyncMock(return_value=errors)
+            mock_spans_repo.return_value.batch_update_error_kind = AsyncMock()
+            mock_summary_repo.return_value.increment = AsyncMock()
 
             result = await classify_tool_errors_batch(session, "job-1", utility_complete)
 
         assert result == 3
-        MockSummaryRepo.return_value.increment.assert_called_once_with(
-            "job-1", agent_error_count=2
-        )
+        mock_summary_repo.return_value.increment.assert_called_once_with("job-1", agent_error_count=2)

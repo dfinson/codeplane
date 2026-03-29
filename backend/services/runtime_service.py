@@ -749,7 +749,6 @@ class RuntimeService:
                     )
                     await session.commit()
 
-
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
 
@@ -880,9 +879,7 @@ class RuntimeService:
                         async with self._session_factory() as session:
                             from backend.services.tool_error_classifier import classify_tool_errors_batch
 
-                            await classify_tool_errors_batch(
-                                session, job_id, self._utility_session.complete
-                            )
+                            await classify_tool_errors_batch(session, job_id, self._utility_session.complete)
                             await session.commit()
                     except Exception:
                         log.debug("tool_error_classification_failed", job_id=job_id, exc_info=True)
@@ -1920,7 +1917,9 @@ class RuntimeService:
             # Build a naming context hint so the LLM can produce a name that
             # reflects both the new instruction AND its follow-up relationship.
             parent_label = original.title or original.id
-            parent_job_context = f"This is a follow-up task continuing work from '{parent_label}' (parent job: {original.id})."
+            parent_job_context = (
+                f"This is a follow-up task continuing work from '{parent_label}' (parent job: {original.id})."
+            )
 
             override_prompt = await self._build_followup_handoff_prompt_for_job(
                 session,

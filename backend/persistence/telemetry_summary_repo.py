@@ -490,9 +490,7 @@ class TelemetrySummaryRepo(BaseRepository):
             "costTrend": cost_trend,
         }
 
-    async def model_comparison(
-        self, *, period_days: int = 30, repo: str | None = None
-    ) -> list[dict[str, Any]]:
+    async def model_comparison(self, *, period_days: int = 30, repo: str | None = None) -> list[dict[str, Any]]:
         """Per-model stats joined with resolution data from jobs table."""
         repo_filter = ""
         params: dict[str, Any] = {}
@@ -572,7 +570,12 @@ class TelemetrySummaryRepo(BaseRepository):
         cost_second = job_row.get("cost_second_half_usd") or 0
         if cost_first > 0 and cost_second > 1.5 * cost_first:
             pct = round(cost_second / (cost_first + cost_second) * 100)
-            flags.append({"type": "turn_escalation", "message": f"Cost escalation: {pct}% of spend in second half of turns"})
+            flags.append(
+                {
+                    "type": "turn_escalation",
+                    "message": f"Cost escalation: {pct}% of spend in second half of turns",
+                }
+            )
 
         reread_count = job_row.get("file_reread_count") or 0
         if reread_count > 10:
@@ -580,7 +583,13 @@ class TelemetrySummaryRepo(BaseRepository):
 
         tool_failures = job_row.get("tool_failure_count") or 0
         if tool_failures > 0:
-            flags.append({"type": "tool_failures", "message": f"{tool_failures} tool failure{'s' if tool_failures > 1 else ''} during this job"})
+            suffix = "s" if tool_failures > 1 else ""
+            flags.append(
+                {
+                    "type": "tool_failures",
+                    "message": f"{tool_failures} tool failure{suffix} during this job",
+                }
+            )
 
         return {
             "job": {

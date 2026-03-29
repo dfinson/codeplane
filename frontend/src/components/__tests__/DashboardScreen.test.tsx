@@ -8,6 +8,7 @@ import type { JobSummary } from "../../store";
 // Mock the API client
 vi.mock("../../api/client", () => ({
   fetchJobs: vi.fn(),
+  fetchScorecard: vi.fn().mockResolvedValue({}),
 }));
 
 import { fetchJobs } from "../../api/client";

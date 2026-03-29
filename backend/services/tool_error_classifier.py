@@ -102,9 +102,9 @@ async def classify_tool_errors_batch(
         return 0
 
     # Build updates and apply
-    updates: list[tuple[int, ErrorKind]] = []
+    updates: list[tuple[int, str]] = []
     agent_error_delta = 0
-    for err, kind in zip(errors, classifications):
+    for err, kind in zip(errors, classifications, strict=True):
         updates.append((err["id"], kind))
         if kind == "agent_error":
             agent_error_delta += 1
@@ -115,9 +115,7 @@ async def classify_tool_errors_batch(
     if agent_error_delta:
         from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-        await TelemetrySummaryRepo(session).increment(
-            job_id, agent_error_count=agent_error_delta
-        )
+        await TelemetrySummaryRepo(session).increment(job_id, agent_error_count=agent_error_delta)
 
     log.info(
         "tool_errors_classified",
@@ -129,9 +127,7 @@ async def classify_tool_errors_batch(
     return len(updates)
 
 
-def _parse_classifications(
-    raw: str, expected_count: int
-) -> list[ErrorKind] | None:
+def _parse_classifications(raw: str, expected_count: int) -> list[ErrorKind] | None:
     """Extract a JSON array of error kinds from the LLM response."""
     # Strip markdown fencing if present
     text = raw.strip()

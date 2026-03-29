@@ -164,9 +164,7 @@ class TelemetrySpansRepo(BaseRepository):
             rows.append(row)
         return rows
 
-    async def batch_update_error_kind(
-        self, updates: list[tuple[int, str]]
-    ) -> None:
+    async def batch_update_error_kind(self, updates: list[tuple[int, str]]) -> None:
         """Set error_kind for multiple span rows by id."""
         for span_id, kind in updates:
             await self._session.execute(

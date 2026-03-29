@@ -701,9 +701,13 @@ class ClaudeAdapter(AgentAdapterInterface):
                     duration_ms=duration_ms,
                     attrs={
                         "success": success,
-                        **({
-                            "error_snippet": result_text[:500],
-                        } if not success and result_text else {}),
+                        **(
+                            {
+                                "error_snippet": result_text[:500],
+                            }
+                            if not success and result_text
+                            else {}
+                        ),
                     },
                     tool_category=category,
                     tool_target=target,

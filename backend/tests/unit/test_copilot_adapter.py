@@ -260,10 +260,9 @@ class TestStreamEvents:
         adapter._queues[sid] = q
         adapter._sessions[sid] = MagicMock()
 
-        with patch.object(q, "get", side_effect=RuntimeError("boom")):
-            with pytest.raises(RuntimeError, match="boom"):
-                async for _ in adapter.stream_events(sid):
-                    pass
+        with patch.object(q, "get", side_effect=RuntimeError("boom")), pytest.raises(RuntimeError, match="boom"):
+            async for _ in adapter.stream_events(sid):
+                pass
 
         # Cleanup should have run via the finally block
         assert sid not in adapter._sessions
