@@ -33,6 +33,7 @@ interface LLMCall {
   durationMs: number;
   offsetSec?: number;
   isSubagent: boolean;
+  callCount?: number;
 }
 
 interface TelemetryData {
@@ -243,7 +244,8 @@ function CacheEfficiencyBar({ inputTokens, cacheReadTokens, pricing, outputToken
   outputTokens?: number;
   actualCost?: number;
 }) {
-  const rate = Math.min(100, inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : 0);
+  const totalInput = inputTokens + cacheReadTokens;
+  const rate = totalInput > 0 ? (cacheReadTokens / totalInput) * 100 : 0;
   const color = rate >= 60 ? "text-green-400" : rate >= 30 ? "text-yellow-400" : "text-red-400";
   const barColor = rate >= 60 ? "bg-green-500" : rate >= 30 ? "bg-yellow-500" : "bg-red-500";
 
@@ -604,7 +606,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     for (const c of subCalls) {
       const key = c.model || "unknown";
       const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0, durationMs: 0, calls: [] };
-      g.count++;
+      g.count += c.callCount ?? 1;
       g.inputTokens += c.inputTokens;
       g.outputTokens += c.outputTokens;
       g.cacheReadTokens += c.cacheReadTokens;
@@ -667,7 +669,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 )}
                 <span className="flex items-center gap-1.5 text-muted-foreground">
                   <MessageSquare size={12} />
-                  {data.agentMessages ?? 0} agent / {data.operatorMessages ?? 0} operator
+                  {data.agentMessages ?? 0} agent{(data.operatorMessages ?? 0) > 0 ? ` / ${data.operatorMessages} operator` : ""}
                 </span>
                 {(data.approvalCount ?? 0) > 0 && (
                   <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -807,7 +809,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                         <CompactStat label="Cache Read" value={formatTokens(data.cacheReadTokens ?? 0)} />
                         <CompactStat label="Cache Write" value={formatTokens(data.cacheWriteTokens ?? 0)} />
-                        <CompactStat label="Input Reuse" value={`${Math.min(100, (data.inputTokens ?? 0) > 0 ? ((data.cacheReadTokens ?? 0) / (data.inputTokens ?? 0)) * 100 : 0).toFixed(0)}%`} />
+                        <CompactStat label="Input Reuse" value={`${((data.inputTokens ?? 0) + (data.cacheReadTokens ?? 0)) > 0 ? (((data.cacheReadTokens ?? 0) / ((data.inputTokens ?? 0) + (data.cacheReadTokens ?? 0))) * 100).toFixed(0) : 0}%`} />
                       </div>
                       <CacheEfficiencyBar
                         inputTokens={data.inputTokens ?? 0}
@@ -1042,7 +1044,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                             <span className="font-mono text-xs text-muted-foreground">{data.mainModel || data.model}</span>
                           )}
                           <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
-                            <span>{mainCalls.length} calls</span>
+                            <span>{mainCalls.reduce((s, c) => s + (c.callCount ?? 1), 0)} calls</span>
                             <span>{formatTokens(mainTotals.inputTokens)} in</span>
                             <span>{formatTokens(mainTotals.outputTokens)} out</span>
                             {mainTotals.cacheReadTokens > 0 && <span>{formatTokens(mainTotals.cacheReadTokens)} cache</span>}

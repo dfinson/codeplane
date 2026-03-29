@@ -697,6 +697,7 @@ async def get_job_telemetry(
                     "durationMs": float(span.get("duration_ms", 0)),
                     "isSubagent": attrs.get("is_subagent", False),
                     "offsetSec": float(span.get("started_at", 0)),
+                    "callCount": attrs.get("num_turns", 1),
                 }
             )
 
@@ -739,7 +740,7 @@ async def get_job_telemetry(
         "durationMs": duration_ms,
         "inputTokens": input_tok,
         "outputTokens": output_tok,
-        "totalTokens": input_tok + output_tok,
+        "totalTokens": input_tok + output_tok + cache_read,
         "cacheReadTokens": cache_read,
         "cacheWriteTokens": summary.get("cache_write_tokens", 0),
         "totalCost": float(summary.get("total_cost_usd", 0)),

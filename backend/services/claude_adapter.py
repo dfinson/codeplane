@@ -874,6 +874,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                         "cache_write_tokens": int(cache_write),
                         "cost": float(total_cost_usd),
                         "is_subagent": False,
+                        "num_turns": int(num_turns),
                     },
                     turn_number=turn_num,
                     execution_phase=current_phase,
