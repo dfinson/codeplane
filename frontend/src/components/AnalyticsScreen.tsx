@@ -152,7 +152,7 @@ function BudgetCard({ scorecard }: { scorecard: ScorecardResponse }) {
             </div>
             <div className="flex items-center gap-3">
               {b.totalCostUsd > 0 || b.avgCostPerJob > 0 ? (
-                <Tooltip content={`Average ${formatUsd(b.avgCostPerJob)} per job, ${formatDuration(b.avgDurationMs)} avg duration`}>
+                <Tooltip content={`API-equivalent cost: ${formatUsd(b.avgCostPerJob)} avg per job, ${formatDuration(b.avgDurationMs)} avg duration. For subscriptions this reflects usage value, not your actual charge.`}>
                   <span className="cursor-help text-foreground">{formatUsd(b.totalCostUsd)}</span>
                 </Tooltip>
               ) : (
