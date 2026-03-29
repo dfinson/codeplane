@@ -34,7 +34,7 @@ _TOOL_CATEGORY_ACTIVITY = {
     "shell": "command_execution",
     "agent": "delegation",
     "system": "reasoning",
-    "other": "misc",
+    "other": "command_execution",
 }
 
 

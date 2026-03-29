@@ -601,8 +601,6 @@ function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriv
     search_discovery: "Search & Discovery",
     setup: "Setup",
     wrap_up: "Wrap-up",
-    misc: "Miscellaneous",
-    other_tools: "Miscellaneous",
   };
   const activityDescriptions: Record<string, string> = {
     command_execution: "LLM cost for turns where the agent ran shell commands (bash, terminal, sql)",
@@ -614,8 +612,6 @@ function FleetCostDriverInsights({ fleetDrivers }: { fleetDrivers: FleetCostDriv
     search_discovery: "LLM cost for turns where the agent searched code or fetched URLs",
     setup: "LLM cost for environment setup at the start of a job",
     wrap_up: "LLM cost for finalization and cleanup at the end of a job",
-    misc: "LLM cost for turns using tools not yet classified into a specific activity",
-    other_tools: "LLM cost for turns using tools not yet classified into a specific activity",
   };
 
   const activityRows = useMemo(
