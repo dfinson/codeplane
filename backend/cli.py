@@ -203,11 +203,11 @@ def up(
         _build_frontend()
 
     # Configure logging before everything else so all startup messages are captured.
-    # Create the Rich dashboard now (TTY check) so the log handler can be wired in
-    # setup_logging; the Live display itself only starts after the startup banner.
-    from backend.console_dashboard import ConsoleDashboard
+    # Create the console log now (TTY check) so the log handler can be wired in
+    # setup_logging; the banner prints when start() is called later.
+    from backend.console_dashboard import ConsoleLog
 
-    dashboard = ConsoleDashboard.create_if_tty(log_file_path=config.logging.file)
+    dashboard = ConsoleLog.create_if_tty(log_file_path=config.logging.file)
     setup_logging(
         config.logging.file,
         console_level=config.logging.level,

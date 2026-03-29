@@ -1,44 +1,39 @@
-"""Rich live dashboard for CodePlane console output.
+"""Structured console log for CodePlane.
 
-Replaces noisy per-event console logging with an in-place Rich panel that
-shows server uptime, active jobs, recent events, and accumulated errors.
-Falls back transparently to a no-op when stderr is not a TTY (CI, piped
-output, systemd) so the existing file-only log behaviour is unchanged.
+Writes one colorized line per significant domain event to stderr.
+No TUI, no cursor manipulation — output is a clean, scrollable stream
+that preserves full terminal scrollback and works with grep, less, pipes.
+
+Falls back to ``None`` on non-TTY (CI, piped output, systemd) so the
+existing file-only log behaviour is unchanged.
 
 Architecture
 ------------
-* ``ConsoleDashboard`` owns the Rich ``Live`` context and all in-memory
-  state (jobs, events, errors).  It is created early in the CLI startup
-  path (before ``uvicorn.run``), wired to the log system as a handler, then
-  *started* (Live display activated) after the startup banner is printed.
-* ``DashboardLogHandler`` is a stdlib ``logging.Handler``.  While the Live
-  display is not yet running it falls back to a plain stderr
-  ``StreamHandler`` so nothing is lost during startup.  Once the Live
-  display starts, WARNING/ERROR records are routed into the dashboard's
-  error panel; INFO and below are silently dropped on the console (they are
-  always present in the rotating log file).
-* The dashboard subscribes to the EventBus as an async coroutine
-  (``handle_event``) so job state and progress headlines update in
-  real-time.
+* ``ConsoleLog`` is created early in the CLI startup path (before
+  ``uvicorn.run``) and wired to the log system via ``ConsoleLogHandler``.
+  It subscribes to the ``EventBus`` so job lifecycle and progress print
+  in real-time as single lines.
+* ``ConsoleLogHandler`` is a stdlib ``logging.Handler``.  Before
+  ``start()`` it falls back to a plain stderr ``StreamHandler`` so
+  startup messages are not lost.  After ``start()`` only ERROR records
+  print as structured lines; everything else is file-only.
+
+What prints (and nothing else):
+  - job_created, job_state_changed, terminal states (completed/failed/canceled)
+  - progress_headline (indented under the active job)
+  - approval_requested
+  - ERROR-level log records
 """
 
 from __future__ import annotations
 
 import logging
 import sys
-import threading
 import time
-from collections import deque
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from rich.box import ROUNDED, SIMPLE_HEAVY
-from rich.console import Console, ConsoleRenderable, Group
-from rich.layout import Layout
-from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
+from rich.console import Console
 from rich.text import Text
 
 from backend.models.events import DomainEventKind
@@ -65,93 +60,72 @@ _STATE_STYLE: dict[str, str] = {
     "running": "bold green",
     "waiting_for_approval": "bold magenta",
     "review": "bold cyan",
-    "completed": "dim green",
+    "completed": "green",
     "failed": "red",
     "canceled": "dim",
 }
 
-_ACTIVE_STATES = frozenset({"queued", "running", "waiting_for_approval", "review"})
 _TERMINAL_STATES = frozenset({"completed", "failed", "canceled"})
 
-# How long completed jobs remain visible in the Jobs panel
-_COMPLETED_JOB_TTL_S = 60.0
-
 
 # ---------------------------------------------------------------------------
-# Internal state dataclasses
+# Per-job tracking (elapsed time + title)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _JobRow:
-    job_id: str
-    state: str
-    title: str | None = None
-    started_at: float = field(default_factory=time.monotonic)
-    completed_at: float | None = None
+class _JobInfo:
+    __slots__ = ("job_id", "started_at", "title")
+
+    def __init__(self, job_id: str) -> None:
+        self.job_id = job_id
+        self.started_at = time.monotonic()
+        self.title: str | None = None
 
     def elapsed(self) -> str:
-        end = self.completed_at or time.monotonic()
-        secs = int(end - self.started_at)
+        secs = int(time.monotonic() - self.started_at)
         if secs < 60:
             return f"{secs}s"
         return f"{secs // 60}m {secs % 60}s"
 
 
-@dataclass
-class _ErrorEntry:
-    timestamp: str
-    logger_name: str
-    message: str
-
-
 # ---------------------------------------------------------------------------
-# Renderable: Rich calls __rich__ on every automatic refresh cycle
+# Main console log
 # ---------------------------------------------------------------------------
 
 
-class _DashboardView:
-    """Thin wrapper so Rich Live can call back into the dashboard to render."""
+class ConsoleLog:
+    """Structured event log for the terminal.
 
-    __slots__ = ("_dashboard",)
+    One colorized line per significant domain event.  No Rich Live, no
+    Layout — just ``console.print()`` calls that scroll naturally.
 
-    def __init__(self, dashboard: ConsoleDashboard) -> None:
-        self._dashboard = dashboard
-
-    def __rich__(self) -> ConsoleRenderable:
-        return self._dashboard._build_renderable()
-
-
-# ---------------------------------------------------------------------------
-# Main dashboard
-# ---------------------------------------------------------------------------
-
-
-class ConsoleDashboard:
-    """In-place Rich live dashboard.
-
-    Create via ``ConsoleDashboard.create_if_tty()`` so non-TTY environments
-    receive ``None`` and continue using the plain logging path.
+    Create via ``ConsoleLog.create_if_tty()``; non-TTY environments receive
+    ``None`` so the plain logging path continues unchanged.
     """
-
-    _MAX_EVENTS = 14
-    _MAX_ERRORS = 6
 
     def __init__(self, log_file_path: str | None = None) -> None:
         self._console = Console(stderr=True, highlight=False)
-        self._live: Live | None = None
-        self._lock = threading.Lock()
-
-        self._jobs: dict[str, _JobRow] = {}
-        self._recent_events: deque[tuple[str, str]] = deque(maxlen=self._MAX_EVENTS)
-        self._errors: deque[_ErrorEntry] = deque(maxlen=self._MAX_ERRORS)
-        self._error_count = 0
-        self._warning_count = 0
-        self._start_time = time.monotonic()
+        self._jobs: dict[str, _JobInfo] = {}
         self._log_file_path = log_file_path
+        self._started = False
         self._server_url: str | None = None
         self._tunnel_url: str | None = None
         self._password: str | None = None
+
+    # ------------------------------------------------------------------
+    # Factory
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def create_if_tty(cls, log_file_path: str | None = None) -> ConsoleLog | None:
+        """Return a console log only when stderr is a real interactive TTY."""
+        if sys.stderr.isatty():
+            return cls(log_file_path=log_file_path)
+        return None
+
+    # ------------------------------------------------------------------
+    # Server info (stored, printed on start)
+    # ------------------------------------------------------------------
 
     def set_server_info(
         self,
@@ -160,92 +134,77 @@ class ConsoleDashboard:
         tunnel_url: str | None = None,
         password: str | None = None,
     ) -> None:
-        """Set server URLs and password for the dashboard header."""
         self._server_url = server_url
         self._tunnel_url = tunnel_url
         self._password = password
-
-    # ------------------------------------------------------------------
-    # Factory
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def create_if_tty(cls, log_file_path: str | None = None) -> ConsoleDashboard | None:
-        """Return a dashboard only when stderr is a real interactive TTY."""
-        if sys.stderr.isatty():
-            return cls(log_file_path=log_file_path)
-        return None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     @property
-    def is_live_running(self) -> bool:
-        return self._live is not None and self._live.is_started
-
-    # Minimum / maximum rendered height (rows).  The dashboard adapts to
-    # the terminal but stays within these bounds so the Rich Live cursor-up
-    # erasing is reliable and large terminals don't waste space.
-    _MIN_HEIGHT = 16
-    _MAX_HEIGHT = 50
+    def is_started(self) -> bool:
+        return self._started
 
     def start(self) -> None:
-        """Activate the Rich Live display. Call after the startup banner."""
-        if self._live is not None:
+        """Print the startup banner and begin accepting events."""
+        if self._started:
             return
-        self._live = Live(
-            _DashboardView(self),
-            console=self._console,
-            refresh_per_second=2,
-            screen=False,
-            auto_refresh=True,
-            vertical_overflow="crop",
-        )
-        self._live.start(refresh=True)
+        banner = Text()
+        banner.append("CodePlane", style="bold cyan")
+        if self._server_url:
+            banner.append(f"  {self._server_url}", style="dim")
+        if self._tunnel_url:
+            banner.append(f"  🔗 {self._tunnel_url}")
+        if self._password:
+            banner.append(f"  🔑 {self._password}")
+        if self._log_file_path:
+            banner.append(f"  logs → {self._log_file_path}", style="dim")
+        self._console.print(banner)
+        self._console.rule(style="dim")
+        self._started = True
 
     def stop(self) -> None:
-        """Deactivate the display and restore normal terminal state."""
-        if self._live is not None:
-            self._live.stop()
-            self._live = None
+        """Print a shutdown marker."""
+        if not self._started:
+            return
+        self._console.rule(style="dim")
+        self._console.print("[dim]CodePlane stopped[/]")
+        self._started = False
 
     # ------------------------------------------------------------------
     # EventBus subscriber
     # ------------------------------------------------------------------
 
     async def handle_event(self, event: DomainEvent) -> None:
-        """Async EventBus subscriber — updates in-memory state."""
-        with self._lock:
-            self._apply_event(event)
+        """Async EventBus subscriber — prints one line per significant event."""
+        self._apply_event(event)
 
     # ------------------------------------------------------------------
     # Logging handler integration
     # ------------------------------------------------------------------
 
     def add_log_record(self, record: logging.LogRecord) -> None:
-        """Route a WARNING/ERROR log record into the dashboard panels."""
+        """Print an ERROR-level log record as a structured line."""
+        if record.levelno < logging.ERROR:
+            return
         msg = record.getMessage()
-        # First line only — never surface stack traces on the console
-        first_line = (msg.splitlines()[0] if msg else "(no message)")[:90]
-        # Shorten the logger name for compact display
+        first_line = (msg.splitlines()[0] if msg else "(no message)")[:120]
         short_name = record.name
-        for prefix in ("backend.", "backend.services.", "backend.api."):
+        for prefix in ("backend.services.", "backend.api.", "backend."):
             if short_name.startswith(prefix):
                 short_name = short_name[len(prefix) :]
                 break
         ts = datetime.now(UTC).strftime("%H:%M:%S")
-
-        with self._lock:
-            if record.levelno >= logging.ERROR:
-                self._error_count += 1
-                self._errors.append(_ErrorEntry(ts, short_name, first_line))
-            else:
-                self._warning_count += 1
-                self._recent_events.append((ts, f"⚠ {short_name}  {first_line[:52]}"))
+        line = Text()
+        line.append(ts, style="dim")
+        line.append("  ✗  ", style="red")
+        line.append(short_name, style="dim cyan")
+        line.append(f"  {first_line}", style="red")
+        self._console.print(line)
 
     # ------------------------------------------------------------------
-    # Internal: apply a domain event to state (lock must be held)
+    # Internal: map domain event → printed line
     # ------------------------------------------------------------------
 
     def _apply_event(self, event: DomainEvent) -> None:
@@ -253,19 +212,16 @@ class ConsoleDashboard:
         kind = event.kind
 
         if kind == DomainEventKind.job_created:
-            self._jobs[event.job_id] = _JobRow(job_id=event.job_id, state="queued")
-            self._recent_events.append((ts, f"○ {event.job_id}  created"))
+            self._jobs[event.job_id] = _JobInfo(event.job_id)
+            self._print_event(ts, "○", "queued", event.job_id, "created")
 
         elif kind == DomainEventKind.job_state_changed:
             new_state = str(event.payload.get("new_state", ""))
             if event.job_id not in self._jobs:
-                self._jobs[event.job_id] = _JobRow(job_id=event.job_id, state=new_state)
-            else:
-                self._jobs[event.job_id].state = new_state
-            if new_state in _TERMINAL_STATES:
-                self._jobs[event.job_id].completed_at = time.monotonic()
+                self._jobs[event.job_id] = _JobInfo(event.job_id)
+            label = new_state.replace("_", " ")
             icon = _STATE_ICON.get(new_state, "?")
-            self._recent_events.append((ts, f"{icon} {event.job_id}  → {new_state}"))
+            self._print_event(ts, icon, new_state, event.job_id, label)
 
         elif kind in (
             DomainEventKind.job_review,
@@ -273,22 +229,18 @@ class ConsoleDashboard:
             DomainEventKind.job_failed,
             DomainEventKind.job_canceled,
         ):
-            # These dedicated events are the authoritative signal that a
-            # job has changed state — job_state_changed is NOT published for
-            # these transitions, so we must handle them here.
             new_state = {
                 DomainEventKind.job_review: "review",
                 DomainEventKind.job_completed: "completed",
                 DomainEventKind.job_failed: "failed",
                 DomainEventKind.job_canceled: "canceled",
             }[kind]
-            if event.job_id not in self._jobs:
-                self._jobs[event.job_id] = _JobRow(job_id=event.job_id, state=new_state)
-            else:
-                self._jobs[event.job_id].state = new_state
-            self._jobs[event.job_id].completed_at = time.monotonic()
+            job = self._jobs.get(event.job_id)
+            elapsed = f"  ({job.elapsed()})" if job else ""
+            title = f'  "{job.title}"' if job and job.title else ""
             icon = _STATE_ICON.get(new_state, "?")
-            self._recent_events.append((ts, f"{icon} {event.job_id}  → {new_state}"))
+            self._print_event(ts, icon, new_state, event.job_id, new_state + elapsed + title)
+            self._jobs.pop(event.job_id, None)
 
         elif kind == DomainEventKind.job_title_updated:
             title = event.payload.get("title")
@@ -298,160 +250,28 @@ class ConsoleDashboard:
         elif kind == DomainEventKind.progress_headline:
             headline = str(event.payload.get("headline") or "")
             if headline:
-                # Use only the last segment of the job id for compact display
-                short_id = event.job_id.rsplit("-", 1)[-1] if "-" in event.job_id else event.job_id[:8]
-                self._recent_events.append((ts, f"  [{short_id}] {headline[:52]}"))
+                line = Text()
+                line.append(ts, style="dim")
+                line.append("       ↳ ", style="dim")
+                line.append(headline[:80])
+                self._console.print(line)
 
         elif kind == DomainEventKind.approval_requested:
             desc = str(event.payload.get("description") or "approval needed")
-            self._recent_events.append((ts, f"⏸ {event.job_id}  {desc[:40]}"))
-
-        # Prune expired completed jobs every time state changes
-        now = time.monotonic()
-        self._jobs = {
-            jid: row
-            for jid, row in self._jobs.items()
-            if row.state in _ACTIVE_STATES
-            or (row.completed_at is not None and now - row.completed_at < _COMPLETED_JOB_TTL_S)
-        }
-
-    # ------------------------------------------------------------------
-    # Rendering
-    # ------------------------------------------------------------------
-
-    def _build_renderable(self) -> ConsoleRenderable:
-        with self._lock:
-            return self._render()
-
-    def _render(self) -> ConsoleRenderable:
-        """Build the full dashboard layout. Caller must hold ``_lock``."""
-        # --- Header ---
-        uptime_s = int(time.monotonic() - self._start_time)
-        h, rem = divmod(uptime_s, 3600)
-        m, s = divmod(rem, 60)
-        uptime_str = f"{h}h {m}m" if h else f"{m}m {s}s"
-        log_hint = f"  ·  logs → {self._log_file_path}" if self._log_file_path else ""
-        line1 = Text.assemble(
-            ("CodePlane", "bold cyan"),
-            "  up ",
-            (uptime_str, "green"),
-            (f"  ·  {self._server_url}" if self._server_url else "", "dim"),
-            (log_hint, "dim"),
-        )
-        details_parts: list[str] = []
-        if self._tunnel_url:
-            details_parts.append(f"🔗 {self._tunnel_url}")
-        if self._password:
-            details_parts.append(f"🔑 {self._password}")
-        header_content = Group(line1, Text("  ·  ".join(details_parts))) if details_parts else line1
-        header_panel = Panel(header_content, box=ROUNDED, padding=(0, 1))
-
-        # --- Jobs table ---
-        active = [r for r in self._jobs.values() if r.state in _ACTIVE_STATES]
-        terminal = sorted(
-            (r for r in self._jobs.values() if r.state in _TERMINAL_STATES),
-            key=lambda r: r.completed_at or 0,
-            reverse=True,
-        )
-        jobs_table = Table(
-            box=SIMPLE_HEAVY,
-            expand=True,
-            show_header=bool(active or terminal),
-            header_style="bold dim",
-            padding=(0, 1),
-        )
-        jobs_table.add_column("ID", style="cyan", no_wrap=True)
-        jobs_table.add_column("State", no_wrap=True)
-        jobs_table.add_column("Time", no_wrap=True, justify="right")
-        jobs_table.add_column("Title")
-
-        for row in sorted(active, key=lambda r: r.started_at):
-            icon = _STATE_ICON.get(row.state, "?")
-            style = _STATE_STYLE.get(row.state, "white")
-            jobs_table.add_row(
-                row.job_id,
-                Text(f"{icon} {row.state}", style=style),
-                row.elapsed(),
-                Text((row.title or "")[:44], style="dim"),
-            )
-        for row in terminal[:3]:
-            icon = _STATE_ICON.get(row.state, "?")
-            style = _STATE_STYLE.get(row.state, "dim")
-            jobs_table.add_row(
-                row.job_id,
-                Text(f"{icon} {row.state}", style=style),
-                row.elapsed(),
-                Text((row.title or "")[:44], style="dim"),
+            self._print_event(
+                ts, "⏸", "waiting_for_approval", event.job_id, f"approval needed · {desc[:60]}"
             )
 
-        if not active and not terminal:
-            jobs_table.add_row("", Text("no active jobs", style="dim"), "", "")
-
-        jobs_panel = Panel(jobs_table, title="[bold]Jobs[/bold]", box=ROUNDED)
-
-        # --- Recent events ---
-        events_text = Text()
-        for ts_str, msg in self._recent_events:
-            events_text.append(f"{ts_str}  ", style="dim")
-            if msg.startswith(("✗", "⚠")):
-                events_text.append(msg + "\n", style="red" if msg.startswith("✗") else "yellow")
-            elif msg.startswith("✓"):
-                events_text.append(msg + "\n", style="green")
-            elif msg.startswith("⏸"):
-                events_text.append(msg + "\n", style="magenta")
-            else:
-                events_text.append(msg + "\n")
-        if not self._recent_events:
-            events_text.append("waiting for events…", style="dim")
-
-        events_panel = Panel(events_text, title="[bold]Events[/bold]", box=ROUNDED)
-
-        # --- Errors footer ---
-        if self._error_count == 0 and self._warning_count == 0:
-            err_title = "[bold green]Errors — none[/bold green]"
-        else:
-            parts = []
-            if self._error_count:
-                parts.append(f"{self._error_count} error{'s' if self._error_count != 1 else ''}")
-            if self._warning_count:
-                parts.append(f"{self._warning_count} warning{'s' if self._warning_count != 1 else ''}")
-            err_title = f"[bold red]Errors — {', '.join(parts)}[/bold red]"
-
-        if self._errors:
-            err_content = Text()
-            for entry in self._errors:
-                err_content.append(f"{entry.timestamp}  ", style="dim")
-                err_content.append(f"{entry.logger_name}  ", style="dim cyan")
-                err_content.append(entry.message + "\n", style="red")
-        else:
-            err_content = Text("(none)", style="dim")
-
-        errors_panel = Panel(err_content, title=err_title, box=ROUNDED)
-
-        # --- Assemble with a fixed total height ---
-        # A stable height is critical: Rich Live (screen=False) uses
-        # cursor-up sequences to erase the previous frame.  If the height
-        # changes between renders, the old frame isn't fully erased and
-        # output stacks.  Clamping to [_MIN_HEIGHT, _MAX_HEIGHT] makes the
-        # frame height predictable while adapting to the terminal size.
-        term_h = self._console.size.height
-        total = max(self._MIN_HEIGHT, min(self._MAX_HEIGHT, term_h - 2))
-        header_h = 4
-        errors_h = 5
-        body_h = total - header_h - errors_h
-
-        root = Layout(size=total)
-        root.split_column(
-            Layout(header_panel, name="header", size=header_h),
-            Layout(name="body", size=body_h),
-            Layout(errors_panel, name="errors", size=errors_h),
-        )
-        root["body"].split_row(
-            Layout(jobs_panel, name="jobs", ratio=5),
-            Layout(events_panel, name="events", ratio=4),
-        )
-
-        return root
+    def _print_event(
+        self, ts: str, icon: str, state: str, job_id: str, message: str
+    ) -> None:
+        style = _STATE_STYLE.get(state, "")
+        line = Text()
+        line.append(ts, style="dim")
+        line.append(f"  {icon}  ", style=style)
+        line.append(job_id, style="cyan")
+        line.append(f"  {message}")
+        self._console.print(line)
 
 
 # ---------------------------------------------------------------------------
@@ -459,34 +279,33 @@ class ConsoleDashboard:
 # ---------------------------------------------------------------------------
 
 
-class DashboardLogHandler(logging.Handler):
-    """Stdlib logging handler that routes records to ``ConsoleDashboard``.
+class ConsoleLogHandler(logging.Handler):
+    """Stdlib logging handler that routes records through ``ConsoleLog``.
 
-    * **Before the Live display starts** (pre-startup): falls back to a
-      plain ``StreamHandler`` so startup messages are not silently dropped.
-    * **While the Live display runs**: WARNING records appear as events in
-      the dashboard; ERROR/CRITICAL records appear in the errors panel.
-      INFO and below are dropped on the console (they are in the log file).
+    * **Before start()**: falls back to a plain ``StreamHandler`` so
+      startup messages are not silently dropped.
+    * **After start()**: ERROR/CRITICAL records print as structured lines;
+      everything else is suppressed on the console (still in the log file).
     """
 
     def __init__(
         self,
-        dashboard: ConsoleDashboard,
+        console_log: ConsoleLog,
         fallback_formatter: logging.Formatter,
         fallback_filter: logging.Filter,
     ) -> None:
         super().__init__(level=logging.WARNING)
-        self._dashboard = dashboard
+        self._console_log = console_log
         self._fallback = logging.StreamHandler()
         self._fallback.setLevel(logging.WARNING)
         self._fallback.setFormatter(fallback_formatter)
         self._fallback.addFilter(fallback_filter)
 
     def emit(self, record: logging.LogRecord) -> None:
-        if not self._dashboard.is_live_running:
+        if not self._console_log.is_started:
             self._fallback.emit(record)
             return
         try:
-            self._dashboard.add_log_record(record)
+            self._console_log.add_log_record(record)
         except Exception:  # noqa: BLE001
             self.handleError(record)
