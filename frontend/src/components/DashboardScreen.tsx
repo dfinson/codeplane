@@ -1,13 +1,46 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus } from "lucide-react";
+import { Plus, AlertTriangle } from "lucide-react";
 import { useStore, enrichJob } from "../store";
 import type { JobSummary } from "../store";
-import { fetchJobs } from "../api/client";
+import { fetchJobs, fetchScorecard } from "../api/client";
 import { KanbanBoard } from "./KanbanBoard";
 import { MobileJobList } from "./MobileJobList";
 import { Button } from "./ui/button";
 import { KanbanSkeleton } from "./KanbanSkeleton";
+
+function QuotaWarningBanner() {
+  const [quotaPct, setQuotaPct] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetchScorecard(7)
+      .then((sc) => {
+        if (!sc.quotaJson) return;
+        try {
+          const q = JSON.parse(sc.quotaJson);
+          const snapshots = Array.isArray(q) ? q : q?.snapshots ?? [q];
+          const latest = snapshots[snapshots.length - 1];
+          if (latest && typeof latest.percentage_used === "number") {
+            setQuotaPct(latest.percentage_used);
+          } else if (latest && latest.used != null && latest.total != null && latest.total > 0) {
+            setQuotaPct((latest.used / latest.total) * 100);
+          }
+        } catch { /* ignore */ }
+      })
+      .catch(() => {});
+  }, []);
+
+  if (quotaPct === null || quotaPct <= 80) return null;
+
+  return (
+    <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-2.5 mb-4 flex items-center gap-2 text-sm">
+      <AlertTriangle size={16} className="text-yellow-400 shrink-0" />
+      <span className="text-yellow-200">
+        Copilot quota is {quotaPct.toFixed(0)}% used — new jobs may be throttled or denied.
+      </span>
+    </div>
+  );
+}
 
 export function DashboardScreen() {
   const navigate = useNavigate();
@@ -33,6 +66,7 @@ export function DashboardScreen() {
 
   return (
     <div>
+      <QuotaWarningBanner />
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-foreground">Jobs</h3>
         <Button size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/jobs/new")}>

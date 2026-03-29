@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchSettings, fetchRepoDetail, suggestNames } from "../api/client";
+import { createJob, fetchRepos, fetchSettings, fetchRepoDetail, suggestNames, fetchModelComparison } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { useStore } from "../store";
 import { PromptWithVoice } from "./VoiceButton";
@@ -136,6 +136,28 @@ export function JobCreationScreen() {
     setModel(null);
     loadModelsForSdk(resolved);
   }, [defaultSdk, activeSdk, loadModelsForSdk]);
+
+  // Pre-launch model hint — show avg cost/duration for selected model + repo
+  const [modelHint, setModelHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (!model || !repo) { setModelHint(null); return; }
+    let cancelled = false;
+    fetchModelComparison(30, repo)
+      .then((data) => {
+        if (cancelled) return;
+        const row = data.models.find((m) => m.model === model);
+        if (row && row.jobCount >= 2) {
+          const cost = row.avgCost < 0.01 ? `$${row.avgCost.toFixed(4)}` : row.avgCost < 1 ? `$${row.avgCost.toFixed(3)}` : `$${row.avgCost.toFixed(2)}`;
+          const mins = Math.round(row.avgDurationMs / 60_000);
+          const time = mins < 1 ? `${Math.round(row.avgDurationMs / 1000)}s` : `${mins}m`;
+          setModelHint(`Avg ${cost}/job, ${time} — based on ${row.jobCount} recent jobs in this repo`);
+        } else {
+          setModelHint(null);
+        }
+      })
+      .catch(() => { if (!cancelled) setModelHint(null); });
+    return () => { cancelled = true; };
+  }, [model, repo]);
 
   const validateField = useCallback((field: string, value: string) => {
     setErrors(prev => {
@@ -292,6 +314,9 @@ export function JobCreationScreen() {
             value={model}
             onChange={setModel}
           />
+          {modelHint && (
+            <p className="text-[11px] text-muted-foreground -mt-1">{modelHint}</p>
+          )}
 
           <hr className="border-border" />
 

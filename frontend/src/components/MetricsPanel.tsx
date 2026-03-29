@@ -4,7 +4,7 @@ import {
   AlertTriangle, ArrowDownUp, ChevronDown, ChevronRight,
   BarChart3, BookOpen, CheckCircle, XCircle, Zap, TrendingUp,
 } from "lucide-react";
-import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent } from "../api/client";
+import { fetchJobTelemetry, fetchArtifacts, fetchArtifactContent, fetchJobContext, type JobContextResponse } from "../api/client";
 import { Badge } from "./ui/badge";
 import { Progress } from "./ui/progress";
 import { Spinner } from "./ui/spinner";
@@ -515,6 +515,16 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     return () => { cancelled = true; };
   }, [jobId, isRunning, telemetryVersion]);
 
+  // Job context — comparison against repo average + noteworthy flags
+  const [jobContext, setJobContext] = useState<JobContextResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchJobContext(jobId)
+      .then((ctx) => { if (!cancelled) setJobContext(ctx); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [jobId, telemetryVersion]);
+
   // Load agent_summary artifacts once on mount and when job stops
   useEffect(() => {
     let cancelled = false;
@@ -665,6 +675,56 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 )}
               </div>
 
+              {/* Job Context — how this job compares to repo average */}
+              {jobContext && (
+                <div className="rounded-md bg-accent/20 border border-border/50 p-3 space-y-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+                    <TrendingUp size={12} /> vs. Repo Average
+                  </h4>
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div>
+                      <p className="text-sm font-bold tabular-nums">{formatUsd(jobContext.job.cost)}</p>
+                      <p className="text-muted-foreground">This Job</p>
+                      {jobContext.repoAvg && (
+                        <p className="text-[10px] text-muted-foreground/70">avg {formatUsd(jobContext.repoAvg.avgCost)}</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold tabular-nums">{formatDuration(jobContext.job.durationMs)}</p>
+                      <p className="text-muted-foreground">Duration</p>
+                      {jobContext.repoAvg && (
+                        <p className="text-[10px] text-muted-foreground/70">avg {formatDuration(jobContext.repoAvg.avgDurationMs)}</p>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold tabular-nums">{jobContext.job.diffLinesAdded + jobContext.job.diffLinesRemoved}</p>
+                      <p className="text-muted-foreground">Diff Lines</p>
+                      {jobContext.repoAvg && (
+                        <p className="text-[10px] text-muted-foreground/70">avg {Math.round(jobContext.repoAvg.avgDiffLines)}</p>
+                      )}
+                    </div>
+                  </div>
+                  {jobContext.flags.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {jobContext.flags.map((f, i) => (
+                        <Tooltip key={i} content={f.message}>
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] cursor-help ${
+                              f.type === "warning" ? "border-yellow-500/40 text-yellow-400" :
+                              f.type === "info" ? "border-blue-500/40 text-blue-400" :
+                              "border-green-500/40 text-green-400"
+                            }`}
+                          >
+                            {f.type}
+                          </Badge>
+                        </Tooltip>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Stat cards */}
               <div className={cn("grid grid-cols-2 gap-3", (data.totalCost ?? 0) > 0 ? "sm:grid-cols-5" : "sm:grid-cols-4")}>
                 <StatCard icon={<Clock size={14} />} label="Duration" value={formatDuration(data.durationMs ?? 0)} color="text-blue-400" />
@@ -672,7 +732,11 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 <StatCard icon={<Brain size={14} />} label="LLM Calls" value={String(data.llmCallCount ?? 0)} color="text-blue-400" />
                 <StatCard icon={<Wrench size={14} />} label="Tools" value={`${data.toolCallCount ?? 0}${fails ? ` (${fails} fail)` : ""}`} color="text-yellow-400" />
                 {(data.totalCost ?? 0) > 0 && (
-                  <StatCard icon={<Zap size={14} />} label="Total Cost" value={formatUsd(data.totalCost ?? 0)} color="text-green-400" />
+                  <Tooltip content={data.sdk === "copilot" ? "API-equivalent cost — your actual charge is through your Copilot subscription" : data.sdk === "claude" ? "API-equivalent cost — if using Claude Max, this reflects usage value, not your subscription charge" : "Total API-equivalent cost for this job"}>
+                    <div>
+                      <StatCard icon={<Zap size={14} />} label="Cost" value={formatUsd(data.totalCost ?? 0)} color="text-green-400" />
+                    </div>
+                  </Tooltip>
                 )}
               </div>
 
