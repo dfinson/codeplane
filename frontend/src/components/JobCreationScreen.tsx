@@ -146,8 +146,8 @@ export function JobCreationScreen() {
       .then((data) => {
         if (cancelled) return;
         const row = data.models.find((m) => m.model === model);
-        if (row && row.jobCount >= 2) {
-          const cost = row.avgCost < 0.01 ? `$${row.avgCost.toFixed(4)}` : row.avgCost < 1 ? `$${row.avgCost.toFixed(3)}` : `$${row.avgCost.toFixed(2)}`;
+        if (row && row.jobCount >= 3 && row.avgCost >= 0.01) {
+          const cost = row.avgCost < 1 ? `$${row.avgCost.toFixed(3)}` : `$${row.avgCost.toFixed(2)}`;
           const mins = Math.round(row.avgDurationMs / 60_000);
           const time = mins < 1 ? `${Math.round(row.avgDurationMs / 1000)}s` : `${mins}m`;
           setModelHint(`Avg ${cost}/job, ${time} — based on ${row.jobCount} recent jobs in this repo`);

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
@@ -87,6 +89,8 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._paused_sessions: set[str] = set()
         # Debounce: last monotonic time a telemetry_updated SSE was fired per job
         self._last_telemetry_broadcast: dict[str, float] = {}
+        # Stderr capture files for debugging failed sessions
+        self._stderr_files: dict[str, str] = {}
         # Cost analytics: per-job turn counter, phase, retry tracker
         self._turn_counters: dict[str, int] = {}
         self._current_phases: dict[str, str] = {}
@@ -106,6 +110,12 @@ class ClaudeAdapter(AgentAdapterInterface):
             task.cancel()
         if client is not None:
             asyncio.ensure_future(self._disconnect_client(client))
+        stderr_path = self._stderr_files.pop(session_id, None)
+        if stderr_path:
+            try:
+                os.unlink(stderr_path)
+            except OSError:
+                pass
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
@@ -119,6 +129,17 @@ class ClaudeAdapter(AgentAdapterInterface):
     def set_execution_phase(self, job_id: str, phase: str) -> None:
         """Update the current execution phase for cost analytics span tagging."""
         self._current_phases[job_id] = phase
+
+    def _read_session_stderr(self, session_id: str) -> str:
+        """Read captured stderr from the Claude subprocess (last 4 KB)."""
+        path = self._stderr_files.get(session_id)
+        if not path:
+            return ""
+        try:
+            with open(path) as f:
+                return f.read()[-4096:]
+        except OSError:
+            return ""
 
     @staticmethod
     async def _disconnect_client(client: ClaudeSDKClient) -> None:
@@ -396,13 +417,22 @@ class ClaudeAdapter(AgentAdapterInterface):
                 # forwarded as transcript events (they are internal SDK bookkeeping).
         except asyncio.CancelledError:
             log.info("claude_consumer_cancelled", session_id=session_id)
-        except Exception:
-            log.error("claude_consumer_error", session_id=session_id, exc_info=True)
+        except Exception as exc:
+            stderr_snippet = self._read_session_stderr(session_id)
+            log.error(
+                "claude_consumer_error",
+                session_id=session_id,
+                stderr_tail=stderr_snippet[:500] if stderr_snippet else "",
+                exc_info=True,
+            )
+            error_msg = f"Claude SDK session error: {exc}"
+            if stderr_snippet:
+                error_msg += f"\n{stderr_snippet}"
             self._enqueue(
                 session_id,
                 SessionEvent(
                     kind=SessionEventKind.error,
-                    payload={"message": "Claude SDK session error"},
+                    payload={"message": error_msg},
                 ),
             )
         finally:
@@ -834,6 +864,11 @@ class ClaudeAdapter(AgentAdapterInterface):
             if config.model:
                 self._requested_models[config.job_id] = config.model
 
+        # Capture Claude subprocess stderr for diagnostics on failure
+        stderr_fd, stderr_path = tempfile.mkstemp(prefix="claude_stderr_", suffix=".log")
+        stderr_file = os.fdopen(stderr_fd, "w")
+        self._stderr_files[session_id] = stderr_path
+
         # Build options
         options = ClaudeCodeOptions(
             cwd=config.workspace_path,
@@ -841,6 +876,8 @@ class ClaudeAdapter(AgentAdapterInterface):
             permission_mode=_PERMISSION_MODE_MAP.get(config.permission_mode, "default"),  # type: ignore[arg-type]
             can_use_tool=self._build_can_use_tool(config, session_id),
             append_system_prompt=CODEPLANE_SYSTEM_PROMPT,
+            extra_args={"debug-to-stderr": None},
+            debug_stderr=stderr_file,
         )
 
         # MCP servers from CodePlane config
@@ -1021,7 +1058,9 @@ async def _prompt_to_stream(prompt: str) -> Any:  # noqa: ANN401
     # Keep the stream open so stdin is not closed.
     # The anyio task running stream_input will be cancelled when the
     # session disconnects — that is the normal cleanup path.
-    await asyncio.Event().wait()
+    # Use a bare Future — it suspends until cancelled, and correctly
+    # propagates CancelledError under both asyncio and anyio.
+    await asyncio.get_running_loop().create_future()
 
 
 def _summarize_tool_input(tool_name: str, input_data: dict[str, Any]) -> str:
