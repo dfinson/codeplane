@@ -502,19 +502,11 @@ class ClaudeAdapter(AgentAdapterInterface):
         # Each AssistantMessage starts a new turn for grouping
         self._current_turn_id = str(uuid.uuid4())
 
-        # Each AssistantMessage = one LLM call / turn
+        # Turn counting is deferred to ResultMessage.num_turns for accuracy
+        # (the SDK streams many AssistantMessages per actual API turn).
         if job_id:
             turn_num = self._turn_counters.get(job_id, 0) + 1
             self._turn_counters[job_id] = turn_num
-            self._schedule_db_write(
-                self._db_write(
-                    "increment",
-                    job_id=job_id,
-                    llm_call_count=1,
-                    total_turns=1,
-                    agent_messages=1,
-                )
-            )
 
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and job_id not in self._job_main_models:
@@ -550,6 +542,14 @@ class ClaudeAdapter(AgentAdapterInterface):
                 text = block.text or ""
                 if not text.strip():
                     continue
+                if job_id:
+                    self._schedule_db_write(
+                        self._db_write(
+                            "increment",
+                            job_id=job_id,
+                            agent_messages=1,
+                        )
+                    )
                 self._enqueue(
                     session_id,
                     SessionEvent(
@@ -838,6 +838,7 @@ class ClaudeAdapter(AgentAdapterInterface):
             tel.cost_usd.add(float(total_cost_usd), attrs)
             tel.llm_duration.record(float(duration_ms), {**attrs, "is_subagent": False})
 
+            num_turns = getattr(message, "num_turns", 0) or 1
             self._schedule_db_write(
                 self._db_write(
                     "increment",
@@ -848,6 +849,8 @@ class ClaudeAdapter(AgentAdapterInterface):
                     cache_write_tokens=int(cache_write),
                     total_cost_usd=float(total_cost_usd),
                     total_llm_duration_ms=int(duration_ms),
+                    llm_call_count=int(num_turns),
+                    total_turns=int(num_turns),
                 )
             )
 
