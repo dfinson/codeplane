@@ -37,7 +37,7 @@ CodePlane orchestrates coding agents against your repositories. You see every ac
 <div class="workflow-step" markdown>
 <span class="step-index">1</span>
 ### Launch a task
-Pick a repository, write a prompt, choose an SDK and model. The agent runs in an isolated Git worktree — your working directory is never touched.
+Pick a repository, write a prompt, choose an agent and model. The agent runs in an isolated Git worktree — your working directory is never touched.
 </div>
 
 <div class="workflow-step" markdown>
@@ -70,6 +70,11 @@ Launch jobs with a prompt and model selection. Each job runs in its own Git work
 </div>
 
 <div class="feature-card" markdown>
+### :material-cellphone-link: Remote & Mobile
+Run the agent on your workstation, control it from your phone. Fully responsive UI with Dev Tunnels or Cloudflare Tunnels — approve actions, monitor jobs, and send messages from anywhere.
+</div>
+
+<div class="feature-card" markdown>
 ### :material-monitor-eye: Live Visibility
 Transcript, logs, timeline, plan steps, and token costs — all streaming in real time as the agent works.
 </div>
@@ -85,20 +90,15 @@ Syntax-highlighted diffs, workspace browsing, and merge/PR/discard controls — 
 </div>
 
 <div class="feature-card" markdown>
-### :material-cellphone-link: Remote Access
-Access the UI from your phone via Dev Tunnels or Cloudflare Tunnels. Approve actions and monitor jobs from anywhere.
-</div>
-
-<div class="feature-card" markdown>
 ### :material-chart-line: Cost Analytics
 Track token usage, costs, model performance, and tool health across all jobs.
 </div>
 
 </div>
 
-## Supported SDKs
+## Supported Agents
 
-CodePlane works with **GitHub Copilot** and **Claude Code** SDKs. Select your SDK and model per job — CodePlane handles the rest.
+CodePlane works with **GitHub Copilot CLI** and **Claude Code CLI**. Install and authenticate the CLI, select your agent and model per job — CodePlane manages the SDKs and handles the rest.
 
 <div class="screenshot-desktop" markdown>
 ![Live Transcript](images/screenshots/desktop/job-running-transcript.png)

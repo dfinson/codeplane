@@ -26,7 +26,7 @@ CodePlane orchestrates coding agents against your repositories. Launch tasks, wa
 
 ## Quick Start
 
-> Requires Python 3.11+ and Git. You also need at least one agent SDK installed (GitHub Copilot CLI or Claude Code).
+> Requires Python 3.11+ and Git. You also need at least one agent CLI installed and authenticated: [GitHub Copilot CLI](https://docs.github.com/en/copilot/managing-copilot/configure-personal-settings/using-github-copilot-in-the-cli) or [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code).
 
 ```bash
 pip install codeplane
@@ -37,13 +37,13 @@ Open `http://localhost:8080`, register a repository in Settings, and create your
 
 ## What It Does
 
-- **Task orchestration** — Launch coding jobs with a prompt, SDK, and model selection against any local repository
+- **Remote & mobile** — Monitor jobs, approve actions, and send messages from your phone via Dev Tunnels or Cloudflare Tunnels
+- **Task orchestration** — Launch coding jobs with a prompt and model selection against any local repository
 - **Live supervision** — Watch agent reasoning, tool calls, logs, plan progress, and costs in real time
 - **Approval gates** — Risky operations (file writes, shell commands) pause for your review
 - **Diff review & merge** — Syntax-highlighted diffs, workspace browsing, merge/PR/discard controls
-- **Remote access** — Monitor and approve from your phone via Dev Tunnels or Cloudflare Tunnels
 - **Cost analytics** — Track token usage, costs, and model performance across all jobs
-- **Multi-SDK** — Works with GitHub Copilot and Claude Code SDKs
+- **Multi-agent** — Works with GitHub Copilot CLI and Claude Code CLI
 - **MCP server** — Expose CodePlane as tools for agent-to-agent orchestration
 
 ## CLI

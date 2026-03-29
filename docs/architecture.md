@@ -1,27 +1,27 @@
 # How It Works
 
-CodePlane is an **orchestration layer** for coding agents. It does not contain its own AI — it wraps existing agent SDKs and provides the control surface around them.
+CodePlane is an **orchestration layer** for coding agents. It does not contain its own AI — it manages the underlying SDKs so you don't have to. You install and authenticate the agent CLIs; CodePlane handles everything else.
 
 ## What CodePlane Is
 
-- A **control plane**, not an execution engine. It manages and supervises coding agents, but the agents themselves come from external SDKs (GitHub Copilot, Claude Code).
-- A **local server** that runs on your machine. You interact with it through a web browser at `http://localhost:8080`.
-- A **thin wrapper** around existing CLIs and SDKs. It delegates to the SDK for all AI reasoning and tool execution.
+- A **control plane**, not an execution engine. It manages and supervises coding agents, but the agents themselves come from external CLIs (GitHub Copilot CLI, Claude Code CLI).
+- A **local-first server** that runs on your workstation. Access it from a browser at `http://localhost:8080` — or remotely from your phone via Dev Tunnels or Cloudflare Tunnels.
+- A **thin wrapper** around existing agent CLIs. CodePlane manages the SDKs internally and delegates to them for all AI reasoning and tool execution.
 
 ## What CodePlane Is Not
 
 - Not an AI model or agent. It orchestrates agents built by others.
-- Not a cloud service. It runs locally (cloud deployment is a future direction).
-- Not a replacement for your existing tools. It uses your Git installation, your SDK credentials, and your repositories as-is.
+- Not a cloud service. It runs locally with optional remote access via tunnels.
+- Not a replacement for your existing tools. It uses your Git installation, your CLI credentials, and your repositories as-is.
 
 ## Authentication
 
-CodePlane uses **your existing SDK authentication**. There is no separate auth system to configure.
+CodePlane uses **your existing CLI authentication**. There is no separate auth system to configure.
 
-- For GitHub Copilot: your existing GitHub authentication
-- For Claude Code: your existing Anthropic credentials
+- For GitHub Copilot CLI: your existing GitHub authentication (`gh auth login`)
+- For Claude Code CLI: your existing Anthropic credentials
 
-If the SDK CLIs work on your machine, CodePlane can use them.
+If the agent CLIs work on your machine, CodePlane can use them. Run `cpl doctor` to verify.
 
 ## High-Level Architecture
 
@@ -40,19 +40,19 @@ If the SDK CLIs work on your machine, CodePlane can use them.
 └──┬───────────┬───────────┬──────────────────┘
    │           │           │
 ┌──▼──┐   ┌───▼────┐  ┌───▼─────────┐
-│ Git │   │ SQLite │  │ Agent SDKs  │
+│ Git │   │ SQLite │  │ Agent CLIs  │
 │     │   │  (DB)  │  │ Copilot /   │
 │     │   │        │  │ Claude Code │
 └─────┘   └────────┘  └─────────────┘
 ```
 
-**You → Browser → CodePlane → Agent SDK → Repository**
+**You → Browser → CodePlane → Agent CLI → Repository**
 
 ## Key Concepts
 
 ### Jobs
 
-A job is a single coding task. You provide a prompt, repository, SDK, and model. CodePlane creates an isolated Git worktree for the job and starts an agent session. Each job has its own worktree, so multiple jobs can run concurrently without interfering.
+A job is a single coding task. You provide a prompt, repository, agent, and model. CodePlane creates an isolated Git worktree for the job and starts an agent session. Each job has its own worktree, so multiple jobs can run concurrently without interfering.
 
 ### Worktrees
 
@@ -64,11 +64,11 @@ All activity flows through domain events: job state changes, transcript updates,
 
 ### Agent Adapters
 
-Each SDK is wrapped behind a common adapter interface. CodePlane doesn't know or care about SDK internals — it talks to the adapter, which translates to and from the specific SDK. Adding a new SDK means writing one new adapter file.
+Each agent CLI/SDK is wrapped behind a common adapter interface. CodePlane manages the SDK internals so you don't have to — you just install and authenticate the CLI. Adding support for a new agent means writing one adapter file.
 
 ### Permission Callbacks
 
-When an agent tries to perform a risky action (file write, shell command), the SDK fires a permission callback. CodePlane intercepts this and either auto-approves or surfaces it to you for a decision. The job pauses until you respond.
+When an agent tries to perform a risky action (file write, shell command), the agent fires a permission callback. CodePlane intercepts this and either auto-approves or surfaces it to you for a decision. The job pauses until you respond.
 
 ## Data Storage
 

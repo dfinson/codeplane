@@ -8,7 +8,7 @@ Get CodePlane running and complete your first supervised agent job.
 |-------------|---------|
 | **Python** | 3.11 or later |
 | **Git** | Any recent version |
-| **Agent SDK** | At least one: [GitHub Copilot CLI](https://docs.github.com/en/copilot) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) |
+| **Agent CLI** | At least one installed and authenticated: [GitHub Copilot CLI](https://docs.github.com/en/copilot/managing-copilot/configure-personal-settings/using-github-copilot-in-the-cli) or [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) |
 
 You also need a **local Git repository** to run jobs against.
 
@@ -24,7 +24,7 @@ Verify the installation:
 cpl doctor
 ```
 
-This checks that Python, Git, and your agent SDKs are available.
+This checks that Python, Git, and your agent CLIs are installed and authenticated.
 
 ## Start the Server
 
@@ -32,10 +32,10 @@ This checks that Python, Git, and your agent SDKs are available.
 cpl up
 ```
 
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:8080` in your browser — or use `cpl up --remote` to access from your phone.
 
 !!! tip "First-time setup"
-    Run `cpl setup` for an interactive walkthrough that registers your first repository and sets SDK preferences.
+    Run `cpl setup` for an interactive walkthrough that registers your first repository and sets preferences.
 
 ## Register a Repository
 
@@ -45,7 +45,7 @@ Go to **Settings** (`Ctrl+,`) and add a local Git repository path. This tells Co
 
 1. Press `Alt+N` or click **New Job**
 2. Write a prompt — e.g., *"Add input validation to the user registration endpoint"*
-3. Select the repository, SDK, and model
+3. Select the repository, agent CLI, and model
 4. Click **Create Job**
 
 The agent starts working in an isolated Git worktree. Your working directory is never modified.
@@ -88,8 +88,19 @@ Then resolve the job:
 | **Create PR** | Push the branch and open a pull request |
 | **Discard** | Delete the worktree and discard all changes |
 
+## Remote Access
+
+Access CodePlane from your phone or any other device:
+
+```bash
+cpl up --remote                              # Dev Tunnels (default)
+cpl up --remote --provider cloudflare        # Cloudflare Tunnels
+```
+
+The UI is fully responsive — monitor jobs, approve actions, and send messages from anywhere.
+
 ## What's Next
 
 - [Usage Guide](guide.md) — the full workflow in detail
-- [Configuration](configuration.md) — SDK defaults, permission modes, tunnels
+- [Configuration](configuration.md) — permission modes, remote access, tunnels
 - [CLI Reference](reference/cli.md) — all `cpl` commands

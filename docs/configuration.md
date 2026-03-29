@@ -10,7 +10,7 @@ Run the interactive setup wizard:
 cpl setup
 ```
 
-This walks you through registering a repository, selecting a default SDK, and setting preferences.
+This walks you through registering a repository, selecting a default agent, and setting preferences.
 
 ## Global Config File
 
@@ -20,16 +20,16 @@ Location: `~/.codeplane/config.yaml` (created on first run or via `cpl setup`).
 
 ```yaml
 agent:
-  default_sdk: copilot              # copilot | claude
-  default_model: ~                  # model name, or ~ for SDK default
+  default_sdk: copilot              # agent CLI to use: copilot | claude
+  default_model: ~                  # model name, or ~ for agent default
   permission_mode: auto             # auto | read_only | approval_required
 ```
 
 | Permission Mode | Behavior |
 |-----------------|----------|
-| `auto` | SDK handles permissions automatically (default) |
-| `read_only` | Agent can only read; all writes require approval |
-| `approval_required` | File writes, shell commands, and network access require approval |
+| `auto` | All agent actions within the worktree are auto-approved — no prompts (default) |
+| `read_only` | Agent can read files and run safe commands (grep, ls, find); all writes and mutations are blocked |
+| `approval_required` | Reads always allowed; file writes, shell commands (except grep/find), and network access pause for your approval |
 
 ### Server
 
@@ -58,14 +58,19 @@ agent:
   permission_mode: approval_required
 ```
 
-## Remote Access
+## Remote & Mobile Access
+
+CodePlane is designed for remote supervision — run the agent on your workstation, control it from your phone.
 
 ### Dev Tunnels (default)
 
 ```bash
-cpl up --remote
-cpl up --remote --password your-secret
+cpl up --remote                              # auto-generates password
+cpl up --remote --password your-secret       # explicit password
+cpl info                                     # print URL + QR code
 ```
+
+Scan the QR code from `cpl info` to open CodePlane on your phone instantly.
 
 ### Cloudflare Tunnels
 
@@ -86,4 +91,4 @@ cpl up --remote --provider cloudflare
 
 ## UI Settings
 
-Additional preferences are available in **Settings** (`Ctrl+,`): registered repositories, default SDK, and model preferences.
+Additional preferences are available in **Settings** (`Ctrl+,`): registered repositories, default agent, and model preferences.

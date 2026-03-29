@@ -12,8 +12,8 @@ Jobs are the core unit of work. Each job runs an agent against a repository in a
 |-----------|-------------|
 | **Prompt** | What you want the agent to do. Be specific — name files, describe the change, state constraints. |
 | **Repository** | A registered local Git repo. Register repos in **Settings** (`Ctrl+,`). |
-| **SDK** | GitHub Copilot or Claude Code. |
-| **Model** | The AI model to use. Available models depend on your SDK and account. |
+| **Agent** | GitHub Copilot CLI or Claude Code CLI. CodePlane manages the underlying SDKs — you just need the CLIs installed and authenticated. |
+| **Model** | The AI model to use. Available models depend on your agent CLI and account. |
 
 Press `Alt+N` or click **New Job** to open the form. Submit with **Create Job** or `Ctrl+Enter`.
 
@@ -35,7 +35,7 @@ Send messages to the agent at any time using the input box at the bottom. The ag
 
 ### Plan
 
-The agent's planned steps with real-time status: ✅ done, 🔄 active, ⏳ pending, ⏭️ skipped.
+The agent's planned steps with real-time status indicators for done, active, pending, and skipped steps.
 
 ### Logs
 
@@ -65,9 +65,9 @@ When an agent attempts a risky action, CodePlane can pause execution and ask for
 
 | Mode | Behavior |
 |------|----------|
-| `auto` | SDK handles permissions automatically (default) |
-| `read_only` | Agent can only read files; all writes require approval |
-| `approval_required` | File writes, shell commands, and network access require your approval |
+| `auto` | All agent actions within the worktree are auto-approved. No prompts. (default) |
+| `read_only` | Agent can read files and run safe commands (grep, ls, find). All writes and mutations are blocked. |
+| `approval_required` | Reads are always allowed. File writes, shell commands (except grep/find), and network access pause for your approval. |
 
 Set the mode in `~/.codeplane/config.yaml` or per-repo in `.codeplane.yml`:
 
@@ -119,22 +119,33 @@ From a job in the `review` state, create a **follow-up job** that continues in t
 
 ---
 
+## Remote & Mobile Access
+
+CodePlane is built for remote supervision. Run the agent on your workstation, control it from your phone, tablet, or any device:
+
+```bash
+cpl up --remote                              # Dev Tunnels (default)
+cpl up --remote --provider cloudflare        # Cloudflare Tunnels
+cpl info                                     # show URL + QR code
+```
+
+The UI is fully responsive — optimized layouts for mobile, tablet, and desktop. From your phone you can:
+
+- **Monitor** running jobs and live transcripts
+- **Approve or reject** permission requests with one tap
+- **Send messages** to steer an agent mid-run
+- **Review diffs** in a mobile-optimized single-column view
+- **Create new jobs** and browse history
+
+Scan the QR code from `cpl info` to open CodePlane on your phone instantly.
+
+---
+
 ## Additional Features
 
 ### Terminal
 
 Press `` Ctrl+` `` to open the integrated terminal. Supports multiple tabs — global terminals or job-specific terminals rooted in the worktree.
-
-### Remote Access
-
-Access CodePlane from your phone or another device:
-
-```bash
-cpl up --remote                              # Dev Tunnels (default)
-cpl up --remote --provider cloudflare        # Cloudflare Tunnels
-```
-
-The UI is fully responsive on mobile — monitor jobs, approve actions, and send messages from anywhere.
 
 ### Command Palette
 

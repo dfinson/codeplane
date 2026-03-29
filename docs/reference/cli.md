@@ -66,7 +66,7 @@ Accepts all `cpl up` options plus `--force` to skip session pausing on shutdown.
 
 ### `cpl setup`
 
-Interactive first-time setup: register a repository, select a default SDK, and set preferences.
+Interactive first-time setup: register a repository, select a default agent, and set preferences.
 
 ```bash
 cpl setup
@@ -74,7 +74,7 @@ cpl setup
 
 ### `cpl doctor`
 
-Check that dependencies, SDKs, and Git are correctly configured.
+Check that dependencies, agent CLIs, and Git are correctly configured.
 
 ```bash
 cpl doctor
