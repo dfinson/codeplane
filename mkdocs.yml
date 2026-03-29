@@ -53,42 +53,17 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
-      - getting-started/index.md
-      - Installation: getting-started/installation.md
-      - Quick Start: getting-started/quick-start.md
-      - Configuration: getting-started/configuration.md
-  - User Guide:
-      - guide/index.md
-      - Creating Jobs: guide/creating-jobs.md
-      - Monitoring Jobs: guide/monitoring-jobs.md
-      - Approvals: guide/approvals.md
-      - Code Review: guide/code-review.md
-      - Merging: guide/merging.md
-      - Terminal: guide/terminal.md
-      - Voice Input: guide/voice-input.md
-      - Remote Access: guide/remote-access.md
-      - Command Palette: guide/command-palette.md
-      - History: guide/history.md
-      - Analytics: guide/analytics.md
-      - MCP Server: guide/mcp-server.md
+  - Quick Start: quick-start.md
+  - Usage Guide: guide.md
+  - How It Works: architecture.md
+  - Configuration: configuration.md
   - Reference:
       - reference/index.md
       - CLI: reference/cli.md
       - REST API: reference/rest-api.md
       - SSE Events: reference/sse-events.md
-      - Configuration: reference/configuration.md
       - Job States: reference/job-states.md
       - Keyboard Shortcuts: reference/keyboard-shortcuts.md
-  - Architecture:
-      - architecture/index.md
-      - Backend: architecture/backend.md
-      - Frontend: architecture/frontend.md
-      - Agent Adapters: architecture/agent-adapters.md
-      - Cloud-Native Design: architecture/cloud-native.md
-  - Design Notes:
-      - Cloud-Native Proposal: cloud-native-design.md
-      - Cost Analytics Proposal: design/otel-cost-analytics.md
   - Contributing:
       - contributing/index.md
       - Development: contributing/development.md

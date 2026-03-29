@@ -1,5 +1,7 @@
 # Contributing to CodePlane
 
+This guide is for contributors working from source. If you just want to use CodePlane, see the [documentation](https://dfinson.github.io/codeplane).
+
 ## Prerequisites
 
 - Python 3.11+
@@ -7,38 +9,25 @@
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 - Git
 
-## Setup
+## Setup from Source
 
 ```bash
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
-make install
-cp .env.sample .env          # optional — set CPL_DEVTUNNEL_PASSWORD for tunnel auth
+make install                  # uv sync + npm ci
+cp .env.sample .env           # optional — set CPL_DEVTUNNEL_PASSWORD for tunnel auth
 ```
 
-## Development
+### Build & Run
 
 ```bash
-# Start server (builds frontend, starts Dev Tunnels)
-make run
-
-# Backend-only work (skip frontend build)
-uv run cpl up --dev
-
-# Start with custom port
-uv run cpl up --port 9090
-
-# Use Cloudflare Tunnel instead of Dev Tunnels
-uv run cpl up --remote --provider cloudflare
-
-# Stop server gracefully
-uv run cpl down
-
-# Restart server (preserves sessions)
-uv run cpl restart
+make run                      # build frontend + start server with remote access
+# or manually:
+uv run cpl up --dev           # backend-only (skip frontend build)
+uv run cpl up                 # full stack (builds frontend on startup)
 ```
 
-The backend serves the built frontend from `backend/web/` on `http://localhost:8080`.
+The server runs on `http://localhost:8080` and serves the built frontend from `backend/web/`.
 
 ## Code Quality
 
