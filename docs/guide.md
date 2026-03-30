@@ -113,12 +113,11 @@ When a job completes, it enters the **review** state. You decide how to land the
 
 | Option | Description |
 |--------|-------------|
-| **Merge** | Standard Git merge of the worktree branch into the base branch |
-| **Smart Merge** | Cherry-pick only the agent's meaningful commits, skipping setup noise |
+| **Merge** | Cherry-pick only the agent's meaningful commits onto the base branch, skipping setup noise |
 | **Create PR** | Push the branch and open a pull request for team review |
 | **Discard** | Delete the worktree and throw away all changes |
 
-If a merge encounters conflicts, CodePlane shows the conflicting files. You can resolve them in the built-in terminal, discard, or create a PR instead.
+If a merge encounters conflicts, CodePlane shows the conflicting files. You can ask the agent to resolve them, discard, or create a PR instead.
 
 After resolution, the job moves to `completed`. Archive it to move it to history and keep the dashboard clean.
 
