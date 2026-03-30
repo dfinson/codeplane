@@ -33,6 +33,8 @@ const CATEGORY_MAP: Record<string, ToolCategory> = {
   replace_string_in_file: "file-write",
   multi_replace_string_in_file: "file-write",
   str_replace_based_edit_tool: "file-write",
+  str_replace_editor: "file-write",
+  edit: "file-write",
   Edit: "file-write",
   MultiEdit: "file-write",
   insert_edit_into_file: "file-write",

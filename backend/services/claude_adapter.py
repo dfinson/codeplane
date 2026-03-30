@@ -47,7 +47,7 @@ _TOOL_SUMMARY_MAX = 200
 _TOOL_SUMMARY_FALLBACK = 120
 
 # Claude SDK tool names that are internal / should not appear in transcript
-_HIDDEN_TOOLS = frozenset({"TodoWrite"})
+_HIDDEN_TOOLS: frozenset[str] = frozenset()
 
 # Map CodePlane permission modes to Claude SDK permission modes
 _PERMISSION_MODE_MAP: dict[PermissionMode, str] = {

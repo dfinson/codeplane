@@ -219,6 +219,8 @@ class ProgressTrackingService:
         self._plan_last_steps: dict[str, list[dict[str, str]]] = {}
         self._plan_tasks: dict[str, asyncio.Task[None]] = {}
         self._plan_terminal_state: dict[str, str] = {}
+        # Jobs receiving native plan data (manage_todo_list / TodoWrite)
+        self._native_plan_active: set[str] = set()
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -262,6 +264,7 @@ class ProgressTrackingService:
         self._headline_history.pop(job_id, None)
         self._plan_transcript.pop(job_id, None)
         self._plan_last_steps.pop(job_id, None)
+        self._native_plan_active.discard(job_id)
 
     # -- Data ingestion ------------------------------------------------------
 
@@ -292,6 +295,48 @@ class ProgressTrackingService:
                 ibuf.append(tool_intent[:_TOOL_INTENT_MAX])
                 if len(ibuf) > 10:
                     self._headline_tool_intents[job_id] = ibuf[-10:]
+
+    async def feed_native_plan(self, job_id: str, items: list[dict[str, str]]) -> None:
+        """Accept plan steps from the agent's native todo tool.
+
+        Maps agent todo statuses to plan step statuses and publishes
+        ``agent_plan_updated`` immediately, bypassing the LLM extraction loop.
+        """
+        _STATUS_MAP = {
+            "not-started": "pending",
+            "in-progress": "active",
+            "in_progress": "active",
+            "completed": "done",
+            "done": "done",
+            "pending": "pending",
+            "active": "active",
+            "skipped": "skipped",
+        }
+        steps: list[dict[str, str]] = []
+        for item in items:
+            label = str(item.get("title") or item.get("content") or item.get("label") or "").strip()
+            if not label:
+                continue
+            raw_status = str(item.get("status", "pending")).strip().lower()
+            status = _STATUS_MAP.get(raw_status, "pending")
+            steps.append({"label": label, "status": status})
+
+        if not steps:
+            return
+
+        self._native_plan_active.add(job_id)
+
+        if steps != self._plan_last_steps.get(job_id, []):
+            self._plan_last_steps[job_id] = steps
+            await self._event_bus.publish(
+                DomainEvent(
+                    event_id=DomainEvent.make_event_id(),
+                    job_id=job_id,
+                    timestamp=datetime.now(UTC),
+                    kind=DomainEventKind.agent_plan_updated,
+                    payload={"steps": steps},
+                )
+            )
 
     def set_terminal_state(self, job_id: str, outcome: str) -> None:
         """Record terminal outcome (``succeeded`` / ``failed`` / ``canceled``)."""
@@ -459,6 +504,12 @@ class ProgressTrackingService:
         try:
             await asyncio.sleep(initial_delay_s)
             while True:
+                # Skip LLM extraction when the agent is providing native plan
+                # data via manage_todo_list / TodoWrite.
+                if job_id in self._native_plan_active:
+                    await asyncio.sleep(interval_s)
+                    continue
+
                 buf = self._plan_transcript.get(job_id)
                 if not buf:
                     await asyncio.sleep(interval_s)

@@ -231,8 +231,11 @@ class TestPermissionModeMap:
 
 
 class TestHiddenTools:
-    def test_todo_write_hidden(self) -> None:
-        assert "TodoWrite" in _HIDDEN_TOOLS
+    def test_no_hidden_tools(self) -> None:
+        assert len(_HIDDEN_TOOLS) == 0
+
+    def test_todo_write_not_hidden(self) -> None:
+        assert "TodoWrite" not in _HIDDEN_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +489,9 @@ class TestProcessAssistantMessage:
 
         assert "tool-1" in adapter._tool_start_times
 
-    def test_hidden_tool_no_log(self, adapter: ClaudeAdapter) -> None:
+    @patch("backend.services.tool_formatters.format_tool_display_full", return_value="TodoWrite")
+    @patch("backend.services.tool_formatters.format_tool_display", return_value="Update todo list")
+    def test_todo_write_emits_transcript(self, mock_fmt: MagicMock, mock_fmt_full: MagicMock, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
         tool_block = _FakeToolUseBlock(name="TodoWrite", id="tool-2")
@@ -494,9 +499,9 @@ class TestProcessAssistantMessage:
 
         adapter._process_assistant_message(sid, msg, [0])
 
-        # Only the tool_start_times should be updated, no log enqueued
+        # TodoWrite should now be emitted as a transcript event (no longer hidden)
         assert "tool-2" in adapter._tool_start_times
-        assert adapter._queues[sid].empty()
+        assert not adapter._queues[sid].empty()
 
     @patch("backend.services.tool_formatters.format_tool_display", return_value="Bash: ls")
     def test_tool_result_block_emits_transcript(self, mock_fmt: MagicMock, adapter: ClaudeAdapter) -> None:

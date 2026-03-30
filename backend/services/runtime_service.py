@@ -1333,6 +1333,13 @@ class RuntimeService:
                     tool_intent = str(domain_event.payload.get("tool_intent") or "")
                     self._progress_tracking.feed_transcript(job_id, role, content, tool_intent)
 
+                # Native plan capture: extract structured plan data from the
+                # agent's own todo/plan tool instead of relying on LLM extraction.
+                if role == "tool_call":
+                    tool_name = domain_event.payload.get("tool_name", "")
+                    if tool_name in ("manage_todo_list", "TodoWrite"):
+                        await self._ingest_native_plan(job_id, domain_event.payload)
+
             # Tag log lines with the current session number so callers can filter
             # by session when a job has been resumed one or more times.
             if domain_event.kind == DomainEventKind.log_line_emitted:
@@ -1346,6 +1353,33 @@ class RuntimeService:
             made_progress=made_progress,
             downgrade=downgrade,
         )
+
+    async def _ingest_native_plan(self, job_id: str, payload: dict[str, object]) -> None:
+        """Extract plan steps from a manage_todo_list / TodoWrite tool call."""
+        import json as _json
+
+        if self._progress_tracking is None:
+            return
+        raw_args = payload.get("tool_args")
+        if not raw_args:
+            return
+
+        try:
+            args = _json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except (ValueError, TypeError):
+            return
+        if not isinstance(args, dict):
+            return
+
+        # Copilot: {"todoList": [...]}   Claude: {"todos": [...]}
+        items = args.get("todoList") or args.get("todos") or []
+        if not isinstance(items, list):
+            return
+
+        try:
+            await self._progress_tracking.feed_native_plan(job_id, items)
+        except Exception:
+            log.debug("native_plan_ingest_failed", job_id=job_id, exc_info=True)
 
     async def _run_followup_turn(
         self,
