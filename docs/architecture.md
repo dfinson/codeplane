@@ -10,12 +10,13 @@ CodePlane is an **orchestration layer** for coding agents. It does not contain i
 ## What CodePlane Is
 
 - A **control plane**, not an execution engine. It manages and supervises coding agents, but the agents themselves come from external CLIs (GitHub Copilot CLI, Claude Code CLI).
-- A **local-first server** that runs on your workstation. Access it from a browser at `http://localhost:8080` — or remotely from your phone via Dev Tunnels or Cloudflare Tunnels.
+- A **headless, local-first server** that runs on your workstation — no editor required. Access it from any browser at `http://localhost:8080`, or remotely from your phone via Dev Tunnels or Cloudflare Tunnels.
 - A **thin wrapper** around existing agent CLIs. CodePlane manages the SDKs internally and delegates to them for all AI reasoning and tool execution.
 
 ## What CodePlane Is Not
 
 - Not an AI model or agent. It orchestrates agents built by others.
+- Not a task decomposer. You write one prompt, one agent executes it, you see everything it does. The depth is in the supervision, not the fan-out.
 - Not a cloud service. It runs locally with optional remote access via tunnels.
 - Not a replacement for your existing tools. It uses your Git installation, your CLI credentials, and your repositories as-is.
 

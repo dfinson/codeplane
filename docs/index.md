@@ -14,9 +14,9 @@ hide:
 
 <span class="eyebrow">Control plane for coding agents</span>
 
-**Launch coding tasks, supervise execution in real time, and control how changes land.**
+**Launch a coding task, supervise every action in real time, and decide what lands.**
 
-CodePlane orchestrates coding agents against your repositories. You see every action the agent takes — transcript, diffs, costs — and decide what gets merged.
+CodePlane gives you deep, continuous visibility into a single agent run — not a summary after the fact. You see the reasoning, the tool calls, the diffs, and the costs as they happen. Nothing gets merged without your sign-off.
 
 <div class="hero-actions" markdown>
 [Quick Start](quick-start.md){ .md-button .md-button--primary }
@@ -70,8 +70,8 @@ Launch jobs with a prompt and model selection. Each job runs in its own Git work
 </div>
 
 <div class="feature-card" markdown>
-### :material-cellphone-link: Remote & Mobile
-Run the agent on your workstation, control it from your phone. Fully responsive UI with Dev Tunnels or Cloudflare Tunnels — approve actions, monitor jobs, and send messages from anywhere.
+### :material-cellphone-link: Headless & Remote
+No editor required. CodePlane runs as a standalone server — kick off a task, close your laptop, and pick it up from your phone. Approve actions, review diffs, and send messages from any browser via Dev Tunnels or Cloudflare Tunnels.
 </div>
 
 <div class="feature-card" markdown>

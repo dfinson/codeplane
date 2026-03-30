@@ -5,7 +5,7 @@ hide:
 
 # Quick Start
 
-Get CodePlane running and complete your first supervised agent job.
+Get CodePlane running and complete your first supervised agent job. No editor required — just a terminal and a browser.
 
 ## Prerequisites
 

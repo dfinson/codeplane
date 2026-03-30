@@ -20,7 +20,7 @@
 
 > **Pre-alpha** — Under active development. Not yet usable.
 
-CodePlane orchestrates coding agents against your repositories. Launch tasks, watch execution in real time, approve risky actions, review diffs, and decide what gets merged — all from a browser.
+CodePlane orchestrates coding agents against your repositories — no editor required. Launch a task, watch every action in real time, approve risky operations, review diffs, and decide what gets merged — all from a browser, even on your phone.
 
 <p align="center"><img src="docs/images/screenshots/desktop/hero-dashboard.png" alt="CodePlane — dashboard with active jobs" width="800" /></p>
 
@@ -37,9 +37,9 @@ Open `http://localhost:8080`, register a repository in Settings, and create your
 
 ## What It Does
 
-- **Remote & mobile** — Monitor jobs, approve actions, and send messages from your phone via Dev Tunnels or Cloudflare Tunnels
-- **Task orchestration** — Launch coding jobs with a prompt and model selection against any local repository
-- **Live supervision** — Watch agent reasoning, tool calls, logs, plan progress, and costs in real time
+- **Headless** — Runs as a standalone server, no editor session required. Start a task and close your laptop
+- **Remote & mobile** — Pick up from your phone via Dev Tunnels or Cloudflare Tunnels — approve, review, and steer from anywhere
+- **Deep visibility** — Watch agent reasoning, tool calls, plan progress, diffs, and costs streaming in real time — not a summary after the fact
 - **Approval gates** — Risky operations (file writes, shell commands) pause for your review
 - **Diff review & merge** — Syntax-highlighted diffs, workspace browsing, merge/PR/discard controls
 - **Cost analytics** — Track token usage, costs, and model performance across all jobs
