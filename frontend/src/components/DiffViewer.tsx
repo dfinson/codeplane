@@ -370,8 +370,8 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
                       </span>
                     </button>
                   </div>
-                  {/* Per-hunk checkboxes — shown for the selected file when it has multiple hunks */}
-                  {canAsk && i === selectedIdx && file.hunks.length > 1 && (
+                  {/* Per-hunk checkboxes — shown inline when file has multiple hunks */}
+                  {canAsk && file.hunks.length > 1 && (
                     <div className="flex flex-col border-l-2 border-primary/20 ml-4 md:ml-3">
                       {file.hunks.map((hunk, hi) => {
                         const hunkChecked = checkedHunks.has(hunkKey(i, hi));
@@ -420,46 +420,9 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
         )}
 
         {/* Monaco Diff Editor */}
-        <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card flex flex-col">
-          {/* Inline hunk selection strip */}
-          {canAsk && selectedFile && selectedFile.hunks.length > 1 && (
-            <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border overflow-x-auto shrink-0">
-              <span className="text-xs text-muted-foreground shrink-0 mr-1">Hunks:</span>
-              {selectedFile.hunks.map((hunk, hi) => {
-                const hunkChecked = checkedHunks.has(hunkKey(selectedIdx, hi));
-                const start = hunk.newStart;
-                const end = hunk.newStart + hunk.newLines - 1;
-                const label = start === end ? `L${start}` : `L${start}\u2013${end}`;
-                return (
-                  <button
-                    key={hi}
-                    type="button"
-                    onClick={() => toggleHunk(selectedIdx, hi)}
-                    className={cn(
-                      "flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors shrink-0",
-                      hunkChecked
-                        ? "bg-primary/20 border-primary/50 text-primary"
-                        : "border-border hover:border-muted-foreground text-muted-foreground",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "w-3 h-3 rounded-[2px] border flex items-center justify-center",
-                        hunkChecked
-                          ? "bg-primary border-primary text-primary-foreground"
-                          : "border-current",
-                      )}
-                    >
-                      {hunkChecked && <Check size={8} strokeWidth={3} />}
-                    </span>
-                    <span className="font-mono">{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card">
           {loading ? (
-            <div className="flex items-center justify-center flex-1">
+            <div className="flex items-center justify-center h-full">
               <Spinner />
             </div>
           ) : selectedFile ? (
