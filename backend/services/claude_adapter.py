@@ -11,6 +11,7 @@ approval requests through CodePlane's approval system.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -422,10 +423,13 @@ class ClaudeAdapter(AgentAdapterInterface):
             return
 
         done = False
+        parse_error_retries = 0
+        _MAX_PARSE_ERROR_RETRIES = 5
         try:
             while not done:
                 try:
                     async for message in client.receive_messages():  # type: ignore[attr-defined]
+                        parse_error_retries = 0  # reset on successful message
                         if isinstance(message, SystemMessage):
                             self._enqueue_log(session_id, "Claude session initialized", "info", seq)
 
@@ -450,12 +454,30 @@ class ClaudeAdapter(AgentAdapterInterface):
                     # rate_limit_event.  Log it and re-enter the message loop — the SDK
                     # subprocess is still alive.
                     if MessageParseError is not None and isinstance(exc, MessageParseError):
+                        parse_error_retries += 1
                         log.warning(
                             "claude_unknown_message_type",
                             session_id=session_id,
                             error=str(exc),
+                            retry=parse_error_retries,
                         )
-                        continue  # retry the receive_messages loop
+                        if parse_error_retries >= _MAX_PARSE_ERROR_RETRIES:
+                            log.error(
+                                "claude_parse_error_retry_limit",
+                                session_id=session_id,
+                                retries=parse_error_retries,
+                            )
+                            self._enqueue(
+                                session_id,
+                                SessionEvent(
+                                    kind=SessionEventKind.error,
+                                    payload={"message": f"Claude SDK: too many consecutive parse errors ({parse_error_retries})"},
+                                ),
+                            )
+                            done = True
+                        else:
+                            continue  # retry the receive_messages loop
+                        continue
 
                     stderr_snippet = self._read_session_stderr(session_id)
                     log.error(
@@ -1025,11 +1047,31 @@ class ClaudeAdapter(AgentAdapterInterface):
             return
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=330)
+                except asyncio.TimeoutError:
+                    # Consumer hung or sentinel was lost — treat as stream end.
+                    log.error(
+                        "claude_stream_queue_timeout",
+                        session_id=session_id,
+                    )
+                    yield SessionEvent(
+                        kind=SessionEventKind.error,
+                        payload={"message": "Claude SDK stream timed out (no events for 330s)"},
+                    )
+                    return
                 if event is None:
                     return
                 yield event
         finally:
+            # Cancel the consumer task first — this ensures the SDK subprocess
+            # is no longer being read before we disconnect.
+            consumer = self._consumer_tasks.get(session_id)
+            if consumer and not consumer.done():
+                consumer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await consumer
+
             # Disconnect the SDK client in THIS task context — the same task
             # where connect() opened the anyio cancel scope.  Disconnecting
             # from a fire-and-forget task causes the scope cancellation to

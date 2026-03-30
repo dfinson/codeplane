@@ -258,7 +258,7 @@ class RuntimeService:
             return
         try:
             await self._diff_service.finalize(job_id, worktree_path, base_ref)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.warning("diff_finalize_failed", job_id=job_id, exc_info=True)
 
     @property
@@ -601,10 +601,10 @@ class RuntimeService:
                         branch=branch_name,
                     )
                     await session.commit()
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 log.warning("telemetry_init_failed", job_id=job_id, exc_info=True)
 
-        asyncio.create_task(_init_telemetry_row())
+        asyncio.create_task(_init_telemetry_row(), name=f"telemetry-init-{job_id[:8]}")
 
         # Emit environment_setup phase
         self._resolve_adapter(config.sdk).set_execution_phase(job_id, "environment_setup")
@@ -1042,6 +1042,10 @@ class RuntimeService:
 
     async def _cleanup_job_state(self, job_id: str) -> None:
         """Remove all per-job in-memory state and trigger post-job hooks."""
+        # Last-resort guard: if the job is still non-terminal after all error
+        # handlers have run, force it to failed so it doesn't stay stuck.
+        await self._ensure_terminal_state(job_id)
+
         if self._progress_tracking is not None:
             self._progress_tracking.cleanup(job_id)
         self._tasks.pop(job_id, None)
@@ -1061,6 +1065,38 @@ class RuntimeService:
             self._diff_service.cleanup(job_id)
         self._start_snapshot_task(job_id)
         await self._dequeue_next()
+
+    async def _ensure_terminal_state(self, job_id: str) -> None:
+        """Ensure the job is in a terminal state.  Called as a last-resort
+        safety net during cleanup so that no job is ever permanently stuck
+        in 'running'."""
+        try:
+            async with self._session_factory() as session:
+                svc = self._make_job_service(session)
+                job = await svc.get_job(job_id)
+                if job is not None and job.state not in TERMINAL_STATES:
+                    log.error(
+                        "ensure_terminal_state_forcing_failure",
+                        job_id=job_id,
+                        current_state=str(job.state),
+                    )
+                    await svc.transition_state(
+                        job_id, JobState.failed,
+                        failure_reason="Job cleanup: forced to failed (previous state transitions failed)",
+                    )
+                    await session.commit()
+                    self._set_progress_terminal_state(job_id, JobState.failed)
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=DomainEvent.make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.job_failed,
+                            payload={"reason": "Job cleanup: previous error handlers failed to transition state"},
+                        )
+                    )
+        except (Exception, asyncio.CancelledError):
+            log.error("ensure_terminal_state_failed", job_id=job_id, exc_info=True)
 
     async def _handle_approval_request(
         self,
@@ -1160,7 +1196,10 @@ class RuntimeService:
         base_ref: str | None,
     ) -> None:
         """Process cancellation: finalize diff, abort agent, transition state."""
-        await self._finalize_diff_safe(job_id, worktree_path, base_ref)
+        try:
+            await self._finalize_diff_safe(job_id, worktree_path, base_ref)
+        except (Exception, asyncio.CancelledError):
+            log.warning("cancel_diff_finalize_failed", job_id=job_id, exc_info=True)
         try:
             await agent_session.abort()
         except (Exception, asyncio.CancelledError):

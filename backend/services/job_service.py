@@ -50,6 +50,9 @@ class StateConflictError(Exception):
     """Raised when a job action conflicts with its current state."""
 
 
+_MAX_NAMING_COLLISION_RETRIES = 2
+
+
 @dataclass(frozen=True)
 class ProgressPreview:
     headline: str
@@ -221,14 +224,37 @@ class JobService:
                 existing_worktrees = await self._git.list_worktree_names(resolved_repo)
                 existing_job_ids = await self._job_repo.list_ids()
 
+                exclude_names = existing_worktrees | existing_job_ids
+
                 title, generated_branch, worktree_name = await self._naming.generate(
                     prompt,
                     existing_branches=existing_branches,
-                    existing_worktrees=existing_worktrees | existing_job_ids,
+                    existing_worktrees=exclude_names,
                     parent_job_context=parent_job_context,
                 )
                 if branch is None and generated_branch:
                     branch = generated_branch
+
+                # Post-naming collision guard: the name may still collide if
+                # the LLM ignored the exclude list or a concurrent request
+                # claimed the name between the list_ids() call and now.
+                for _retry in range(_MAX_NAMING_COLLISION_RETRIES):
+                    if worktree_name not in exclude_names and await self._job_repo.get(worktree_name) is None:
+                        break
+                    log.warning(
+                        "naming_collision_retry",
+                        worktree_name=worktree_name,
+                        attempt=_retry + 1,
+                    )
+                    exclude_names = exclude_names | {worktree_name}
+                    title, generated_branch, worktree_name = await self._naming.generate(
+                        prompt,
+                        existing_branches=existing_branches,
+                        existing_worktrees=exclude_names,
+                        parent_job_context=parent_job_context,
+                    )
+                    if branch is None and generated_branch:
+                        branch = generated_branch
             except NamingError as exc:
                 import hashlib
 
@@ -272,6 +298,17 @@ class JobService:
             worktree_name = candidate
 
         job_id = worktree_name
+
+        # Final collision guard (covers both naming paths).
+        # If after all retries the name still collides, append a numeric suffix.
+        if await self._job_repo.get(job_id) is not None:
+            existing_ids = await self._job_repo.list_ids()
+            counter = 2
+            while f"{job_id}-{counter}" in existing_ids:
+                counter += 1
+            job_id = f"{job_id}-{counter}"
+            worktree_name = job_id
+            log.warning("naming_collision_suffixed", job_id=job_id)
         log.info(
             "naming_preflight_complete",
             job_id=job_id,

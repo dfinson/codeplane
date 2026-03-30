@@ -220,7 +220,7 @@ function ReasoningBlock({ entry }: { entry: TranscriptEntry }) {
         <span className="font-medium">Reasoning</span>
         <ChevronDown
           size={11}
-          className={cn("ml-auto shrink-0 transition-transform", open && "rotate-180")}
+          className={cn("ml-auto shrink-0", open && "rotate-180")}
         />
       </button>
       {open && (
@@ -714,7 +714,7 @@ function SubAgentResult({ result }: { result: string }) {
         <span className="font-medium uppercase tracking-wide">Sub-agent Result</span>
         <ChevronDown
           size={9}
-          className={cn("ml-auto shrink-0 transition-transform", open && "rotate-180")}
+          className={cn("ml-auto shrink-0", open && "rotate-180")}
         />
       </button>
       {open && (
@@ -759,11 +759,11 @@ function SubAgentSection({
   return (
     <div className="relative pl-4 sm:pl-5">
       {/* Icon */}
-      <div className={cn(
-        "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
-        (isActive || isRunning) && "animate-pulse",
-      )}>
+      <div className="absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center">
         <Network size={13} className={iconColor} />
+        {(isActive || isRunning) && (
+          <span className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full bg-violet-400" />
+        )}
       </div>
 
       {/* Collapsible header */}
@@ -794,7 +794,7 @@ function SubAgentSection({
             <ChevronDown
               size={10}
               className={cn(
-                "shrink-0 text-muted-foreground/50 transition-transform",
+                "shrink-0 text-muted-foreground/50",
                 !collapsed && "rotate-180",
               )}
             />
@@ -825,7 +825,7 @@ function SubAgentSection({
 
           {/* Running indicator when no children yet */}
           {isRunning && childCalls.length === 0 && (
-            <div className="text-xs text-violet-400/60 animate-pulse py-0.5 pl-4 sm:pl-5">
+            <div className="text-xs text-violet-400/60 py-0.5 pl-4 sm:pl-5">
               Running\u2026
             </div>
           )}
@@ -854,15 +854,15 @@ function ToolStep({ entry, isActive }: {
 
   return (
     <div className="relative pl-4 sm:pl-5">
-      <div className={cn(
-        "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
-        (isActive || isRunning) && "animate-pulse",
-      )}>
+      <div className="absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center">
         <ToolIconGlyph icon={icon} className={cn(
           failed ? "text-red-400"
             : (isActive || isRunning) ? "text-blue-400"
             : "text-muted-foreground/80",
         )} />
+        {(isActive || isRunning) && (
+          <span className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full bg-blue-400" />
+        )}
       </div>
       <button
         onClick={() => !isRunning && setExpanded(!expanded)}
@@ -994,7 +994,7 @@ function AgentMessageBlock({ entry, isNew }: { entry: TranscriptEntry; isNew?: b
 function ActiveIndicator({ turn }: { turn: AgentTurnData }) {
   const runningTool = turn.toolCalls.find((c) => c.role === "tool_running");
   if (runningTool) return null; // tool_running entries are rendered inline in the step list
-  return <div className="text-xs text-muted-foreground animate-pulse px-1">working…</div>;
+  return <div className="text-xs text-muted-foreground px-1">working…</div>;
 }
 
 // ---------------------------------------------------------------------------
