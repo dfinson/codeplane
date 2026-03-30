@@ -12,9 +12,9 @@ hide:
 
 # CodePlane
 
-<span class="eyebrow">Run coding agents from a browser</span>
+<span class="eyebrow">A control plane for coding agents, your browser is the cockpit</span>
 
-**No VS Code. No terminal session. Just a prompt.**
+**No IDE. No terminal. Just a prompt.**
 
 CodePlane orchestrates coding agents headless on your workstation. Start work, supervise from any device, and decide what gets merged — on your schedule.
 
