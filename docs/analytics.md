@@ -7,9 +7,6 @@ hide:
 
 CodePlane tracks every token, tool call, and dollar across all jobs — giving you fleet-wide visibility into what your coding agents cost and how they perform. Open the analytics dashboard with **Alt+A**.
 
-!!! tip "Understanding costs"
-    For subscription plans (like Claude Max or Copilot Business), CodePlane shows what the same usage **would cost at API rates**. This gives you a consistent cost metric for comparing models and optimizing agent behavior, even when you're on a flat-rate plan.
-
 ![Analytics Dashboard](images/screenshots/desktop/analytics-dashboard.png)
 
 ---
@@ -24,6 +21,9 @@ The scorecard is the top-level summary. It shows per-SDK budget totals, job acti
 - **Activity breakdown** — Jobs by resolution: running, merged, PR created, discarded, failed, cancelled
 - **Copilot quota** — If you use Copilot, the scorecard tracks premium request consumption and alerts when quota exceeds 80%
 - **Daily cost trend** — Area chart showing spend over time
+
+!!! tip "Understanding costs"
+    For subscription plans (like Claude Max or Copilot Business), CodePlane shows what the same usage **would cost at API rates**. This gives you a consistent cost metric for comparing models and optimizing agent behavior, even when you're on a flat-rate plan.
 
 ---
 
