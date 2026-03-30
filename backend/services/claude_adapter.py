@@ -103,13 +103,11 @@ class ClaudeAdapter(AgentAdapterInterface):
     def _cleanup_session(self, session_id: str) -> None:
         self._paused_sessions.discard(session_id)
         job_id = self._session_to_job.pop(session_id, None)
-        client = self._clients.pop(session_id, None)
+        self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
         task = self._consumer_tasks.pop(session_id, None)
         if task and not task.done():
             task.cancel()
-        if client is not None:
-            asyncio.ensure_future(self._disconnect_client(client))
         stderr_path = self._stderr_files.pop(session_id, None)
         if stderr_path:
             try:
@@ -146,7 +144,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         """Disconnect a ClaudeSDKClient, terminating its backing subprocess."""
         try:
             await asyncio.wait_for(client.disconnect(), timeout=10)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.warning("claude_client_disconnect_failed", exc_info=True)
 
     _MAX_PENDING_WRITES = 20  # limit concurrent fire-and-forget DB tasks
@@ -1032,6 +1030,16 @@ class ClaudeAdapter(AgentAdapterInterface):
                     return
                 yield event
         finally:
+            # Disconnect the SDK client in THIS task context — the same task
+            # where connect() opened the anyio cancel scope.  Disconnecting
+            # from a fire-and-forget task causes the scope cancellation to
+            # propagate back to the _run_job task as a spurious CancelledError.
+            client = self._clients.get(session_id)
+            if client is not None:
+                try:
+                    await asyncio.wait_for(client.disconnect(), timeout=10)
+                except (Exception, asyncio.CancelledError):
+                    log.warning("claude_client_stream_disconnect_failed", exc_info=True)
             self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
@@ -1067,7 +1075,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         try:
             await client.interrupt()
             await client.disconnect()
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             log.warning("claude_abort_failed", session_id=session_id, exc_info=True)
         finally:
             self._cleanup_session(session_id)
