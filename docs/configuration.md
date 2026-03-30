@@ -63,21 +63,27 @@ agent:
   permission_mode: approval_required
 ```
 
-## Remote & Mobile Access
+## Remote Access
 
-CodePlane is designed for remote supervision — run the agent on your workstation, control it from your phone.
+Run the agent on your workstation, control it from your phone or any browser. CodePlane supports two tunnel providers.
 
 ### Dev Tunnels (default)
 
+**Prerequisite:** Install the [Dev Tunnels CLI](https://aka.ms/devtunnels/cli), or run `cpl setup` which handles it for you.
+
 ```bash
-cpl up --remote                              # auto-generates password
-cpl up --remote --password your-secret       # explicit password
-cpl info                                     # print URL + QR code
+cpl up --remote                              # password auto-generated
+cpl up --remote --password my-secret         # explicit password
+cpl up --remote --tunnel-name my-tunnel      # reuse a named tunnel
 ```
 
-Scan the QR code from `cpl info` to open CodePlane on your phone instantly.
+A password is always required for remote access. By default one is auto-generated; set it explicitly via `--password` or the `CPL_DEVTUNNEL_PASSWORD` env var.
+
+After startup, run `cpl info` to print the tunnel URL and a QR code you can scan from your phone.
 
 ### Cloudflare Tunnels
+
+**Prerequisites:** Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), create a named Cloudflare Tunnel, and route a public hostname to `localhost`.
 
 ```bash
 export CPL_CLOUDFLARE_TUNNEL_TOKEN=your-token
@@ -85,13 +91,23 @@ export CPL_CLOUDFLARE_HOSTNAME=codeplane.yourdomain.com
 cpl up --remote --provider cloudflare
 ```
 
-## Environment Variables
+Both env vars are required. The hostname should point at the tunnel you created in the Cloudflare dashboard.
+
+### All Remote Options
+
+| CLI Flag | Env Var | Description |
+|----------|---------|-------------|
+| `--remote` | — | Enable remote access (required) |
+| `--provider` | — | `devtunnel` (default) or `cloudflare` |
+| `--password SECRET` | `CPL_DEVTUNNEL_PASSWORD` | Auth password (auto-generated if omitted) |
+| `--tunnel-name NAME` | `CPL_DEVTUNNEL_NAME` | Reuse a named Dev Tunnel across restarts |
+| — | `CPL_CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel token |
+| — | `CPL_CLOUDFLARE_HOSTNAME` | Cloudflare public hostname |
+
+## Other Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CPL_DEVTUNNEL_PASSWORD` | Password for Dev Tunnels remote access | auto-generated with `--remote` |
-| `CPL_CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel token | — |
-| `CPL_CLOUDFLARE_HOSTNAME` | Cloudflare public hostname | — |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint for exporting metrics/traces | — (local only) |
 
 ## UI Settings

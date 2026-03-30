@@ -9,6 +9,7 @@ These work from anywhere in the CodePlane UI.
 | `Alt+N` | Create new job |
 | `Alt+J` | Go to dashboard |
 | `Alt+A` | Open analytics |
+| `Alt+H` | Open job history |
 | `⌘K` / `Ctrl+K` | Open command palette |
 | `⌘,` / `Ctrl+,` | Open settings |
 | ``Ctrl+` `` | Toggle terminal drawer |

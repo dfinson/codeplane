@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Menu, TerminalSquare, BarChart3, History, Settings } from "lucide-react";
+import { Menu, TerminalSquare, BarChart3, History, Settings, ExternalLink } from "lucide-react";
 import { Sheet } from "./ui/sheet";
 import { Tooltip } from "./ui/tooltip";
 import { useStore } from "../store";
-import { cn } from "../lib/utils";
+import { modKey } from "../lib/utils";
 
 export function NavMenuSlideout() {
   const [open, setOpen] = useState(false);
@@ -64,7 +64,7 @@ export function NavMenuSlideout() {
               </span>
             )}
             <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
-              Ctrl+`
+              {modKey}+`
             </kbd>
           </button>
 
@@ -95,6 +95,9 @@ export function NavMenuSlideout() {
           >
             <History size={15} className="shrink-0" />
             <span className="flex-1 text-left font-medium">Job History</span>
+            <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
+              Alt+H
+            </kbd>
           </button>
 
           <div className="my-2 border-t border-border" />
@@ -111,9 +114,20 @@ export function NavMenuSlideout() {
             <Settings size={15} className="shrink-0" />
             <span className="flex-1 text-left font-medium">Settings</span>
             <kbd className="hidden sm:inline rounded border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground/70">
-              ⌘,
+              {modKey},
             </kbd>
           </button>
+
+          <a
+            href="https://dfinson.github.io/codeplane"
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => setOpen(false)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors text-muted-foreground hover:text-foreground hover:bg-accent"
+          >
+            <ExternalLink size={15} className="shrink-0" />
+            <span className="flex-1 text-left font-medium">Documentation</span>
+          </a>
         </nav>
       </Sheet>
     </>

@@ -1,7 +1,8 @@
 import { Component, type ReactNode, Suspense, useEffect } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
-import { Search } from "lucide-react";
+import { Search, ExternalLink } from "lucide-react";
+import { modKey } from "./lib/utils";
 import { CommandPalette } from "./components/CommandPalette";
 import { NavMenuSlideout } from "./components/NavMenuSlideout";
 import { useSSE } from "./hooks/useSSE";
@@ -137,6 +138,7 @@ export function App() {
   useHotkeys("alt+j", () => navigate("/"), { preventDefault: true });
   useHotkeys("alt+n", () => navigate("/jobs/new"), { preventDefault: true });
   useHotkeys("alt+a", () => navigate("/analytics"), { preventDefault: true });
+  useHotkeys("alt+h", () => navigate("/history"), { preventDefault: true });
   useHotkeys("ctrl+comma,meta+comma", () => navigate("/settings"), {
     enableOnFormTags: true,
     preventDefault: true,
@@ -160,10 +162,19 @@ export function App() {
             <Search size={14} />
             <span>Search or navigate...</span>
           </span>
-          <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs">⌘K</kbd>
+          <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-xs">{modKey}K</kbd>
         </button>
 
         <div className="flex items-center gap-1">
+          <a
+            href="https://dfinson.github.io/codeplane"
+            target="_blank"
+            rel="noreferrer"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <span>Docs</span>
+            <ExternalLink size={13} />
+          </a>
           <ConnectionStatusIndicator />
           <NavMenuSlideout />
         </div>

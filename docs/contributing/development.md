@@ -17,7 +17,7 @@ This page covers the development workflow for contributors working from source.
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
 make install          # uv sync + npm ci
-cp .env.sample .env   # optional: set CPL_TUNNEL_PASSWORD
+cp .env.sample .env   # optional: set CPL_DEVTUNNEL_PASSWORD
 ```
 
 ## Running the Server

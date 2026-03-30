@@ -8,6 +8,7 @@ import { Textarea } from "./ui/textarea";
 import { Spinner } from "./ui/spinner";
 import { Tooltip } from "./ui/tooltip";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { modKey } from "../lib/utils";
 
 type RecordingState = "idle" | "recording" | "transcribing";
 
@@ -135,7 +136,7 @@ export function PromptWithVoice({ value, onChange, error, onBlur, onKeyDown, onS
               </Tooltip>
             </div>
           </div>
-          <p className="hidden sm:block text-xs text-muted-foreground mt-1">Ctrl+Enter to submit</p>
+          <p className="hidden sm:block text-xs text-muted-foreground mt-1">{modKey}+Enter to submit</p>
         </div>
       </div>
 
