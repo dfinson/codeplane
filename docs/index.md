@@ -101,5 +101,5 @@ Track token usage, costs, model performance, and tool health across all jobs.
 CodePlane works with **GitHub Copilot CLI** and **Claude Code CLI**. Install and authenticate the CLI, select your agent and model per job — CodePlane manages the SDKs and handles the rest.
 
 <div class="screenshot-desktop" markdown>
-![Live Transcript](images/screenshots/desktop/job-running-transcript.png)
+![Live Transcript](images/screenshots/desktop/transcript-streaming.gif)
 </div>
