@@ -37,7 +37,16 @@ This checks that Python, Git, and your agent CLIs are installed and authenticate
 cpl up
 ```
 
-Open `http://localhost:8080` in your browser — or use `cpl up --remote` to access from your phone.
+Open `http://localhost:8080` in your browser.
+
+For remote access (phone, tablet, another machine):
+
+```bash
+cpl up --remote                    # auto-generates a password
+cpl info                           # prints URL + QR code
+```
+
+A password is always required for remote access — one is generated automatically unless you set it with `--password` or the `CPL_DEVTUNNEL_PASSWORD` env var. See [Configuration > Remote Access](configuration.md#remote-access) for Cloudflare Tunnels and other options.
 
 !!! tip "First-time setup"
     Run `cpl setup` for an interactive walkthrough that registers your first repository and sets preferences.
