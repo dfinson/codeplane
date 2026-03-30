@@ -100,7 +100,7 @@ When an approval prompt appears, choose:
 When the agent finishes, review the diff:
 
 <div class="screenshot-desktop" markdown>
-![Diff Viewer](images/screenshots/desktop/job-diff-viewer.png)
+![Diff Viewer](images/screenshots/desktop/job-diff-viewer.gif)
 </div>
 
 Then resolve the job:
