@@ -19,7 +19,7 @@ hide:
 CodePlane orchestrates coding agents headless on your workstation. Start work, talk through the diffs, and merge when you're ready.
 
 <div class="hero-actions" markdown>
-[Quick Start](quick-start.md){ .md-button .md-button--primary }
+[Quick Start](quick-start.md){ .md-button }
 [Usage Guide](guide.md){ .md-button }
 [How It Works](architecture.md){ .md-button }
 </div>
