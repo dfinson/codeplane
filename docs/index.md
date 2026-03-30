@@ -12,11 +12,11 @@ hide:
 
 # CodePlane
 
-<span class="eyebrow">Coding agents, without the session</span>
+<span class="eyebrow">Run coding agents from a browser</span>
 
-**Launch a task. Walk away. Land the code when you're ready.**
+**No VS Code. No terminal session. Just a prompt.**
 
-CodePlane runs coding agents headless — no VS Code session required. Kick off work from a browser, check in from your phone, and review the results on your own schedule. Full visibility when you want it, out of your way when you don't.
+CodePlane orchestrates coding agents headless on your workstation. Start work, supervise from any device, and decide what gets merged — on your schedule.
 
 <div class="hero-actions" markdown>
 [Quick Start](quick-start.md){ .md-button .md-button--primary }

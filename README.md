@@ -5,7 +5,7 @@
 <h1 align="center">CodePlane</h1>
 
 <p align="center">
-  <strong>Control plane for running and supervising coding agents</strong>
+  <strong>Run coding agents from a browser</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 > **Pre-alpha** — Under active development. Not yet usable.
 
-CodePlane orchestrates coding agents against your repositories — no editor required. Launch a task, watch every action in real time, approve risky operations, review diffs, and decide what gets merged — all from a browser, even on your phone.
+CodePlane orchestrates coding agents headless on your workstation — no VS Code, no terminal session. Start work from a browser, supervise from any device, and decide what gets merged — on your schedule.
 
 <p align="center"><img src="docs/images/screenshots/desktop/hero-dashboard.png" alt="CodePlane — dashboard with active jobs" width="800" /></p>
 
