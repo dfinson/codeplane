@@ -241,7 +241,9 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     // Group checked hunks by file index
     const fileHunks = new Map<number, number[]>();
     for (const key of checkedHunks) {
-      const [fi, hi] = key.split(":").map(Number);
+      const parts = key.split(":");
+      const fi = Number(parts[0]);
+      const hi = Number(parts[1]);
       const arr = fileHunks.get(fi) ?? [];
       arr.push(hi);
       fileHunks.set(fi, arr);

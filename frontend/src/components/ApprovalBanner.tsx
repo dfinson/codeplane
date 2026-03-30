@@ -68,7 +68,7 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
               onClick={handleTrustSession}
             >
               <ShieldCheck size={14} />
-              Approve All
+              Trust Session
             </Button>
           )}
         </div>
@@ -96,7 +96,7 @@ export function ApprovalBanner({ jobId }: { jobId: string }) {
           </div>
           {a.requiresExplicitApproval && (
             <p className="text-xs text-red-400/80 mb-2 font-medium">
-              This operation cannot be auto-approved via &ldquo;Approve All&rdquo;. You must approve it individually.
+              This operation cannot be auto-approved via &ldquo;Trust Session&rdquo;. You must approve it individually.
             </p>
           )}
           <p className="text-sm text-foreground mb-2">{a.description}</p>

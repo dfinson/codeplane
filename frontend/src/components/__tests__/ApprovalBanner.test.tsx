@@ -94,11 +94,11 @@ describe("ApprovalBanner", () => {
     });
   });
 
-  it("calls trustJob on Approve All click", async () => {
+  it("calls trustJob on Trust Session click", async () => {
     vi.mocked(trustJob).mockResolvedValueOnce({ resolved: 1 });
     useStore.setState({ approvals: { "apr-1": makeApproval() } });
     render(<ApprovalBanner jobId="job-1" />);
-    fireEvent.click(screen.getByText("Approve All"));
+    fireEvent.click(screen.getByText("Trust Session"));
     await waitFor(() => {
       expect(trustJob).toHaveBeenCalledWith("job-1");
     });
