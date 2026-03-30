@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Quick Start
 
 Get CodePlane running and complete your first supervised agent job.

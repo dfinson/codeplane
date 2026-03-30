@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Usage Guide
 
 This page covers the core CodePlane workflow: create a job, supervise the run, handle approvals, review changes, and decide how they land.

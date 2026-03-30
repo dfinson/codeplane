@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Configuration
 
 CodePlane works out of the box with sensible defaults. This page covers the settings you're most likely to change.

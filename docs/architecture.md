@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # How It Works
 
 CodePlane is an **orchestration layer** for coding agents. It does not contain its own AI — it manages the underlying SDKs so you don't have to. You install and authenticate the agent CLIs; CodePlane handles everything else.
