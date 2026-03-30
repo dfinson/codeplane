@@ -64,6 +64,10 @@ Go to **Settings** (`Ctrl+,`) and add a local Git repository path. This tells Co
 
 The agent starts working in an isolated Git worktree. Your working directory is never modified.
 
+<div class="screenshot-desktop" markdown>
+![Create Job](images/screenshots/desktop/create-job-flow.gif)
+</div>
+
 ## Watch It Run
 
 The job detail view shows live updates:
@@ -74,7 +78,7 @@ The job detail view shows live updates:
 - **Metrics** — token usage and estimated cost
 
 <div class="screenshot-desktop" markdown>
-![Running Job](images/screenshots/desktop/job-running-transcript.png)
+![Running Job](images/screenshots/desktop/transcript-streaming.gif)
 </div>
 
 ## Handle Approvals
