@@ -72,38 +72,6 @@ Monitor the reliability and latency of every tool your agents use.
 
 ## Per-Job Cost Drill-Down
 
-Click any job in the analytics table to see where its budget went.
-
-### Cost Attribution by Activity
-
-Each job's cost is broken down by what the agent was doing:
-
-| Activity | What It Covers |
-|----------|---------------|
-| **Reasoning** | LLM inference not tied to a specific tool |
-| **Code reading** | File reads, grep, semantic search |
-| **Code changes** | File writes, git operations |
-| **Search & discovery** | Browser, file search, broad exploration |
-| **Command execution** | Shell commands |
-| **Delegation** | Sub-agent calls |
-
-![Cost Drivers](images/screenshots/desktop/analytics-cost-drivers.png)
-
-### Turn Economics
-
-The turn-by-turn cost curve shows how spend evolved during the job:
-
-![Turn Economics](images/screenshots/desktop/analytics-turn-economics.png)
-
-- **Peak turn cost** — The most expensive single turn
-- **Avg turn cost** — Mean cost across all turns
-- **First half vs. second half** — Detects cost escalation (second half costing >2× the first half is flagged)
-
-### File I/O Analysis
-
-- Unique files read and total reread count
-- Most-accessed files ranked by access count with read/write breakdown
-
 ---
 
 ## Observations
@@ -121,18 +89,6 @@ CodePlane runs statistical analysis across your job history and surfaces anomali
 | **Phase imbalance** | Verification phase consuming more than reasoning | Info |
 
 Each observation shows the affected job count and estimated waste in USD — helping you decide where to optimize prompts, tooling, or model selection.
-
----
-
-## Job Telemetry Table
-
-The paginated jobs table lists every job with full telemetry, sortable and filterable:
-
-![Jobs Table](images/screenshots/desktop/analytics-jobs-table.png)
-
-- Filter by SDK, model, status, or repository
-- Sort by cost, tokens, duration, or any column
-- 50 jobs per page with cursor pagination
 
 ---
 
