@@ -269,6 +269,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
       ".hunk-cb-checked {",
       "  background: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Crect x='0.5' y='0.5' width='15' height='15' rx='2.5' fill='%230e639c'/%3E%3Cpath d='M4 8L7 11L12 5' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") center center / 16px no-repeat;",
       "}",
+      ".hunk-selected-line { border-left: 3px solid rgba(14,99,156,0.6) !important; }",
     ].join("\n");
     document.head.appendChild(style);
     return () => { style.remove(); };
@@ -284,15 +285,29 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
       decorationIdsRef.current = modifiedEditor.deltaDecorations(decorationIdsRef.current, []);
       return;
     }
-    const newDecorations = hunkLineRanges.map((range, hi) => ({
-      range: new m.Range(range.startLine, 1, range.startLine, 1),
-      options: {
-        glyphMarginClassName: checkedHunks.has(hunkKey(selectedIdx, hi))
-          ? "hunk-cb-checked"
-          : "hunk-cb-unchecked",
-        glyphMarginHoverMessage: { value: "Toggle hunk selection" },
-      },
-    }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const newDecorations: any[] = [];
+    hunkLineRanges.forEach((range, hi) => {
+      const checked = checkedHunks.has(hunkKey(selectedIdx, hi));
+      // Glyph checkbox on the first line of each hunk
+      newDecorations.push({
+        range: new m.Range(range.startLine, 1, range.startLine, 1),
+        options: {
+          glyphMarginClassName: checked ? "hunk-cb-checked" : "hunk-cb-unchecked",
+          glyphMarginHoverMessage: { value: "Toggle hunk selection" },
+        },
+      });
+      // Left-border highlight across all lines of checked hunks
+      if (checked) {
+        newDecorations.push({
+          range: new m.Range(range.startLine, 1, range.endLine, 1),
+          options: {
+            linesDecorationsClassName: "hunk-selected-line",
+            isWholeLine: true,
+          },
+        });
+      }
+    });
     decorationIdsRef.current = modifiedEditor.deltaDecorations(decorationIdsRef.current, newDecorations);
   }, [selectedIdx, checkedHunks, hunkLineRanges, canAsk]);
 
