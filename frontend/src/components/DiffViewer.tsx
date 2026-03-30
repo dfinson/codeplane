@@ -264,10 +264,10 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     style.textContent = [
       ".hunk-cb-unchecked, .hunk-cb-checked { cursor: pointer !important; }",
       ".hunk-cb-unchecked {",
-      "  background: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Crect x='2' y='2' width='12' height='12' rx='2' stroke='rgba(140,140,160,0.5)' stroke-width='1.5'/%3E%3C/svg%3E\") center center / 14px no-repeat;",
+      "  background: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Crect x='1.5' y='1.5' width='13' height='13' rx='2.5' stroke='rgba(180,180,200,0.7)' stroke-width='2'/%3E%3C/svg%3E\") center center / 16px no-repeat;",
       "}",
       ".hunk-cb-checked {",
-      "  background: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Crect x='1' y='1' width='14' height='14' rx='2' fill='%230e639c'/%3E%3Cpath d='M4.5 8L7 10.5L11.5 5.5' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") center center / 14px no-repeat;",
+      "  background: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Crect x='0.5' y='0.5' width='15' height='15' rx='2.5' fill='%230e639c'/%3E%3Cpath d='M4 8L7 11L12 5' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") center center / 16px no-repeat;",
       "}",
     ].join("\n");
     document.head.appendChild(style);
@@ -304,7 +304,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     const modifiedEditor = editor.getModifiedEditor();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     modifiedEditor.onMouseDown((e: any) => {
-      if (e.target.type !== monaco.editor.MouseTargetType.GLYPH_MARGIN) return;
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
       const lineNumber = e.target.position?.lineNumber;
       if (lineNumber == null) return;
       const ranges = hunkLineRangesRef.current;
