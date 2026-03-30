@@ -149,13 +149,27 @@ class ClaudeAdapter(AgentAdapterInterface):
         except Exception:
             log.warning("claude_client_disconnect_failed", exc_info=True)
 
+    _MAX_PENDING_WRITES = 20  # limit concurrent fire-and-forget DB tasks
+
     def _schedule_db_write(self, coro: Any) -> None:  # noqa: ANN401
         """Schedule an async DB write from a synchronous or async context."""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(coro)
         except RuntimeError:
-            pass  # No event loop — skip DB write
+            return  # No event loop — skip DB write
+
+        # Prune completed tasks
+        if hasattr(self, '_write_tasks'):
+            self._write_tasks = [t for t in self._write_tasks if not t.done()]
+        else:
+            self._write_tasks: list[asyncio.Task[None]] = []  # type: ignore[no-redef]
+
+        # Drop writes when too many are in-flight to prevent pool exhaustion
+        if len(self._write_tasks) >= self._MAX_PENDING_WRITES:
+            return
+
+        task = loop.create_task(coro)
+        self._write_tasks.append(task)
 
     _TELEMETRY_BROADCAST_INTERVAL = 2.0  # seconds — debounce SSE broadcasts
 
@@ -409,56 +423,62 @@ class ClaudeAdapter(AgentAdapterInterface):
         if queue is None:
             return
 
+        done = False
         try:
-            async for message in client.receive_messages():  # type: ignore[attr-defined]
-                if isinstance(message, SystemMessage):
-                    self._enqueue_log(session_id, "Claude session initialized", "info", seq)
+            while not done:
+                try:
+                    async for message in client.receive_messages():  # type: ignore[attr-defined]
+                        if isinstance(message, SystemMessage):
+                            self._enqueue_log(session_id, "Claude session initialized", "info", seq)
 
-                elif isinstance(message, AssistantMessage):
-                    self._process_assistant_message(session_id, message, seq)
+                        elif isinstance(message, AssistantMessage):
+                            self._process_assistant_message(session_id, message, seq)
 
-                elif isinstance(message, UserMessage):
-                    self._process_user_message(session_id, message, seq)
+                        elif isinstance(message, UserMessage):
+                            self._process_user_message(session_id, message, seq)
 
-                elif isinstance(message, ResultMessage):
-                    self._process_result_message(session_id, message, seq)
-                    break
+                        elif isinstance(message, ResultMessage):
+                            self._process_result_message(session_id, message, seq)
+                            done = True
+                            break
 
-                # StreamEvent, TaskStartedMessage etc. are logged but not
-                # forwarded as transcript events (they are internal SDK bookkeeping).
+                        # StreamEvent, TaskStartedMessage etc. are logged but not
+                        # forwarded as transcript events (they are internal SDK bookkeeping).
+                    else:
+                        # Iterator exhausted without ResultMessage — session ended
+                        done = True
+                except Exception as exc:
+                    # SDK ≤0.0.25 throws MessageParseError on unknown event types like
+                    # rate_limit_event.  Log it and re-enter the message loop — the SDK
+                    # subprocess is still alive.
+                    if MessageParseError is not None and isinstance(exc, MessageParseError):
+                        log.warning(
+                            "claude_unknown_message_type",
+                            session_id=session_id,
+                            error=str(exc),
+                        )
+                        continue  # retry the receive_messages loop
+
+                    stderr_snippet = self._read_session_stderr(session_id)
+                    log.error(
+                        "claude_consumer_error",
+                        session_id=session_id,
+                        stderr_tail=stderr_snippet[:500] if stderr_snippet else "",
+                        exc_info=True,
+                    )
+                    error_msg = f"Claude SDK session error: {exc}"
+                    if stderr_snippet:
+                        error_msg += f"\n{stderr_snippet}"
+                    self._enqueue(
+                        session_id,
+                        SessionEvent(
+                            kind=SessionEventKind.error,
+                            payload={"message": error_msg},
+                        ),
+                    )
+                    done = True
         except asyncio.CancelledError:
             log.info("claude_consumer_cancelled", session_id=session_id)
-        except Exception as exc:
-            # SDK ≤0.0.25 throws MessageParseError on unknown event types like
-            # rate_limit_event.  Swallow it and retry the message stream so the
-            # session can continue rather than crash.
-            if MessageParseError is not None and isinstance(exc, MessageParseError):
-                log.warning(
-                    "claude_unknown_message_type",
-                    session_id=session_id,
-                    error=str(exc),
-                )
-                # Re-enter the consumer — the SDK may have more messages.
-                await self._consume_messages(session_id, client)
-                return
-
-            stderr_snippet = self._read_session_stderr(session_id)
-            log.error(
-                "claude_consumer_error",
-                session_id=session_id,
-                stderr_tail=stderr_snippet[:500] if stderr_snippet else "",
-                exc_info=True,
-            )
-            error_msg = f"Claude SDK session error: {exc}"
-            if stderr_snippet:
-                error_msg += f"\n{stderr_snippet}"
-            self._enqueue(
-                session_id,
-                SessionEvent(
-                    kind=SessionEventKind.error,
-                    payload={"message": error_msg},
-                ),
-            )
         finally:
             # Sentinel to signal end of stream
             if queue is not None:

@@ -11,24 +11,28 @@ Every job in CodePlane follows a state machine that governs its lifecycle.
                          │ agent session starts
                          ▼
                     ┌──────────┐
-              ┌─────│ running  │─────┐
-              │     └────┬─────┘     │
-              │          │           │
-    approval  │   agent  │    error/ │
-    requested │   done   │   cancel  │
-              │          │           │
-              ▼          ▼           ▼
-    ┌─────────────┐ ┌────────┐ ┌──────────┐
-    │  waiting_   │ │ review │ │  failed   │
-    │for_approval │ │        │ │           │
-    └──────┬──────┘ └───┬────┘ └──────────┘
-           │            │
-    approve│     resolve│
-    /reject│            ▼
-           │     ┌───────────┐
-           └────▶│ completed │
+              ┌─────│ running  │◄────────────────────┐
+              │     └────┬─────┘─────┐               │
+              │          │           │               │
+    approval  │   agent  │    error/ │        approve│
+    requested │   done   │   cancel  │               │
+              │          │           │               │
+              ▼          ▼           ▼               │
+    ┌─────────────┐ ┌────────┐ ┌──────────┐         │
+    │  waiting_   │ │ review │ │  failed   │         │
+    │for_approval │ │        │ │           │         │
+    └──────┬──────┘ └───┬────┘ └──────────┘         │
+           │            │           ▲                │
+    reject │     resolve│           │                │
+           └────────────┼───────────┘                │
+                        ▼                            │
+                 ┌───────────┐                       │
+                 │ completed │───────────────────────┘
                  └───────────┘
 ```
+
+- **Approve** transitions `waiting_for_approval` → `running`
+- **Reject** transitions `waiting_for_approval` → `failed`
 
 ## States
 
@@ -47,6 +51,7 @@ Every job in CodePlane follows a state machine that governs its lifecycle.
 | From | To | Trigger |
 |------|----|---------|
 | `queued` | `running` | Agent session starts |
+| `queued` | `canceled` | Operator cancels before start |
 | `running` | `waiting_for_approval` | Agent requests permission for risky action |
 | `running` | `review` | Agent completes task successfully |
 | `running` | `failed` | Error, timeout, or heartbeat loss |

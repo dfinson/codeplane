@@ -87,7 +87,7 @@ Valid actions: `merge`, `smart_merge`, `create_pr`, `discard`, `agent_merge`
 | `POST` | `/api/terminal/sessions` | Create terminal session |
 | `GET` | `/api/terminal/sessions` | List active sessions |
 | `DELETE` | `/api/terminal/sessions/{session_id}` | Close a session |
-| `WebSocket` | `/api/terminal/sessions/{session_id}/ws` | Terminal I/O stream |
+| `WebSocket` | `/api/terminal/ws` | Terminal I/O stream |
 | `POST` | `/api/terminal/ask` | Translate natural language to a shell command (AI) |
 
 ## Voice
@@ -102,10 +102,10 @@ Valid actions: `merge`, `smart_merge`, `create_pr`, `discard`, `agent_merge`
 |--------|------|-------------|
 | `GET` | `/api/settings` | Get current settings |
 | `PUT` | `/api/settings` | Update settings |
-| `GET` | `/api/repos` | List registered repositories |
-| `POST` | `/api/repos` | Register a new repository |
-| `DELETE` | `/api/repos/{repo_path}` | Unregister a repository |
-| `GET` | `/api/repos/{repo_path}` | Get repository details |
+| `GET` | `/api/settings/repos` | List registered repositories |
+| `POST` | `/api/settings/repos` | Register a new repository |
+| `DELETE` | `/api/settings/repos/{repo_path}` | Unregister a repository |
+| `GET` | `/api/settings/repos/{repo_path}` | Get repository details |
 | `GET` | `/api/sdks` | List available SDKs |
 | `GET` | `/api/models` | List available models (query: `sdk`) |
 | `GET` | `/api/platforms/status` | Check auth status for all detected git hosting platforms |
@@ -133,4 +133,4 @@ See [SSE Events](sse-events.md) for event type documentation.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/browse` | Browse filesystem directories (query: `path`) |
+| `GET` | `/api/settings/browse` | Browse filesystem directories (query: `path`) |

@@ -32,7 +32,7 @@ def _set_sqlite_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:
 def create_engine(db_path: Path | None = None) -> AsyncEngine:
     """Create an async SQLAlchemy engine."""
     url = get_database_url(db_path)
-    engine = create_async_engine(url, echo=False)
+    engine = create_async_engine(url, echo=False, pool_size=10, max_overflow=20, pool_timeout=60)
     sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     return engine
 

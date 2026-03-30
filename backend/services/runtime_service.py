@@ -528,7 +528,7 @@ class RuntimeService:
                             await svc.transition_state(job_id, JobState.canceled)
                             await session.commit()
                             self._set_progress_terminal_state(job_id, JobState.canceled)
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     log.error("safety_net_cancel_failed", job_id=job_id, exc_info=True)
         finally:
             log.debug("_run_job_guarded_finally", job_id=job_id, in_tasks=job_id in self._tasks)

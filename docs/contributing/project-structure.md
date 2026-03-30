@@ -58,7 +58,11 @@ codeplane/
 │   │   ├── approval_repo.py           #   Approval repository
 │   │   ├── artifact_repo.py           #   Artifact repository
 │   │   ├── event_repo.py              #   Event repository
-│   │   └── metrics_repo.py            #   Metrics repository
+│   │   ├── cost_attribution_repo.py   #   Cost attribution repository
+│   │   ├── file_access_repo.py        #   File access repository
+│   │   ├── observations_repo.py       #   Observations repository
+│   │   ├── telemetry_spans_repo.py    #   Telemetry spans repository
+│   │   └── telemetry_summary_repo.py  #   Telemetry summary repository
 │   └── tests/                         # pytest (unit + integration)
 │       ├── unit/                      #   Fast isolated tests
 │       └── integration/               #   Tests with real DB + HTTP

@@ -53,7 +53,6 @@ The server replays up to 500 recent events (within 5 minutes) on reconnection us
 | Event Type | Payload Fields | Description |
 |------------|---------------|-------------|
 | `progress_headline` | `jobId`, `headline` | Short status text (e.g., "Analyzing codebase") |
-| `progress_summary` | `jobId`, `summary` | Detailed summary text |
 | `agent_plan_updated` | `jobId`, `steps` | Agent plan steps updated |
 
 ### Transcript Events
@@ -82,7 +81,7 @@ The server replays up to 500 recent events (within 5 minutes) on reconnection us
 
 | Event Type | Payload Fields | Description |
 |------------|---------------|-------------|
-| `session_heartbeat` | `timestamp` | Keep-alive signal (every 30s) |
+| `session_heartbeat` | `timestamp` | Keep-alive signal (every 5s) |
 | `snapshot` | `jobs`, `approvals` | Initial state on connection |
 | `session_resumed` | `jobId` | Session restarted after pause |
 | `model_downgraded` | `jobId`, `requested`, `actual` | Model fallback occurred |
