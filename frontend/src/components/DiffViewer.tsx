@@ -322,6 +322,9 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     modifiedEditor.onMouseDown((e: any) => {
       if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      // Prevent Monaco from focusing/scrolling on glyph clicks
+      e.event?.preventDefault?.();
+      e.event?.stopPropagation?.();
       const lineNumber = e.target.position?.lineNumber;
       if (lineNumber == null) return;
       const ranges = hunkLineRangesRef.current;
@@ -330,6 +333,8 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
         const r = ranges[hi];
         if (r && lineNumber >= r.startLine && lineNumber <= r.endLine) {
           toggleHunk(fi, hi);
+          // Blur editor to prevent keyboard popup on mobile / scroll jump on desktop
+          (document.activeElement as HTMLElement)?.blur?.();
           break;
         }
       }
