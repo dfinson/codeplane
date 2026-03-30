@@ -107,8 +107,7 @@ Then resolve the job:
 
 | Option | What it does |
 |--------|-------------|
-| **Merge** | Merge the worktree branch into your base branch |
-| **Smart Merge** | Cherry-pick only the agent's commits (skips setup noise) |
+| **Merge** | Cherry-pick only the agent's meaningful commits onto the base branch, skipping setup noise |
 | **Create PR** | Push the branch and open a pull request |
 | **Discard** | Delete the worktree and discard all changes |
 

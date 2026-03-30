@@ -161,7 +161,7 @@ All assets live under `docs/images/screenshots/`. Desktop in `desktop/`, mobile 
 
 | Asset | Type | Wire into | What to capture |
 |-------|------|-----------|-----------------|
-| `desktop/merge-resolve.gif` | GIF | guide.md below `## Merging & Resolution` table | Job 3 in review → click Complete → choose Smart Merge → success. |
+| `desktop/merge-resolve.gif` | GIF | guide.md below `## Merging & Resolution` table | Job 3 in review → click Complete → choose Merge → success. |
 
 ### Between steps (capture when convenient)
 
