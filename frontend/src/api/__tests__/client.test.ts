@@ -345,7 +345,7 @@ describe("fetchJobDiff", () => {
 
 describe("fetchSettings", () => {
   it("returns settings", async () => {
-    const settings = { maxConcurrentJobs: 2, permissionMode: "auto" };
+    const settings = { maxConcurrentJobs: 2, permissionMode: "full_auto" };
     mockFetch.mockResolvedValueOnce(jsonResponse(settings));
     const result = await fetchSettings();
     expect(result).toEqual(settings);

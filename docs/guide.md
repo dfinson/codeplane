@@ -68,15 +68,21 @@ When an agent attempts a risky action, CodePlane can pause execution and ask for
 
 | Mode | Behavior |
 |------|----------|
-| `auto` | All agent actions within the worktree are auto-approved. No prompts. (default) |
-| `read_only` | Agent can read files and run safe commands (grep, ls, find). All writes and mutations are blocked. |
-| `approval_required` | Reads are always allowed. File writes, shell commands (except grep/find), and network access pause for your approval. |
+| `full_auto` | Auto-approve all operations — reads, writes, shell commands, MCP tools, and URL fetches. No prompts. (default) |
+| `review_and_approve` | Reads and read-only shell commands (grep, find, ls, cat) are auto-approved. Writes, mutating shell commands, URL fetches, and mutating MCP tools pause for your approval. |
+| `observe_only` | Allow reads within the worktree and read-only shell commands. Block all writes, URL fetches, and mutations. |
 
-Set the mode in `~/.codeplane/config.yaml` or per-repo in `.codeplane.yml`:
+Set the mode per-job in the creation form, per-repo in `.codeplane.yml`:
 
 ```yaml
-agent:
-  permission_mode: approval_required
+permission_mode: review_and_approve
+```
+
+Or globally in `~/.codeplane/config.yaml`:
+
+```yaml
+runtime:
+  permission_mode: review_and_approve
 ```
 
 ### Approval Actions

@@ -259,6 +259,95 @@ class TestRegisterRepo:
         assert resp.status_code == 400
 
 
+class TestCreateRepo:
+    """POST /api/settings/repos/create"""
+
+    @pytest.mark.asyncio
+    async def test_create_new_repo(
+        self,
+        client: AsyncClient,
+        app: FastAPI,
+        mock_git_service: AsyncMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        monkeypatch.setattr(
+            "backend.api.settings.register_repo",
+            lambda config, repo_path, config_path=None: repo_path,
+        )
+        target = str(tmp_path / "new-project")
+        mock_git_service.init_repo.return_value = target
+
+        resp = await client.post(
+            "/api/settings/repos/create",
+            json={"path": str(tmp_path), "name": "new-project"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "new-project"
+        assert data["path"] == target
+
+    @pytest.mark.asyncio
+    async def test_create_repo_without_name(
+        self,
+        client: AsyncClient,
+        app: FastAPI,
+        mock_git_service: AsyncMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        monkeypatch.setattr(
+            "backend.api.settings.register_repo",
+            lambda config, repo_path, config_path=None: repo_path,
+        )
+        mock_git_service.init_repo.return_value = str(tmp_path)
+
+        resp = await client.post(
+            "/api/settings/repos/create",
+            json={"path": str(tmp_path)},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["path"] == str(tmp_path)
+        assert data["name"] == tmp_path.name
+
+    @pytest.mark.asyncio
+    async def test_create_repo_existing_git_dir_returns_409(
+        self,
+        client: AsyncClient,
+        app: FastAPI,
+        tmp_path: Path,
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        (tmp_path / ".git").mkdir()
+
+        resp = await client.post(
+            "/api/settings/repos/create",
+            json={"path": str(tmp_path)},
+        )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_create_repo_git_error_returns_400(
+        self,
+        client: AsyncClient,
+        app: FastAPI,
+        mock_git_service: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        app.dependency_overrides[_get_config] = _test_config
+        mock_git_service.init_repo.side_effect = GitError("init failed")
+
+        resp = await client.post(
+            "/api/settings/repos/create",
+            json={"path": str(tmp_path), "name": "fail-repo"},
+        )
+        assert resp.status_code == 400
+        assert "init failed" in resp.json()["detail"]
+
+
 class TestUnregisterRepo:
     """DELETE /api/settings/repos/{repo_path}"""
 

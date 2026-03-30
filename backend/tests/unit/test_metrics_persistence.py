@@ -36,7 +36,7 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
                 prompt="Fix the bug",
                 state=JobState.running,
                 base_ref="main",
-                permission_mode=PermissionMode.auto,
+                permission_mode=PermissionMode.full_auto,
                 sdk="copilot",
                 created_at=now,
                 updated_at=now,

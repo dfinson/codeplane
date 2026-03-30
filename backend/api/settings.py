@@ -21,6 +21,8 @@ from backend.models.api_schemas import (
     BrowseDirectoryResponse,
     BrowseEntry,
     CleanupWorktreesResponse,
+    CreateRepoRequest,
+    CreateRepoResponse,
     PlatformStatusListResponse,
     PlatformStatusResponse,
     RegisterRepoRequest,
@@ -188,6 +190,29 @@ async def register_repo_endpoint(
         )
     register_repo(config, resolved)
     return RegisterRepoResponse(path=resolved, source=source, cloned=False)
+
+
+@router.post("/settings/repos/create", response_model=CreateRepoResponse, status_code=201)
+async def create_repo_endpoint(
+    body: CreateRepoRequest,
+    config: Annotated[CPLConfig, Depends(_get_config)],
+    git: Annotated[GitService, Depends(_get_git_service)],
+) -> CreateRepoResponse:
+    """Create a new git repository and register it."""
+    resolved = Path(body.path).expanduser().resolve()
+    if body.name:
+        resolved = resolved / body.name
+
+    if (resolved / ".git").is_dir():
+        raise HTTPException(status_code=409, detail=f"A git repository already exists at {resolved}")
+
+    try:
+        repo_path = await git.init_repo(str(resolved))
+    except GitError as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to create repository: {exc}") from exc
+
+    register_repo(config, repo_path)
+    return CreateRepoResponse(path=repo_path, name=resolved.name)
 
 
 @router.delete("/settings/repos/{repo_path:path}", status_code=204)

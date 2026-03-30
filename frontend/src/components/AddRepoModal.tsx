@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
-import { Folder, FolderOpen, GitBranch, ArrowUp, Link, HardDrive } from "lucide-react";
+import { Folder, FolderOpen, GitBranch, ArrowUp, Link, HardDrive, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { registerRepo, browseDirectories } from "../api/client";
+import { registerRepo, createRepo, browseDirectories } from "../api/client";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -31,6 +31,14 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
   const [cloneBrowseEntries, setCloneBrowseEntries] = useState<{ name: string; path: string; isGitRepo: boolean }[]>([]);
   const [cloneBrowseParent, setCloneBrowseParent] = useState<string | null>(null);
   const [cloneBrowseLoading, setCloneBrowseLoading] = useState(false);
+
+  // Create-new-repo state
+  const [createName, setCreateName] = useState("");
+  const [createBrowsePath, setCreateBrowsePath] = useState("~");
+  const [createBrowseEntries, setCreateBrowseEntries] = useState<{ name: string; path: string; isGitRepo: boolean }[]>([]);
+  const [createBrowseParent, setCreateBrowseParent] = useState<string | null>(null);
+  const [createBrowseLoading, setCreateBrowseLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const handleAdd = useCallback(
     async (source: string, cloneTarget?: string) => {
@@ -86,11 +94,42 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
     [makeDirectoryLoader],
   );
 
+  const loadCreateDirectory = useCallback(
+    (path: string) =>
+      makeDirectoryLoader(setCreateBrowsePath, setCreateBrowseParent, setCreateBrowseEntries, setCreateBrowseLoading)(path),
+    [makeDirectoryLoader],
+  );
+
+  const handleCreate = useCallback(
+    async () => {
+      if (!createBrowsePath) return;
+      setCreating(true);
+      try {
+        const result = await createRepo(createBrowsePath, createName.trim() || undefined);
+        toast.success(`Created: ${result.name}`);
+        onAdded(result.path);
+        setCreateName("");
+        onClose();
+      } catch (e) {
+        toast.error(String(e));
+      } finally {
+        setCreating(false);
+      }
+    },
+    [createBrowsePath, createName, onAdded, onClose],
+  );
+
   useEffect(() => {
     if (tab === "browse" && browseEntries.length === 0) {
       loadDirectory("~");
     }
   }, [tab, browseEntries.length, loadDirectory]);
+
+  useEffect(() => {
+    if (tab === "create" && createBrowseEntries.length === 0) {
+      loadCreateDirectory("~");
+    }
+  }, [tab, createBrowseEntries.length, loadCreateDirectory]);
 
   return (
     <Dialog open={opened} onOpenChange={(o) => !o && onClose()}>
@@ -112,6 +151,10 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
               <TabsTrigger value="browse">
                 <Folder size={13} />
                 Browse
+              </TabsTrigger>
+              <TabsTrigger value="create">
+                <Plus size={13} />
+                Create New
               </TabsTrigger>
             </TabsList>
 
@@ -274,6 +317,71 @@ export function AddRepoModal({ opened, onClose, onAdded }: AddRepoModalProps) {
                     })}
                   </div>
                 )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="create">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label>Parent directory</Label>
+                  <div className="rounded-md border border-border bg-background px-3 py-2 flex items-center gap-2">
+                    {createBrowseParent && (
+                      <button
+                        type="button"
+                        onClick={() => loadCreateDirectory(createBrowseParent)}
+                        className="p-0.5 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+                      >
+                        <ArrowUp size={14} />
+                      </button>
+                    )}
+                    <span className="text-xs font-mono text-muted-foreground truncate flex-1">{createBrowsePath}</span>
+                  </div>
+                  <div className="h-[min(200px,40vh)] overflow-y-auto rounded-md border border-border">
+                    {createBrowseLoading ? (
+                      <div className="flex justify-center py-6">
+                        <Spinner size="sm" />
+                      </div>
+                    ) : createBrowseEntries.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">No subdirectories</p>
+                    ) : (
+                      <div className="p-1 flex flex-col gap-px">
+                        {createBrowseEntries.map((entry) => (
+                          <button
+                            key={entry.path}
+                            type="button"
+                            className="flex w-full items-center gap-2 px-2 py-1.5 rounded hover:bg-accent cursor-pointer text-left"
+                            onClick={() => loadCreateDirectory(entry.path)}
+                          >
+                            <FolderOpen size={14} className="text-yellow-500 shrink-0" />
+                            <span className="text-sm">{entry.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Navigate to choose where the new repository will be created
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>Repository name <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Input
+                    placeholder="my-project"
+                    value={createName}
+                    onChange={(e) => setCreateName(e.currentTarget.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {createName.trim()
+                      ? `Will create: ${createBrowsePath}/${createName.trim()}`
+                      : `Will initialise a repo in ${createBrowsePath}`}
+                  </p>
+                </div>
+                <div className="flex justify-end">
+                  <Button loading={creating} onClick={handleCreate}>
+                    Create Repository
+                  </Button>
+                </div>
               </div>
             </TabsContent>
           </Tabs>

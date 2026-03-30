@@ -20,7 +20,7 @@
 
 > **Pre-alpha** — Under active development. Not yet usable.
 
-CodePlane orchestrates coding agents headless on your workstation — no IDE, no terminal session. Start work, supervise from any device, and decide what gets merged — on your schedule.
+CodePlane orchestrates coding agents headless on your workstation — no IDE, no terminal session. Start work, talk through the diffs, and merge when you're ready.
 
 <p align="center"><img src="docs/images/screenshots/desktop/hero-dashboard.png" alt="CodePlane — dashboard with active jobs" width="800" /></p>
 

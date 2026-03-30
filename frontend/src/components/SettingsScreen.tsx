@@ -15,9 +15,9 @@ import { Spinner } from "./ui/spinner";
 import { ConfirmDialog } from "./ui/confirm-dialog";
 
 const PERMISSION_MODES = [
-  { value: "auto", label: "Full Auto" },
-  { value: "approval_required", label: "Review & Approve" },
-  { value: "read_only", label: "Observe Only" },
+  { value: "full_auto", label: "Full Auto" },
+  { value: "review_and_approve", label: "Review & Approve" },
+  { value: "observe_only", label: "Observe Only" },
 ];
 
 function SelectField({ label, value, options, onChange, description }: {

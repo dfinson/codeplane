@@ -384,7 +384,7 @@ class SessionConfig:
     prompt: str
     mcp_servers: dict[str, MCPServerConfig]  # discovered from repo config files
     protected_paths: list[str]               # from per-repo config; used by permission policy
-    permission_mode: PermissionMode = "auto" # auto | read_only | approval_required
+    permission_mode: PermissionMode = "full_auto" # full_auto | observe_only | review_and_approve
     sdk: str = "copilot"                     # which SDK adapter to use
 
 @dataclass
@@ -479,9 +479,9 @@ The `ClaudeAdapter` wraps the Claude Agent SDK (`pip install claude-code-sdk`, i
 
 | CodePlane mode | Claude SDK mode | Behavior |
 |---|---|---|
-| `auto` | `bypassPermissions` | All tools auto-approved |
-| `read_only` | `plan` | Only read-only tools allowed; `can_use_tool` callback denies writes |
-| `approval_required` | `default` | `can_use_tool` callback routes to `ApprovalService` |
+| `full_auto` | `bypassPermissions` | All tools auto-approved |
+| `observe_only` | `plan` | Only read-only tools allowed; `can_use_tool` callback denies writes |
+| `review_and_approve` | `default` | `can_use_tool` callback routes to `ApprovalService` |
 
 ##### Message Iterator Pattern
 
@@ -539,7 +539,7 @@ class CreateJobRequest(BaseModel):    # Request models use snake_case (Python co
     prompt: str
     base_ref: str | None = None
     branch: str | None = None            # default: agent decides based on prompt
-    permission_mode: PermissionMode | None = None  # auto | read_only | approval_required
+    permission_mode: PermissionMode | None = None  # full_auto | observe_only | review_and_approve
     model: str | None = None              # LLM model override
 
 class CreateJobResponse(CamelModel):
@@ -1382,7 +1382,7 @@ Configuration exists at three layers:
 File: `~/.codeplane/config.yaml`
 
 ```yaml
-server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: auto             # auto | read_only | approval_required\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n  default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job\n\nterminal:\n  assist:\n    sdk: copilot                    # copilot | claude — SDK for terminal agent assistance\n    model: null                     # model override; null = use SDK default\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: manual               # manual | auto_merge | pr_only\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
+server:\n  host: 127.0.0.1\n  port: 8080\n\nruntime:\n  max_concurrent_jobs: 2\n  worktrees_dirname: .codeplane-worktrees\n  permission_mode: full_auto        # full_auto | observe_only | review_and_approve\n  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries\n  default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job\n\nterminal:\n  assist:\n    sdk: copilot                    # copilot | claude — SDK for terminal agent assistance\n    model: null                     # model override; null = use SDK default\n\nretention:\n  artifact_retention_days: 30\n  max_artifact_size_mb: 100\n  cleanup_on_startup: false\n  auto_archive_days: 7\n\ncompletion:\n  strategy: manual               # manual | auto_merge | pr_only\n  auto_push: true                   # push branch to remote on success\n  cleanup_worktree: true            # remove worktree after resolution\n  delete_branch_after_merge: true   # delete branch after merge\n\nlogging:\n  level: info\n  file: ~/.codeplane/logs/server.log\n  max_file_size_mb: 50\n  backup_count: 3\n\nrate_limits:\n  max_sse_connections: 5\n\nplatforms:                          # per-platform auth and repo binding\n  github:\n    auth: cli                       # cli | token\n    repos:\n      - /repos/service-a\n\nrepos:\n  - /repos/service-a\n  - /repos/service-b\n\ntools:\n  mcp:\n    github:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-github\"]\n    postgres:\n      command: uvx\n      args: [\"mcp-postgres\"]\n      env:\n        DATABASE_URL: \"${DATABASE_URL}\"\n```
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 
@@ -1830,7 +1830,7 @@ CREATE TABLE jobs (
     archived_at TEXT,
     title TEXT,
     worktree_name TEXT,
-    permission_mode TEXT NOT NULL DEFAULT 'auto',
+    permission_mode TEXT NOT NULL DEFAULT 'full_auto',
     session_count INTEGER NOT NULL DEFAULT 1,
     sdk_session_id TEXT,
     model TEXT,
@@ -2375,11 +2375,11 @@ CodePlane supports three permission modes that control how the SDK's permission 
 
 | Mode | Behavior |
 |------|----------|
-| `auto` (default) | Full trust: auto-approve **all** operations including reads, writes, shells, MCP tools, and URL fetches. The agent operates without any approval interruptions. **Exception:** hard-gated commands (§18.2) still require approval. |
-| `read_only` | Allow reads within the worktree and read-only shell commands (grep, find, ls, cat, etc.). Deny all writes, URL fetches, and mutating operations. |
-| `approval_required` | Auto-approve reads and read-only shell commands. Require operator approval for all writes, non-read-only shells, URL fetches, mutating MCP tools, and custom tools. |
+| `full_auto` (default) | Full trust: auto-approve **all** operations including reads, writes, shells, MCP tools, and URL fetches. The agent operates without any approval interruptions. **Exception:** hard-gated commands (§18.2) still require approval. |
+| `observe_only` | Allow reads within the worktree and read-only shell commands (grep, find, ls, cat, etc.). Deny all writes, URL fetches, and mutating operations. |
+| `review_and_approve` | Auto-approve reads and read-only shell commands. Require operator approval for all writes, non-read-only shells, URL fetches, mutating MCP tools, and custom tools. |
 
-#### Auto Mode Rules
+#### Full Auto Mode Rules
 
 | Request Kind | Decision |
 |-------------|----------|
@@ -2391,7 +2391,7 @@ CodePlane supports three permission modes that control how the SDK's permission 
 | `mcp` | ✅ approve |
 | `memory` | ✅ approve |
 
-#### Read-Only Mode Rules
+#### Observe Only Mode Rules
 
 | Request Kind | Within Workspace | Outside Workspace |
 |-------------|------------------|-------------------|
@@ -2404,7 +2404,7 @@ CodePlane supports three permission modes that control how the SDK's permission 
 | `mcp` (mutating) | ❌ deny | ❌ deny |
 | `memory` | ✅ approve | ✅ approve |
 
-#### Approval Required Mode Rules
+#### Review & Approve Mode Rules
 
 | Request Kind | Decision |
 |-------------|----------|
@@ -2426,11 +2426,11 @@ Permission mode is resolved with this priority chain (first match wins):
 2. **Per-repo** — `permission_mode` key in `.codeplane.yml`
 3. **Global** — `runtime.permission_mode` in CodePlane's `config.yaml`
 
-Default: `auto`
+Default: `full_auto`
 
 Example `.codeplane.yml`:
 ```yaml
-permission_mode: auto
+permission_mode: full_auto
 
 protected_paths:
   - infra/
@@ -2441,7 +2441,7 @@ Example global config:
 ```yaml
 runtime:
   max_concurrent_jobs: 2
-  permission_mode: auto
+  permission_mode: full_auto
 ```
 
 ### 18.4 Delegation to the Agent Runtime
@@ -2452,15 +2452,15 @@ CodePlane's role is to:
 
 1. **Evaluate** the SDK's permission request against the active permission mode
 2. **Auto-approve** requests that the policy allows (the SDK proceeds immediately)
-3. **Deny** requests that the policy blocks (in `read_only` mode)
-4. **Route** remaining requests to the operator via the UI (in `approval_required` mode; the SDK blocks until resolved)
+3. **Deny** requests that the policy blocks (in `observe_only` mode)
+4. **Route** remaining requests to the operator via the UI (in `review_and_approve` mode; the SDK blocks until resolved)
 5. **Relay** the operator's decision back to the SDK
 6. **Persist** approval requests and resolutions for auditability
 7. **Feed repo-level config** (like `protected_paths`) into the policy at session creation time
 
 #### How `protected_paths` Maps to Policy
 
-The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the CodePlane level. In `auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
+The per-repo `protected_paths` list (Section 10.3) is evaluated by the permission policy at the CodePlane level. In `full_auto` mode, any write targeting a protected path prefix is escalated to the operator regardless of whether it's inside the workspace.
 
 ### 18.5 Approval Request Object
 
@@ -2481,12 +2481,12 @@ The adapter normalizes whichever fields the SDK provides into this common shape.
 1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
 2. Adapter evaluates the permission policy:
    - **Hard-gated commands (§18.2):** always returns `ask` — routes to operator regardless of mode
-   - **`auto` mode:** returns `approved` immediately for all non-hard-gated operations — SDK proceeds, no event emitted
-   - **`read_only` mode:** evaluates request kind; denies writes, non-read-only shells, URL fetches, and mutating MCP calls
-   - **`approval_required` mode:** evaluates request kind; auto-approves reads and read-only shells, routes everything else to operator
+   - **`full_auto` mode:** returns `approved` immediately for all non-hard-gated operations — SDK proceeds, no event emitted
+   - **`observe_only` mode:** evaluates request kind; denies writes, non-read-only shells, URL fetches, and mutating MCP calls
+   - **`review_and_approve` mode:** evaluates request kind; auto-approves reads and read-only shells, routes everything else to operator
 3. If auto-approved: SDK proceeds immediately, no operator interaction
-4. If denied (read_only mode): SDK is told the action is denied, no operator interaction
-5. If operator approval required (approval_required mode):
+4. If denied (observe_only mode): SDK is told the action is denied, no operator interaction
+5. If operator approval required (review_and_approve mode):
    a. `ApprovalService` persists the request
    b. `approval_request` event emitted
    c. Job transitions to `waiting_for_approval`

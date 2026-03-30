@@ -67,7 +67,7 @@ class JobRepository(BaseRepository):
             merge_status=cast("str | None", row.merge_status),
             title=cast("str | None", row.title),
             worktree_name=cast("str | None", row.worktree_name),
-            permission_mode=PermissionMode(cast("str", row.permission_mode) or "auto"),
+            permission_mode=PermissionMode(cast("str", row.permission_mode) or "full_auto"),
             session_count=cast("int", row.session_count) or 1,
             sdk_session_id=cast("str | None", row.sdk_session_id),
             model=cast("str | None", row.model),

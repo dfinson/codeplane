@@ -473,6 +473,20 @@ class GitService:
 
         return removed
 
+    async def init_repo(self, path: str) -> str:
+        """Initialise a new git repository with an initial empty commit.
+
+        Returns the resolved path of the new repository.
+        """
+        target = Path(path).expanduser().resolve()
+        target.mkdir(parents=True, exist_ok=True)
+
+        await self._run_git("init", cwd=target)
+        await self._run_git("commit", "--allow-empty", "-m", "Initial commit", cwd=target)
+
+        log.info("repo_initialised", path=str(target))
+        return str(target)
+
     async def clone_repo(self, url: str, target_dir: str) -> str:
         """Clone a remote repository to target_dir. Returns the clone path."""
         target = Path(target_dir)

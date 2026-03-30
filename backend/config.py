@@ -113,7 +113,7 @@ class ServerConfig:
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".codeplane-worktrees"
-    permission_mode: str = PermissionMode.auto
+    permission_mode: str = PermissionMode.full_auto
     utility_model: str = "gpt-4o-mini"  # cheap/fast model for naming, summaries, etc.
     default_sdk: str = "copilot"  # copilot | claude
     suppressed_preflight_agent_prompts: list[str] = field(default_factory=list)
@@ -503,8 +503,11 @@ def resolve_permission_mode(repo_path: str) -> str | None:
         with open(codeplane_yml) as f:
             data = yaml.safe_load(f) or {}
         mode = data.get("permission_mode")
-        if mode and str(mode) in (PermissionMode.auto, PermissionMode.read_only, PermissionMode.approval_required):
-            return str(mode)
+        if mode:
+            try:
+                return str(PermissionMode(str(mode)))
+            except ValueError:
+                pass
         return None
     except Exception:
         _log.warning("permission_mode_read_failed", path=str(codeplane_yml), exc_info=True)
@@ -536,7 +539,7 @@ def build_session_config(
     try:
         mode = PermissionMode(mode_str)
     except ValueError:
-        mode = PermissionMode.auto
+        mode = PermissionMode.full_auto
 
     return SessionConfig(
         workspace_path=workspace,

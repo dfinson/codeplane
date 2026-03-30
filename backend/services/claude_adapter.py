@@ -51,9 +51,9 @@ _HIDDEN_TOOLS = frozenset({"TodoWrite"})
 
 # Map CodePlane permission modes to Claude SDK permission modes
 _PERMISSION_MODE_MAP: dict[PermissionMode, str] = {
-    PermissionMode.auto: "bypassPermissions",
-    PermissionMode.read_only: "plan",
-    PermissionMode.approval_required: "default",
+    PermissionMode.full_auto: "bypassPermissions",
+    PermissionMode.observe_only: "plan",
+    PermissionMode.review_and_approve: "default",
 }
 
 

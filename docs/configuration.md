@@ -27,14 +27,14 @@ Location: `~/.codeplane/config.yaml` (created on first run or via `cpl setup`).
 agent:
   default_sdk: copilot              # agent CLI to use: copilot | claude
   default_model: ~                  # model name, or ~ for agent default
-  permission_mode: auto             # auto | read_only | approval_required
+  permission_mode: full_auto        # full_auto | observe_only | review_and_approve
 ```
 
 | Permission Mode | Behavior |
-|-----------------|----------|
-| `auto` | All agent actions within the worktree are auto-approved — no prompts (default) |
-| `read_only` | Agent can read files and run safe commands (grep, ls, find); all writes and mutations are blocked |
-| `approval_required` | Reads always allowed; file writes, shell commands (except grep/find), and network access pause for your approval |
+|-----------------|---------|
+| `full_auto` | All agent actions within the worktree are auto-approved — no prompts (default) |
+| `observe_only` | Agent can read files and run safe commands (grep, ls, find); all writes and mutations are blocked |
+| `review_and_approve` | Reads always allowed; file writes, shell commands (except grep/find), and network access pause for your approval |
 
 ### Server
 

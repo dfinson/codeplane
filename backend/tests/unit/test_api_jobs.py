@@ -25,7 +25,7 @@ def _make_job(job_id: str, *, resolution: Resolution | None = Resolution.unresol
         created_at=now,
         updated_at=now,
         resolution=resolution,
-        permission_mode=PermissionMode.auto,
+        permission_mode=PermissionMode.full_auto,
     )
 
 

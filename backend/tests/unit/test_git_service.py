@@ -788,6 +788,61 @@ class TestCleanupWorktrees:
 # ------------------------------------------------------------------
 
 
+# ------------------------------------------------------------------
+# init_repo
+# ------------------------------------------------------------------
+
+
+class TestInitRepo:
+    @pytest.mark.asyncio
+    async def test_init_creates_directory_and_repo(self, git_service: GitService, tmp_path: Path) -> None:
+        target = tmp_path / "new-project"
+        calls: list[tuple[str, ...]] = []
+
+        async def mock_exec(*args, **kwargs):
+            calls.append(args)
+            return _mock_subprocess()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await git_service.init_repo(str(target))
+
+        assert result == str(target)
+        assert target.is_dir()
+        # Should have called git init, then git commit --allow-empty
+        git_args = [c[1:] for c in calls if c[0] == "git"]
+        assert ("init",) in git_args
+        assert ("commit", "--allow-empty", "-m", "Initial commit") in git_args
+
+    @pytest.mark.asyncio
+    async def test_init_existing_directory(self, git_service: GitService, tmp_path: Path) -> None:
+        target = tmp_path / "existing"
+        target.mkdir()
+        (target / "README.md").write_text("# Hello\n")
+
+        async def mock_exec(*args, **kwargs):
+            return _mock_subprocess()
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await git_service.init_repo(str(target))
+
+        assert result == str(target)
+
+    @pytest.mark.asyncio
+    async def test_init_failure_raises_git_error(self, git_service: GitService, tmp_path: Path) -> None:
+        target = tmp_path / "fail-project"
+        mock_proc = _mock_subprocess(stderr="permission denied", returncode=128)
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+            pytest.raises(GitError),
+        ):
+            await git_service.init_repo(str(target))
+
+
+# ------------------------------------------------------------------
+# clone_repo
+# ------------------------------------------------------------------
+
+
 class TestCloneRepo:
     @pytest.mark.asyncio
     async def test_clone_success(self, git_service: GitService, tmp_path: Path) -> None:

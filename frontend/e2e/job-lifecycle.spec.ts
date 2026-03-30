@@ -36,7 +36,7 @@ const MOCK_JOB = {
 
 const MOCK_SETTINGS = {
   maxConcurrentJobs: 2,
-  permissionMode: "auto",
+  permissionMode: "full_auto",
   autoPush: false,
   cleanupWorktree: true,
   deleteBranchAfterMerge: false,

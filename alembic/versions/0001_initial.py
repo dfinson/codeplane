@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("title", sa.String(), nullable=True),
         sa.Column("worktree_name", sa.String(), nullable=True),
-        sa.Column("permission_mode", sa.String(), nullable=False, server_default="auto"),
+        sa.Column("permission_mode", sa.String(), nullable=False, server_default="full_auto"),
         sa.Column("session_count", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("sdk_session_id", sa.String(), nullable=True),
         sa.Column("model", sa.String(), nullable=True),

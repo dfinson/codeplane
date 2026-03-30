@@ -4,10 +4,10 @@ Evaluates tool-call permission decisions based on the active PermissionMode.
 
 Modes
 -----
-AUTO             — approve everything within the current worktree.
-READ_ONLY        — approve reads and grep/find; deny everything else.
-APPROVAL_REQUIRED — approve read_file; require approval for shells
-                    (except grep/find), URL fetches, and writes.
+FULL_AUTO          — approve everything within the current worktree.
+OBSERVE_ONLY       — approve reads and grep/find; deny everything else.
+REVIEW_AND_APPROVE — approve read_file; require approval for shells
+                     (except grep/find), URL fetches, and writes.
 
 Hard blocks
 -----------
@@ -153,37 +153,37 @@ class _Rule(NamedTuple):
 
 # (mode, kind) → rule.  Missing entries fall through to the mode default.
 _RULES: dict[tuple[str, str], _Rule] = {
-    # ── AUTO ──────────────────────────────────────────────────────────
-    (PermissionMode.auto, "read"): _Rule(_APPROVE),
-    (PermissionMode.auto, "memory"): _Rule(_APPROVE),
-    (PermissionMode.auto, "write"): _Rule(_PATH_WS, _APPROVE),  # approve; workspace path check first
-    (PermissionMode.auto, "shell"): _Rule(_APPROVE),
-    (PermissionMode.auto, "mcp"): _Rule(_APPROVE),
-    (PermissionMode.auto, "url"): _Rule(_APPROVE),
-    (PermissionMode.auto, "custom-tool"): _Rule(_APPROVE),
-    # ── READ_ONLY ────────────────────────────────────────────────────
-    (PermissionMode.read_only, "memory"): _Rule(_APPROVE),
-    (PermissionMode.read_only, "read"): _Rule(_READ_WS),
-    (PermissionMode.read_only, "shell"): _Rule(_SHELL_RO, _DENY),
-    (PermissionMode.read_only, "mcp"): _Rule(_MCP_RO, _DENY),
-    (PermissionMode.read_only, "write"): _Rule(_DENY),
-    (PermissionMode.read_only, "url"): _Rule(_DENY),
-    (PermissionMode.read_only, "custom-tool"): _Rule(_DENY),
-    # ── APPROVAL_REQUIRED ────────────────────────────────────────────
-    (PermissionMode.approval_required, "memory"): _Rule(_APPROVE),
-    (PermissionMode.approval_required, "read"): _Rule(_APPROVE),
-    (PermissionMode.approval_required, "shell"): _Rule(_SHELL_RO, _ASK),
-    (PermissionMode.approval_required, "write"): _Rule(_ASK),
-    (PermissionMode.approval_required, "url"): _Rule(_ASK),
-    (PermissionMode.approval_required, "mcp"): _Rule(_MCP_RO, _ASK),
-    (PermissionMode.approval_required, "custom-tool"): _Rule(_ASK),
+    # ── FULL_AUTO ──────────────────────────────────────────────────────────
+    (PermissionMode.full_auto, "read"): _Rule(_APPROVE),
+    (PermissionMode.full_auto, "memory"): _Rule(_APPROVE),
+    (PermissionMode.full_auto, "write"): _Rule(_PATH_WS, _APPROVE),  # approve; workspace path check first
+    (PermissionMode.full_auto, "shell"): _Rule(_APPROVE),
+    (PermissionMode.full_auto, "mcp"): _Rule(_APPROVE),
+    (PermissionMode.full_auto, "url"): _Rule(_APPROVE),
+    (PermissionMode.full_auto, "custom-tool"): _Rule(_APPROVE),
+    # ── OBSERVE_ONLY ────────────────────────────────────────────────────
+    (PermissionMode.observe_only, "memory"): _Rule(_APPROVE),
+    (PermissionMode.observe_only, "read"): _Rule(_READ_WS),
+    (PermissionMode.observe_only, "shell"): _Rule(_SHELL_RO, _DENY),
+    (PermissionMode.observe_only, "mcp"): _Rule(_MCP_RO, _DENY),
+    (PermissionMode.observe_only, "write"): _Rule(_DENY),
+    (PermissionMode.observe_only, "url"): _Rule(_DENY),
+    (PermissionMode.observe_only, "custom-tool"): _Rule(_DENY),
+    # ── REVIEW_AND_APPROVE ────────────────────────────────────────────
+    (PermissionMode.review_and_approve, "memory"): _Rule(_APPROVE),
+    (PermissionMode.review_and_approve, "read"): _Rule(_APPROVE),
+    (PermissionMode.review_and_approve, "shell"): _Rule(_SHELL_RO, _ASK),
+    (PermissionMode.review_and_approve, "write"): _Rule(_ASK),
+    (PermissionMode.review_and_approve, "url"): _Rule(_ASK),
+    (PermissionMode.review_and_approve, "mcp"): _Rule(_MCP_RO, _ASK),
+    (PermissionMode.review_and_approve, "custom-tool"): _Rule(_ASK),
 }
 
 # Default decisions when a (mode, kind) pair is not in the table.
 _MODE_DEFAULTS: dict[str, PolicyDecision] = {
-    PermissionMode.auto: _APPROVE,
-    PermissionMode.read_only: _DENY,
-    PermissionMode.approval_required: _ASK,
+    PermissionMode.full_auto: _APPROVE,
+    PermissionMode.observe_only: _DENY,
+    PermissionMode.review_and_approve: _ASK,
 }
 
 
@@ -258,9 +258,14 @@ def evaluate(
 # Keep legacy wrappers for backward compatibility
 from functools import partial as _partial  # noqa: E402
 
-evaluate_auto = _partial(evaluate, "auto")
-evaluate_read_only = _partial(evaluate, "read_only")
-evaluate_approval_required = _partial(evaluate, "approval_required")
+evaluate_full_auto = _partial(evaluate, "full_auto")
+evaluate_observe_only = _partial(evaluate, "observe_only")
+evaluate_review_and_approve = _partial(evaluate, "review_and_approve")
+
+# Legacy aliases
+evaluate_auto = evaluate_full_auto
+evaluate_read_only = evaluate_observe_only
+evaluate_approval_required = evaluate_review_and_approve
 
 
 def _evaluate(

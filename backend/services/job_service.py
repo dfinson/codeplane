@@ -171,7 +171,7 @@ class JobService:
         prompt: str,
         base_ref: str | None = None,
         branch: str | None = None,
-        permission_mode: PermissionMode = PermissionMode.auto,
+        permission_mode: PermissionMode = PermissionMode.full_auto,
         model: str | None = None,
         sdk: str | None = None,
         verify: bool | None = None,

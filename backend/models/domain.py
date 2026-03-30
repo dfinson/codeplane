@@ -102,16 +102,24 @@ def validate_state_transition(from_state: str | None, to_state: str) -> None:
 class PermissionMode(StrEnum):
     """Controls how the agent adapter handles SDK permission requests.
 
-    auto              — Everything auto-approved within worktree. No prompts.
-    read_only         — Allow reads + grep/find. Block all writes/mutations.
-    approval_required — Always allow read_file. Require approval for
-                        shell commands (except grep/find), URL fetches,
-                        and any write operations.
+    full_auto          — Everything auto-approved within worktree. No prompts.
+    observe_only       — Allow reads + grep/find. Block all writes/mutations.
+    review_and_approve — Always allow read_file. Require approval for
+                         shell commands (except grep/find), URL fetches,
+                         and any write operations.
     """
 
-    auto = "auto"
-    read_only = "read_only"
-    approval_required = "approval_required"
+    full_auto = "full_auto"
+    observe_only = "observe_only"
+    review_and_approve = "review_and_approve"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "PermissionMode | None":
+        """Accept legacy names so existing configs and DB rows keep working."""
+        _LEGACY = {"auto": cls.full_auto, "read_only": cls.observe_only, "approval_required": cls.review_and_approve}
+        if isinstance(value, str):
+            return _LEGACY.get(value)
+        return None
 
 
 class SessionEventKind(StrEnum):
@@ -139,7 +147,7 @@ class SessionConfig:
     model: str | None = None
     mcp_servers: dict[str, MCPServerConfig] = field(default_factory=dict)
     protected_paths: list[str] = field(default_factory=list)
-    permission_mode: PermissionMode = PermissionMode.auto
+    permission_mode: PermissionMode = PermissionMode.full_auto
     # Injected by RuntimeService for supervised mode; callable[[description, proposed_action], Awaitable[str]]
     blocking_permission_handler: object = None
     # Set when resuming a job to reconnect to an existing Copilot SDK session
@@ -190,7 +198,7 @@ class Job:
     archived_at: datetime | None = None
     title: str | None = None
     worktree_name: str | None = None
-    permission_mode: PermissionMode = PermissionMode.auto
+    permission_mode: PermissionMode = PermissionMode.full_auto
     session_count: int = 1
     sdk_session_id: str | None = None
     model: str | None = None

@@ -421,6 +421,13 @@ export function registerRepo(source: string, cloneTo?: string): Promise<{ path: 
   });
 }
 
+export function createRepo(path: string, name?: string): Promise<{ path: string; name: string }> {
+  return request("/settings/repos/create", {
+    method: "POST",
+    body: JSON.stringify({ path, name: name || undefined }),
+  });
+}
+
 export function unregisterRepo(repoPath: string): Promise<void> {
   return request(`/settings/repos/${encodeURIComponent(repoPath)}`, {
     method: "DELETE",

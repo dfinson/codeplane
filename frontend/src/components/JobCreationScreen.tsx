@@ -43,7 +43,7 @@ export function JobCreationScreen() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [addRepoOpen, setAddRepoOpen] = useState(false);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("approval_required");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>("review_and_approve");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [sdk, setSdk] = useState<string | null>(null);
   const [verify, setVerify] = useState(false);
@@ -264,9 +264,9 @@ export function JobCreationScreen() {
             <div className={`flex gap-2 transition-opacity ${!settingsLoaded ? "opacity-50 pointer-events-none" : ""}`}>
               {(
                 [
-                  { value: "auto", label: "Full Auto", title: "Approve all operations within the worktree silently" },
-                  { value: "approval_required", label: "Review & Approve", title: "Require approval for writes, shell commands, and URL fetches" },
-                  { value: "read_only", label: "Observe Only", title: "Deny all writes and mutations" },
+                  { value: "full_auto", label: "Full Auto", title: "Approve all operations within the worktree silently" },
+                  { value: "review_and_approve", label: "Review & Approve", title: "Require approval for writes, shell commands, and URL fetches" },
+                  { value: "observe_only", label: "Observe Only", title: "Deny all writes and mutations" },
                 ] as { value: PermissionMode; label: string; title: string }[]
               ).map(({ value, label, title }) => (
                 <Tooltip key={value} content={title}>

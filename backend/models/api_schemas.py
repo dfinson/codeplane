@@ -207,6 +207,16 @@ class RegisterRepoRequest(CamelModel):
     clone_to: str | None = None
 
 
+class CreateRepoRequest(CamelModel):
+    path: str
+    name: str | None = None
+
+
+class CreateRepoResponse(CamelModel):
+    path: str
+    name: str
+
+
 class SuggestNamesRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=50_000)
     repo: str | None = None

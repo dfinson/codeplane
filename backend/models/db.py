@@ -33,7 +33,7 @@ class JobRow(Base):
     archived_at = Column(TZDateTime, nullable=True)
     title = Column(String, nullable=True)
     worktree_name = Column(String, nullable=True)
-    permission_mode = Column(String, nullable=False, default=PermissionMode.auto)
+    permission_mode = Column(String, nullable=False, default=PermissionMode.full_auto)
     session_count = Column(Integer, nullable=False, default=1)
     sdk_session_id = Column(String, nullable=True)
     model = Column(String, nullable=True)

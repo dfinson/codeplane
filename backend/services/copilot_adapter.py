@@ -263,8 +263,8 @@ class CopilotAdapter(AgentAdapterInterface):
             log.debug("permission_auto_approved", mode="trusted", kind=kind_val)
             return _Result(kind="approved")
 
-        # --- AUTO: approve everything (full execution permission) ---
-        if mode == PermissionMode.auto:
+        # --- FULL_AUTO: approve everything (full execution permission) ---
+        if mode == PermissionMode.full_auto:
             candidate_paths: list[str] = []
             if request.file_name:
                 candidate_paths.append(request.file_name)
@@ -274,7 +274,7 @@ class CopilotAdapter(AgentAdapterInterface):
                 candidate_paths.extend(request.possible_paths)
 
             decision = evaluate(
-                mode=PermissionMode.auto,
+                mode=PermissionMode.full_auto,
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 possible_paths=candidate_paths or None,
@@ -282,13 +282,13 @@ class CopilotAdapter(AgentAdapterInterface):
                 path=request.path,
             )
             if decision == PolicyDecision.approve:
-                log.debug("permission_auto_approved", mode=PermissionMode.auto, kind=kind_val)
+                log.debug("permission_auto_approved", mode=PermissionMode.full_auto, kind=kind_val)
                 return _Result(kind="approved")
 
-        # --- READ_ONLY: deny mutations ---
-        if mode == PermissionMode.read_only:
+        # --- OBSERVE_ONLY: deny mutations ---
+        if mode == PermissionMode.observe_only:
             decision = evaluate(
-                mode=PermissionMode.read_only,
+                mode=PermissionMode.observe_only,
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 full_command_text=request.full_command_text,
@@ -297,17 +297,17 @@ class CopilotAdapter(AgentAdapterInterface):
                 read_only=request.read_only,
             )
             if decision == PolicyDecision.approve:
-                log.debug("permission_auto_approved", mode=PermissionMode.read_only, kind=kind_val)
+                log.debug("permission_auto_approved", mode=PermissionMode.observe_only, kind=kind_val)
                 return _Result(kind="approved")
             if decision == PolicyDecision.deny:
                 log.info("permission_denied_readonly", kind=kind_val)
                 return _Result(kind="denied-interactively-by-user")
-            # ask → fall through (shouldn't happen in read_only, but safe)
+            # ask → fall through (shouldn't happen in observe_only, but safe)
 
-        # --- APPROVAL_REQUIRED: check policy ---
-        if mode == PermissionMode.approval_required:
+        # --- REVIEW_AND_APPROVE: check policy ---
+        if mode == PermissionMode.review_and_approve:
             decision = evaluate(
-                mode=PermissionMode.approval_required,
+                mode=PermissionMode.review_and_approve,
                 kind=kind_val,
                 workspace_path=config.workspace_path,
                 full_command_text=request.full_command_text,
@@ -316,7 +316,7 @@ class CopilotAdapter(AgentAdapterInterface):
                 read_only=request.read_only,
             )
             if decision == PolicyDecision.approve:
-                log.debug("permission_auto_approved", mode=PermissionMode.approval_required, kind=kind_val)
+                log.debug("permission_auto_approved", mode=PermissionMode.review_and_approve, kind=kind_val)
                 return _Result(kind="approved")
 
         # --- Route to operator for approval ---
