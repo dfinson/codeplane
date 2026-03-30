@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock, Check } from "lucide-react";
+import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare, Send, Lock, Check, Minus } from "lucide-react";
 import { DiffEditor } from "@monaco-editor/react";
 import { toast } from "sonner";
 import { useStore, selectJobDiffs } from "../store";
@@ -140,12 +140,32 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     },
   });
 
-  // Ask-about-diff state
-  const [checkedFiles, setCheckedFiles] = useState<Set<number>>(new Set());
+  // Ask-about-diff state — tracked per hunk (key: "fileIdx:hunkIdx")
+  const [checkedHunks, setCheckedHunks] = useState<Set<string>>(new Set());
   const [askMsg, setAskMsg] = useState("");
   const [askSending, setAskSending] = useState(false);
   const { canAsk, reason: disabledReason } = computeAskState();
   const isTerminal = ["review", "completed", "failed", "canceled"].includes(jobState ?? "");
+
+  const hunkKey = (fi: number, hi: number) => `${fi}:${hi}`;
+
+  const isFileFullyChecked = useCallback(
+    (fi: number) => {
+      const f = diffs[fi];
+      return f != null && f.hunks.length > 0 && f.hunks.every((_, hi) => checkedHunks.has(hunkKey(fi, hi)));
+    },
+    [diffs, checkedHunks],
+  );
+
+  const isFilePartiallyChecked = useCallback(
+    (fi: number) => {
+      const f = diffs[fi];
+      if (!f) return false;
+      const n = f.hunks.filter((_, hi) => checkedHunks.has(hunkKey(fi, hi))).length;
+      return n > 0 && n < f.hunks.length;
+    },
+    [diffs, checkedHunks],
+  );
 
   // Voice input state
   const waveformContainerRef = useRef<HTMLDivElement>(null);
@@ -187,22 +207,67 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
     setLoading(false);
   }, [selectedFile]);
 
-  const toggleFile = useCallback((idx: number) => {
-    setCheckedFiles((prev) => {
+  const toggleFile = useCallback(
+    (fi: number) => {
+      setCheckedHunks((prev) => {
+        const next = new Set(prev);
+        const f = diffs[fi];
+        if (!f) return next;
+        const full = f.hunks.every((_, hi) => next.has(hunkKey(fi, hi)));
+        f.hunks.forEach((_, hi) => {
+          const k = hunkKey(fi, hi);
+          if (full) next.delete(k);
+          else next.add(k);
+        });
+        return next;
+      });
+    },
+    [diffs],
+  );
+
+  const toggleHunk = useCallback((fi: number, hi: number) => {
+    setCheckedHunks((prev) => {
       const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
+      const k = hunkKey(fi, hi);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
       return next;
     });
   }, []);
 
   const handleAskSend = useCallback(async () => {
-    if (!askMsg.trim() || checkedFiles.size === 0) return;
-    const refs = Array.from(checkedFiles)
-      .sort()
-      .map((idx) => diffs[idx])
-      .filter((f): f is DiffFileModel => f != null)
-      .map((f) => fileSpanRef(f));
+    if (!askMsg.trim() || checkedHunks.size === 0) return;
+
+    // Group checked hunks by file index
+    const fileHunks = new Map<number, number[]>();
+    for (const key of checkedHunks) {
+      const [fi, hi] = key.split(":").map(Number);
+      const arr = fileHunks.get(fi) ?? [];
+      arr.push(hi);
+      fileHunks.set(fi, arr);
+    }
+
+    const refs: string[] = [];
+    for (const [fi, his] of fileHunks) {
+      const file = diffs[fi];
+      if (!file) continue;
+      // If all hunks selected, use the full file span shorthand
+      if (his.length === file.hunks.length) {
+        refs.push(fileSpanRef(file));
+      } else {
+        const spans = his
+          .sort((a, b) => a - b)
+          .map((hi) => {
+            const h = file.hunks[hi];
+            if (!h) return null;
+            const start = h.newStart;
+            const end = h.newStart + h.newLines - 1;
+            return start === end ? `L${start}` : `L${start}-L${end}`;
+          })
+          .filter(Boolean);
+        refs.push(`${file.path}:${spans.join(",")}`);
+      }
+    }
 
     const contextPrefix = `[Re: changes in ${refs.join("; ")}]\n\n`;
     const fullMessage = contextPrefix + askMsg.trim();
@@ -223,14 +288,14 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
       }
       toast.success("Question sent to agent");
       setAskMsg("");
-      setCheckedFiles(new Set());
+      setCheckedHunks(new Set());
       onAskSent?.();
     } catch (e) {
       toast.error(String(e));
     } finally {
       setAskSending(false);
     }
-  }, [jobId, askMsg, checkedFiles, diffs, isTerminal, navigate, onAskSent]);
+  }, [jobId, askMsg, checkedHunks, diffs, isTerminal, navigate, onAskSent]);
 
   const totalAdditions = diffs.reduce((sum, f) => sum + (f.additions ?? 0), 0);
   const totalDeletions = diffs.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
@@ -261,45 +326,83 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
           <div className="flex-1 overflow-y-auto">
             {diffs.map((file, i) => {
               const Icon = STATUS_ICON[file.status] ?? FileCode;
-              const checked = checkedFiles.has(i);
+              const fileChecked = isFileFullyChecked(i);
+              const filePartial = isFilePartiallyChecked(i);
               return (
-                <div
-                  key={i}
-                  className={cn(
-                    "flex items-center gap-1.5 px-2 py-2 text-sm transition-colors w-full",
-                    i === selectedIdx ? "bg-accent" : "hover:bg-accent/50",
-                  )}
-                >
-                  {/* Checkbox — visible when ask is active, disabled placeholder when not */}
-                  {canAsk ? (
-                    <Tooltip content="Select to ask about this file's changes">
-                      <button
-                        type="button"
-                        onClick={() => toggleFile(i)}
-                        className={cn(
-                          "shrink-0 w-5 h-5 md:w-3.5 md:h-3.5 rounded-[3px] border flex items-center justify-center transition-colors cursor-pointer",
-                          checked
-                            ? "bg-primary border-primary text-primary-foreground"
-                            : "border-muted-foreground/40 hover:border-muted-foreground",
-                        )}
-                      >
-                        {checked && <Check size={12} strokeWidth={3} />}
-                      </button>
-                    </Tooltip>
-                  ) : (
-                    <span className="shrink-0 w-5 md:w-3.5" />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedIdx(i)}
-                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                <div key={i} className="flex flex-col">
+                  <div
+                    className={cn(
+                      "flex items-center gap-1.5 px-2 py-2 text-sm transition-colors w-full",
+                      i === selectedIdx ? "bg-accent" : "hover:bg-accent/50",
+                    )}
                   >
-                    <Icon size={14} className={cn("shrink-0", STATUS_ICON_CLASS[file.status])} />
-                    <TruncatedPath path={file.path} />
-                    <span className={cn("text-xs border rounded px-1 hidden sm:inline", STATUS_BADGE[file.status])}>
-                      +{file.additions} -{file.deletions}
-                    </span>
-                  </button>
+                    {/* File checkbox — tri-state: unchecked / partial (minus) / fully checked */}
+                    {canAsk ? (
+                      <Tooltip content="Select to ask about this file's changes">
+                        <button
+                          type="button"
+                          onClick={() => toggleFile(i)}
+                          className={cn(
+                            "shrink-0 w-5 h-5 md:w-3.5 md:h-3.5 rounded-[3px] border flex items-center justify-center transition-colors cursor-pointer",
+                            fileChecked || filePartial
+                              ? "bg-primary border-primary text-primary-foreground"
+                              : "border-muted-foreground/40 hover:border-muted-foreground",
+                          )}
+                        >
+                          {fileChecked && <Check size={12} strokeWidth={3} />}
+                          {filePartial && <Minus size={12} strokeWidth={3} />}
+                        </button>
+                      </Tooltip>
+                    ) : (
+                      <span className="shrink-0 w-5 md:w-3.5" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIdx(i)}
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                    >
+                      <Icon size={14} className={cn("shrink-0", STATUS_ICON_CLASS[file.status])} />
+                      <TruncatedPath path={file.path} />
+                      <span className={cn("text-xs border rounded px-1 hidden sm:inline", STATUS_BADGE[file.status])}>
+                        +{file.additions} -{file.deletions}
+                      </span>
+                    </button>
+                  </div>
+                  {/* Per-hunk checkboxes — shown for the selected file when it has multiple hunks */}
+                  {canAsk && i === selectedIdx && file.hunks.length > 1 && (
+                    <div className="flex flex-col border-l-2 border-primary/20 ml-4 md:ml-3">
+                      {file.hunks.map((hunk, hi) => {
+                        const hunkChecked = checkedHunks.has(hunkKey(i, hi));
+                        const start = hunk.newStart;
+                        const end = hunk.newStart + hunk.newLines - 1;
+                        const label = start === end ? `L${start}` : `L${start}–${end}`;
+                        const adds = hunk.lines.filter((l) => l.type === "addition").length;
+                        const dels = hunk.lines.filter((l) => l.type === "deletion").length;
+                        return (
+                          <div
+                            key={hi}
+                            className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:bg-accent/30 transition-colors"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggleHunk(i, hi)}
+                              className={cn(
+                                "shrink-0 w-4 h-4 md:w-3 md:h-3 rounded-[2px] border flex items-center justify-center transition-colors cursor-pointer",
+                                hunkChecked
+                                  ? "bg-primary border-primary text-primary-foreground"
+                                  : "border-muted-foreground/40 hover:border-muted-foreground",
+                              )}
+                            >
+                              {hunkChecked && <Check size={10} strokeWidth={3} />}
+                            </button>
+                            <span className="font-mono">{label}</span>
+                            {adds > 0 && <span className="text-green-400/70">+{adds}</span>}
+                            {dels > 0 && <span className="text-red-400/70">-{dels}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -315,9 +418,46 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
         )}
 
         {/* Monaco Diff Editor */}
-        <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card">
+        <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card flex flex-col">
+          {/* Inline hunk selection strip */}
+          {canAsk && selectedFile && selectedFile.hunks.length > 1 && (
+            <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border overflow-x-auto shrink-0">
+              <span className="text-xs text-muted-foreground shrink-0 mr-1">Hunks:</span>
+              {selectedFile.hunks.map((hunk, hi) => {
+                const hunkChecked = checkedHunks.has(hunkKey(selectedIdx, hi));
+                const start = hunk.newStart;
+                const end = hunk.newStart + hunk.newLines - 1;
+                const label = start === end ? `L${start}` : `L${start}\u2013${end}`;
+                return (
+                  <button
+                    key={hi}
+                    type="button"
+                    onClick={() => toggleHunk(selectedIdx, hi)}
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors shrink-0",
+                      hunkChecked
+                        ? "bg-primary/20 border-primary/50 text-primary"
+                        : "border-border hover:border-muted-foreground text-muted-foreground",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "w-3 h-3 rounded-[2px] border flex items-center justify-center",
+                        hunkChecked
+                          ? "bg-primary border-primary text-primary-foreground"
+                          : "border-current",
+                      )}
+                    >
+                      {hunkChecked && <Check size={8} strokeWidth={3} />}
+                    </span>
+                    <span className="font-mono">{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {loading ? (
-            <div className="flex items-center justify-center h-full">
+            <div className="flex items-center justify-center flex-1">
               <Spinner />
             </div>
           ) : selectedFile ? (
@@ -343,12 +483,16 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
       </div>
 
       {/* Ask-about-diff bar */}
-      {canAsk && checkedFiles.size > 0 && (
+      {canAsk && checkedHunks.size > 0 && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 animate-in slide-in-from-bottom-2 duration-200">
           <div className="flex items-center gap-2">
             <MessageSquare size={16} className="text-primary shrink-0" />
             <span className="text-xs text-muted-foreground">
-              {checkedFiles.size} file{checkedFiles.size > 1 ? "s" : ""} selected
+              {checkedHunks.size} hunk{checkedHunks.size !== 1 ? "s" : ""} selected
+              {" across "}
+              {new Set(Array.from(checkedHunks).map((k) => k.split(":")[0])).size}
+              {" file"}
+              {new Set(Array.from(checkedHunks).map((k) => k.split(":")[0])).size !== 1 ? "s" : ""}
             </span>
           </div>
 

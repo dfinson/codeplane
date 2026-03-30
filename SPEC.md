@@ -1889,25 +1889,57 @@ CREATE TABLE artifacts (
     id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    type TEXT NOT NULL,              -- 'diff_snapshot', 'agent_summary', 'custom'
+    type TEXT NOT NULL,              -- see Artifact Types table below
     mime_type TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     disk_path TEXT NOT NULL,
     phase TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    session_number INTEGER,           -- which session produced this artifact (nullable for legacy rows)
     FOREIGN KEY (job_id) REFERENCES jobs(id)
 );
 ```
 
 #### Artifact Types
 
-| Type | Description | Collection trigger |
-|---|---|---|
-| `diff_snapshot` | Final unified diff of all changes | `JobSucceeded` or `JobFailed` |
-| `agent_summary` | Agent's self-reported summary of work done | `JobSucceeded` |
-| `custom` | Files placed by the agent in `.codeplane/artifacts/` inside the worktree | `JobSucceeded` |
+| Type | Description | Collection trigger | MIME | Upserts? |
+|---|---|---|---|---|
+| `diff_snapshot` | Final unified diff of all file changes, serialized as JSON | `store_diff_snapshot()` (manual / test) | `application/json` | No |
+| `agent_summary` | LLM-generated session summary (task, accomplishments, decisions, blockers, resume instructions) | Session end → `summarize()` | `application/json` | No (one per session) |
+| `session_snapshot` | Raw session state: deduplicated transcript turns + changed files _(legacy — superseded by `session_log`)_ | Session end → `store_session_snapshot()` | `application/json` | No |
+| `session_log` | Unified log across all handoff sessions — aggregated transcript turns + changed files per session | Session end → `upsert_session_log()` | `application/json` | Yes — subsequent sessions append |
+| `agent_plan` | Agent's internal plan steps with status (`completed`, `in_progress`, `pending`) | Job completion → `_store_post_completion_artifacts()` | `application/json` | Yes — latest plan replaces previous |
+| `telemetry_report` | Cost, token, and model-call metrics from the telemetry subsystem | Job completion → `_store_post_completion_artifacts()` | `application/json` | Yes |
+| `approval_history` | Chronological record of all approval requests and resolutions for the job | Job completion → `_store_post_completion_artifacts()` | `application/json` | Yes — accumulates across sessions |
+| `document` | Human-readable text files: markdown from agent session state (`~/.copilot/session-state/`), and `agent.log` (formatted log lines). Also includes `.md`/`.txt`/`.html`/`.csv`/`.log` files from `.codeplane/artifacts/` | Session end + job completion | `text/markdown` or `text/plain` | Yes — same-named docs updated in place |
+| `server_log` | Server-side structlog output scoped to a single job session (JSON Lines) | Session end (see §20.5) | `text/plain` | No (one per session) |
+| `cli_log` | Raw stderr/stdout from the agent SDK process for a session | Session end (see §20.5) | `text/plain` | No (one per session) |
+| `custom` | Any non-document file placed by the agent in `.codeplane/artifacts/` inside the worktree | Session end → `collect_from_workspace()` | Guessed from extension | No |
 
-Custom artifacts are collected by scanning `{worktree_path}/.codeplane/artifacts/` at job completion. Each file found is registered as an artifact with `type: custom`.
+##### Collection Sources
+
+**Workspace scan** — At session end, `collect_from_workspace()` scans
+`{worktree_path}/.codeplane/artifacts/` for all files (max 50 MB each).
+Files are classified by extension:
+
+| Extensions | Type |
+|---|---|
+| `.md`, `.txt`, `.html`, `.csv`, `.log` | `document` |
+| Everything else | `custom` |
+
+**Session storage scan** — `collect_from_session_storage()` scans
+`~/.copilot/session-state/{sdk_session_id}/` for `*.md` files (top-level
+and `files/` subdirectory). These become `document` artifacts with
+`text/markdown` MIME type. Same-named documents are upserted across handoffs.
+
+**Post-completion artifacts** — After a job reaches a terminal state,
+`_store_post_completion_artifacts()` creates `telemetry_report`, `agent_plan`,
+`approval_history`, and `agent.log` (as `document`). These are only created
+when there is data to store (e.g. no `approval_history` if there were zero
+approvals).
+
+**Session-scoped log artifacts** — `server_log` and `cli_log` are collected
+per §20.5. One pair per session for multi-session jobs.
 
 #### diff_snapshots
 
