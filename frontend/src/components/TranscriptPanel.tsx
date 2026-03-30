@@ -639,7 +639,7 @@ function ToolIconGlyph({ icon, className }: { icon: ToolIconDef; className?: str
 }
 
 // ---------------------------------------------------------------------------
-// Sub-agent step — collapsible pill (B) that expands into an inset card (A)
+// Sub-agent section — collapsible group with indented child operations
 // ---------------------------------------------------------------------------
 
 const SUB_AGENT_TOOLS = new Set(["Task", "task", "runSubagent", "search_subagent", "skill"]);
@@ -649,41 +649,116 @@ function isSubagentTool(toolName?: string): boolean {
   return SUB_AGENT_TOOLS.has(stripMcpPrefix(toolName));
 }
 
-function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+interface ToolSegment {
+  type: "standalone" | "subagent-group";
+  entry: TranscriptEntry;
+  children: TranscriptEntry[];
+}
+
+function groupToolCalls(calls: TranscriptEntry[]): ToolSegment[] {
+  const segments: ToolSegment[] = [];
+  let i = 0;
+
+  while (i < calls.length) {
+    const call = calls[i]!;
+
+    if (isSubagentTool(call.toolName)) {
+      const children: TranscriptEntry[] = [];
+
+      if (call.role === "tool_running") {
+        // Subagent in progress — all subsequent entries are its child operations
+        i++;
+        while (i < calls.length) {
+          children.push(calls[i]!);
+          i++;
+        }
+      } else {
+        // Completed subagent — collect children that fall within its duration window
+        i++;
+        if (call.toolDurationMs != null && call.toolDurationMs > 0) {
+          const startMs = new Date(call.timestamp).getTime();
+          const endMs = startMs + call.toolDurationMs;
+          while (i < calls.length) {
+            const next = calls[i]!;
+            if (isSubagentTool(next.toolName)) break;
+            const ts = new Date(next.timestamp).getTime();
+            if (ts >= startMs && ts <= endMs + 1000) {
+              children.push(next);
+              i++;
+            } else {
+              break;
+            }
+          }
+        }
+      }
+
+      segments.push({ type: "subagent-group", entry: call, children });
+    } else {
+      segments.push({ type: "standalone", entry: call, children: [] });
+      i++;
+    }
+  }
+
+  return segments;
+}
+
+function SubAgentResult({ result }: { result: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded border border-border/30 bg-muted/10 overflow-hidden mt-1">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-1.5 px-2.5 py-1 text-left text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+      >
+        <Network size={10} className="shrink-0 text-violet-400/60" />
+        <span className="font-medium uppercase tracking-wide">Sub-agent Result</span>
+        <ChevronDown
+          size={9}
+          className={cn("ml-auto shrink-0 transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2 pt-1 border-t border-border/20 text-xs">
+          <TruncatedPayload content={result} maxLength={600} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubAgentSection({
+  entry,
+  childCalls,
+  isActive,
+}: {
+  entry: TranscriptEntry;
+  childCalls: TranscriptEntry[];
+  isActive: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
   const isRunning = entry.role === "tool_running";
   const failed = entry.toolSuccess === false;
 
   const args = parseArgs(entry.toolArgs);
-
-  // Prefer the untruncated label for responsive CSS truncation; fall back to
-  // char-capped toolDisplay for older entries that predate toolDisplayFull.
-  const displaySource = entry.toolDisplayFull
+  const rawLabel = entry.toolDisplayFull
     ?? entry.toolDisplay
     ?? (typeof args.description === "string" ? args.description : null)
     ?? (typeof args.prompt === "string" ? args.prompt : null)
     ?? (typeof args.query === "string" ? args.query : null)
     ?? (typeof args.skill === "string" ? args.skill : null)
-    ?? entry.toolName
-    ?? "Sub-agent";
-  const label = displaySource.replace(/^(?:Task|Subagent|Search agent|Skill):\s*/i, "");
+    ?? "";
+  const description = rawLabel.replace(/^(?:Task|Subagent|Search agent|Skill):\s*/i, "").trim()
+    || "Launching Subagent";
+  const label = `Task: ${description}`;
 
-  // Full prompt for the expanded card — only when args carry more detail than the truncated label.
-  const fullDescription = typeof args.description === "string" ? args.description
-    : typeof args.prompt === "string" ? args.prompt
-    : typeof args.query === "string" ? args.query
-    : typeof args.skill === "string" ? args.skill
-    : null;
-  const fullPrompt = fullDescription && fullDescription.length > label.length + 4 ? fullDescription : null;
-
-  const accentColor = failed ? "border-red-500/50" : "border-violet-500/40";
   const iconColor = failed ? "text-red-400"
     : isRunning || isActive ? "text-violet-400"
     : "text-violet-400/70";
+  const hasContent = childCalls.length > 0 || (!isRunning && entry.toolResult);
 
   return (
     <div className="relative pl-4 sm:pl-5">
-      {/* Icon column — pulse lives here only, not duplicated on the icon */}
+      {/* Icon */}
       <div className={cn(
         "absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center",
         (isActive || isRunning) && "animate-pulse",
@@ -691,10 +766,10 @@ function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: b
         <Network size={13} className={iconColor} />
       </div>
 
-      {/* Collapsed pill row */}
+      {/* Collapsible header */}
       <button
-        onClick={() => !isRunning && setExpanded(!expanded)}
-        className={cn("w-full text-left group", isRunning && "cursor-default")}
+        onClick={() => hasContent && setCollapsed(!collapsed)}
+        className={cn("w-full text-left group", !hasContent && "cursor-default")}
       >
         <div className="flex items-baseline gap-2 py-0.5 min-w-0">
           <span className={cn(
@@ -703,7 +778,7 @@ function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: b
               : isRunning || isActive ? "text-violet-400"
               : "text-foreground/80",
           )}>
-            {label}{isRunning ? "…" : ""}
+            {label}{isRunning ? "\u2026" : ""}
           </span>
           {entry.toolDurationMs != null && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0">
@@ -715,53 +790,49 @@ function SubAgentStep({ entry, isActive }: { entry: TranscriptEntry; isActive: b
               {entry.toolIssue}
             </span>
           )}
-          {!isRunning && (
+          {hasContent && (
             <ChevronDown
               size={10}
               className={cn(
-                "ml-auto shrink-0 text-muted-foreground/50 transition-transform",
-                expanded && "rotate-180",
+                "shrink-0 text-muted-foreground/50 transition-transform",
+                !collapsed && "rotate-180",
               )}
             />
           )}
         </div>
       </button>
 
-      {/* Expanded inset card */}
-      {expanded && !isRunning && (
-        <div className={cn(
-          "mt-1 mb-2 rounded-r border-l-2 border border-border/30 bg-muted/10 text-xs overflow-hidden",
-          accentColor,
-        )}>
-          {/* Header */}
-          <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border/20 bg-muted/20">
-            <Network size={11} className="shrink-0 text-violet-400/80" />
-            <span className="text-[10px] font-medium text-violet-400/90 uppercase tracking-wide">
-              Sub-agent
-            </span>
-          </div>
+      {/* Collapsible body — subtly indented child operations + result */}
+      {!collapsed && hasContent && (
+        <div className="pl-1 sm:pl-1.5 border-l border-violet-500/20 mt-0.5 space-y-0.5">
+          {/* Child tool operations */}
+          {childCalls.map((child, i) =>
+            isSubagentTool(child.toolName) ? (
+              <SubAgentSection
+                key={child.seq}
+                entry={child}
+                childCalls={[]}
+                isActive={isActive && i === childCalls.length - 1}
+              />
+            ) : (
+              <ToolStep
+                key={child.seq}
+                entry={child}
+                isActive={isActive && i === childCalls.length - 1}
+              />
+            ),
+          )}
 
-          {/* Full description / prompt */}
-          {fullPrompt && (
-            <div className="px-3 py-1.5 border-b border-border/20">
-              <span className="text-muted-foreground font-medium text-[10px] uppercase">Prompt</span>
-              <TruncatedPayload content={fullPrompt} maxLength={400} />
+          {/* Running indicator when no children yet */}
+          {isRunning && childCalls.length === 0 && (
+            <div className="text-xs text-violet-400/60 animate-pulse py-0.5 pl-4 sm:pl-5">
+              Running\u2026
             </div>
           )}
 
-          {/* Error banner */}
-          {failed && entry.toolIssue && (
-            <div className="px-3 py-1.5 bg-red-500/5 border-b border-border/20">
-              <span className="text-red-400 font-medium">{entry.toolIssue}</span>
-            </div>
-          )}
-
-          {/* Result */}
-          {entry.toolResult && (
-            <div className="px-3 py-1.5">
-              <span className="text-muted-foreground font-medium text-[10px] uppercase">Result</span>
-              <TruncatedPayload content={entry.toolResult} maxLength={600} />
-            </div>
+          {/* Sub-agent result (expandable, when completed) */}
+          {!isRunning && entry.toolResult && (
+            <SubAgentResult result={entry.toolResult} />
           )}
         </div>
       )}
@@ -826,23 +897,31 @@ function ToolStep({ entry, isActive }: {
 function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive: boolean }) {
   // Filter out report_intent — it's extracted as the intent label, not a visible tool step
   const visibleCalls = calls.filter((c) => c.toolName !== "report_intent");
+  const segments = groupToolCalls(visibleCalls);
   return (
     <div className="relative sm:ml-1">
       <div className="absolute left-[7px] top-2 bottom-2 w-px border-l border-dotted border-border/60" />
       <div className="space-y-0.5">
-        {visibleCalls.map((call, i) => isSubagentTool(call.toolName) ? (
-          <SubAgentStep
-            key={call.seq}
-            entry={call}
-            isActive={isActive && i === visibleCalls.length - 1}
-          />
-        ) : (
-          <ToolStep
-            key={call.seq}
-            entry={call}
-            isActive={isActive && i === visibleCalls.length - 1}
-          />
-        ))}
+        {segments.map((seg, i) => {
+          const isLastSeg = i === segments.length - 1;
+          if (seg.type === "subagent-group") {
+            return (
+              <SubAgentSection
+                key={seg.entry.seq}
+                entry={seg.entry}
+                childCalls={seg.children}
+                isActive={isActive && isLastSeg}
+              />
+            );
+          }
+          return (
+            <ToolStep
+              key={seg.entry.seq}
+              entry={seg.entry}
+              isActive={isActive && isLastSeg}
+            />
+          );
+        })}
       </div>
     </div>
   );
