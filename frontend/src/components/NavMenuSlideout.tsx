@@ -4,7 +4,7 @@ import { Menu, TerminalSquare, BarChart3, History, Settings, ExternalLink } from
 import { Sheet } from "./ui/sheet";
 import { Tooltip } from "./ui/tooltip";
 import { useStore } from "../store";
-import { modKey } from "../lib/utils";
+import { cn, modKey } from "../lib/utils";
 
 export function NavMenuSlideout() {
   const [open, setOpen] = useState(false);
