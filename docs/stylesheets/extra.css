@@ -131,10 +131,12 @@ body {
     radial-gradient(circle at top right, rgb(59 130 246 / 0.16), transparent 30%),
     linear-gradient(180deg, rgb(17 24 39 / 0.98), rgb(15 23 42 / 0.92));
   box-shadow: var(--cp-shadow);
+  text-align: center;
 }
 
 .md-typeset .hero p {
   max-width: 48rem;
+  margin-inline: auto;
   font-size: 1.05rem;
   color: var(--cp-foreground-muted);
 }
@@ -157,6 +159,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 0.8rem;
+  justify-content: center;
   margin-top: 1.5rem;
 }
 
