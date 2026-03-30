@@ -1072,16 +1072,30 @@ class ClaudeAdapter(AgentAdapterInterface):
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await consumer
 
-            # Disconnect the SDK client in THIS task context — the same task
-            # where connect() opened the anyio cancel scope.  Disconnecting
-            # from a fire-and-forget task causes the scope cancellation to
-            # propagate back to the _run_job task as a spurious CancelledError.
+            # Run client.disconnect() in a SEPARATE asyncio task.  The anyio
+            # cancel-scope teardown inside disconnect() calls task.cancel() on
+            # whichever task hosts the scope.  Running in a separate task
+            # isolates this so the _run_job task never receives a spurious
+            # CancelledError that cascades through all error handlers.
             client = self._clients.get(session_id)
             if client is not None:
+                async def _do_disconnect(c: object = client, sid: str = session_id) -> None:
+                    try:
+                        await c.disconnect()  # type: ignore[union-attr]
+                    except (Exception, asyncio.CancelledError):
+                        log.warning("claude_client_disconnect_inner_error", session_id=sid, exc_info=True)
+
+                dc_task = asyncio.create_task(
+                    _do_disconnect(), name=f"claude-dc-{session_id[:8]}",
+                )
                 try:
-                    await asyncio.wait_for(client.disconnect(), timeout=10)
-                except (Exception, asyncio.CancelledError):
-                    log.warning("claude_client_stream_disconnect_failed", exc_info=True)
+                    await asyncio.wait_for(asyncio.shield(dc_task), timeout=10)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    log.warning("claude_client_stream_disconnect_failed", session_id=session_id, exc_info=True)
+                    if not dc_task.done():
+                        dc_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await dc_task
             self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:

@@ -516,6 +516,13 @@ class RuntimeService:
                 log.info("shutdown_task_cancelled", job_id=job_id)
             else:
                 log.info("job_canceled_safety_net", job_id=job_id)
+                # Clear pending task-level cancellation so the DB operations
+                # below are not immediately re-interrupted.  This handles the
+                # case where anyio's cancel-scope teardown (during SDK client
+                # disconnect) flagged this task for cancellation.
+                _cur = asyncio.current_task()
+                if _cur is not None:
+                    _cur.uncancel()
                 # Safety net: _handle_job_canceled inside _run_job may have
                 # been interrupted by a second CancelledError during abort().
                 # Attempt the DB transition here so the job doesn't stay stuck
@@ -1069,7 +1076,18 @@ class RuntimeService:
     async def _ensure_terminal_state(self, job_id: str) -> None:
         """Ensure the job is in a terminal state.  Called as a last-resort
         safety net during cleanup so that no job is ever permanently stuck
-        in 'running'."""
+        in 'running'.
+
+        During server shutdown, jobs are intentionally left as-is so that
+        ``recover_on_startup`` can resume them on the next launch.
+        """
+        if self._shutting_down:
+            return
+        # Clear any pending task-level cancellation so the DB transition
+        # below is not immediately interrupted.
+        _cur = asyncio.current_task()
+        if _cur is not None:
+            _cur.uncancel()
         try:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
@@ -1793,13 +1811,21 @@ class RuntimeService:
                 log.error("dequeue_failed", exc_info=True)
 
     async def _fail_job(self, job_id: str, reason: str) -> None:
-        """Transition a job to failed state and publish the event."""
-        try:
+        """Transition a job to failed state and publish the event.
+
+        The DB transition is run inside ``asyncio.shield`` so that a
+        pending task-level cancellation (e.g. from anyio cancel-scope
+        teardown) cannot interrupt the write.
+        """
+        async def _do_fail() -> None:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 await svc.get_job(job_id)
                 await svc.transition_state(job_id, JobState.failed, failure_reason=reason)
                 await session.commit()
+
+        try:
+            await asyncio.shield(_do_fail())
             self._set_progress_terminal_state(job_id, JobState.failed)
             await self._event_bus.publish(
                 DomainEvent(
