@@ -7,6 +7,9 @@ hide:
 
 CodePlane tracks every token, tool call, and dollar across all jobs — giving you fleet-wide visibility into what your coding agents cost and how they perform. Open the analytics dashboard with **Alt+A**.
 
+!!! tip "Understanding costs"
+    For subscription plans (like Claude Max or Copilot Business), CodePlane shows what the same usage **would cost at API rates**. This gives you a consistent cost metric for comparing models and optimizing agent behavior, even when you're on a flat-rate plan.
+
 ![Analytics Dashboard](images/screenshots/desktop/analytics-dashboard.png)
 
 ---
@@ -141,6 +144,3 @@ Every job tracks token usage in detail:
 - **Cache read tokens** and **cache write tokens** (prompt caching)
 - **Cache hit rate** — percentage of input tokens served from cache
 - Per-model and per-repo token aggregations
-
-!!! tip "Understanding costs"
-    For subscription plans (like Claude Max or Copilot Business), CodePlane shows what the same usage **would cost at API rates**. This gives you a consistent cost metric for comparing models and optimizing agent behavior, even when you're on a flat-rate plan.
