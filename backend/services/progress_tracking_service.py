@@ -302,7 +302,7 @@ class ProgressTrackingService:
         Maps agent todo statuses to plan step statuses and publishes
         ``agent_plan_updated`` immediately, bypassing the LLM extraction loop.
         """
-        _STATUS_MAP = {
+        status_map = {
             "not-started": "pending",
             "in-progress": "active",
             "in_progress": "active",
@@ -318,7 +318,7 @@ class ProgressTrackingService:
             if not label:
                 continue
             raw_status = str(item.get("status", "pending")).strip().lower()
-            status = _STATUS_MAP.get(raw_status, "pending")
+            status = status_map.get(raw_status, "pending")
             steps.append({"label": label, "status": status})
 
         if not steps:

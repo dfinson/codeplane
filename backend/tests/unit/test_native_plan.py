@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from backend.models.events import DomainEvent, DomainEventKind
 from backend.services.progress_tracking_service import ProgressTrackingService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -182,12 +179,14 @@ class TestIngestNativePlan:
         # Simulate what RuntimeService._ingest_native_plan does
         payload = {
             "tool_name": "manage_todo_list",
-            "tool_args": json.dumps({
-                "todoList": [
-                    {"id": 1, "title": "Setup project", "status": "completed"},
-                    {"id": 2, "title": "Write code", "status": "in-progress"},
-                ]
-            }),
+            "tool_args": json.dumps(
+                {
+                    "todoList": [
+                        {"id": 1, "title": "Setup project", "status": "completed"},
+                        {"id": 2, "title": "Write code", "status": "in-progress"},
+                    ]
+                }
+            ),
         }
         args = json.loads(payload["tool_args"])
         items = args.get("todoList") or args.get("todos") or []
@@ -204,12 +203,14 @@ class TestIngestNativePlan:
 
         payload = {
             "tool_name": "TodoWrite",
-            "tool_args": json.dumps({
-                "todos": [
-                    {"id": "1", "content": "Investigate issue", "status": "completed"},
-                    {"id": "2", "content": "Apply fix", "status": "in_progress"},
-                ]
-            }),
+            "tool_args": json.dumps(
+                {
+                    "todos": [
+                        {"id": "1", "content": "Investigate issue", "status": "completed"},
+                        {"id": "2", "content": "Apply fix", "status": "in_progress"},
+                    ]
+                }
+            ),
         }
         args = json.loads(payload["tool_args"])
         items = args.get("todoList") or args.get("todos") or []

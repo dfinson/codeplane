@@ -1,4 +1,5 @@
 """Tests for the redesigned analytics endpoints (scorecard, model-comparison, job-context)."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _scorecard_data() -> dict:
+def _scorecard_data() -> dict[str, object]:
     return {
         "budget": [
             {
@@ -38,7 +39,7 @@ def _scorecard_data() -> dict:
     }
 
 
-def _model_comparison_rows() -> list[dict]:
+def _model_comparison_rows() -> list[dict[str, object]]:
     return [
         {
             "model": "claude-sonnet-4-20250514",
@@ -62,7 +63,7 @@ def _model_comparison_rows() -> list[dict]:
     ]
 
 
-def _job_context_data() -> dict:
+def _job_context_data() -> dict[str, object]:
     return {
         "job": {
             "job_id": "j-1",
@@ -157,9 +158,7 @@ async def test_model_comparison_with_repo_filter():
     ):
         from backend.api.analytics import analytics_model_comparison
 
-        result = await analytics_model_comparison(
-            session=session, period=14, repo="/tmp/my-repo"
-        )
+        result = await analytics_model_comparison(session=session, period=14, repo="/tmp/my-repo")
 
     comparison_mock.assert_awaited_once_with(period_days=14, repo="/tmp/my-repo")
     assert result.repo == "/tmp/my-repo"
@@ -189,10 +188,10 @@ async def test_job_context_returns_job_data():
 
         result = await analytics_job_context(job_id="j-1", session=session)
 
-    assert result["job"]["job_id"] == "j-1"
-    assert result["repo_avg"]["avg_cost_usd"] == 0.25
+    assert result["job"]["job_id"] == "j-1"  # type: ignore[index]
+    assert result["repo_avg"]["avg_cost_usd"] == 0.25  # type: ignore[index]
     assert len(result["flags"]) == 1
-    assert result["flags"][0]["level"] == "warning"
+    assert result["flags"][0]["level"] == "warning"  # type: ignore[index]
 
 
 @pytest.mark.asyncio

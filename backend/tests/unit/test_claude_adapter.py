@@ -491,7 +491,12 @@ class TestProcessAssistantMessage:
 
     @patch("backend.services.tool_formatters.format_tool_display_full", return_value="TodoWrite")
     @patch("backend.services.tool_formatters.format_tool_display", return_value="Update todo list")
-    def test_todo_write_emits_transcript(self, mock_fmt: MagicMock, mock_fmt_full: MagicMock, adapter: ClaudeAdapter) -> None:
+    def test_todo_write_emits_transcript(
+        self,
+        mock_fmt: MagicMock,
+        mock_fmt_full: MagicMock,
+        adapter: ClaudeAdapter,
+    ) -> None:
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
         tool_block = _FakeToolUseBlock(name="TodoWrite", id="tool-2")

@@ -661,9 +661,13 @@ class CopilotAdapter(AgentAdapterInterface):
                 duration_ms=dur,
                 attrs={
                     "success": success,
-                    **({
-                        "error_snippet": result_text[:500],
-                    } if not success and result_text else {}),
+                    **(
+                        {
+                            "error_snippet": result_text[:500],
+                        }
+                        if not success and result_text
+                        else {}
+                    ),
                 },
                 tool_category=category,
                 tool_target=target,
@@ -899,7 +903,11 @@ class CopilotAdapter(AgentAdapterInterface):
                                 result_text = str(parts)
                         if not result_text and data.partial_output:
                             result_text = data.partial_output
-                    from backend.services.tool_formatters import extract_tool_issue, format_tool_display, format_tool_display_full
+                    from backend.services.tool_formatters import (
+                        extract_tool_issue,
+                        format_tool_display,
+                        format_tool_display_full,
+                    )
 
                     tool_args_str = buffered.get("tool_args")
                     success = bool(data.success) if data and data.success is not None else True

@@ -12,6 +12,7 @@ vi.mock("../../api/client", () => ({
   fetchSettings: vi.fn(),
   fetchRepoDetail: vi.fn(),
   suggestNames: vi.fn(),
+  fetchModelComparison: vi.fn().mockResolvedValue({ models: [] }),
 }));
 
 // Mock sonner toast
@@ -188,7 +189,7 @@ describe("JobCreationScreen", () => {
 
     await waitFor(() => {
       expect(createJob).toHaveBeenCalledWith(
-        expect.objectContaining({ permission_mode: "auto" }),
+        expect.objectContaining({ permission_mode: "full_auto" }),
       );
     });
   });

@@ -114,11 +114,11 @@ class PermissionMode(StrEnum):
     review_and_approve = "review_and_approve"
 
     @classmethod
-    def _missing_(cls, value: object) -> "PermissionMode | None":
+    def _missing_(cls, value: object) -> PermissionMode | None:
         """Accept legacy names so existing configs and DB rows keep working."""
-        _LEGACY = {"auto": cls.full_auto, "read_only": cls.observe_only, "approval_required": cls.review_and_approve}
+        legacy = {"auto": cls.full_auto, "read_only": cls.observe_only, "approval_required": cls.review_and_approve}
         if isinstance(value, str):
-            return _LEGACY.get(value)
+            return legacy.get(value)
         return None
 
 

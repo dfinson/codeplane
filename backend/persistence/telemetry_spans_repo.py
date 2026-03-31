@@ -136,5 +136,3 @@ class TelemetrySpansRepo(BaseRepository):
             """),
         )
         return [dict(r) for r in result.mappings().all()]
-
-

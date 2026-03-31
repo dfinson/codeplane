@@ -243,9 +243,9 @@ class ConsoleLog:
             self._jobs.pop(event.job_id, None)
 
         elif kind == DomainEventKind.job_title_updated:
-            title = event.payload.get("title")
-            if title and event.job_id in self._jobs:
-                self._jobs[event.job_id].title = str(title)
+            updated_title: str | None = event.payload.get("title")
+            if updated_title and event.job_id in self._jobs:
+                self._jobs[event.job_id].title = updated_title
 
         elif kind == DomainEventKind.progress_headline:
             headline = str(event.payload.get("headline") or "")
@@ -258,13 +258,9 @@ class ConsoleLog:
 
         elif kind == DomainEventKind.approval_requested:
             desc = str(event.payload.get("description") or "approval needed")
-            self._print_event(
-                ts, "⏸", "waiting_for_approval", event.job_id, f"approval needed · {desc[:60]}"
-            )
+            self._print_event(ts, "⏸", "waiting_for_approval", event.job_id, f"approval needed · {desc[:60]}")
 
-    def _print_event(
-        self, ts: str, icon: str, state: str, job_id: str, message: str
-    ) -> None:
+    def _print_event(self, ts: str, icon: str, state: str, job_id: str, message: str) -> None:
         style = _STATE_STYLE.get(state, "")
         line = Text()
         line.append(ts, style="dim")

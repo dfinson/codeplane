@@ -273,7 +273,7 @@ async def turn_economics_for_job(
 async def analytics_scorecard(
     session: FromDishka[AsyncSession],
     period: Annotated[int, Query(ge=1, le=365)] = 7,
-):
+) -> ScorecardResponse:
     """Top-level scorecard: budget per SDK, activity with resolution, quota, cost trend."""
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
@@ -286,13 +286,11 @@ async def analytics_model_comparison(
     session: FromDishka[AsyncSession],
     period: Annotated[int, Query(ge=1, le=365)] = 30,
     repo: str | None = None,
-):
+) -> ModelComparisonResponse:
     """Per-model comparison with resolution data joined from jobs table."""
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepo
 
-    rows = await TelemetrySummaryRepo(session).model_comparison(
-        period_days=period, repo=repo
-    )
+    rows = await TelemetrySummaryRepo(session).model_comparison(period_days=period, repo=repo)
     return ModelComparisonResponse(period=period, repo=repo, models=rows)
 
 

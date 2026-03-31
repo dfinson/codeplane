@@ -96,6 +96,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         self._turn_counters: dict[str, int] = {}
         self._current_phases: dict[str, str] = {}
         self._retry_trackers: dict[str, RetryTracker] = {}
+        self._write_tasks: list[asyncio.Task[None]] = []
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -111,10 +112,8 @@ class ClaudeAdapter(AgentAdapterInterface):
             task.cancel()
         stderr_path = self._stderr_files.pop(session_id, None)
         if stderr_path:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(stderr_path)
-            except OSError:
-                pass
         if job_id:
             self._job_start_times.pop(job_id, None)
             self._job_main_models.pop(job_id, None)
@@ -158,10 +157,7 @@ class ClaudeAdapter(AgentAdapterInterface):
             return  # No event loop — skip DB write
 
         # Prune completed tasks
-        if hasattr(self, '_write_tasks'):
-            self._write_tasks = [t for t in self._write_tasks if not t.done()]
-        else:
-            self._write_tasks: list[asyncio.Task[None]] = []  # type: ignore[no-redef]
+        self._write_tasks = [t for t in self._write_tasks if not t.done()]
 
         # Drop writes when too many are in-flight to prevent pool exhaustion
         if len(self._write_tasks) >= self._MAX_PENDING_WRITES:
@@ -415,7 +411,7 @@ class ClaudeAdapter(AgentAdapterInterface):
         try:
             from claude_code_sdk._errors import MessageParseError
         except ImportError:
-            MessageParseError = None  # type: ignore[assignment,misc]
+            MessageParseError = None  # type: ignore[assignment,misc]  # noqa: N806
 
         seq = [0]
         queue = self._queues.get(session_id)
@@ -424,7 +420,7 @@ class ClaudeAdapter(AgentAdapterInterface):
 
         done = False
         parse_error_retries = 0
-        _MAX_PARSE_ERROR_RETRIES = 5
+        max_parse_error_retries = 5
         try:
             while not done:
                 try:
@@ -461,7 +457,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                             error=str(exc),
                             retry=parse_error_retries,
                         )
-                        if parse_error_retries >= _MAX_PARSE_ERROR_RETRIES:
+                        if parse_error_retries >= max_parse_error_retries:
                             log.error(
                                 "claude_parse_error_retry_limit",
                                 session_id=session_id,
@@ -471,7 +467,11 @@ class ClaudeAdapter(AgentAdapterInterface):
                                 session_id,
                                 SessionEvent(
                                     kind=SessionEventKind.error,
-                                    payload={"message": f"Claude SDK: too many consecutive parse errors ({parse_error_retries})"},
+                                    payload={
+                                        "message": (
+                                            f"Claude SDK: too many consecutive parse errors ({parse_error_retries})"
+                                        ),
+                                    },
                                 ),
                             )
                             done = True
@@ -522,9 +522,7 @@ class ClaudeAdapter(AgentAdapterInterface):
                     self._process_tool_result_block(session_id, block, seq, job_id)
         elif isinstance(content, str) and content.strip() and job_id:
             # Human / operator follow-up message
-            self._schedule_db_write(
-                self._db_write("increment", job_id=job_id, operator_messages=1)
-            )
+            self._schedule_db_write(self._db_write("increment", job_id=job_id, operator_messages=1))
 
     def _process_assistant_message(
         self,
@@ -831,9 +829,13 @@ class ClaudeAdapter(AgentAdapterInterface):
                     duration_ms=duration_ms,
                     attrs={
                         "success": success,
-                        **({
-                            "error_snippet": result_text[:500],
-                        } if not success and result_text else {}),
+                        **(
+                            {
+                                "error_snippet": result_text[:500],
+                            }
+                            if not success and result_text
+                            else {}
+                        ),
                     },
                     tool_category=category,
                     tool_target=target,
@@ -1049,7 +1051,7 @@ class ClaudeAdapter(AgentAdapterInterface):
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=330)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Consumer hung or sentinel was lost — treat as stream end.
                     log.error(
                         "claude_stream_queue_timeout",
@@ -1079,18 +1081,20 @@ class ClaudeAdapter(AgentAdapterInterface):
             # CancelledError that cascades through all error handlers.
             client = self._clients.get(session_id)
             if client is not None:
+
                 async def _do_disconnect(c: object = client, sid: str = session_id) -> None:
                     try:
-                        await c.disconnect()  # type: ignore[union-attr]
+                        await c.disconnect()  # type: ignore[attr-defined]
                     except (Exception, asyncio.CancelledError):
                         log.warning("claude_client_disconnect_inner_error", session_id=sid, exc_info=True)
 
                 dc_task = asyncio.create_task(
-                    _do_disconnect(), name=f"claude-dc-{session_id[:8]}",
+                    _do_disconnect(),
+                    name=f"claude-dc-{session_id[:8]}",
                 )
                 try:
                     await asyncio.wait_for(asyncio.shield(dc_task), timeout=10)
-                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                except (TimeoutError, asyncio.CancelledError, Exception):
                     log.warning("claude_client_stream_disconnect_failed", session_id=session_id, exc_info=True)
                     if not dc_task.done():
                         dc_task.cancel()

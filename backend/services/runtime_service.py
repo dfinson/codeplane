@@ -770,7 +770,6 @@ class RuntimeService:
                     )
                     await session.commit()
 
-
             if resolution_event is not None:
                 await self._event_bus.publish(resolution_event)
 
@@ -1099,7 +1098,8 @@ class RuntimeService:
                         current_state=str(job.state),
                     )
                     await svc.transition_state(
-                        job_id, JobState.failed,
+                        job_id,
+                        JobState.failed,
                         failure_reason="Job cleanup: forced to failed (previous state transitions failed)",
                     )
                     await session.commit()
@@ -1817,6 +1817,7 @@ class RuntimeService:
         pending task-level cancellation (e.g. from anyio cancel-scope
         teardown) cannot interrupt the write.
         """
+
         async def _do_fail() -> None:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
@@ -2020,7 +2021,9 @@ class RuntimeService:
             # Build a naming context hint so the LLM can produce a name that
             # reflects both the new instruction AND its follow-up relationship.
             parent_label = original.title or original.id
-            parent_job_context = f"This is a follow-up task continuing work from '{parent_label}' (parent job: {original.id})."
+            parent_job_context = (
+                f"This is a follow-up task continuing work from '{parent_label}' (parent job: {original.id})."
+            )
 
             override_prompt = await self._build_followup_handoff_prompt_for_job(
                 session,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, Callable
+from typing import TYPE_CHECKING, Annotated, Any
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -41,6 +41,8 @@ from backend.services.tool_formatters import format_tool_display, format_tool_di
 from backend.services.utility_session import UtilitySessionService
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from backend.models.domain import Job
 
 from backend.models.domain import JobState, PermissionMode, Resolution
@@ -74,14 +76,14 @@ def _resolve_display_field(
 ) -> str | None:
     stored = payload.get(field)
     if stored is not None:
-        return stored
+        return str(stored)
     tool_name: str | None = payload.get("tool_name")
     if not tool_name:
         return None
     tool_args: str | None = payload.get("tool_args")
     tool_result = payload.get("tool_result") or None  # normalise empty string → None
     tool_success: bool = payload.get("tool_success") is not False
-    return formatter(tool_name, tool_args, tool_result=tool_result, tool_success=tool_success)
+    return str(formatter(tool_name, tool_args, tool_result=tool_result, tool_success=tool_success))
 
 
 def _job_to_response(job: Job, progress_preview: ProgressPreview | None = None) -> JobResponse:

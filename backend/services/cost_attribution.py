@@ -147,12 +147,14 @@ async def compute_attribution(session: AsyncSession, job_id: str) -> None:
     diff_added = 0
     diff_removed = 0
     try:
-        from backend.persistence.event_repo import EventRepo
         from backend.models.events import DomainEventKind
+        from backend.persistence.event_repo import EventRepository
 
-        event_repo = EventRepo(session)
+        event_repo = EventRepository(session)
         diff_events = await event_repo.list_by_job(
-            job_id, kinds=[DomainEventKind.diff_updated], limit=100,
+            job_id,
+            kinds=[DomainEventKind.diff_updated],
+            limit=100,
         )
         if diff_events:
             changed_files = diff_events[-1].payload.get("changed_files", [])
