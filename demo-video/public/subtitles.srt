@@ -1,0 +1,115 @@
+1
+00:00:00,500 --> 00:00:03,000
+A control plane for coding agents.
+
+2
+00:00:03,500 --> 00:00:06,000
+Run, supervise, and review — from any device.
+
+3
+00:00:06,500 --> 00:00:09,500
+Built for headless agent execution.
+
+4
+00:00:10,500 --> 00:00:13,500
+Agents run in the dark.
+
+5
+00:00:14,000 --> 00:00:16,500
+No visibility into reasoning or tool calls.
+
+6
+00:00:17,000 --> 00:00:19,000
+No approval gates for risky operations.
+
+7
+00:00:19,500 --> 00:00:21,500
+No way to intervene mid-run.
+
+8
+00:00:22,500 --> 00:00:25,000
+See every job at a glance.
+
+9
+00:00:25,500 --> 00:00:28,500
+Kanban board tracks queued, running, and review states.
+
+10
+00:00:29,000 --> 00:00:31,500
+Multiple agents run in parallel.
+
+11
+00:00:32,000 --> 00:00:34,500
+Each job runs in its own git worktree.
+
+12
+00:00:35,500 --> 00:00:38,500
+Write a prompt. Pick your agent and model.
+
+13
+00:00:39,000 --> 00:00:41,500
+Choose a permission mode.
+
+14
+00:00:42,000 --> 00:00:44,500
+Full auto, review & approve, or observe only.
+
+15
+00:00:45,000 --> 00:00:47,500
+One click to launch.
+
+16
+00:00:48,500 --> 00:00:51,000
+Watch the agent think in real time.
+
+17
+00:00:51,500 --> 00:00:54,000
+Reasoning, tool calls, and plan progress stream live.
+
+18
+00:00:54,500 --> 00:00:57,000
+Approval gates pause on risky actions.
+
+19
+00:00:57,500 --> 00:00:59,500
+Approve, reject, or trust the session.
+
+20
+00:01:00,000 --> 00:01:01,500
+Send operator messages to steer the agent.
+
+21
+00:01:02,500 --> 00:01:05,000
+Review every change before it lands.
+
+22
+00:01:05,500 --> 00:01:08,000
+Syntax-highlighted side-by-side diffs.
+
+23
+00:01:08,500 --> 00:01:10,500
+Browse the full workspace, not just changed files.
+
+24
+00:01:11,000 --> 00:01:13,500
+Merge, create a PR, or discard.
+
+25
+00:01:14,500 --> 00:01:17,000
+Track token usage and costs across the fleet.
+
+26
+00:01:17,500 --> 00:01:20,000
+Compare models by cost and performance.
+
+27
+00:01:20,500 --> 00:01:22,500
+No more invisible token burn.
+
+28
+00:01:23,500 --> 00:01:26,000
+Headless. Remote-first. Open.
+
+29
+00:01:26,500 --> 00:01:29,500
+CodePlane — control your coding agents.
