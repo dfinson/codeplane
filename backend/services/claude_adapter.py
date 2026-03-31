@@ -87,14 +87,10 @@ def _kill_sdk_subprocess(client: object | None) -> None:
         pid = getattr(process, "pid", None)
     if pid is None:
         return
-    try:
+    with contextlib.suppress(ProcessLookupError, OSError):
         os.kill(pid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass  # already dead
-    try:
+    with contextlib.suppress(ChildProcessError):
         os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-        pass  # not our child or already reaped
 
 
 class ClaudeAdapter(AgentAdapterInterface):
