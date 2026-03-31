@@ -361,10 +361,23 @@ body {
   .md-typeset .hero-actions {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.65rem;
   }
 
   .md-typeset .hero-actions .md-button {
     text-align: center;
+    padding: 0.7rem 1.2rem;
+    font-size: 0.95rem;
+  }
+}
+
+@media screen and (min-width: 44.9845em) and (max-width: 60em) {
+  .md-typeset .hero-actions {
+    gap: 1rem;
+  }
+
+  .md-typeset .hero-actions .md-button {
+    padding: 0.6rem 1.4rem;
   }
 }
 
