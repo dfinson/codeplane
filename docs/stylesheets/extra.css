@@ -292,13 +292,13 @@ body {
   margin-inline: auto;
 }
 
-@media screen and (max-width: 44.9844em) {
+@media screen and (max-width: 60em) {
   .md-typeset .screenshot-desktop {
-    display: none;
+    display: none !important;
   }
 
   .md-typeset .screenshot-mobile {
-    display: block;
+    display: block !important;
   }
 }
 
