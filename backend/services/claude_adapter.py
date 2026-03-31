@@ -95,16 +95,16 @@ def _kill_sdk_subprocess(client: object | None) -> None:
     # try to clean them up through anyio (which triggers the connection
     # pool contamination on __del__).
     with contextlib.suppress(Exception):
-        transport._process = None  # type: ignore[union-attr]
-        transport._stdout_stream = None  # type: ignore[union-attr]
-        transport._stdin_stream = None  # type: ignore[union-attr]
-        transport._ready = False  # type: ignore[union-attr]
+        transport._process = None  # private access needed for cleanup
+        transport._stdout_stream = None
+        transport._stdin_stream = None
+        transport._ready = False
     with contextlib.suppress(Exception):
         query = getattr(client, "_query", None)
         if query is not None:
             query._tg = None  # prevent cancel-scope teardown in GC
-            client._query = None  # type: ignore[union-attr]
-        client._transport = None  # type: ignore[union-attr]
+            client._query = None  # type: ignore[attr-defined]
+        client._transport = None  # type: ignore[attr-defined]
 
 
 class ClaudeAdapter(AgentAdapterInterface):
