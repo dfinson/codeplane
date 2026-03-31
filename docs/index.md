@@ -18,7 +18,7 @@ hide:
 
 CodePlane orchestrates coding agents headless on your workstation — from your desktop, phone, or tablet. Start work, talk through the diffs, and merge when you're ready. Track every token and dollar, and let other agents orchestrate jobs through the built-in MCP server.
 
-:material-cellphone-link:{ .lg .middle } **Mobile-first. Supervise from anywhere.**
+:material-cellphone-link:{ .lg .middle } **Mobile is a first-class citizen. Supervise from any device.**
 
 <div class="hero-actions" markdown>
 [Quick Start](quick-start.md){ .md-button }
