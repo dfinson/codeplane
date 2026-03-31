@@ -1073,15 +1073,21 @@ class RuntimeService:
         await self._dequeue_next()
 
     async def _ensure_terminal_state(self, job_id: str) -> None:
-        """Ensure the job is in a terminal state.  Called as a last-resort
-        safety net during cleanup so that no job is ever permanently stuck
-        in 'running'.
+        """Ensure the job is not stuck in an in-flight state.  Called as a
+        last-resort safety net during cleanup so that no job is ever
+        permanently stuck in 'running' or 'waiting_for_approval'.
+
+        'review' is intentionally excluded — it is a valid resting state
+        where the agent has finished and the job awaits operator action.
 
         During server shutdown, jobs are intentionally left as-is so that
         ``recover_on_startup`` can resume them on the next launch.
         """
         if self._shutting_down:
             return
+        # Only force-fail jobs that are truly in-flight.  'review' and
+        # terminal states are fine.
+        _STUCK_STATES = frozenset({JobState.running, JobState.waiting_for_approval})
         # Clear any pending task-level cancellation so the DB transition
         # below is not immediately interrupted.
         _cur = asyncio.current_task()
@@ -1091,7 +1097,7 @@ class RuntimeService:
             async with self._session_factory() as session:
                 svc = self._make_job_service(session)
                 job = await svc.get_job(job_id)
-                if job is not None and job.state not in TERMINAL_STATES:
+                if job is not None and job.state in _STUCK_STATES:
                     log.error(
                         "ensure_terminal_state_forcing_failure",
                         job_id=job_id,
