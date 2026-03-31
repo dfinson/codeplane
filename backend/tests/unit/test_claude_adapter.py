@@ -873,7 +873,7 @@ class TestAbortSession:
         await adapter.abort_session("sess-1")
 
         assert client._interrupted
-        assert client._transport._closed
+        # subprocess kill is via raw os.kill — no SDK methods called
         assert "sess-1" not in adapter._clients
 
     @pytest.mark.asyncio

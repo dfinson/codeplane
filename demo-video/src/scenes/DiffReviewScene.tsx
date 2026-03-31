@@ -1,13 +1,13 @@
 import React from "react";
 import {
   AbsoluteFill,
-  Img,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
   interpolate,
   Sequence,
 } from "remotion";
+import { Gif } from "@remotion/gif";
 import { COLORS, FONT } from "../constants";
 
 /**
@@ -51,9 +51,10 @@ export const DiffReviewScene: React.FC = () => {
           boxShadow: "0 30px 80px rgba(99, 102, 241, 0.12)",
         }}
       >
-        <Img
+        <Gif
           src={staticFile("assets/job-diff-viewer.gif")}
-          style={{ width: 2800, height: "auto" }}
+          width={2800}
+          fit="contain"
         />
       </div>
 
@@ -70,6 +71,7 @@ export const DiffReviewScene: React.FC = () => {
             key={i}
             from={Math.round((3 + i * 1.5) * fps)}
             premountFor={Math.round(0.5 * fps)}
+            layout="none"
           >
             <ResolutionCard
               label={res.label}

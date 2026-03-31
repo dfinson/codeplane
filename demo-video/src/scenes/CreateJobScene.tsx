@@ -1,13 +1,13 @@
 import React from "react";
 import {
   AbsoluteFill,
-  Img,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
   interpolate,
   Sequence,
 } from "remotion";
+import { Gif } from "@remotion/gif";
 import { COLORS, FONT } from "../constants";
 
 /**
@@ -56,9 +56,10 @@ export const CreateJobScene: React.FC = () => {
           flex: "0 0 auto",
         }}
       >
-        <Img
+        <Gif
           src={staticFile("assets/create-job-flow.gif")}
-          style={{ width: 2000, height: "auto" }}
+          width={2000}
+          fit="contain"
         />
       </div>
 
@@ -89,6 +90,7 @@ export const CreateJobScene: React.FC = () => {
             key={i}
             from={Math.round((1.5 + i * 1.5) * fps)}
             premountFor={Math.round(0.5 * fps)}
+            layout="none"
           >
             <StepItem index={i + 1} text={step} />
           </Sequence>

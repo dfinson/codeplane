@@ -96,6 +96,7 @@ export const ProblemScene: React.FC = () => {
           key={i}
           from={Math.round((1 + i * 2) * fps)}
           premountFor={Math.round(0.5 * fps)}
+          layout="none"
         >
           <ProblemItem icon={p.icon} text={p.text} />
         </Sequence>

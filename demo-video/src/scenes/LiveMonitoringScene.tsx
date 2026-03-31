@@ -1,13 +1,13 @@
 import React from "react";
 import {
   AbsoluteFill,
-  Img,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
   interpolate,
   Sequence,
 } from "remotion";
+import { Gif } from "@remotion/gif";
 import { COLORS, FONT } from "../constants";
 
 /**
@@ -69,9 +69,10 @@ export const LiveMonitoringScene: React.FC = () => {
           boxShadow: "0 30px 80px rgba(99, 102, 241, 0.12)",
         }}
       >
-        <Img
+        <Gif
           src={staticFile("assets/transcript-streaming.gif")}
-          style={{ width: 2800, height: "auto" }}
+          width={2800}
+          fit="contain"
         />
       </div>
 
@@ -89,6 +90,7 @@ export const LiveMonitoringScene: React.FC = () => {
             key={i}
             from={Math.round((2 + i * 1.2) * fps)}
             premountFor={Math.round(0.5 * fps)}
+            layout="none"
           >
             <CapBadge icon={cap.icon} text={cap.text} />
           </Sequence>

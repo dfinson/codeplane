@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import tempfile
 import time
 import uuid
@@ -56,6 +57,44 @@ _PERMISSION_MODE_MAP: dict[PermissionMode, str] = {
     PermissionMode.observe_only: "plan",
     PermissionMode.review_and_approve: "default",
 }
+
+
+def _kill_sdk_subprocess(client: object | None) -> None:
+    """Terminate the SDK's CLI subprocess using raw OS signals.
+
+    This MUST be used instead of ``client.disconnect()`` or
+    ``transport.close()`` because both invoke anyio methods whose
+    cancel-scope teardown injects ``CancelledError`` into every
+    SQLAlchemy connection in the process via the greenlet adapter.
+
+    Pure OS calls (``os.kill`` / ``os.waitpid``) bypass anyio entirely
+    and cannot contaminate other asyncio tasks.
+    """
+    if client is None:
+        return
+    transport = getattr(client, "_transport", None)
+    if transport is None:
+        return
+    process = getattr(transport, "_process", None)
+    if process is None:
+        return
+    # anyio Process wraps an asyncio.subprocess.Process in _process
+    inner = getattr(process, "_process", None)
+    pid: int | None = None
+    if inner is not None:
+        pid = getattr(inner, "pid", None)
+    if pid is None:
+        pid = getattr(process, "pid", None)
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass  # already dead
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        pass  # not our child or already reaped
 
 
 class ClaudeAdapter(AgentAdapterInterface):
@@ -1074,21 +1113,20 @@ class ClaudeAdapter(AgentAdapterInterface):
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await consumer
 
-            # Terminate the CLI subprocess directly via the transport.
-            # We MUST NOT call client.disconnect() because it invokes
-            # Query.close() → _tg.cancel_scope.cancel(), which injects
-            # CancelledError into EVERY SQLAlchemy connection via anyio's
-            # greenlet adapter — even connections in other asyncio tasks.
-            # transport.close() cleanly shuts down the subprocess (close
-            # stdin, terminate process, wait) without touching cancel scopes.
-            client = self._clients.get(session_id)
-            if client is not None:
-                transport = getattr(client, "_transport", None)
-                if transport is not None:
-                    try:
-                        await transport.close()
-                    except (Exception, asyncio.CancelledError):
-                        log.debug("claude_transport_close_error", session_id=session_id, exc_info=True)
+            # Kill the CLI subprocess using raw OS signals.
+            #
+            # We MUST NOT call client.disconnect(), transport.close(), or
+            # ANY method on anyio-owned objects.  The SDK's Query holds an
+            # anyio task-group whose cancel-scope was entered in a different
+            # asyncio task.  Touching ANY anyio object (streams, Process,
+            # etc.) from this task triggers cross-task cancel-scope
+            # propagation that injects CancelledError into the entire
+            # SQLAlchemy connection pool.
+            #
+            # os.kill(SIGTERM) + os.waitpid are pure OS calls that bypass
+            # anyio entirely.  The subprocess is already dead or dying;
+            # we just reap it so it doesn't become a zombie.
+            _kill_sdk_subprocess(self._clients.get(session_id))
             self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
@@ -1126,14 +1164,8 @@ class ClaudeAdapter(AgentAdapterInterface):
         except (Exception, asyncio.CancelledError):
             log.warning("claude_abort_interrupt_failed", session_id=session_id, exc_info=True)
 
-        # Directly close the transport to kill the subprocess.
-        # MUST NOT call client.disconnect() — see stream_events comment.
-        transport = getattr(client, "_transport", None)
-        if transport is not None:
-            try:
-                await transport.close()
-            except (Exception, asyncio.CancelledError):
-                log.debug("claude_abort_transport_close_error", session_id=session_id, exc_info=True)
+        # Kill subprocess with raw OS signals — see stream_events comment.
+        _kill_sdk_subprocess(client)
         self._cleanup_session(session_id)
 
     async def complete(self, prompt: str) -> str | None:

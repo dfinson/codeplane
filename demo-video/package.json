@@ -15,6 +15,7 @@
   "dependencies": {
     "@remotion/captions": "^4.0.441",
     "@remotion/cli": "^4.0.441",
+    "@remotion/gif": "^4.0.441",
     "@remotion/media": "^4.0.441",
     "@remotion/transitions": "^4.0.441",
     "react": "^19.2.4",
