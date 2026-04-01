@@ -505,10 +505,6 @@ export function JobDetailScreen() {
           </a>
         )}
 
-        <div className="rounded-md border border-border bg-background p-3 mt-3">
-          <p className="text-sm whitespace-pre-wrap leading-relaxed text-foreground">{job.prompt}</p>
-        </div>
-
         {/* Model downgrade banner */}
         {job.modelDowngraded && (
           <div className="flex items-start gap-2 mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
