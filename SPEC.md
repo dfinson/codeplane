@@ -1032,14 +1032,26 @@ In production mode, the backend serves the built React frontend as static files.
 
 ### 7.1 Tunnel
 
-Dev Tunnels exposes the local application over HTTPS, enabling remote access from phones and other devices.
+CodePlane supports two remote-access tunnel providers: **Dev Tunnels** (default) and **Cloudflare Tunnels**. Both expose the local server over HTTPS for remote access from phones and other devices.
+
+#### Dev Tunnels (default)
 
 - Requires the `devtunnel` CLI installed and authenticated on the machine
 - Exposes the local port over HTTPS at `https://{tunnel}-{port}.{region}.devtunnels.ms`
 - Tunnel URLs are provisioned by the Dev Tunnels relay
-- Password auth is always enabled when tunneling — remote access requires the password printed in the startup banner
+- The relay requires Microsoft account login (tunnel-owner only) — this is an identity gate independent of the CodePlane password
 - HTTPS is enforced by the Dev Tunnels relay
+- Password auth is always enabled when tunneling — remote access requires the password printed in the startup banner
 - The backend enforces CORS to prevent cross-origin abuse from other browser tabs
+
+#### Cloudflare Tunnels
+
+- Requires the `cloudflared` CLI and a pre-created named tunnel with a routed public hostname
+- Uses a tunnel token (env var `CPL_CLOUDFLARE_TUNNEL_TOKEN`) — no local config file needed
+- Ingress routing must be configured in the Cloudflare dashboard or API before first use
+- DNS must point at the tunnel (CNAME to `{tunnel-id}.cfargotunnel.com`, proxied)
+- Password auth is always enabled — same as Dev Tunnels
+- **Important:** Unlike Dev Tunnels, Cloudflare Tunnels have **no built-in identity gate** at the relay level. Anyone who discovers the hostname can reach the CodePlane login page. To add an identity layer, configure Cloudflare Access (Zero Trust) with an email OTP or SSO policy on the hostname. See [Security §21.1](#211-authentication) for details.
 
 ### 7.2 Startup
 
@@ -2855,14 +2867,20 @@ The global `server.log` file rotation (§20.2) is independent and unaffected.
 CodePlane uses **password-based authentication** for remote access and **localhost trust** for local access:
 
 1. **Localhost binding**: The backend binds to `127.0.0.1` by default, making it accessible only from the local machine. Localhost requests bypass password auth entirely.
-2. **Password auth for remote access**: When `--remote` is used, a password is required. It is set explicitly (`--password`, `CPL_DEVTUNNEL_PASSWORD` env var / `.env`) or auto-generated. Remote clients must authenticate via the login page; sessions use httpOnly cookies with 24h expiry.
-3. **Private tunnel relay**: Remote traffic reaches the server through a private Dev Tunnel that requires the tunnel owner's Microsoft account login. Only the authenticated tunnel owner can reach the URL; the CodePlane password provides a second authentication layer.
+2. **Password auth for remote access**: When `--remote` is used, a password is required. It is set explicitly (`--password`, `CPL_PASSWORD` env var / `.env`) or auto-generated. Remote clients must authenticate via the login page; sessions use httpOnly cookies with 24h expiry.
+3. **Relay-level identity gate (provider-dependent)**: The security posture of the relay layer differs by provider:
+
+| Provider | Relay Identity Gate | Effect |
+|----------|-------------------|--------|
+| **Dev Tunnels** | Microsoft account login (tunnel owner only) | Two-factor by default: MS identity + CodePlane password |
+| **Cloudflare Tunnels** | None by default | Password-only unless Cloudflare Access is configured |
+| **Cloudflare + Access** | Email OTP, SSO, or mTLS via Cloudflare Zero Trust | Two-factor: Cloudflare identity + CodePlane password |
 
 This means:
 
 - Local access requires no credentials
-- Remote access requires Microsoft login (tunnel owner) **and** the password printed in the operator's terminal
-- Dev Tunnels provides the HTTPS relay path with owner-only access; application access is additionally gated by password auth
+- Remote via Dev Tunnels requires Microsoft login **and** the CodePlane password — two independent auth layers out of the box
+- Remote via Cloudflare requires **only** the CodePlane password unless the operator configures Cloudflare Access on the hostname — a startup warning is emitted to make this explicit
 - Rate limiting (5 attempts/min/IP) protects the login endpoint against brute-force
 - If the server is intentionally bound to `0.0.0.0` (e.g., for LAN access), a startup warning is emitted noting that no authentication is enforced
 
@@ -2898,11 +2916,25 @@ SSE connections are capped at `max_sse_connections` (default: 5) to prevent reso
 
 ### 21.7 Tunnel Security
 
-When Dev Tunnels is active:
+Both tunnel providers enforce HTTPS and require password authentication. The key difference is the relay-level identity gate:
 
-- Remote clients connect through the `devtunnels.ms` relay URL, protected by password auth
-- Tunnel URLs should be treated as sensitive operational details even though password auth is mandatory
+**Dev Tunnels:**
+
+- Remote clients connect through the `devtunnels.ms` relay URL
+- The relay requires the tunnel owner's Microsoft account login before the request reaches CodePlane
+- Tunnel URLs should be treated as sensitive operational details even though they are gated by MS auth + password
 - HTTPS is enforced by the Dev Tunnels relay
+
+**Cloudflare Tunnels:**
+
+- Remote clients connect through the operator's custom hostname (e.g., `codeplane.example.com`)
+- The tunnel relay itself has **no identity gate** — anyone who discovers the hostname reaches the CodePlane login page
+- To add an identity gate, configure a Cloudflare Access application on the hostname with an email OTP, SSO, or mTLS policy
+- HTTPS is enforced by Cloudflare's edge
+- A startup warning is emitted when `--provider cloudflare` is used, noting the single-factor security posture and recommending Cloudflare Access
+
+**Common to both:**
+
 - Password auth is mandatory
 - Session cookies are set with `Secure; HttpOnly; SameSite=Lax`
 - Rate limiting prevents brute-force attacks on the login endpoint

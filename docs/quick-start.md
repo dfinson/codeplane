@@ -46,7 +46,7 @@ cpl up --remote                    # auto-generates a password
 cpl info                           # prints URL + QR code
 ```
 
-A password is always required for remote access — one is generated automatically unless you set it with `--password` or the `CPL_DEVTUNNEL_PASSWORD` env var. See [Configuration > Remote Access](configuration.md#remote-access) for Cloudflare Tunnels and other options.
+A password is always required for remote access — one is generated automatically unless you set it with `--password` or the `CPL_PASSWORD` env var. See [Configuration > Remote Access](configuration.md#remote-access) for Cloudflare Tunnels and other options.
 
 !!! note "Security"
     CodePlane is secure by default — localhost-only binding, password-protected remote access, and agents isolated in dedicated worktrees. See [Security](security.md) for the full threat model and best practices.

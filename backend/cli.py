@@ -175,11 +175,21 @@ def up(
             click.secho(error, fg="red", err=True)
             raise SystemExit(1)
 
-    # Password priority: --password flag > CPL_DEVTUNNEL_PASSWORD env/dotenv > auto-generate for tunnel
+        if remote_provider is RemoteProvider.cloudflare:
+            click.secho(
+                "WARNING: Cloudflare Tunnels have no built-in identity gate.\n"
+                "  Anyone who discovers the hostname can reach the login page.\n"
+                "  Recommendation: add a Cloudflare Access policy (email OTP or SSO)\n"
+                "  on this hostname. See: https://codeplane.dev/configuration/#cloudflare-tunnels",
+                fg="yellow",
+                err=True,
+            )
+
+    # Password priority: --password flag > CPL_PASSWORD env/dotenv > auto-generate for remote
     effective_password: str | None = password
 
     if not effective_password and not no_password:
-        env_pw = _env("CPL_DEVTUNNEL_PASSWORD")
+        env_pw = _env("CPL_PASSWORD")
         if env_pw:
             effective_password = env_pw
 

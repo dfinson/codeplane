@@ -23,7 +23,7 @@ cpl up [options]
 | `--remote` | Enable Dev Tunnels for remote access | disabled |
 | `--dev` | Skip frontend build (backend-only development) | disabled |
 | `--port PORT` | Server port | `8080` |
-| `--password SECRET` | Tunnel authentication password | from `CPL_DEVTUNNEL_PASSWORD` env var |
+| `--password SECRET` | Remote access password | from `CPL_PASSWORD` env var |
 | `--provider PROVIDER` | Tunnel provider (`devtunnel` or `cloudflare`) | `devtunnel` |
 | `--tunnel-name NAME` | Dev Tunnel name (reused across restarts) | random |
 | `--skip-preflight` | Skip preflight checks | disabled |

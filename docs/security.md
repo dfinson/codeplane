@@ -17,12 +17,14 @@ CodePlane, and recommended practices for safe operation.
 
 ## Threat Model
 
-The risk depends on how you run CodePlane. There are three access modes:
+The risk depends on how you run CodePlane. There are four access modes:
 
 | Mode | Command | Who can connect | Auth layers | Risk |
 |------|---------|-----------------|-------------|------|
 | **Localhost** (default) | `cpl up` | Local processes only | Auto-password (optional) | ✅ Low |
-| **Remote tunnel** | `cpl up --remote` | Tunnel owner only | Microsoft login + password | ✅ Low |
+| **Dev Tunnels** | `cpl up --remote` | Tunnel owner only | Microsoft login + password | ✅ Low |
+| **Cloudflare + Access** | `cpl up --remote --provider cloudflare` | Cloudflare Access policy | Identity gate (OTP/SSO) + password | ✅ Low |
+| **Cloudflare (no Access)** | `cpl up --remote --provider cloudflare` | Anyone who knows the hostname | Password only | ⚠️ Medium |
 | **All interfaces** | `cpl up --host 0.0.0.0` | Any device on your network | Password required | ⚠️ Medium |
 
 ### Safe Defaults
@@ -30,9 +32,10 @@ The risk depends on how you run CodePlane. There are three access modes:
 Out of the box, CodePlane is configured conservatively:
 
 - ✅ **Localhost-only** — server binds to `127.0.0.1`, inaccessible from the network
-- ✅ **Password auto-generated** — remote and tunnel access always requires a password
+- ✅ **Password auto-generated** — remote access always requires a password, regardless of provider
 - ✅ **Dangerous combos blocked** — `--host 0.0.0.0 --no-password` is rejected at startup; `--remote --no-password` is also rejected
-- ✅ **Private tunnel** — `--remote` creates a Dev Tunnel that requires Microsoft account login (tunnel-owner only); the URL is unguessable and access is gated by both MS auth and the CodePlane password
+- ✅ **Dev Tunnels identity gate** — `--remote` with the default provider creates a Dev Tunnel that requires Microsoft account login (tunnel-owner only); the URL is unguessable and access is gated by both MS auth and the CodePlane password
+- ⚠️ **Cloudflare Tunnels** — `--remote --provider cloudflare` has **no built-in identity gate** at the relay level. A startup warning is emitted recommending Cloudflare Access. See [Configuration > Cloudflare Tunnels](configuration.md#cloudflare-tunnels) for setup details
 - ✅ **Worktree isolation** — agents operate in a dedicated Git worktree, never on your main branch
 - ✅ **Approval system** — destructive Git commands always require operator approval
 - ✅ **Secure cookies** — httpOnly, SameSite=Strict, Secure (when over HTTPS)

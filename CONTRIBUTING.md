@@ -15,7 +15,7 @@ This guide is for contributors working from source. If you just want to use Code
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
 make install                  # uv sync + npm ci
-cp .env.sample .env           # optional — set CPL_DEVTUNNEL_PASSWORD for tunnel auth
+cp .env.sample .env           # optional — set CPL_PASSWORD for remote auth
 ```
 
 ### Build & Run
@@ -82,7 +82,7 @@ Migrations run automatically on `cpl up`.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CPL_DEVTUNNEL_PASSWORD` | Password for Dev Tunnels remote access | _(auto-generated with --remote)_ |
+| `CPL_PASSWORD` | Remote access password (any provider) | _(auto-generated with --remote)_ |
 | `CPL_CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel token | _(none)_ |
 | `CPL_CLOUDFLARE_HOSTNAME` | Cloudflare public hostname | _(none)_ |
 | `OTEL_EXPORTER_ENDPOINT` | OTLP exporter endpoint | _(none — local only)_ |
