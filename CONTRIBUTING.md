@@ -25,6 +25,10 @@ make run                      # build frontend + start server with remote access
 # or manually:
 uv run cpl up --dev           # backend-only (skip frontend build)
 uv run cpl up                 # full stack (builds frontend on startup)
+uv run cpl up --port 9090     # custom port
+uv run cpl up --remote --provider cloudflare  # Cloudflare Tunnel
+uv run cpl down               # stop server
+uv run cpl restart            # restart (preserves sessions)
 ```
 
 The server runs on `http://localhost:8080` and serves the built frontend from `backend/web/`.
@@ -77,6 +81,33 @@ uv run alembic revision --autogenerate -m "description" # create new
 ```
 
 Migrations run automatically on `cpl up`.
+
+## Frontend Type Generation
+
+When backend API schemas change:
+
+```bash
+# Start the server first
+uv run cpl up --dev
+
+# In another terminal
+cd frontend
+npm run generate:api    # generates src/api/schema.d.ts
+```
+
+The generated `schema.d.ts` is gitignored — import types via `src/api/types.ts` aliases instead.
+
+## Developer Tools
+
+### `tools/dev_restart.py`
+
+Graceful server restart that preserves running jobs:
+
+1. Pauses active jobs
+2. Stops the server
+3. Rebuilds the frontend
+4. Restarts the server
+5. Resumes paused jobs
 
 ## Environment Variables
 
@@ -194,3 +225,28 @@ docs: update spec section 14
 test: add state machine transition tests
 chore: update dependencies
 ```
+
+## CI/CD
+
+CodePlane uses GitHub Actions for continuous integration and releases.
+
+### CI Pipeline
+
+Triggered on every push to `main` and every pull request. Runs three parallel jobs:
+
+- **Backend** — Install (`uv sync`), lint (`ruff check`), format check (`ruff format --check`), type check (`mypy`), test (`pytest` with 70% coverage threshold), upload coverage to Codecov
+- **Frontend** — Install (`npm ci`), lint (`eslint`), type check (`tsc --noEmit`), test (`vitest` with coverage), upload coverage to Codecov
+- **E2E** (depends on Backend + Frontend passing) — Build frontend, install Playwright + Chromium, run E2E tests, upload report on failure
+
+CI uses concurrency groups per branch/PR, cancelling in-progress runs when new commits are pushed.
+
+### Releases
+
+Triggered by pushing a version tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds the frontend, builds the Python package (`uv build`), creates a GitHub Release with auto-generated notes, and attaches the distribution files.
