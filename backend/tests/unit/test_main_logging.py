@@ -22,6 +22,16 @@ def test_console_noise_filter_allows_uvicorn_warning() -> None:
     assert filt.filter(_record("uvicorn.error", logging.WARNING)) is True
 
 
+def test_console_noise_filter_suppresses_invalid_http_request() -> None:
+    filt = _ConsoleNoiseFilter()
+    rec = logging.LogRecord(
+        name="uvicorn.error", level=logging.WARNING,
+        pathname=__file__, lineno=1,
+        msg="Invalid HTTP request received.", args=(), exc_info=None,
+    )
+    assert filt.filter(rec) is False
+
+
 def test_console_noise_filter_suppresses_sse_info() -> None:
     filt = _ConsoleNoiseFilter()
     assert filt.filter(_record("backend.services.sse_manager", logging.INFO)) is False

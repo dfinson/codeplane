@@ -39,12 +39,21 @@ _CONSOLE_NOISE_PREFIXES: tuple[str, ...] = (
     "backend.services.utility_session",
 )
 
+# Warning-level messages that are safe to suppress on the console.
+# They still reach the log file.
+_SUPPRESSED_WARNINGS: tuple[tuple[str, str], ...] = (
+    ("uvicorn.error", "Invalid HTTP request received."),
+)
+
 
 class _ConsoleNoiseFilter(logging.Filter):
     """Keep warnings/errors on console while suppressing chatty info logs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= logging.WARNING:
+            for logger_name, message in _SUPPRESSED_WARNINGS:
+                if record.name == logger_name and record.getMessage() == message:
+                    return False
             return True
         return not any(record.name.startswith(prefix) for prefix in _CONSOLE_NOISE_PREFIXES)
 
