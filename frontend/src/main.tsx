@@ -1,3 +1,4 @@
+import "./monacoSetup"; // Must be first — configures Monaco to load locally, not from CDN
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";

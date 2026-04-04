@@ -24,7 +24,11 @@ test: ## Run backend and frontend tests with coverage
 
 run: ## Build frontend and start server with remote access
 	cd frontend && npm run build
-	uv run cpl up --remote
+	@if [ -n "$$CPL_CLOUDFLARE_TUNNEL_TOKEN" ] && [ -n "$$CPL_CLOUDFLARE_HOSTNAME" ]; then \
+		uv run cpl up --remote --provider cloudflare; \
+	else \
+		uv run cpl up --remote; \
+	fi
 
 down: ## Gracefully pause sessions and stop the server
 	uv run cpl down

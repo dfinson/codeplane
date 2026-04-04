@@ -158,7 +158,7 @@ export function JobDetailScreen() {
     }).catch((err) => console.error("Failed to fetch approvals", err));
   }, [jobId]);
 
-  // Load diff data: on mount, when job reaches terminal state, or when diff tab selected.
+  // Load diff data: on mount and when job state changes (e.g. reaches terminal state).
   const jobState = job?.state;
   useEffect(() => {
     if (!jobId) return;
@@ -169,7 +169,7 @@ export function JobDetailScreen() {
         }));
       })
       .catch((err) => console.error("Failed to fetch job diff", err));
-  }, [jobId, jobState, tab]);
+  }, [jobId, jobState]);
 
   const doCancelJob = useCallback(async () => {
     if (!jobId) return;

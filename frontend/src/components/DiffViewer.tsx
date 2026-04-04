@@ -4,7 +4,7 @@ import { type LucideIcon, FileCode, FilePlus, FileMinus, FileEdit, MessageSquare
 import { DiffEditor } from "@monaco-editor/react";
 import { toast } from "sonner";
 import { useStore, selectJobDiffs } from "../store";
-import { fetchJobDiff, sendOperatorMessage, resumeJob, continueJob } from "../api/client";
+import { sendOperatorMessage, resumeJob, continueJob } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { Spinner } from "./ui/spinner";
 import { Button } from "./ui/button";
@@ -187,18 +187,8 @@ export default function DiffViewer({ jobId, jobState, onAskSent }: DiffViewerPro
   const hunkLineRangesRef = useRef(hunkLineRanges);
   hunkLineRangesRef.current = hunkLineRanges;
 
-  // Fetch historical diff from API on mount (for completed jobs / page refresh)
-  useEffect(() => {
-    fetchJobDiff(jobId)
-      .then((files) => {
-        if (files.length > 0) {
-          useStore.setState((s) => ({
-            diffs: { ...s.diffs, [jobId]: files },
-          }));
-        }
-      })
-      .catch((err) => console.error("Failed to fetch job diff", err));
-  }, [jobId]);
+  // NOTE: diff data is fetched by JobDetailScreen and stored in the Zustand
+  // store — no need to duplicate the fetch here.
 
   const selectedFile = diffs[selectedIdx];
 
