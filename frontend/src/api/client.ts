@@ -121,6 +121,34 @@ export function fetchJobDiff(jobId: string): Promise<DiffFileModel[]> {
   return request(`/jobs/${encodeURIComponent(jobId)}/diff`);
 }
 
+export function fetchJobSteps(jobId: string): Promise<import("../store").Step[]> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/steps`);
+}
+
+export function fetchTranscriptSearch(
+  jobId: string,
+  q: string,
+  opts?: { roles?: string[]; stepId?: string; limit?: number },
+): Promise<Array<{ seq: number; role: string; content: string; toolName: string | null; stepId: string | null; stepNumber: number | null; timestamp: string }>> {
+  const params = new URLSearchParams({ q });
+  if (opts?.roles) opts.roles.forEach((r) => params.append("roles", r));
+  if (opts?.stepId) params.set("step_id", opts.stepId);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  return request(`/jobs/${encodeURIComponent(jobId)}/transcript/search?${params}`);
+}
+
+export function fetchStepDiff(jobId: string, stepId: string): Promise<{ stepId: string; diff: string; filesChanged: number }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/steps/${encodeURIComponent(stepId)}/diff`);
+}
+
+export function restoreToSha(jobId: string, sha: string): Promise<{ restored: boolean; sha: string }> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sha }),
+  });
+}
+
 /** Full state hydration for a single job — used after reconnect or page refresh. */
 export function fetchJobSnapshot(jobId: string): Promise<{
   job: import("../store").JobSummary;

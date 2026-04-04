@@ -96,6 +96,28 @@ export interface TranscriptEntry {
   toolDurationMs?: number;  // tool_call: execution time in milliseconds
   // AI-generated group summary — patched in asynchronously via tool_group_summary SSE
   toolGroupSummary?: string;
+  stepId?: string;      // step this event belongs to (added by StepTracker)
+  stepNumber?: number;  // sequential step number within the job
+}
+
+export interface Step {
+  stepId: string;
+  stepNumber: number;
+  jobId: string;
+  turnId: string | null;
+  intent: string;
+  title: string | null;
+  status: "running" | "completed" | "failed" | "canceled";
+  trigger: string;
+  toolCount: number;
+  durationMs: number | null;
+  startedAt: string;
+  completedAt: string | null;
+  filesRead: string[] | null;
+  filesWritten: string[] | null;
+  startSha: string | null;
+  endSha: string | null;
+  artifactCount: number;
 }
 
 export interface TimelineEntry {
@@ -235,6 +257,8 @@ interface AppState {
   diffs: Record<string, DiffFileModel[]>; // keyed by jobId
   timelines: Record<string, TimelineEntry[]>; // keyed by jobId
   plans: Record<string, PlanStep[]>; // keyed by jobId
+  steps: Record<string, Step[]>;           // keyed by jobId
+  transcriptByStep: Record<string, Record<string, TranscriptEntry[]>>;  // jobId → stepId → entries
   /** Accumulated streaming text for in-progress agent messages, keyed by
    * "${jobId}:${turnId}" (or "${jobId}:__default__" when turnId is absent).
    * Cleared when the complete agent message arrives for that turn. */
@@ -278,6 +302,7 @@ interface AppState {
     diff: DiffFileModel[];
     approvals: ApprovalRequest[];
     timeline: TimelineEntry[];
+    steps?: Step[];
   }) => void;
 
   // Terminal actions
@@ -298,6 +323,16 @@ export function _resetSdkInitForTesting() {
   _sdkInitPromise = null;
 }
 
+function buildTranscriptByStep(entries: TranscriptEntry[]): Record<string, TranscriptEntry[]> {
+  const byStep: Record<string, TranscriptEntry[]> = {};
+  for (const entry of entries) {
+    if (entry.stepId) {
+      (byStep[entry.stepId] ??= []).push(entry);
+    }
+  }
+  return byStep;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   jobs: {},
   approvals: {},
@@ -306,6 +341,8 @@ export const useStore = create<AppState>((set, get) => ({
   diffs: {},
   timelines: {},
   plans: {},
+  steps: {},
+  transcriptByStep: {},
   streamingMessages: {},
   telemetryVersions: {},
   connectionStatus: "reconnecting",
@@ -433,6 +470,8 @@ export const useStore = create<AppState>((set, get) => ({
           ...Object.fromEntries(snapshot.approvals.map((a) => [a.id, a])),
         },
         streamingMessages,
+        steps: { ...s.steps, [jobId]: snapshot.steps ?? [] },
+        transcriptByStep: { ...s.transcriptByStep, [jobId]: buildTranscriptByStep(snapshot.transcript ?? []) },
       };
     });
   },
@@ -578,9 +617,87 @@ export const useStore = create<AppState>((set, get) => ({
             }
           }
 
+          // Index by step for O(1) lookup in StepContainer
+          let transcriptByStep = state.transcriptByStep;
+          if (entry.stepId) {
+            const jobIndex = transcriptByStep[jobId] ?? {};
+            const stepEntries = jobIndex[entry.stepId] ?? [];
+            const capped = stepEntries.length >= 500 ? stepEntries.slice(-499) : stepEntries;
+            transcriptByStep = {
+              ...transcriptByStep,
+              [jobId]: { ...jobIndex, [entry.stepId]: [...capped, entry] },
+            };
+          }
+
           return {
             transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
             streamingMessages,
+            transcriptByStep,
+          };
+        }
+
+        case "step_started": {
+          const jobId = payload.jobId as string;
+          const existing = get().steps[jobId] ?? [];
+          const newStep: Step = {
+            stepId: payload.stepId as string,
+            stepNumber: payload.stepNumber as number,
+            jobId,
+            turnId: (payload.turnId as string | null) ?? null,
+            intent: payload.intent as string,
+            title: null,
+            status: "running",
+            trigger: payload.trigger as string,
+            toolCount: 0,
+            durationMs: null,
+            startedAt: payload.startedAt as string,
+            completedAt: null,
+            filesRead: null,
+            filesWritten: null,
+            startSha: null,
+            endSha: null,
+            artifactCount: 0,
+          };
+          return { steps: { ...get().steps, [jobId]: [...existing, newStep] } };
+        }
+
+        case "step_completed": {
+          const jobId = payload.jobId as string;
+          const existing = get().steps[jobId] ?? [];
+          return {
+            steps: {
+              ...get().steps,
+              [jobId]: existing.map((s) =>
+                s.stepId === (payload.stepId as string)
+                  ? {
+                      ...s,
+                      status: payload.status as Step["status"],
+                      toolCount: payload.toolCount as number,
+                      durationMs: (payload.durationMs as number | null) ?? null,
+                      completedAt: new Date().toISOString(),
+                      filesRead: (payload.filesRead as string[] | null) ?? null,
+                      filesWritten: (payload.filesWritten as string[] | null) ?? null,
+                      startSha: (payload.startSha as string | null) ?? null,
+                      endSha: (payload.endSha as string | null) ?? null,
+                    }
+                  : s
+              ),
+            },
+          };
+        }
+
+        case "step_title": {
+          const jobId = payload.jobId as string;
+          const existing = get().steps[jobId] ?? [];
+          return {
+            steps: {
+              ...get().steps,
+              [jobId]: existing.map((s) =>
+                s.stepId === (payload.stepId as string)
+                  ? { ...s, title: payload.title as string }
+                  : s
+              ),
+            },
           };
         }
 
@@ -838,11 +955,16 @@ export const useStore = create<AppState>((set, get) => ({
           if (existing.some((e) => e.role === "divider" && e.timestamp === divider.timestamp)) {
             return { jobs: state.jobs[jobId] ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], ...resetFields } } : state.jobs };
           }
+          // Also reset step state so stale steps from the previous session don't appear
+          const { [jobId]: _s, ...restSteps } = state.steps;
+          const { [jobId]: _t, ...restByStep } = state.transcriptByStep;
           return {
             transcript: { ...state.transcript, [jobId]: [...existing, divider] },
             jobs: state.jobs[jobId]
               ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], ...resetFields } }
               : state.jobs,
+            steps: restSteps,
+            transcriptByStep: restByStep,
           };
         }
 
@@ -1157,3 +1279,14 @@ export const selectArchivedJobs = (state: AppState): JobSummary[] =>
 /** Count of archived jobs known to the store (badge hint). */
 export const selectArchivedCount = (state: AppState): number =>
   Object.values(state.jobs).filter((j) => !!j.archivedAt).length;
+
+const EMPTY_STEPS: Step[] = [];
+export const selectJobSteps = (jobId: string) => (state: AppState) =>
+  state.steps[jobId] ?? EMPTY_STEPS;
+export const selectActiveStep = (jobId: string) => (state: AppState) => {
+  const steps = state.steps[jobId] ?? [];
+  return steps.find((s) => s.status === "running");
+};
+const EMPTY_STEP_ENTRIES: TranscriptEntry[] = [];
+export const selectStepEntries = (jobId: string, stepId: string) => (state: AppState) =>
+  state.transcriptByStep[jobId]?.[stepId] ?? EMPTY_STEP_ENTRIES;

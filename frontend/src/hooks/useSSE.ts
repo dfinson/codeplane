@@ -110,6 +110,10 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "merge_completed",
         "merge_conflict",
         "telemetry_updated",
+        // Step system — low-frequency, must be registered explicitly
+        "step_started",
+        "step_completed",
+        "step_title",
       ];
 
       for (const eventType of eventTypes) {
