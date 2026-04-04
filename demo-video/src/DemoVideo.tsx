@@ -1,132 +1,86 @@
-import React from "react";
-import { AbsoluteFill } from "remotion";
-import { TransitionSeries, linearTiming } from "@remotion/transitions";
-import { fade } from "@remotion/transitions/fade";
-
-import { HookScene } from "./scenes/HookScene";
-import { ProblemScene } from "./scenes/ProblemScene";
-import { DashboardScene } from "./scenes/DashboardScene";
-import { CreateJobScene } from "./scenes/CreateJobScene";
-import { LiveMonitoringScene } from "./scenes/LiveMonitoringScene";
-import { DiffReviewScene } from "./scenes/DiffReviewScene";
-import { AnalyticsScene } from "./scenes/AnalyticsScene";
-import { ClosingScene } from "./scenes/ClosingScene";
-import { SubtitleOverlay } from "./components/SubtitleOverlay";
-import { SCENES, TRANSITION_DURATION } from "./constants";
-
 /**
- * Main composition for the CodePlane demo video.
- *
- * 8 scenes connected with fade transitions.
- * Subtitles are rendered as an overlay on top of all scenes.
- * Total: 90 seconds at 30fps = 2700 frames.
- *
- * Scene durations sum to 2805 frames.
- * 7 transitions of 15 frames each overlap = 105 frames.
- * Effective: 2805 - 105 = 2700 frames. ✓
+ * DemoVideo — main composition using TransitionSeries and real captures.
  */
+import {
+  TransitionSeries,
+  linearTiming,
+} from "@remotion/transitions";
+import { fade } from "@remotion/transitions/fade";
+import { slide } from "@remotion/transitions/slide";
+import { SCENES, TRANSITION_FRAMES } from "./constants";
+import { S01_Opening } from "./scenes/S01_Opening";
+import { S02_Problem } from "./scenes/S02_Problem";
+import { S03_Dashboard } from "./scenes/S03_Dashboard";
+import { S04_LiveExec } from "./scenes/S04_LiveExec";
+import { S05_PlanDiff } from "./scenes/S05_PlanDiff";
+import { S06_Approval } from "./scenes/S06_Approval";
+import { S07_Analytics } from "./scenes/S07_Analytics";
+import { S08_Mobile } from "./scenes/S08_Mobile";
+import { S09_Closing } from "./scenes/S09_Closing";
+
+const T = TRANSITION_FRAMES;
+const timing = linearTiming({ durationInFrames: T });
+
 export const DemoVideo: React.FC = () => {
-  const transitionTiming = linearTiming({
-    durationInFrames: TRANSITION_DURATION,
-  });
-
   return (
-    <AbsoluteFill>
-      <TransitionSeries>
-        {/* Scene 1: Hook */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.hook.durationInFrames}
-        >
-          <HookScene />
-        </TransitionSeries.Sequence>
+    <TransitionSeries>
+      {/* Opening title cards use fade transitions */}
+      <TransitionSeries.Sequence durationInFrames={SCENES.opening}>
+        <S01_Opening />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition presentation={fade()} timing={timing} />
 
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
+      <TransitionSeries.Sequence durationInFrames={SCENES.problem}>
+        <S02_Problem />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition presentation={fade()} timing={timing} />
 
-        {/* Scene 2: Problem */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.problem.durationInFrames}
-        >
-          <ProblemScene />
-        </TransitionSeries.Sequence>
+      {/* Product scenes use slide transitions */}
+      <TransitionSeries.Sequence durationInFrames={SCENES.dashboard}>
+        <S03_Dashboard />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition
+        presentation={slide({ direction: "from-left" })}
+        timing={timing}
+      />
 
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
+      <TransitionSeries.Sequence durationInFrames={SCENES.liveExecution}>
+        <S04_LiveExec />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition
+        presentation={slide({ direction: "from-right" })}
+        timing={timing}
+      />
 
-        {/* Scene 3: Dashboard */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.dashboard.durationInFrames}
-        >
-          <DashboardScene />
-        </TransitionSeries.Sequence>
+      <TransitionSeries.Sequence durationInFrames={SCENES.planDiff}>
+        <S05_PlanDiff />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition
+        presentation={slide({ direction: "from-left" })}
+        timing={timing}
+      />
 
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
+      <TransitionSeries.Sequence durationInFrames={SCENES.approval}>
+        <S06_Approval />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition
+        presentation={slide({ direction: "from-right" })}
+        timing={timing}
+      />
 
-        {/* Scene 4: Create Job */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.createJob.durationInFrames}
-        >
-          <CreateJobScene />
-        </TransitionSeries.Sequence>
+      <TransitionSeries.Sequence durationInFrames={SCENES.analytics}>
+        <S07_Analytics />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition presentation={fade()} timing={timing} />
 
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
+      <TransitionSeries.Sequence durationInFrames={SCENES.mobile}>
+        <S08_Mobile />
+      </TransitionSeries.Sequence>
+      <TransitionSeries.Transition presentation={fade()} timing={timing} />
 
-        {/* Scene 5: Live Monitoring */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.liveMonitoring.durationInFrames}
-        >
-          <LiveMonitoringScene />
-        </TransitionSeries.Sequence>
-
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
-
-        {/* Scene 6: Diff Review */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.diffReview.durationInFrames}
-        >
-          <DiffReviewScene />
-        </TransitionSeries.Sequence>
-
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
-
-        {/* Scene 7: Analytics */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.analytics.durationInFrames}
-        >
-          <AnalyticsScene />
-        </TransitionSeries.Sequence>
-
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={transitionTiming}
-        />
-
-        {/* Scene 8: Closing */}
-        <TransitionSeries.Sequence
-          durationInFrames={SCENES.closing.durationInFrames}
-        >
-          <ClosingScene />
-        </TransitionSeries.Sequence>
-      </TransitionSeries>
-
-      {/* Subtitle overlay on top of everything */}
-      <SubtitleOverlay />
-    </AbsoluteFill>
+      <TransitionSeries.Sequence durationInFrames={SCENES.closing}>
+        <S09_Closing />
+      </TransitionSeries.Sequence>
+    </TransitionSeries>
   );
 };

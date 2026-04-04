@@ -5,26 +5,29 @@
   "main": "index.js",
   "scripts": {
     "studio": "remotion studio src/index.ts",
-    "render": "remotion render src/index.ts CodePlaneDemo out/codeplane-demo.mp4 --concurrency 2",
+    "render": "remotion render src/index.ts CodePlaneDemo out/codeplane-demo.mp4 --codec h264 --concurrency 2",
     "render:4k": "remotion render src/index.ts CodePlaneDemo out/codeplane-demo.mp4 --codec h264 --image-format jpeg --concurrency 2",
-    "preview": "remotion preview src/index.ts"
+    "preview": "remotion preview src/index.ts",
+    "capture": "tsx capture/run.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@remotion/captions": "^4.0.441",
     "@remotion/cli": "^4.0.441",
-    "@remotion/gif": "^4.0.441",
-    "@remotion/media": "^4.0.441",
+    "@remotion/google-fonts": "^4.0.441",
     "@remotion/transitions": "^4.0.441",
+    "lucide-react": "^1.7.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "remotion": "^4.0.441"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "playwright": "^1.58.2",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }
 }
