@@ -129,6 +129,13 @@ export interface TimelineEntry {
   active: boolean;
 }
 
+export interface StepGroup {
+  groupId: string;
+  headline: string;
+  headlinePast: string;
+  stepIds: string[];
+}
+
 const HEADLINE_STOP_WORDS = new Set([
   "a",
   "an",
@@ -259,6 +266,7 @@ interface AppState {
   timelines: Record<string, TimelineEntry[]>; // keyed by jobId
   plans: Record<string, PlanStep[]>; // keyed by jobId
   steps: Record<string, Step[]>;           // keyed by jobId
+  stepGroups: Record<string, StepGroup[]>;  // keyed by jobId
   transcriptByStep: Record<string, Record<string, TranscriptEntry[]>>;  // jobId → stepId → entries
   /** Accumulated streaming text for in-progress agent messages, keyed by
    * "${jobId}:${turnId}" (or "${jobId}:__default__" when turnId is absent).
@@ -343,6 +351,7 @@ export const useStore = create<AppState>((set, get) => ({
   timelines: {},
   plans: {},
   steps: {},
+  stepGroups: {},
   transcriptByStep: {},
   streamingMessages: {},
   telemetryVersions: {},
@@ -709,6 +718,25 @@ export const useStore = create<AppState>((set, get) => ({
           };
         }
 
+        case "step_group_updated": {
+          const jobId = payload.jobId as string;
+          const group: StepGroup = {
+            groupId: payload.groupId as string,
+            headline: payload.headline as string,
+            headlinePast: payload.headlinePast as string,
+            stepIds: payload.stepIds as string[],
+          };
+          const existingGroups = get().stepGroups[jobId] ?? [];
+          // Replace if same groupId, otherwise append
+          const idx = existingGroups.findIndex((g) => g.groupId === group.groupId);
+          const updatedGroups = idx >= 0
+            ? existingGroups.map((g, i) => (i === idx ? group : g))
+            : [...existingGroups, group];
+          return {
+            stepGroups: { ...get().stepGroups, [jobId]: updatedGroups },
+          };
+        }
+
         case "approval_requested": {
           const approval: ApprovalRequest = {
             id: payload.approvalId as string,
@@ -966,6 +994,7 @@ export const useStore = create<AppState>((set, get) => ({
           // Also reset step state so stale steps from the previous session don't appear
           const { [jobId]: _s, ...restSteps } = state.steps;
           const { [jobId]: _t, ...restByStep } = state.transcriptByStep;
+          const { [jobId]: _g, ...restGroups } = state.stepGroups;
           return {
             transcript: { ...state.transcript, [jobId]: [...existing, divider] },
             jobs: state.jobs[jobId]
@@ -973,6 +1002,7 @@ export const useStore = create<AppState>((set, get) => ({
               : state.jobs,
             steps: restSteps,
             transcriptByStep: restByStep,
+            stepGroups: restGroups,
           };
         }
 
@@ -1295,6 +1325,9 @@ export const selectActiveStep = (jobId: string) => (state: AppState) => {
   const steps = state.steps[jobId] ?? [];
   return steps.find((s) => s.status === "running");
 };
+const EMPTY_STEP_GROUPS: StepGroup[] = [];
+export const selectStepGroups = (jobId: string) => (state: AppState) =>
+  state.stepGroups[jobId] ?? EMPTY_STEP_GROUPS;
 const EMPTY_STEP_ENTRIES: TranscriptEntry[] = [];
 export const selectStepEntries = (jobId: string, stepId: string) => (state: AppState) =>
   state.transcriptByStep[jobId]?.[stepId] ?? EMPTY_STEP_ENTRIES;

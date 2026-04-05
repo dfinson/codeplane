@@ -870,6 +870,15 @@ class StepTitlePayload(CamelModel):
     title: str
 
 
+class StepGroupPayload(CamelModel):
+    """SSE payload for step grouping updates."""
+    job_id: str
+    group_id: str
+    headline: str
+    headline_past: str
+    step_ids: list[str]
+
+
 class StepDiffPayload(CamelModel):
     """Response for step-scoped Git diff."""
     step_id: str

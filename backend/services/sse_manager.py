@@ -34,6 +34,7 @@ from backend.models.api_schemas import (
     SessionResumedPayload,
     SnapshotPayload,
     StepPayload,
+    StepGroupPayload,
     StepTitlePayload,
     TelemetryUpdatedPayload,
     ToolGroupSummaryPayload,
@@ -80,6 +81,7 @@ _SSE_EVENT_TYPE: dict[DomainEventKind, str | None] = {
     DomainEventKind.step_started: "step_started",
     DomainEventKind.step_completed: "step_completed",
     DomainEventKind.step_title_generated: "step_title",
+    DomainEventKind.step_group_updated: "step_group_updated",
 }
 
 # State implied by each domain event kind (for job_state_changed payloads)
@@ -448,6 +450,15 @@ _SSE_PAYLOAD_REGISTRY: dict[str, tuple[type, FieldMap] | _BuilderFn] = {
         {
             "step_id": ("step_id", ""),
             "title": ("title", ""),
+        },
+    ),
+    "step_group_updated": (
+        StepGroupPayload,
+        {
+            "group_id": ("group_id", ""),
+            "headline": ("headline", ""),
+            "headline_past": ("headline_past", ""),
+            "step_ids": ("step_ids", []),
         },
     ),
 }

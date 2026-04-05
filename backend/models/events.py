@@ -41,6 +41,7 @@ class DomainEventKind(StrEnum):
     step_started = "StepStarted"
     step_completed = "StepCompleted"
     step_title_generated = "StepTitleGenerated"
+    step_group_updated = "StepGroupUpdated"
 
 
 # ---------------------------------------------------------------------------

@@ -114,6 +114,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "step_started",
         "step_completed",
         "step_title",
+        "step_group_updated",
       ];
 
       for (const eventType of eventTypes) {

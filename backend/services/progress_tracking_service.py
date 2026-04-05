@@ -357,11 +357,13 @@ class ProgressTrackingService:
         self,
         job_id: str,
         sister: SisterSession,
-    ) -> None:
+    ) -> bool:
         """Generate a headline milestone on a step boundary.
 
         Called by the step-completed event handler.  Uses the buffered
         transcript data and the job's sister session for the LLM call.
+
+        Returns True if a new headline was emitted (phase boundary).
         """
         import json as _json
 
@@ -377,7 +379,7 @@ class ProgressTrackingService:
             intents_buf.clear()
 
         if not recent_msgs and not recent_intents:
-            return
+            return False
 
         parts = []
         for msg in recent_msgs:
@@ -416,6 +418,7 @@ class ProgressTrackingService:
 
             if parsed.get("defer"):
                 log.debug("headline_deferred", job_id=job_id)
+                return False
             else:
                 headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
                 headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
@@ -447,8 +450,11 @@ class ProgressTrackingService:
                             },
                         )
                     )
+                    return True
+            return False
         except Exception:
             log.debug("headline_generation_failed", job_id=job_id, exc_info=True)
+            return False
 
     # -- Event-driven plan extraction ----------------------------------------
 
@@ -552,12 +558,27 @@ class ProgressTrackingService:
 
 
 class _ProgressSubscriber:
-    """EventBus subscriber that dispatches step_completed events to ProgressTrackingService."""
+    """EventBus subscriber that dispatches step_completed events to ProgressTrackingService.
+
+    Also tracks step groups: steps that belong to the same headline phase
+    are clustered together and emitted as ``step_group_updated`` events
+    when a new headline marks a phase boundary.
+    """
 
     def __init__(self, service: ProgressTrackingService) -> None:
         self._svc = service
+        # Per-job group state: current group's step IDs and group counter
+        self._current_group_steps: dict[str, list[str]] = {}
+        self._group_counter: dict[str, int] = {}
 
     async def __call__(self, event: DomainEvent) -> None:
+        # Accumulate step IDs as they start
+        if event.kind == DomainEventKind.step_started:
+            step_id = event.payload.get("step_id", "")
+            if step_id:
+                self._current_group_steps.setdefault(event.job_id, []).append(step_id)
+            return
+
         if event.kind != DomainEventKind.step_completed:
             return
         if event.payload.get("status") == "canceled":
@@ -567,5 +588,33 @@ class _ProgressSubscriber:
         if sister is None:
             return
 
-        await self._svc.generate_headline_on_step(event.job_id, sister)
+        headline_emitted = await self._svc.generate_headline_on_step(event.job_id, sister)
         await self._svc.generate_plan_on_step(event.job_id, sister)
+
+        # On phase boundary: close the current group and emit it
+        if headline_emitted:
+            step_ids = self._current_group_steps.get(event.job_id, [])
+            if step_ids:
+                counter = self._group_counter.get(event.job_id, 0) + 1
+                self._group_counter[event.job_id] = counter
+                history = self._svc._headline_history.get(event.job_id, [])
+                headline = history[-1] if history else ""
+                headline_past = self._svc._headline_last_text.get(event.job_id, headline)
+
+                await self._svc._event_bus.publish(
+                    DomainEvent(
+                        event_id=DomainEvent.make_event_id(),
+                        job_id=event.job_id,
+                        timestamp=datetime.now(UTC),
+                        kind=DomainEventKind.step_group_updated,
+                        payload={
+                            "group_id": f"g-{counter}",
+                            "headline": headline,
+                            "headline_past": headline_past,
+                            "step_ids": list(step_ids),
+                        },
+                    )
+                )
+
+            # Start a new group
+            self._current_group_steps[event.job_id] = []
