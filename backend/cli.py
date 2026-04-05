@@ -164,8 +164,6 @@ def up(
         if not validate_preflight(port):
             raise SystemExit(1)
 
-    remote_provider = RemoteProvider(provider) if remote else RemoteProvider.local
-
     if not remote and provider != "devtunnel":
         click.secho(
             f"ERROR: --provider requires --remote (got --provider {provider} without --remote).",
@@ -193,6 +191,12 @@ def up(
     cloudflare_hostname = _env("CPL_CLOUDFLARE_HOSTNAME")
     tunnel_name = tunnel_name or _env("CPL_DEVTUNNEL_NAME")
 
+    # Auto-detect Cloudflare when --provider wasn't explicitly set but credentials exist
+    if remote and provider == "devtunnel" and cloudflare_token and cloudflare_hostname:
+        provider = "cloudflare"
+
+    remote_provider = RemoteProvider(provider) if remote else RemoteProvider.local
+
     # Password logic: block unsafe combos before checking provider availability
     if remote and no_password:
         click.secho(
@@ -214,7 +218,7 @@ def up(
     effective_password: str | None = password
 
     if not effective_password and not no_password:
-        env_pw = _env("CPL_PASSWORD") or _env("CPL_DEVTUNNEL_PASSWORD")
+        env_pw = _env("CPL_PASSWORD")
         if env_pw:
             effective_password = env_pw
 
