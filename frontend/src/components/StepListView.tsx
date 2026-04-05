@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import { useStore, selectJobSteps, selectActiveStep } from "../store";
 import type { JobSummary, Step } from "../store";
@@ -87,16 +87,28 @@ export function StepListView({ job, targetStepId, onViewDiff }: StepListViewProp
       case "errors": return step.status === "failed";
       case "tools": return step.toolCount > 0;
       case "agent": return step.agentMessage != null;
-      case "approvals": return false; // TODO: requires transcript entry check
+      case "approvals": return false;
       default: return true;
     }
   }, []);
+
+  // Compute visible filter chips dynamically from actual step data
+  const visibleChips = useMemo(() => {
+    const chips: { key: FilterChipKey; label: string; count?: number }[] = [];
+    const errorCount = steps.filter((s) => s.status === "failed").length;
+    if (errorCount > 0) chips.push({ key: "errors", label: "Errors", count: errorCount });
+    const toolSteps = steps.filter((s) => s.toolCount > 0).length;
+    if (toolSteps > 0) chips.push({ key: "tools", label: "Tool calls" });
+    const agentSteps = steps.filter((s) => s.agentMessage != null).length;
+    if (agentSteps > 0) chips.push({ key: "agent", label: "Agent messages" });
+    return chips;
+  }, [steps]);
 
   return (
     <div className="relative flex flex-col">
       <div ref={listTopRef} />
 
-      <StepSearchBar jobId={jobId} onSelect={handleSearchSelect} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
+      <StepSearchBar jobId={jobId} onSelect={handleSearchSelect} activeFilter={activeFilter} onFilterChange={setActiveFilter} visibleChips={visibleChips} />
 
       <ResumeBanner jobId={jobId} onJumpToFirst={scrollToTop} />
 

@@ -15,19 +15,20 @@ interface SearchResult {
 
 export type FilterChipKey = "errors" | "tools" | "agent" | "approvals";
 
+interface FilterChipDisplay {
+  key: FilterChipKey;
+  label: string;
+  count?: number;
+}
+
 interface StepSearchBarProps {
   jobId: string;
   onSelect?: (result: SearchResult) => void;
   activeFilter?: FilterChipKey | null;
   onFilterChange?: (filter: FilterChipKey | null) => void;
+  /** Only chips with data to show — computed by parent from step state */
+  visibleChips?: FilterChipDisplay[];
 }
-
-const FILTER_CHIPS: { key: FilterChipKey; label: string }[] = [
-  { key: "errors", label: "Errors" },
-  { key: "tools", label: "Tool calls" },
-  { key: "agent", label: "Agent messages" },
-  { key: "approvals", label: "Approvals" },
-];
 
 function useDebounce<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -38,7 +39,7 @@ function useDebounce<T>(value: T, delay: number): T {
   return debounced;
 }
 
-export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange }: StepSearchBarProps) {
+export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange, visibleChips }: StepSearchBarProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const debouncedQuery = useDebounce(query, 300);
@@ -72,10 +73,10 @@ export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange }:
           </button>
         )}
       </div>
-      {/* Filter chips */}
-      {onFilterChange && (
+      {/* Filter chips — only shown when relevant data exists */}
+      {onFilterChange && visibleChips && visibleChips.length > 0 && (
         <div className="flex items-center gap-1.5 px-3 py-1.5 overflow-x-auto">
-          {FILTER_CHIPS.map((chip) => (
+          {visibleChips.map((chip) => (
             <button
               key={chip.key}
               onClick={() => onFilterChange(activeFilter === chip.key ? null : chip.key)}
@@ -86,7 +87,7 @@ export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange }:
                   : "bg-muted text-muted-foreground hover:text-foreground",
               )}
             >
-              {chip.label}
+              {chip.label}{chip.count != null ? ` (${chip.count})` : ""}
             </button>
           ))}
         </div>

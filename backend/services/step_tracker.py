@@ -98,6 +98,28 @@ class StepTracker:
         if role == "agent_delta":
             return
 
+        # Skip SDK-internal tools (they carry a new turn_id but shouldn't
+        # trigger a step boundary).
+        tool_name = payload.get("tool_name", "")
+        if tool_name == "report_intent":
+            # Extract the intent label and attach it to the current step
+            # so the title generator can use it later.
+            current = self._current.get(job_id)
+            if current:
+                args_raw = payload.get("tool_args") or ""
+                if isinstance(args_raw, str):
+                    import json as _json
+                    try:
+                        args_obj = _json.loads(args_raw)
+                    except (ValueError, TypeError):
+                        args_obj = {}
+                else:
+                    args_obj = args_raw
+                intent_text = args_obj.get("intent") or args_obj.get("description") or ""
+                if intent_text:
+                    current.intent = intent_text[:120]
+            return
+
         if not turn_id and role not in ("operator", "divider"):
             log.warning(
                 "step_tracker_missing_turn_id",
@@ -122,7 +144,7 @@ class StepTracker:
 
         elif turn_id and turn_id != current.turn_id:
             new_step_trigger = "turn_change"
-            intent = tool_intent or ""
+            intent = tool_intent or content[:120] or "Continuing work"
 
         # Idempotency: if turn_id matches current, no new step
         if new_step_trigger:

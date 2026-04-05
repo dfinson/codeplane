@@ -577,6 +577,8 @@ export const useStore = create<AppState>((set, get) => ({
             toolDisplay: payload.toolDisplay as string | undefined,
             toolDisplayFull: payload.toolDisplayFull as string | undefined,
             toolDurationMs: payload.toolDurationMs as number | undefined,
+            stepId: payload.stepId as string | undefined,
+            stepNumber: payload.stepNumber as number | undefined,
           };
           const existing = state.transcript[jobId] ?? [];
 
@@ -640,6 +642,9 @@ export const useStore = create<AppState>((set, get) => ({
         case "step_started": {
           const jobId = payload.jobId as string;
           const existing = get().steps[jobId] ?? [];
+          // Dedup: skip if already hydrated from REST API
+          const stepId = payload.stepId as string;
+          if (existing.some((s) => s.stepId === stepId)) return {};
           const newStep: Step = {
             stepId: payload.stepId as string,
             stepNumber: payload.stepNumber as number,
