@@ -294,6 +294,11 @@ def up(
                     err=True,
                 )
                 raise SystemExit(1)
+            # Cloudflare Access is handling authentication — disable the
+            # redundant internal password gate.
+            if effective_password:
+                log.info("cloudflare_access_detected", msg="Disabling local password auth — Cloudflare Access is active")
+                effective_password = None
 
     app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
 
