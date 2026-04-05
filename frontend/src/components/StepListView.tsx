@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, ListChecks } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useStore, selectJobSteps, selectActiveStep } from "../store";
 import type { JobSummary, Step } from "../store";
@@ -105,44 +106,74 @@ export function StepListView({ job, targetStepId, onViewDiff }: StepListViewProp
   }, [steps]);
 
   return (
-    <div className="relative flex flex-col">
+    <div className="rounded-lg border border-border bg-card overflow-hidden">
       <div ref={listTopRef} />
 
-      <StepSearchBar jobId={jobId} onSelect={handleSearchSelect} activeFilter={activeFilter} onFilterChange={setActiveFilter} visibleChips={visibleChips} />
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
+        <ListChecks size={14} className="text-muted-foreground" />
+        <span className="text-sm font-medium">Steps</span>
+        {steps.length > 0 && (
+          <span className="text-xs text-muted-foreground">{steps.length}</span>
+        )}
+        {isRunning && activeStep && (
+          <span className="ml-auto text-[10px] font-medium text-blue-500">LIVE</span>
+        )}
+      </div>
+
+      {/* Search & filters — only shown when there are steps */}
+      {steps.length > 0 && (
+        <StepSearchBar jobId={jobId} onSelect={handleSearchSelect} activeFilter={activeFilter} onFilterChange={setActiveFilter} visibleChips={visibleChips} />
+      )}
 
       <ResumeBanner jobId={jobId} onJumpToFirst={scrollToTop} />
 
+      {/* Empty / startup state */}
       {steps.length === 0 && (
-        <div className="py-8 text-center text-sm text-muted-foreground">
-          {isRunning ? "Waiting for first step…" : "No steps recorded."}
+        <div className="flex flex-col items-center justify-center py-10 px-4">
+          {isRunning ? (
+            <>
+              <Loader2 className="h-6 w-6 text-muted-foreground/50 animate-spin mb-3" />
+              <p className="text-sm text-muted-foreground">Waiting for first step…</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">The agent is initializing</p>
+            </>
+          ) : (
+            <>
+              <ListChecks className="h-6 w-6 text-muted-foreground/30 mb-3" />
+              <p className="text-sm text-muted-foreground">No steps recorded</p>
+            </>
+          )}
         </div>
       )}
 
-      <div className="flex flex-col">
-        {steps.map((step) => {
-          const isActive = step.stepId === activeStep?.stepId;
-          const dimmed = activeFilter != null && !stepMatchesFilter(step, activeFilter);
-          return (
-            <div
-              key={step.stepId}
-              data-step-id={step.stepId}
-              ref={(el) => {
-                if (el) stepRefs.current.set(step.stepId, el);
-                if (isActive) activeStepRef.current = el;
-              }}
-              className={cn(dimmed && "opacity-40 transition-opacity")}
-            >
-              <StepContainer
-                step={step}
-                isActive={isActive}
-                expanded={expandedStepIds.has(step.stepId)}
-                onToggle={() => toggleStep(step.stepId)}
-                onViewDiff={onViewDiff}
-              />
-            </div>
-          );
-        })}
-      </div>
+      {/* Step list */}
+      {steps.length > 0 && (
+        <div className="flex flex-col divide-y divide-border/50">
+          {steps.map((step) => {
+            const isActive = step.stepId === activeStep?.stepId;
+            const dimmed = activeFilter != null && !stepMatchesFilter(step, activeFilter);
+            return (
+              <div
+                key={step.stepId}
+                data-step-id={step.stepId}
+                ref={(el) => {
+                  if (el) stepRefs.current.set(step.stepId, el);
+                  if (isActive) activeStepRef.current = el;
+                }}
+                className={cn(dimmed && "opacity-40 transition-opacity")}
+              >
+                <StepContainer
+                  step={step}
+                  isActive={isActive}
+                  expanded={expandedStepIds.has(step.stepId)}
+                  onToggle={() => toggleStep(step.stepId)}
+                  onViewDiff={onViewDiff}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Jump-to quick actions */}
       {isRunning && activeStep && (
@@ -155,7 +186,7 @@ export function StepListView({ job, targetStepId, onViewDiff }: StepListViewProp
             Jump to current step ↓
           </button>
         ) : (
-          <div className="sticky bottom-0 flex gap-2 p-2 bg-card/95 backdrop-blur border-t">
+          <div className="sticky bottom-0 flex gap-2 p-2 bg-card/95 backdrop-blur border-t border-border">
             <button
               onClick={scrollToActiveStep}
               className="text-xs text-muted-foreground hover:text-foreground"

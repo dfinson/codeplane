@@ -56,7 +56,7 @@ export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange, v
 
   return (
     <div className="relative mb-2">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border/50">
         <Search size={14} className="text-muted-foreground shrink-0" />
         <input
           value={query}
@@ -75,7 +75,7 @@ export function StepSearchBar({ jobId, onSelect, activeFilter, onFilterChange, v
       </div>
       {/* Filter chips — only shown when relevant data exists */}
       {onFilterChange && visibleChips && visibleChips.length > 0 && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 overflow-x-auto">
+        <div className="flex items-center gap-1.5 px-4 py-1.5 overflow-x-auto border-b border-border/50">
           {visibleChips.map((chip) => (
             <button
               key={chip.key}

@@ -124,13 +124,13 @@ export function StepContainer({ step, isActive, expanded: externalExpanded, onTo
   return (
     <div
       className={cn(
-        "border-l-2 pl-4 py-3 transition-colors",
+        "border-l-2 pl-4 pr-4 py-3 transition-colors",
         isMobile && "min-h-[44px]",
         isActive
-          ? "border-blue-500"
+          ? "border-l-blue-500 bg-blue-500/5"
           : step.status === "completed"
-            ? "border-emerald-500/30"
-            : "border-border",
+            ? "border-l-emerald-500/30"
+            : "border-l-transparent",
       )}
     >
       <StepHeader
