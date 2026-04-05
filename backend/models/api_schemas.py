@@ -130,6 +130,7 @@ class CreateJobRequest(CamelModel):
     max_turns: int | None = Field(None, ge=1, le=10)
     verify_prompt: str | None = Field(None, max_length=5000)
     self_review_prompt: str | None = Field(None, max_length=5000)
+    session_token: str | None = None
 
     @model_validator(mode="before")
     @classmethod

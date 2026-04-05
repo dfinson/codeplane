@@ -22,7 +22,7 @@ from backend.services.naming_service import NamingService
 from backend.services.platform_adapter import PlatformRegistry
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
-from backend.services.utility_session import UtilitySessionService
+from backend.services.sister_session import SisterSessionManager
 from backend.services.voice_service import VoiceService
 
 # NewType wrappers for plain values that need unique DI keys
@@ -45,7 +45,7 @@ class AppProvider(Provider):
     runtime_service = from_context(provides=RuntimeService)
     merge_service = from_context(provides=MergeService)
     platform_registry = from_context(provides=PlatformRegistry)
-    utility_session = from_context(provides=UtilitySessionService)
+    sister_sessions = from_context(provides=SisterSessionManager)
     voice_service = from_context(provides=VoiceService)
     cached_models = from_context(provides=CachedModelsBySdk)
     voice_max_bytes = from_context(provides=VoiceMaxBytes)
@@ -74,9 +74,9 @@ class RequestProvider(Provider):
         self,
         session: AsyncSession,
         config: CPLConfig,
-        utility_session: UtilitySessionService,
+        sister_sessions: SisterSessionManager,
     ) -> JobService:
-        naming = NamingService(utility_session)
+        naming = NamingService(sister_sessions)
         return JobService.from_session(
             session,
             config,

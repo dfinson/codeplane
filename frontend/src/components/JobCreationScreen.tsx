@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { createJob, fetchRepos, fetchSettings, fetchRepoDetail, suggestNames, fetchModelComparison } from "../api/client";
+import { createJob, fetchRepos, fetchSettings, fetchRepoDetail, suggestNames, fetchModelComparison, warmUtilitySession, releaseUtilitySession } from "../api/client";
 import type { PermissionMode, SDKInfo } from "../api/types";
 import { useStore } from "../store";
 import { PromptWithVoice } from "./VoiceButton";
@@ -52,6 +52,29 @@ export function JobCreationScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [voiceState, setVoiceState] = useState<"idle" | "recording" | "transcribing">("idle");
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionTokenRef = useRef<string | null>(null);
+  const jobCreatedRef = useRef(false);
+
+  // Pre-warm a sister session when the panel mounts; release on unmount if unused
+  useEffect(() => {
+    let canceled = false;
+    warmUtilitySession()
+      .then((token) => {
+        if (canceled) {
+          releaseUtilitySession(token).catch(() => {});
+        } else {
+          sessionTokenRef.current = token;
+        }
+      })
+      .catch(() => {}); // non-fatal — job creation works without a pre-warmed session
+    return () => {
+      canceled = true;
+      const token = sessionTokenRef.current;
+      if (token && !jobCreatedRef.current) {
+        releaseUtilitySession(token).catch(() => {});
+      }
+    };
+  }, []);
 
   // Resolve the active SDK — default to what the store says once it's loaded
   const activeSdk = sdk ?? defaultSdk ?? "copilot";
@@ -185,7 +208,9 @@ export function JobCreationScreen() {
         sdk: activeSdk !== defaultSdk ? activeSdk : undefined,
         verify: verify ?? undefined,
         self_review: selfReview ?? undefined,
+        session_token: sessionTokenRef.current ?? undefined,
       });
+      jobCreatedRef.current = true;
       toast.success(`Job ${result.id} created`);
       navigate(`/jobs/${result.id}`);
     } catch (e) {

@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from backend.models.domain import Job
     from backend.services.approval_service import ApprovalService
     from backend.services.runtime_service import RuntimeService
-    from backend.services.utility_session import UtilitySessionService
+    from backend.services.sister_session import SisterSessionManager
 
 log = structlog.get_logger()
 
@@ -95,7 +95,7 @@ McpToolResult: TypeAlias = McpErrorDict | dict[str, Any]
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _runtime_service: RuntimeService | None = None
 _approval_service: ApprovalService | None = None
-_utility_session: UtilitySessionService | None = None
+_sister_sessions: SisterSessionManager | None = None
 
 
 def _get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -122,8 +122,8 @@ def _make_job_service(session: AsyncSession, config: CPLConfig, *, git: bool = T
     from backend.services.naming_service import NamingService
 
     naming: NamingService | None = None
-    if _utility_session is not None:
-        naming = NamingService(_utility_session)
+    if _sister_sessions is not None:
+        naming = NamingService(_sister_sessions)
     return JobService(
         job_repo=JobRepository(session),
         git_service=GitService(config) if git else None,
@@ -172,14 +172,14 @@ def create_mcp_server(
     session_factory: async_sessionmaker[AsyncSession],
     runtime_service: RuntimeService,
     approval_service: ApprovalService,
-    utility_session: UtilitySessionService | None = None,
+    sister_sessions: SisterSessionManager | None = None,
 ) -> FastMCP:
     """Create and configure the MCP server with all CodePlane tools."""
-    global _session_factory, _runtime_service, _approval_service, _utility_session  # noqa: PLW0603
+    global _session_factory, _runtime_service, _approval_service, _sister_sessions  # noqa: PLW0603
     _session_factory = session_factory
     _runtime_service = runtime_service
     _approval_service = approval_service
-    _utility_session = utility_session
+    _sister_sessions = sister_sessions
 
     mcp = FastMCP(
         "CodePlane",

@@ -168,6 +168,19 @@ export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {
   });
 }
 
+export async function warmUtilitySession(): Promise<string> {
+  const resp: { sessionToken: string } = await request("/utility-sessions/warm", {
+    method: "POST",
+  });
+  return resp.sessionToken;
+}
+
+export async function releaseUtilitySession(token: string): Promise<void> {
+  await request(`/utility-sessions/${encodeURIComponent(token)}`, {
+    method: "DELETE",
+  });
+}
+
 export function suggestNames(prompt: string): Promise<import("./types").SuggestNamesResponse> {
   return request("/jobs/suggest-names", {
     method: "POST",

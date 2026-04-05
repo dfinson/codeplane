@@ -893,6 +893,8 @@ export interface components {
             verify_prompt?: string | null;
             /** Self Review Prompt */
             self_review_prompt?: string | null;
+            /** Session Token */
+            session_token?: string | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {

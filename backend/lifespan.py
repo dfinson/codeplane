@@ -37,7 +37,7 @@ from backend.services.step_persistence import StepPersistenceSubscriber
 from backend.services.step_title_generator import StepTitleGenerator, _StepTitleSubscriber
 from backend.services.step_tracker import StepTracker
 from backend.services.summarization_service import SummarizationService
-from backend.services.utility_session import UtilitySessionService
+from backend.services.sister_session import SisterSessionManager
 from backend.services.voice_service import VoiceService
 
 if TYPE_CHECKING:
@@ -94,7 +94,7 @@ class _CoreServices:
     adapter_registry: AdapterRegistry
     platform_registry: PlatformRegistry
     merge_service: MergeService
-    utility_session: UtilitySessionService
+    sister_sessions: SisterSessionManager
     runtime_service: RuntimeService
 
 
@@ -255,16 +255,16 @@ async def _wire_core_services(
         diff_service=diff_service,
     )
 
-    # --- Utility session pool (warm cheap model for naming / summaries) ---
-    utility_session = UtilitySessionService(
+    # --- Sister session manager (per-job dedicated utility sessions) ---
+    sister_sessions = SisterSessionManager(
         model=config.runtime.utility_model,
     )
-    log.debug("utility_session_starting", model=config.runtime.utility_model)
-    await utility_session.start()
+    log.debug("sister_sessions_starting", model=config.runtime.utility_model)
+    await sister_sessions.start()
 
     summarization_service = SummarizationService(
         session_factory=session_factory,
-        adapter=utility_session,
+        adapter=sister_sessions,
     )
 
     runtime_service = RuntimeService(
@@ -277,7 +277,7 @@ async def _wire_core_services(
         merge_service=merge_service,
         summarization_service=summarization_service,
         platform_registry=platform_registry,
-        utility_session=utility_session,
+        sister_sessions=sister_sessions,
         step_tracker=StepTracker(
             event_bus=event_bus,
             git_service=git_service,
@@ -287,7 +287,7 @@ async def _wire_core_services(
     # Step title generator — wired as an event bus subscriber
     step_repo = StepRepository(session_factory)
     step_title_gen = StepTitleGenerator(
-        utility_session=utility_session,
+        sister_sessions=sister_sessions,
         event_bus=event_bus,
         step_repo=step_repo,
     )
@@ -301,7 +301,7 @@ async def _wire_core_services(
         adapter_registry=adapter_registry,
         platform_registry=platform_registry,
         merge_service=merge_service,
-        utility_session=utility_session,
+        sister_sessions=sister_sessions,
         runtime_service=runtime_service,
     )
 
@@ -338,7 +338,7 @@ async def _init_optional_services(
             scrollback_size_kb=config.terminal.scrollback_size_kb,
         )
         terminal.set_terminal_service(terminal_service)
-        terminal.set_utility_session(services.utility_session)
+        terminal.set_utility_session(services.sister_sessions)
         log.debug("terminal_service_enabled", max_sessions=config.terminal.max_sessions)
 
     # --- Model list cache ---
@@ -402,7 +402,7 @@ async def _init_optional_services(
         session_factory=session_factory,
         runtime_service=services.runtime_service,
         approval_service=services.approval_service,
-        utility_session=services.utility_session,
+        sister_sessions=services.sister_sessions,
     )
     mcp_app = mcp_server.streamable_http_app()
     app.mount(MCP_PATH, mcp_app)
@@ -464,7 +464,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             RuntimeService: services.runtime_service,
             MergeService: services.merge_service,
             PlatformRegistry: services.platform_registry,
-            UtilitySessionService: services.utility_session,
+            SisterSessionManager: services.sister_sessions,
             VoiceService: optional.voice_service,
             CachedModelsBySdk: CachedModelsBySdk(optional.cached_models_by_sdk),
             VoiceMaxBytes: VoiceMaxBytes(optional.voice_max_bytes),
@@ -503,7 +503,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     dead_letter_task.cancel()
     if optional.terminal_service is not None:
         await optional.terminal_service.shutdown()
-    await services.utility_session.shutdown()
+    await services.sister_sessions.shutdown()
     await services.runtime_service.shutdown()
     await sse_manager.close_all()
     await engine.dispose()

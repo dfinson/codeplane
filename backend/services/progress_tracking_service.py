@@ -1,8 +1,7 @@
 """Progress tracking — headline milestones and plan extraction for running jobs.
 
-Periodically summarises agent activity into human-readable milestones (headlines)
-and projects remaining work as a structured plan.  Both loops run as per-job
-asyncio tasks and publish domain events via the shared ``EventBus``.
+Event-driven: headlines and plan updates fire on step boundaries (step_completed)
+rather than on timers.  Each job's sister session provides the LLM calls.
 
 Extracted from ``RuntimeService`` to isolate the LLM-driven progress tracking
 concern from the core job execution lifecycle.
@@ -10,7 +9,6 @@ concern from the core job execution lifecycle.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -22,7 +20,7 @@ from backend.models.events import DomainEvent, DomainEventKind
 
 if TYPE_CHECKING:
     from backend.services.event_bus import EventBus
-    from backend.services.utility_session import UtilitySessionService
+    from backend.services.sister_session import SisterSession, SisterSessionManager
 
 log = structlog.get_logger()
 
@@ -190,34 +188,28 @@ def _count_similar_trailing_headlines(history: list[str], headline: str) -> int:
 class ProgressTrackingService:
     """Manages headline milestone generation and plan extraction for active jobs.
 
-    Each running job gets two periodic async tasks:
-    * **Headline loop** — summarises recent agent activity into milestone labels.
-    * **Plan loop** — projects remaining work as a list of steps with statuses.
-
-    Both loops consume transcript fragments fed by the caller and produce
-    ``DomainEvent`` s published to the ``EventBus``.
+    Event-driven: headlines and plan updates fire on step boundaries rather
+    than on timers.  The sister session for each job is looked up via
+    ``SisterSessionManager``.
     """
 
     def __init__(
         self,
-        utility_session: UtilitySessionService,
+        sister_sessions: SisterSessionManager,
         event_bus: EventBus,
     ) -> None:
-        self._utility_session = utility_session
+        self._sister_sessions = sister_sessions
         self._event_bus = event_bus
 
         # Per-job headline state
         self._headline_transcript: dict[str, list[str]] = {}
         self._headline_tool_intents: dict[str, list[str]] = {}
-        self._headline_last_snapshot: dict[str, list[str]] = {}
         self._headline_last_text: dict[str, str] = {}
         self._headline_history: dict[str, list[str]] = {}
-        self._headline_tasks: dict[str, asyncio.Task[None]] = {}
 
         # Per-job plan state
         self._plan_transcript: dict[str, list[str]] = {}
         self._plan_last_steps: dict[str, list[dict[str, str]]] = {}
-        self._plan_tasks: dict[str, asyncio.Task[None]] = {}
         self._plan_terminal_state: dict[str, str] = {}
         # Jobs receiving native plan data (manage_todo_list / TodoWrite)
         self._native_plan_active: set[str] = set()
@@ -225,41 +217,21 @@ class ProgressTrackingService:
     # -- Lifecycle -----------------------------------------------------------
 
     def start_tracking(self, job_id: str) -> None:
-        """Initialise per-job state and start headline + plan async loops."""
+        """Initialise per-job state (no background tasks)."""
         self._headline_transcript[job_id] = []
         self._headline_tool_intents[job_id] = []
-        self._headline_last_snapshot[job_id] = []
         self._headline_last_text[job_id] = ""
         self._headline_history[job_id] = []
         self._plan_transcript[job_id] = []
         self._plan_last_steps[job_id] = []
 
-        headline_task = asyncio.create_task(
-            self._headline_loop(job_id),
-            name=f"headline-{job_id}",
-        )
-        self._headline_tasks[job_id] = headline_task
-
-        plan_task = asyncio.create_task(
-            self._plan_loop(job_id),
-            name=f"plan-{job_id}",
-        )
-        self._plan_tasks[job_id] = plan_task
-
     def stop_tracking(self, job_id: str) -> None:
-        """Cancel headline and plan tasks for a job."""
-        headline_t = self._headline_tasks.pop(job_id, None)
-        if headline_t is not None:
-            headline_t.cancel()
-        plan_t = self._plan_tasks.pop(job_id, None)
-        if plan_t is not None:
-            plan_t.cancel()
+        """No-op — no background tasks to cancel."""
 
     def cleanup(self, job_id: str) -> None:
         """Remove all per-job in-memory state."""
         self._headline_transcript.pop(job_id, None)
         self._headline_tool_intents.pop(job_id, None)
-        self._headline_last_snapshot.pop(job_id, None)
         self._headline_last_text.pop(job_id, None)
         self._headline_history.pop(job_id, None)
         self._plan_transcript.pop(job_id, None)
@@ -379,220 +351,196 @@ class ProgressTrackingService:
         except Exception:
             log.debug("plan_finalize_emit_failed", job_id=job_id, exc_info=True)
 
-    # -- Async loops ---------------------------------------------------------
+    # -- Event-driven headline generation -------------------------------------
 
-    async def _headline_loop(self, job_id: str) -> None:
-        """Periodically assess agent activity and emit milestone headlines."""
-        import json as _json
-        import re as _re
+    async def generate_headline_on_step(
+        self,
+        job_id: str,
+        sister: SisterSession,
+    ) -> None:
+        """Generate a headline milestone on a step boundary.
 
-        initial_delay_s = 8
-        interval_s = 15
-        try:
-            await asyncio.sleep(initial_delay_s)
-            first = True
-            while True:
-                buf = self._headline_transcript.get(job_id)
-                intents_buf = self._headline_tool_intents.get(job_id)
-
-                recent_msgs: list[str] = []
-                recent_intents: list[str] = []
-
-                if buf:
-                    recent_msgs = list(buf)
-                    buf.clear()
-                if intents_buf:
-                    recent_intents = list(intents_buf)
-                    intents_buf.clear()
-
-                if recent_msgs or recent_intents:
-                    self._headline_last_snapshot[job_id] = recent_msgs or self._headline_last_snapshot.get(job_id, [])
-                else:
-                    recent_msgs = self._headline_last_snapshot.get(job_id, [])
-
-                if not recent_msgs and not recent_intents:
-                    if not first:
-                        await asyncio.sleep(interval_s)
-                    first = False
-                    continue
-
-                parts = []
-                for msg in recent_msgs:
-                    parts.append(msg[:_HEADLINE_MSG_MAX])
-                if recent_intents:
-                    parts.append("Tool intents: " + ", ".join(recent_intents))
-
-                history = self._headline_history.get(job_id, [])
-                history_block = ""
-                if history:
-                    numbered = "\n".join(f"  {i + 1}. {h}" for i, h in enumerate(history))
-                    history_block = f"Milestone history so far:\n{numbered}\n\n"
-
-                prompt = (
-                    _MILESTONE_PROMPT_PREFIX
-                    + history_block
-                    + "Recent agent activity:\n"
-                    + "\n---\n".join(parts)
-                    + _MILESTONE_PROMPT_SUFFIX
-                )
-
-                try:
-                    raw = await self._utility_session.complete(prompt, timeout=30)
-                    raw = raw.strip()
-
-                    # Strip markdown fences if present
-                    if raw.startswith("```"):
-                        raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
-                        raw = _re.sub(r"\n?```$", "", raw)
-                        raw = raw.strip()
-
-                    try:
-                        parsed = _json.loads(raw)
-                    except (ValueError, AttributeError):
-                        parsed = {}
-
-                    if parsed.get("defer"):
-                        log.debug("headline_deferred", job_id=job_id)
-                    else:
-                        headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
-                        headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
-                        summary = str(parsed.get("summary", "")).strip().strip('"')
-                        replace_last = int(parsed.get("replace_last", 0))
-
-                        last_headline = self._headline_last_text.get(job_id, "")
-                        if headline and len(headline) > 3 and headline != last_headline:
-                            replace_last = max(replace_last, _count_similar_trailing_headlines(history, headline))
-
-                            # Clamp replace_last to actual history length
-                            replace_last = max(0, min(replace_last, len(history)))
-
-                            # Update in-memory history
-                            if replace_last > 0:
-                                self._headline_history[job_id] = history[:-replace_last] + [headline]
-                            else:
-                                self._headline_history.setdefault(job_id, []).append(headline)
-                            self._headline_last_text[job_id] = headline
-
-                            await self._event_bus.publish(
-                                DomainEvent(
-                                    event_id=DomainEvent.make_event_id(),
-                                    job_id=job_id,
-                                    timestamp=datetime.now(UTC),
-                                    kind=DomainEventKind.progress_headline,
-                                    payload={
-                                        "headline": headline,
-                                        "headline_past": headline_past,
-                                        "replaces_count": replace_last,
-                                        "summary": summary,
-                                    },
-                                )
-                            )
-                except Exception:
-                    log.debug("headline_generation_failed", job_id=job_id, exc_info=True)
-
-                await asyncio.sleep(interval_s)
-                first = False
-        except asyncio.CancelledError:
-            pass
-
-    async def _plan_loop(self, job_id: str) -> None:
-        """Periodically extract the agent's plan and project remaining steps."""
+        Called by the step-completed event handler.  Uses the buffered
+        transcript data and the job's sister session for the LLM call.
+        """
         import json as _json
 
-        initial_delay_s = 12
-        interval_s = 30
+        buf = self._headline_transcript.get(job_id)
+        intents_buf = self._headline_tool_intents.get(job_id)
+
+        recent_msgs: list[str] = list(buf) if buf else []
+        recent_intents: list[str] = list(intents_buf) if intents_buf else []
+
+        if buf:
+            buf.clear()
+        if intents_buf:
+            intents_buf.clear()
+
+        if not recent_msgs and not recent_intents:
+            return
+
+        parts = []
+        for msg in recent_msgs:
+            parts.append(msg[:_HEADLINE_MSG_MAX])
+        if recent_intents:
+            parts.append("Tool intents: " + ", ".join(recent_intents))
+
+        history = self._headline_history.get(job_id, [])
+        history_block = ""
+        if history:
+            numbered = "\n".join(f"  {i + 1}. {h}" for i, h in enumerate(history))
+            history_block = f"Milestone history so far:\n{numbered}\n\n"
+
+        prompt = (
+            _MILESTONE_PROMPT_PREFIX
+            + history_block
+            + "Recent agent activity:\n"
+            + "\n---\n".join(parts)
+            + _MILESTONE_PROMPT_SUFFIX
+        )
+
         try:
-            await asyncio.sleep(initial_delay_s)
-            while True:
-                # Skip LLM extraction when the agent is providing native plan
-                # data via manage_todo_list / TodoWrite.
-                if job_id in self._native_plan_active:
-                    await asyncio.sleep(interval_s)
-                    continue
+            raw = await sister.complete(prompt, timeout=30)
+            raw = raw.strip()
 
-                buf = self._plan_transcript.get(job_id)
-                if not buf:
-                    await asyncio.sleep(interval_s)
-                    continue
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
+                raw = raw.strip()
 
-                recent = list(buf)
+            try:
+                parsed = _json.loads(raw)
+            except (ValueError, AttributeError):
+                parsed = {}
 
-                milestones = self._headline_history.get(job_id, [])
-                milestone_block = ""
-                if milestones:
-                    milestone_block = "Completed milestones:\n" + "\n".join(f"  - {m}" for m in milestones) + "\n\n"
+            if parsed.get("defer"):
+                log.debug("headline_deferred", job_id=job_id)
+            else:
+                headline = str(parsed.get("present", "")).strip().strip('"').strip(".")
+                headline_past = str(parsed.get("past", "")).strip().strip('"').strip(".")
+                summary = str(parsed.get("summary", "")).strip().strip('"')
+                replace_last = int(parsed.get("replace_last", 0))
 
-                prev_steps = self._plan_last_steps.get(job_id, [])
-                prev_block = ""
-                if prev_steps:
-                    lines = []
-                    for s in prev_steps:
-                        lines.append(f"  - [{s.get('status', 'pending')}] {s.get('label', '')}")
-                    prev_block = "Previous plan:\n" + "\n".join(lines) + "\n\n"
+                last_headline = self._headline_last_text.get(job_id, "")
+                if headline and len(headline) > 3 and headline != last_headline:
+                    replace_last = max(replace_last, _count_similar_trailing_headlines(history, headline))
+                    replace_last = max(0, min(replace_last, len(history)))
 
-                prompt = (
-                    _PLAN_PROMPT_PREFIX
-                    + milestone_block
-                    + prev_block
-                    + "Recent agent messages:\n"
-                    + "\n---\n".join(recent)
-                    + _PLAN_PROMPT_SUFFIX
-                )
-
-                try:
-                    raw = await self._utility_session.complete(prompt, timeout=30)
-                    raw = raw.strip()
-
-                    # Strip markdown fences
-                    if raw.startswith("```"):
-                        import re as _re
-
-                        raw = _re.sub(r"^```[a-zA-Z]*\n?", "", raw)
-                        raw = _re.sub(r"\n?```$", "", raw)
-                        raw = raw.strip()
-
-                    parsed = _json.loads(raw)
-                    steps = parsed.get("steps", [])
-
-                    if not isinstance(steps, list):
-                        steps = []
-
-                    if not steps:
-                        # LLM explicitly cleared the plan — publish empty to hide stale steps.
-                        if self._plan_last_steps.get(job_id):
-                            self._plan_last_steps[job_id] = []
-                            await self._event_bus.publish(
-                                DomainEvent(
-                                    event_id=DomainEvent.make_event_id(),
-                                    job_id=job_id,
-                                    timestamp=datetime.now(UTC),
-                                    kind=DomainEventKind.agent_plan_updated,
-                                    payload={"steps": []},
-                                )
-                            )
+                    if replace_last > 0:
+                        self._headline_history[job_id] = history[:-replace_last] + [headline]
                     else:
-                        clean_steps = []
-                        for s in steps:
-                            if isinstance(s, dict) and s.get("label"):
-                                status = s.get("status", "pending")
-                                if status not in ("done", "active", "pending", "skipped"):
-                                    status = "pending"
-                                clean_steps.append({"label": s["label"], "status": status})
+                        self._headline_history.setdefault(job_id, []).append(headline)
+                    self._headline_last_text[job_id] = headline
 
-                        if clean_steps and clean_steps != self._plan_last_steps.get(job_id, []):
-                            self._plan_last_steps[job_id] = clean_steps
-                            await self._event_bus.publish(
-                                DomainEvent(
-                                    event_id=DomainEvent.make_event_id(),
-                                    job_id=job_id,
-                                    timestamp=datetime.now(UTC),
-                                    kind=DomainEventKind.agent_plan_updated,
-                                    payload={"steps": clean_steps},
-                                )
-                            )
-                except Exception:
-                    log.debug("plan_extraction_failed", job_id=job_id, exc_info=True)
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=DomainEvent.make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.progress_headline,
+                            payload={
+                                "headline": headline,
+                                "headline_past": headline_past,
+                                "replaces_count": replace_last,
+                                "summary": summary,
+                            },
+                        )
+                    )
+        except Exception:
+            log.debug("headline_generation_failed", job_id=job_id, exc_info=True)
 
-                await asyncio.sleep(interval_s)
-        except asyncio.CancelledError:
-            pass
+    # -- Event-driven plan extraction ----------------------------------------
+
+    async def generate_plan_on_step(
+        self,
+        job_id: str,
+        sister: SisterSession,
+    ) -> None:
+        """Extract/update the plan on a step boundary.
+
+        Skipped when the agent provides native plan data via manage_todo_list.
+        Called by the step-completed event handler.
+        """
+        import json as _json
+
+        if job_id in self._native_plan_active:
+            return
+
+        buf = self._plan_transcript.get(job_id)
+        if not buf:
+            return
+
+        recent = list(buf)
+
+        milestones = self._headline_history.get(job_id, [])
+        milestone_block = ""
+        if milestones:
+            milestone_block = "Completed milestones:\n" + "\n".join(f"  - {m}" for m in milestones) + "\n\n"
+
+        prev_steps = self._plan_last_steps.get(job_id, [])
+        prev_block = ""
+        if prev_steps:
+            lines = []
+            for s in prev_steps:
+                lines.append(f"  - [{s.get('status', 'pending')}] {s.get('label', '')}")
+            prev_block = "Previous plan:\n" + "\n".join(lines) + "\n\n"
+
+        prompt = (
+            _PLAN_PROMPT_PREFIX
+            + milestone_block
+            + prev_block
+            + "Recent agent messages:\n"
+            + "\n---\n".join(recent)
+            + _PLAN_PROMPT_SUFFIX
+        )
+
+        try:
+            raw = await sister.complete(prompt, timeout=30)
+            raw = raw.strip()
+
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw)
+                raw = raw.strip()
+
+            parsed = _json.loads(raw)
+            steps = parsed.get("steps", [])
+
+            if not isinstance(steps, list):
+                steps = []
+
+            if not steps:
+                if self._plan_last_steps.get(job_id):
+                    self._plan_last_steps[job_id] = []
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=DomainEvent.make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.agent_plan_updated,
+                            payload={"steps": []},
+                        )
+                    )
+            else:
+                clean_steps = []
+                for s in steps:
+                    if isinstance(s, dict) and s.get("label"):
+                        status = s.get("status", "pending")
+                        if status not in ("done", "active", "pending", "skipped"):
+                            status = "pending"
+                        clean_steps.append({"label": s["label"], "status": status})
+
+                if clean_steps and clean_steps != self._plan_last_steps.get(job_id, []):
+                    self._plan_last_steps[job_id] = clean_steps
+                    await self._event_bus.publish(
+                        DomainEvent(
+                            event_id=DomainEvent.make_event_id(),
+                            job_id=job_id,
+                            timestamp=datetime.now(UTC),
+                            kind=DomainEventKind.agent_plan_updated,
+                            payload={"steps": clean_steps},
+                        )
+                    )
+        except Exception:
+            log.debug("plan_extraction_failed", job_id=job_id, exc_info=True)

@@ -35,7 +35,7 @@ from backend.services.merge_service import MergeService
 from backend.services.platform_adapter import PlatformRegistry
 from backend.services.runtime_service import RuntimeService
 from backend.services.sse_manager import SSEManager
-from backend.services.utility_session import UtilitySessionService
+from backend.services.sister_session import SisterSessionManager
 from backend.services.voice_service import VoiceService
 
 
@@ -85,7 +85,7 @@ async def _client() -> AsyncGenerator[Any, None]:
             RuntimeService: AsyncMock(spec=RuntimeService),
             MergeService: AsyncMock(spec=MergeService),
             PlatformRegistry: Mock(spec=PlatformRegistry),
-            UtilitySessionService: AsyncMock(spec=UtilitySessionService),
+            SisterSessionManager: AsyncMock(spec=SisterSessionManager),
             VoiceService: Mock(),
             CachedModelsBySdk: CachedModelsBySdk({}),
             VoiceMaxBytes: VoiceMaxBytes(10 * 1024 * 1024),

@@ -42,7 +42,7 @@ from backend.services.merge_service import MergeService
 from backend.services.naming_service import NamingService
 from backend.services.runtime_service import RuntimeService
 from backend.services.tool_formatters import format_tool_display, format_tool_display_full
-from backend.services.utility_session import UtilitySessionService
+from backend.services.sister_session import SisterSessionManager
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -123,20 +123,46 @@ def _job_to_response(job: Job, progress_preview: ProgressPreview | None = None) 
     )
 
 
+@router.post("/utility-sessions/warm")
+async def warm_utility_session(
+    sister_sessions: FromDishka[SisterSessionManager],
+) -> dict[str, str]:
+    """Pre-warm a utility session for the new-job panel.
+
+    Returns a session token that can be passed to ``POST /jobs`` or released
+    via ``DELETE /utility-sessions/{token}`` if the user navigates away.
+    """
+    try:
+        token = await sister_sessions.warm()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to warm session: {exc}") from exc
+    return {"sessionToken": token}
+
+
+@router.delete("/utility-sessions/{token}", status_code=204)
+async def release_utility_session(
+    token: str,
+    sister_sessions: FromDishka[SisterSessionManager],
+) -> None:
+    """Release a pre-warmed session the user didn't use."""
+    found = await sister_sessions.release(token)
+    if not found:
+        raise HTTPException(status_code=404, detail="Session not found or already expired")
+
+
 @router.post("/jobs/suggest-names", response_model=SuggestNamesResponse)
 async def suggest_names(
     body: SuggestNamesRequest,
-    utility_session: FromDishka[UtilitySessionService],
+    sister_sessions: FromDishka[SisterSessionManager],
 ) -> SuggestNamesResponse:
     """Generate a suggested title, branch name, and worktree name for a task description.
 
-    Calls the utility LLM (NamingService) in the background so the frontend can
-    pre-populate the branch field before the user submits the job.
+    Uses a one-shot utility session (suggest-names is called before a job exists).
     Returns 503 if the utility LLM is not configured.
     """
     from backend.services.naming_service import NamingError
 
-    naming = NamingService(utility_session)
+    naming = NamingService(sister_sessions)
     try:
         title, branch_name, worktree_name = await naming.generate(body.prompt)
     except NamingError as exc:
@@ -176,6 +202,7 @@ async def create_job(
         await runtime_service.start_or_enqueue(
             job,
             permission_mode=body.permission_mode.value if body.permission_mode else None,
+            session_token=body.session_token,
         )
 
         # Re-fetch to get updated state (may have been enqueued)

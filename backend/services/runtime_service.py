@@ -113,8 +113,8 @@ if TYPE_CHECKING:
     from backend.services.job_service import JobService
     from backend.services.merge_service import MergeService
     from backend.services.platform_adapter import PlatformRegistry
+    from backend.services.sister_session import SisterSessionManager
     from backend.services.summarization_service import SummarizationService
-    from backend.services.utility_session import UtilitySessionService
 
 log = structlog.get_logger()
 
@@ -201,7 +201,7 @@ class RuntimeService:
         merge_service: MergeService | None = None,
         summarization_service: SummarizationService | None = None,
         platform_registry: PlatformRegistry | None = None,
-        utility_session: UtilitySessionService | None = None,
+        sister_sessions: SisterSessionManager | None = None,
         step_tracker: StepTracker | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -213,7 +213,7 @@ class RuntimeService:
         self._merge_service = merge_service
         self._summarization_service = summarization_service
         self._platform_registry = platform_registry
-        self._utility_session = utility_session
+        self._sister_sessions = sister_sessions
         self._step_tracker = step_tracker
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._agent_sessions: dict[str, _AgentSession] = {}
@@ -232,9 +232,9 @@ class RuntimeService:
         self._echo_suppress: dict[str, set[str]] = {}
         # Progress tracking (headline milestones + plan extraction)
         self._progress_tracking: ProgressTrackingService | None = None
-        if utility_session is not None:
+        if sister_sessions is not None:
             self._progress_tracking = ProgressTrackingService(
-                utility_session=utility_session,
+                sister_sessions=sister_sessions,
                 event_bus=event_bus,
             )
 
@@ -277,10 +277,19 @@ class RuntimeService:
         override_prompt: str | None = None,
         resume_sdk_session_id: str | None = None,
         permission_mode: str | None = None,
+        session_token: str | None = None,
     ) -> None:
         """Start the job if capacity allows, otherwise keep it queued."""
         if permission_mode:
             self._permission_overrides[job.id] = permission_mode
+
+        # Adopt or create the sister session for this job
+        if self._sister_sessions is not None:
+            if session_token:
+                await self._sister_sessions.adopt(session_token, job.id)
+            else:
+                await self._sister_sessions.create_for_job(job.id)
+
         if self._shutting_down:
             log.warning("job_rejected_shutting_down", job_id=job.id)
             return
@@ -570,9 +579,6 @@ class RuntimeService:
         # Start progress tracking (headline milestones + plan extraction)
         if self._progress_tracking is not None:
             self._progress_tracking.start_tracking(job_id)
-            # Proactively scale the utility pool to match running jobs
-            if self._utility_session is not None:
-                await self._utility_session.notify_job_started()
 
         # Start telemetry tracking — init OTEL spans and SQLite summary row.
         import time as _time
@@ -1075,8 +1081,8 @@ class RuntimeService:
         self._pending_starts.pop(job_id, None)
         self._queued_override_prompts.pop(job_id, None)
         self._queued_resume_session_ids.pop(job_id, None)
-        if self._utility_session is not None:
-            await self._utility_session.notify_job_ended()
+        if self._sister_sessions is not None:
+            await self._sister_sessions.close_job(job_id)
         if self._approval_service is not None:
             self._approval_service.cleanup_job(job_id)
         if self._diff_service is not None:
