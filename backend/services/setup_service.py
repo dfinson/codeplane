@@ -262,20 +262,34 @@ def _find_cpl_processes() -> list[int]:
         # POSIX (Linux, macOS, BSD)
         try:
             result = subprocess.run(
-                ["ps", "axo", "pid,args"],
+                ["ps", "axo", "pid,ppid,args"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            exclude = {os.getpid(), os.getppid()}
+            # Build exclude set: walk the full ancestor chain so we never
+            # detect our own process tree (make → sh → uv → python cpl up).
+            pid_to_ppid: dict[int, int] = {}
             for line in result.stdout.splitlines():
-                lower = line.lower()
-                if ("cpl up" in lower or "cpl restart" in lower) and "doctor" not in lower:
-                    parts = line.split()
-                    if parts and parts[0].isdigit():
-                        pid = int(parts[0])
-                        if pid not in exclude:
-                            pids.append(pid)
+                parts = line.split(None, 2)
+                if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                    pid_to_ppid[int(parts[0])] = int(parts[1])
+
+            exclude: set[int] = set()
+            ancestor = os.getpid()
+            while ancestor and ancestor not in exclude:
+                exclude.add(ancestor)
+                ancestor = pid_to_ppid.get(ancestor, 0)
+
+            for line in result.stdout.splitlines():
+                parts = line.split(None, 2)
+                if len(parts) < 3 or not parts[0].isdigit():
+                    continue
+                pid = int(parts[0])
+                args_lower = parts[2].lower()
+                if ("cpl up" in args_lower or "cpl restart" in args_lower) and "doctor" not in args_lower:
+                    if pid not in exclude:
+                        pids.append(pid)
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
