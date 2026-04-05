@@ -186,11 +186,15 @@ export function StepContainer({ step, isActive, expanded: externalExpanded, onTo
       {agentMessage && step.status !== "running" && (
         <div
           className={cn(
-            "mt-2 text-sm text-foreground/90 leading-relaxed",
-            !expanded && (isMobile ? "line-clamp-2" : "line-clamp-3"),
+            "mt-2 text-sm text-foreground/90 leading-relaxed relative",
+            !expanded && "max-h-[4.5rem] overflow-hidden",
           )}
         >
           <AgentMarkdown content={agentMessage.content} />
+          {/* Fade-out gradient when collapsed — indicates more content */}
+          {!expanded && (
+            <div className="absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-card to-transparent pointer-events-none" />
+          )}
         </div>
       )}
 

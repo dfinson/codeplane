@@ -693,10 +693,9 @@ class _ProgressSubscriber:
             # --- No phase boundary: re-emit the open group so frontend sees it grow ---
             headline = self._current_headline.get(job_id, "")
             headline_past = self._current_headline_past.get(job_id, "")
-            if headline and len(step_ids) > 1:
-                # Only emit open-group updates when there's a known headline
-                # and more than one step (first step alone isn't informative).
-                # Use the NEXT group counter so the ID will match the eventual
-                # closed group — the frontend replaces by groupId.
+            if headline:
+                # Emit open-group update when there's a known headline so the
+                # frontend sees every step assigned to its group immediately —
+                # including the first step after a phase boundary.
                 next_counter = self._group_counter.get(job_id, 0) + 1
                 await self._emit_group(job_id, f"g-{next_counter}", headline, headline_past, step_ids)
