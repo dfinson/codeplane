@@ -75,6 +75,9 @@ function ToolCallRow({ entry }: { entry: import("../store").TranscriptEntry }) {
 
 /* ---------- StepContainer ---------- */
 
+/** SDK-internal tools that are metadata, not user-visible work. */
+const SDK_INTERNAL_TOOLS = new Set(["report_intent", "manage_todo_list", "TodoWrite"]);
+
 interface StepContainerProps {
   step: Step;
   isActive: boolean;
@@ -95,7 +98,7 @@ export function StepContainer({ step, isActive, expanded: externalExpanded, onTo
 
   const currentTool = useMemo(() => {
     if (step.status !== "active") return null;
-    const tools = stepEntries.filter((e) => e.role === "tool_running");
+    const tools = stepEntries.filter((e) => e.role === "tool_running" && !SDK_INTERNAL_TOOLS.has(e.toolName ?? ""));
     return tools.length > 0 ? tools[tools.length - 1] : null;
   }, [stepEntries, step.status]);
 
@@ -105,7 +108,7 @@ export function StepContainer({ step, isActive, expanded: externalExpanded, onTo
   }, [stepEntries]);
 
   const toolCalls = useMemo(
-    () => stepEntries.filter((e) => e.role === "tool_call"),
+    () => stepEntries.filter((e) => e.role === "tool_call" && !SDK_INTERNAL_TOOLS.has(e.toolName ?? "")),
     [stepEntries],
   );
 

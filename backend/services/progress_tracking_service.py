@@ -389,6 +389,7 @@ class ProgressTrackingService:
         agent_msg = turn_payload.get("agent_message", "") or ""
         files_written = turn_payload.get("files_written", []) or []
         duration_ms = turn_payload.get("duration_ms", 0) or 0
+        start_sha = turn_payload.get("start_sha")
         end_sha = turn_payload.get("end_sha")
 
         # Native plan: accumulate metrics on active step + generate summary
@@ -401,6 +402,8 @@ class ProgressTrackingService:
                 for f in files_written:
                     if f not in ps.files_written:
                         ps.files_written.append(f)
+                if start_sha and ps.start_sha is None:
+                    ps.start_sha = start_sha
                 if end_sha:
                     ps.end_sha = end_sha
                 await self._generate_summary(job_id, sister, ps, agent_msg)
@@ -415,6 +418,7 @@ class ProgressTrackingService:
             tool_count=tool_count,
             files_written=files_written,
             duration_ms=duration_ms,
+            start_sha=start_sha,
             end_sha=end_sha,
         )
 
@@ -428,6 +432,7 @@ class ProgressTrackingService:
         tool_count: int,
         files_written: list[str],
         duration_ms: int,
+        start_sha: str | None,
         end_sha: str | None,
     ) -> None:
         plan_block = "\n".join(
@@ -474,6 +479,8 @@ class ProgressTrackingService:
         for f in files_written:
             if f not in ps.files_written:
                 ps.files_written.append(f)
+        if start_sha and ps.start_sha is None:
+            ps.start_sha = start_sha
         if end_sha:
             ps.end_sha = end_sha
         if summary:
