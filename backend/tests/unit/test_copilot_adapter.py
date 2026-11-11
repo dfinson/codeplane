@@ -20,6 +20,7 @@ from backend.models.domain import (
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -1612,15 +1613,32 @@ class TestHandlePermissionRequestGitResetHard:
         approval_service.create_request.assert_not_called()
 
 
+@pytest.fixture()
+async def accounting_sessions(adapter: CopilotAdapter) -> AsyncIterator[tuple[str, str]]:
+    clients = [_FakeCopilotClient(), _FakeCopilotClient()]
+    for client in clients:
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+    with patch("copilot.CopilotClient", side_effect=clients):
+        scout_id = await adapter.create_session(
+            _make_config(job_id="job-accounting", session_kind="preflight", model="gpt-4o-mini")
+        )
+        primary_id = await adapter.create_session(
+            _make_config(job_id="job-accounting", model="primary-heavy-model")
+        )
+    try:
+        yield scout_id, primary_id
+    finally:
+        await adapter.abort_session(scout_id)
+        await adapter.abort_session(primary_id)
+
+
 class TestScoutAccounting:
     @pytest.mark.asyncio
-    async def test_scout_usage_keeps_primary_model_unset_until_primary_usage(self, adapter: CopilotAdapter) -> None:
-        scout_id = "scout-accounting"
-        primary_id = "primary-accounting"
-        for session_id in (scout_id, primary_id):
-            adapter.set_job_id(session_id, "job-accounting")
-            adapter._queues[session_id] = asyncio.Queue()
-        adapter.set_session_kind(scout_id, "preflight")
+    async def test_scout_usage_keeps_primary_model_unset_until_primary_usage(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str]
+    ) -> None:
+        scout_id, primary_id = accounting_sessions
         adapter._db_write_set_model = AsyncMock()
         adapter._schedule_db_write = lambda coro: coro.close()
         usage = _FakeEventData(
@@ -1667,13 +1685,10 @@ class TestScoutAccounting:
         adapter._db_write_set_model.assert_called_once_with(job_id="job-accounting", model="primary-heavy-model")
 
     @pytest.mark.asyncio
-    async def test_scout_model_change_does_not_overwrite_primary_model(self, adapter: CopilotAdapter) -> None:
-        scout_id = "scout-model-change"
-        primary_id = "primary-model-change"
-        for session_id in (scout_id, primary_id):
-            adapter.set_job_id(session_id, "job-accounting")
-            adapter._queues[session_id] = asyncio.Queue()
-        adapter.set_session_kind(scout_id, "preflight")
+    async def test_scout_model_change_does_not_overwrite_primary_model(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str]
+    ) -> None:
+        scout_id, primary_id = accounting_sessions
         adapter._job_main_models["job-accounting"] = "primary-heavy-model"
         adapter._db_write_set_model = AsyncMock()
         adapter._schedule_db_write = lambda coro: coro.close()

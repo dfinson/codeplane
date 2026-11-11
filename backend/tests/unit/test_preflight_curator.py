@@ -8,12 +8,12 @@ import inspect
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from backend.config import CPLConfig
-from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.events import EventKind, new_event
 from backend.services.tools import preflight_curator
 
 if TYPE_CHECKING:
@@ -161,15 +161,29 @@ async def test_scout_error_does_not_promote_partial_reasoning_to_brief(scout: Si
 
 @pytest.mark.asyncio
 async def test_managed_sdk_error_does_not_become_a_successful_brief(scout: SimpleNamespace) -> None:
+    from backend.models.domain import SessionConfig
     from backend.services.copilot_adapter._adapter import CopilotAdapter
 
     translator = CopilotAdapter()
+    sdk_session = SimpleNamespace(session_id="scout-sdk", on=MagicMock(), send=AsyncMock(), abort=AsyncMock())
+    client = SimpleNamespace(
+        create_session=AsyncMock(return_value=sdk_session), stop=AsyncMock(), force_stop=AsyncMock()
+    )
 
     async def events(session_id: str):
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            admitted = await translator.create_session(
+                SessionConfig(
+                    workspace_path=scout.worktree,
+                    prompt="Prepare a context brief",
+                    job_id="job-scout",
+                    model=scout.config.runtime.utility_model,
+                    session_kind="preflight",
+                )
+            )
+        assert admitted == session_id
         yield new_event(session_id, EventKind.message_assistant, {"content": "Still exploring; not a finished brief"})
-        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
-        translator._queues[session_id] = queue
-        translator.set_job_id(session_id, "job-scout")
+        queue = translator._queues[session_id]
         sdk_error = SimpleNamespace(
             type=SimpleNamespace(value="session.error"),
             data=SimpleNamespace(to_dict=lambda: {"message": "SDK rejected Scout session"}),
@@ -181,8 +195,11 @@ async def test_managed_sdk_error_does_not_become_a_successful_brief(scout: Simpl
                 yield event
 
     scout.adapter.stream_events.side_effect = events
-    with pytest.raises(RuntimeError, match="SDK rejected Scout session"):
-        await _curate(scout)
+    try:
+        with pytest.raises(RuntimeError, match="SDK rejected Scout session"):
+            await _curate(scout)
+    finally:
+        await translator.abort_session(sdk_session.session_id)
     scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
 
 
