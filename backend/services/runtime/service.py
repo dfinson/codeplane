@@ -2117,9 +2117,9 @@ class RuntimeService:
         else:
             scout_task = self._scout_tasks.get(job_id)
             if scout_task is not None:
+                # The request still owns its canceled-state transaction.
+                # Finalization writes through a separate session after it commits.
                 scout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await scout_task
             # No task yet — job may still be in preflight curation.
             # Abort the agent session so the preflight curator's stream ends.
             agent_session = self._agent_sessions.get(job_id)
@@ -3010,6 +3010,7 @@ class RuntimeService:
         """
         from backend.models.secondary_session import EntryKind, SecondarySessionKind, SecondarySessionStatus
         from backend.persistence.secondary_session_repo import SecondarySessionRepository
+        from backend.services.tools.preflight_curator import PreflightReport
 
         worktree_path = worktree_override or job.worktree_path or job.repo
 
@@ -3021,6 +3022,7 @@ class RuntimeService:
         started_at = datetime.now(UTC)
         repo = SecondarySessionRepository(self._session_factory)
         seq_counter = 0
+        usage_report = PreflightReport()
 
         try:
             # Persist + emit started
@@ -3127,6 +3129,10 @@ class RuntimeService:
                     )
                 )
 
+            async def _on_usage(observed: PreflightReport) -> None:
+                nonlocal usage_report
+                usage_report = observed
+
             report = await self._preflight_curator.curate(
                 task=session_config.prompt,
                 repo=str(job.repo),
@@ -3134,6 +3140,7 @@ class RuntimeService:
                 job_id=job.id,
                 on_tool_call=_on_tool_call,
                 on_reasoning=_on_reasoning,
+                on_usage=_on_usage,
             )
 
             # Emit completed
@@ -3188,7 +3195,11 @@ class RuntimeService:
                 return dataclass_replace(session_config, memory_context=report.brief)
             log.debug("preflight_curator.nothing_relevant", job_id=job.id)
         except (Exception, asyncio.CancelledError) as exc:
-            log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+            if isinstance(exc, asyncio.CancelledError):
+                log.info("preflight_curator.curation_cancelled", job_id=job.id)
+            else:
+                log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+            failed_report = usage_report
             # Mark session failed if it was created
             try:
                 await repo.complete_session(
@@ -3199,6 +3210,10 @@ class RuntimeService:
                         else SecondarySessionStatus.failed.value
                     ),
                     completed_at=datetime.now(UTC),
+                    input_tokens=failed_report.input_tokens,
+                    output_tokens=failed_report.output_tokens,
+                    cost_usd=failed_report.cost_usd,
+                    metadata={"model": failed_report.model, "requested_model": self._config.runtime.utility_model},
                 )
                 await self._event_bus.publish(
                     new_event(
@@ -3212,6 +3227,9 @@ class RuntimeService:
                                 if isinstance(exc, TimeoutError)
                                 else SecondarySessionStatus.failed.value
                             ),
+                            "input_tokens": failed_report.input_tokens,
+                            "output_tokens": failed_report.output_tokens,
+                            "cost_usd": failed_report.cost_usd,
                         },
                     )
                 )

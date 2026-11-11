@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.config import CPLConfig
-from backend.models.events import EventKind, new_event
+from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.tools import preflight_curator
 
 if TYPE_CHECKING:
@@ -155,6 +155,33 @@ async def test_scout_error_does_not_promote_partial_reasoning_to_brief(scout: Si
 
     scout.adapter.stream_events.side_effect = events
     with pytest.raises(RuntimeError, match="Scout transport failed"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_managed_sdk_error_does_not_become_a_successful_brief(scout: SimpleNamespace) -> None:
+    from backend.services.copilot_adapter._adapter import CopilotAdapter
+
+    translator = CopilotAdapter()
+
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Still exploring; not a finished brief"})
+        queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
+        translator._queues[session_id] = queue
+        translator.set_job_id(session_id, "job-scout")
+        sdk_error = SimpleNamespace(
+            type=SimpleNamespace(value="session.error"),
+            data=SimpleNamespace(to_dict=lambda: {"message": "SDK rejected Scout session"}),
+        )
+        await translator._process_sdk_event_inner(sdk_error, session_id, "job-scout", "", [False], queue)
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event is not None:
+                yield event
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="SDK rejected Scout session"):
         await _curate(scout)
     scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
 

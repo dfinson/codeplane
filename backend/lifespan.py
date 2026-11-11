@@ -25,7 +25,7 @@ from backend import config as backend_config
 from backend.config import MCP_PATH, VOICE_MAX_AUDIO_SIZE_MB, CPLConfig, load_config
 from backend.di import AppProvider, CachedModelsBySdk, RequestProvider, VoiceMaxBytes
 from backend.models.events import EventKind, SessionEvent, new_event
-from backend.persistence.database import create_engine, create_session_factory, serialized_write
+from backend.persistence.database import create_engine, create_session_factory, run_migrations, serialized_write
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.step_repo import StepRepository
 from backend.services.adapters.adapter_registry import AdapterRegistry
@@ -818,6 +818,7 @@ async def _init_optional_services(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage engine lifecycle — create on startup, dispose on shutdown."""
+    await asyncio.to_thread(run_migrations)
     from backend.services.analytics.telemetry import init_telemetry
 
     init_telemetry()

@@ -557,6 +557,92 @@ async def test_cancel_during_scout_stops_scout_and_never_launches_primary(
 
 
 @pytest.mark.asyncio
+async def test_http_cancel_order_preserves_scout_terminal_history(
+    runtime: RuntimeService, config: CPLConfig, tmp_path: Path
+) -> None:
+    from backend.api.jobs import cancel_job
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
+
+    @sa_event.listens_for(engine.sync_engine, "connect")
+    def configure(connection, _record):
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=1000")
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    runtime._session_factory = factory
+    job = await _prepare_scout_job(runtime, factory, config)
+    entered = asyncio.Event()
+    curator = MagicMock()
+
+    async def curate(**kwargs: Any) -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    curator.curate = AsyncMock(side_effect=curate)
+    runtime.set_preflight_curator(curator)
+    start = asyncio.create_task(runtime._start_job(job))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        async with factory() as request_session:
+            response = await cancel_job(job.id, runtime._make_job_service(request_session), runtime, AsyncMock())
+            assert response.state == "canceled"
+            # The request-scoped session commits after the endpoint returns.
+            await request_session.commit()
+        await asyncio.gather(start, return_exceptions=True)
+        sessions = await SecondarySessionRepository(factory).get_by_job(job.id)
+        assert len(sessions) == 1
+        assert sessions[0].status == "failed"
+        assert sessions[0].completed_at is not None
+        runtime._run_job_guarded.assert_not_awaited()
+    finally:
+        start.cancel()
+        await asyncio.gather(start, return_exceptions=True)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_scout_timeout_retains_observed_accounting(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+    from backend.services.tools import preflight_curator
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    adapter = AsyncMock()
+    adapter.create_session.return_value = "timed-scout"
+
+    async def stream(session_id: str):
+        yield new_event(
+            job.id,
+            EventKind.telemetry_usage,
+            {"model": "utility-observed", "input_tokens": 100, "output_tokens": 20, "cost_usd": 0.003},
+        )
+        await asyncio.Event().wait()
+
+    adapter.stream_events = MagicMock(side_effect=stream)
+    monkeypatch.setattr(preflight_curator, "_SESSION_TIMEOUT_S", 0.02)
+    runtime.set_preflight_curator(preflight_curator.PreflightCurator(adapter, model=config.runtime.utility_model))
+    await runtime._start_job(job)
+    await runtime._tasks[job.id]
+    sessions = await SecondarySessionRepository(session_factory).get_by_job(job.id)
+    assert len(sessions) == 1
+    assert sessions[0].status == "timeout"
+    assert sessions[0].output is None
+    assert sessions[0].input_tokens == 100
+    assert sessions[0].output_tokens == 20
+    assert sessions[0].cost_usd == pytest.approx(0.003)
+    assert json.loads(sessions[0].metadata_json)["model"] == "utility-observed"
+    assert not runtime._run_job_guarded.call_args.args[2].memory_context
+
+
+@pytest.mark.asyncio
 async def test_shutdown_stops_scout_before_primary_launch(
     runtime: RuntimeService,
     session_factory: async_sessionmaker[AsyncSession],

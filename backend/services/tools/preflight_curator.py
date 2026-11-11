@@ -158,6 +158,7 @@ class PreflightCurator:
         job_id: str = "",
         on_tool_call: Callable[[PreflightToolCall], Awaitable[None]] | None = None,
         on_reasoning: Callable[[str], Awaitable[None]] | None = None,
+        on_usage: Callable[[PreflightReport], Awaitable[None]] | None = None,
     ) -> PreflightReport:
         config = SessionConfig(
             workspace_path=worktree,
@@ -169,7 +170,7 @@ class PreflightCurator:
             disallowed_tools=list(_DISALLOWED_BUILTIN_TOOLS),
             session_kind="preflight",
         )
-        return await self._run_session(config, on_tool_call=on_tool_call, on_reasoning=on_reasoning)
+        return await self._run_session(config, on_tool_call=on_tool_call, on_reasoning=on_reasoning, on_usage=on_usage)
 
     async def _run_session(
         self,
@@ -177,6 +178,7 @@ class PreflightCurator:
         *,
         on_tool_call: Callable[[PreflightToolCall], Awaitable[None]] | None = None,
         on_reasoning: Callable[[str], Awaitable[None]] | None = None,
+        on_usage: Callable[[PreflightReport], Awaitable[None]] | None = None,
     ) -> PreflightReport:
         started = time.monotonic()
         session_id: str | None = None
@@ -187,6 +189,18 @@ class PreflightCurator:
         output_tokens = 0
         cost_usd = 0.0
         model = ""
+
+        def report(brief: str = "") -> PreflightReport:
+            return PreflightReport(
+                brief=brief,
+                tool_calls=tool_calls,
+                elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                model=model,
+            )
+
         try:
             async with asyncio.timeout(_SESSION_TIMEOUT_S):
                 session_id = await self._adapter.create_session(config)
@@ -215,10 +229,12 @@ class PreflightCurator:
                         output_tokens += int(payload.get("output_tokens") or 0)
                         cost_usd += float(payload.get("cost_usd") or 0)
                         model = str(payload.get("model") or model)
+                        if on_usage is not None:
+                            await on_usage(report())
                     elif event.kind == EventKind.session_ended:
                         result_text = str(payload.get("result", ""))
                         break
-                    elif event.kind == EventKind.session_error:
+                    elif event.kind in (EventKind.session_error, EventKind.job_failed):
                         raise RuntimeError(str(payload.get("message") or "Scout session failed"))
         except TimeoutError:
             log.warning("preflight_curator.session_timeout", job_id=config.job_id, timeout_s=_SESSION_TIMEOUT_S)
@@ -235,12 +251,4 @@ class PreflightCurator:
                     await self._adapter.abort_session(session_id)
                 except Exception:
                     log.warning("preflight_curator.session_close_failed", job_id=config.job_id, exc_info=True)
-        return PreflightReport(
-            brief=(result_text or (agent_chunks[-1] if agent_chunks else "")).strip(),
-            tool_calls=tool_calls,
-            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
-            model=model,
-        )
+        return report((result_text or (agent_chunks[-1] if agent_chunks else "")).strip())
