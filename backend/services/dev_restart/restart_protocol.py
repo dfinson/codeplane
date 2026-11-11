@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -51,6 +52,13 @@ class RestartProtocolError(CodePlaneError):
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep local credentials and remote probes on their exact destination."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def get_dev_restart_dir() -> Path:

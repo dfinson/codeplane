@@ -56,6 +56,20 @@ def _tool(mcp_server, name: str):
 # ── Fixtures ─────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def internal_transport():
+    from backend.services.auth.middleware import (
+        _reset_for_testing,
+        configure_auth,
+        configure_internal_endpoint,
+    )
+
+    configure_auth(remote=False, access_only=False, password=None)
+    configure_internal_endpoint(host="127.0.0.1", port=8080)
+    yield
+    _reset_for_testing()
+
+
 @pytest.fixture
 def mock_session_factory():
     session = AsyncMock()
@@ -81,6 +95,7 @@ def mock_runtime():
     runtime.start_or_enqueue = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.send_message = AsyncMock(return_value=True)
+    runtime.send_operator_message = AsyncMock(return_value=True)
     return runtime
 
 
@@ -118,9 +133,7 @@ def mcp_server(mock_session_factory, mock_runtime, mock_approval, mock_merge_ser
 class TestRuntimeContract:
     async def test_message_uses_source_aware_command(self, mcp_server, mock_runtime):
         mock_runtime.send_operator_message = AsyncMock(return_value=True)
-        result = await _tool(mcp_server, "codeplane_job")(
-            action="message", job_id="native-job", content="fixture"
-        )
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="native-job", content="fixture")
         assert mock_runtime.send_operator_message.await_count == 1
         mock_runtime.send_message.assert_not_awaited()
         assert "error" not in result
@@ -224,8 +237,9 @@ class TestJobTool:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_cancel(self, mcp_server) -> None:
+    async def test_cancel(self, mcp_server, mock_runtime) -> None:
         job = make_job(id="job-123", repo="/test/repo", state="canceled")
+        mock_runtime.cancel_job.return_value = job
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -255,7 +269,7 @@ class TestJobTool:
     async def test_message_success(self, mcp_server, mock_runtime) -> None:
         result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-123", content="hello")
         assert "seq" in result
-        mock_runtime.send_message.assert_awaited_once_with("job-123", "hello")
+        mock_runtime.send_operator_message.assert_awaited_once_with("job-123", "hello")
 
     @pytest.mark.asyncio
     async def test_message_missing_params(self, mcp_server) -> None:
@@ -269,7 +283,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_message_not_running(self, mcp_server, mock_runtime) -> None:
-        mock_runtime.send_message = AsyncMock(return_value=False)
+        mock_runtime.send_operator_message = AsyncMock(return_value=False)
         result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-1", content="hi")
         assert "error" in result
 

@@ -18,6 +18,8 @@ from backend.models.domain import (
     SessionConfig,
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.services.adapters.agent_adapter import UtilityCompletionError
+from backend.services.completers.copilot_steer import NativeDeliveryError
 
 # ---------------------------------------------------------------------------
 # Fake copilot SDK types — injected into sys.modules before adapter import
@@ -324,8 +326,11 @@ class TestRuntimeContract:
                 _FakeSdkSessionEvent(
                     "tool.execution_start",
                     _FakeEventData(
-                        tool_call_id="shared-id", tool_name=tool, arguments={"tool": tool},
-                        mcp_tool_name=None, mcp_server_name=None,
+                        tool_call_id="shared-id",
+                        tool_name=tool,
+                        arguments={"tool": tool},
+                        mcp_tool_name=None,
+                        mcp_server_name=None,
                     ),
                 )
             )
@@ -595,7 +600,10 @@ class TestSendMessage:
 
     @pytest.mark.asyncio
     async def test_send_to_missing_session(self, adapter: CopilotAdapter) -> None:
-        await adapter.send_message("nonexistent", "hello")  # should not raise
+        with pytest.raises(NativeDeliveryError, match="no longer live") as failure:
+            await adapter.send_message("nonexistent", "hello")
+
+        assert failure.value.uncertain is False
 
 
 # ---------------------------------------------------------------------------
@@ -1075,7 +1083,7 @@ class TestEventTelemetry:
 
         await self._fire(session, _FakeSdkSessionEvent("tool.execution_start", start_data))
 
-        buffered = adapter._tool_buf.get("tc-1", {})
+        buffered = adapter._tool_buf[sid, "tc-1"]
         assert buffered.get("tool_name") == "bash"
 
         result_obj = SimpleNamespace(content=[SimpleNamespace(text="file1.py")])
@@ -1470,7 +1478,7 @@ class TestTfEventEmission:
         assert len(started) == 1
         assert started[0].payload["tool_name"] == "github/search_code"
 
-        buffered = adapter._tool_buf.get("tc-mcp", {})
+        buffered = adapter._tool_buf[sid, "tc-mcp"]
         assert buffered.get("tool_name") == "github/search_code"
 
 
@@ -1519,10 +1527,14 @@ class TestComplete:
             async def stop(self) -> None:
                 pass
 
-        with patch("copilot.CopilotClient", return_value=_FailingClient()):
-            result = await adapter.complete("test")
+        with (
+            patch("copilot.CopilotClient", return_value=_FailingClient()),
+            pytest.raises(UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
 
-        assert result.text is None
+        assert failure.value.reason == "sdk_error"
+        assert isinstance(failure.value.__cause__, _FakeJsonRpcError)
 
     @pytest.mark.asyncio
     async def test_complete_timeout(self, adapter: CopilotAdapter) -> None:
@@ -1537,11 +1549,13 @@ class TestComplete:
 
         with (
             patch("copilot.CopilotClient", return_value=_TimeoutClient()),
-            patch("asyncio.wait_for", side_effect=TimeoutError),
+            patch("backend.services.copilot_adapter._adapter.COMPLETION_TIMEOUT_S", 0.01),
+            pytest.raises(UtilityCompletionError) as failure,
         ):
-            result = await adapter.complete("test prompt")
+            await adapter.complete("test prompt")
 
-        assert result.text == ""
+        assert failure.value.reason == "timeout"
+        assert fake_session._aborted
 
 
 # ---------------------------------------------------------------------------
@@ -1576,7 +1590,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-desc", {})
+        buf = adapter._tool_buf[session_id, "tc-desc"]
         assert buf.get("intent") == "List files"
 
     @pytest.mark.asyncio
@@ -1605,7 +1619,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-str", {})
+        buf = adapter._tool_buf[session_id, "tc-str"]
         assert buf.get("arguments") == '{"path": "/tmp/foo"}'
         assert buf.get("intent") == "Read a file"
         assert buf.get("title") == "read_file"
@@ -1635,7 +1649,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-none", {})
+        buf = adapter._tool_buf[session_id, "tc-none"]
         assert buf.get("arguments") is None
 
 

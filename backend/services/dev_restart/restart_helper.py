@@ -33,8 +33,10 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import psutil
 import structlog
@@ -46,6 +48,7 @@ from backend.services.dev_restart.launch_profile import (
     profile_owns_listener,
 )
 from backend.services.dev_restart.restart_protocol import (
+    NoRedirectHandler,
     RestartLock,
     RestartLockHeldError,
     RestartPhase,
@@ -77,6 +80,8 @@ log = structlog.get_logger()
 # turn — existing startup recovery (RuntimeService.recover_on_startup) owns
 # their fate, and the helper never sends /resume for anything (AD-7).
 _RUNNING_STATE = "running"
+_helper_auth_origin: str | None = None
+_helper_session: str | None = None
 
 # Secret-free redaction keys: never let these substrings reach a log line or
 # a persisted diagnostic file (AD-12).
@@ -268,7 +273,50 @@ def _now_iso() -> str:
 
 
 def _base_url(profile: LaunchProfile) -> str:
-    return f"http://{profile.host}:{profile.port}"
+    host = profile.host
+    if host in {"0.0.0.0", "127.0.0.1", "localhost"}:  # noqa: S104
+        host = "127.0.0.1"
+    elif host in {"::", "::1"}:
+        host = "[::1]"
+    else:
+        raise HelperAbort(RestartPhase.failed, "non_loopback_restart_endpoint")
+    return f"http://{host}:{profile.port}"
+
+
+def _authorize_helper(profile: LaunchProfile) -> None:
+    """Authenticate a detached helper without storing secrets in restart records."""
+    global _helper_auth_origin, _helper_session  # noqa: PLW0603
+    _helper_auth_origin = None
+    _helper_session = None
+    if not profile.remote:
+        return
+    source = profile.password_source
+    if profile.effective_auth_mode == "access_only":
+        raise HelperAbort(RestartPhase.failed, "access_only_helper_requires_authenticated_handoff")
+    if source.kind != "resolvable" or source.provider != "environment" or source.reference != "CPL_PASSWORD":
+        raise HelperAbort(RestartPhase.failed, "restart_password_unavailable")
+    password = os.environ.get("CPL_PASSWORD")
+    if not password:
+        raise HelperAbort(RestartPhase.failed, "restart_password_unavailable")
+    origin = _base_url(profile)
+    req = urllib.request.Request(
+        f"{origin}/api/auth/login",
+        data=json.dumps({"password": password}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+    try:
+        with opener.open(req, timeout=10.0) as response:
+            cookie = SimpleCookie()
+            cookie.load(response.headers.get("set-cookie", ""))
+            token = cookie.get("cpl_session")
+            if response.status != 200 or token is None:
+                raise HelperAbort(RestartPhase.failed, "restart_authentication_failed")
+            _helper_session = token.value
+            _helper_auth_origin = origin
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise HelperAbort(RestartPhase.failed, "restart_authentication_failed") from exc
 
 
 def _http_request(
@@ -276,9 +324,15 @@ def _http_request(
 ) -> tuple[int, dict[str, Any] | None]:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
+    if _helper_session:
+        target = urlparse(url)
+        if f"{target.scheme}://{target.netloc}" != _helper_auth_origin or not target.path.startswith("/api/jobs"):
+            raise HelperAbort(RestartPhase.failed, "restart_credential_destination_rejected")
+        headers["Cookie"] = f"cpl_session={_helper_session}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+        with opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
             try:
                 return resp.status, json.loads(raw) if raw else None
@@ -440,6 +494,8 @@ def _start_replacement(
     ]
     if profile.dev:
         args.append("--dev")
+    if profile.effective_auth_mode == "access_only":
+        args.append("--access-only")
     if profile.remote:
         args.append("--remote")
         # Always pass --provider explicitly instead of relying on the CLI's
@@ -577,6 +633,7 @@ def _run_claimed(
 
         time.sleep(request.timeouts.response_grace_seconds)
 
+        _authorize_helper(request.launch_profile)
         log_phase(RestartPhase.pausing, request_id, phase_start=True)
         jobs = _list_running_jobs(request.launch_profile)
         failed_pauses = _pause_jobs(request.launch_profile, jobs, request_id)

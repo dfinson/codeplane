@@ -691,6 +691,21 @@ class SessionConfig:
     session_kind: SessionKind = "job"
 
 
+@dataclass(frozen=True)
+class CurrentExecutionContext:
+    job_id: str
+    execution_token: str | None
+
+
+@dataclass(frozen=True)
+class CurrentExecutionDispatchResult:
+    job_id: str
+    execution_token: str | None
+    status: str
+    reason: str | None = None
+    message_event_id: str | None = None
+
+
 @dataclass
 class JobSpec:
     """Parameters for creating a new job — bundles the inputs to JobService.create_job."""

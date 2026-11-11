@@ -634,10 +634,25 @@ async def list_sdks() -> SDKListResponse:
     from backend.services.setup.checks import check_agent_auth, check_agent_cli
 
     config = load_config()
-    default_sdk = config.runtime.default_sdk
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    policy = IntegrationPolicy(config)
+    default_sdk = policy.default_sdk
 
     items: list[SDKInfoResponse] = []
     for sdk in AgentSDK:
+        if not policy.enabled(sdk):
+            items.append(
+                SDKInfoResponse(
+                    id=sdk.value,
+                    name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
+                    enabled=False,
+                    status="disabled_by_policy",
+                    authenticated=None,
+                    hint="Disabled by runtime.copilot_only. Existing history is preserved.",
+                )
+            )
+            continue
         cli = check_agent_cli(sdk.value)
         if not cli.ready:
             items.append(

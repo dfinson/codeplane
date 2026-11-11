@@ -942,6 +942,17 @@ class SecondarySessionResponse(CamelModel):
     entries: list[SecondarySessionEntryResponse] = []
 
 
+class VerificationResultResponse(CamelModel):
+    phase: Literal["verify", "self_review"]
+    attempt: int
+    status: Literal["completed", "failed", "interrupted"]
+    session_number: int
+    sdk_session_id: str | None = None
+    started_at: datetime
+    completed_at: datetime
+    error: str | None = None
+
+
 class JobSnapshotResponse(CamelModel):
     """Full state hydration for a single job — used after reconnect or page refresh."""
 
@@ -955,13 +966,14 @@ class JobSnapshotResponse(CamelModel):
     turn_summaries: list[TurnSummaryPayload] = []
     secondary_sessions: list[SecondarySessionResponse] = []
     context_handoffs: list[ContextHandoffPayload] = []
+    verification_results: list[VerificationResultResponse] = []
 
 
 class SDKInfoResponse(CamelModel):
     id: str
     name: str
     enabled: bool
-    status: Literal["ready", "not_installed", "not_configured"]
+    status: Literal["ready", "not_installed", "not_configured", "disabled_by_policy"]
     authenticated: bool | None = None  # None = unknown / not applicable
     hint: str = ""  # actionable suggestion for the user
 
@@ -1111,6 +1123,8 @@ class TurnSummaryPayload(CamelModel):
     job_id: str
     turn_id: str
     title: str
+    kind: str | None = None
+    version: int | None = None
     activity_id: str
     activity_label: str
     activity_status: str = "active"  # active | done

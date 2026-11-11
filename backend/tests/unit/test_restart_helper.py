@@ -574,6 +574,33 @@ class TestRuntimeContract:
         assert "--no-password" not in args
 
 
+class TestRemoteHelperAuthentication:
+    def test_remote_password_login_stays_in_memory_and_uses_loopback(self, monkeypatch):
+        monkeypatch.setenv("CPL_PASSWORD", "test-password")
+        response = MagicMock(status=200, headers={"set-cookie": "cpl_session=test-session; HttpOnly; Path=/"})
+        response.__enter__.return_value = response
+        opener = MagicMock()
+        opener.open.return_value = response
+        try:
+            with patch.object(rh.urllib.request, "build_opener", return_value=opener):
+                rh._authorize_helper(_remote_profile())
+            request = opener.open.call_args.args[0]
+            assert request.full_url == "http://127.0.0.1:8080/api/auth/login"
+            assert rh._helper_session == "test-session"
+            with pytest.raises(rh.HelperAbort, match="destination_rejected"):
+                rh._http_request("GET", "http://127.0.0.1:3000/api/jobs")
+        finally:
+            rh._helper_session = None
+            rh._helper_auth_origin = None
+
+    def test_access_only_helper_refuses_missing_handoff_before_stopping(self):
+        data = _remote_profile(provider="cloudflare").to_dict()
+        data["authMode"] = "access_only"
+        data["passwordSource"] = {"kind": "not_required"}
+        with pytest.raises(rh.HelperAbort, match="authenticated_handoff"):
+            rh._authorize_helper(LaunchProfile.from_dict(data))
+
+
 class TestStartReplacement:
     def test_builds_exact_local_argv_and_env_with_nonce(self, tmp_path: Path) -> None:
         """Exact argv reproducibility (verified against ``python -m backend.main up --help``,
@@ -923,6 +950,7 @@ class TestCheckingRemotePhase:
 
         probe_mock = MagicMock()
         with (
+            patch.object(rh, "_authorize_helper"),
             patch.object(rh, "_list_running_jobs", return_value=[]),
             patch.object(rh, "_pause_jobs", return_value=[]),
             patch.object(rh, "_stop_old_process"),
@@ -1000,6 +1028,7 @@ class TestCheckingRemotePhase:
             return fake_child
 
         with (
+            patch.object(rh, "_authorize_helper"),
             patch.object(rh, "_list_running_jobs", return_value=[]),
             patch.object(rh, "_pause_jobs", return_value=[]),
             patch.object(rh, "_stop_old_process"),

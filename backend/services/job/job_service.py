@@ -26,6 +26,7 @@ from backend.models.domain import (
     validate_state_transition,
 )
 from backend.services.adapters.agent_adapter import validate_sdk_model
+from backend.services.adapters.integration_policy import IntegrationPolicy
 from backend.services.completers.naming_service import NamingError
 from backend.services.git.git_service import GitError
 from backend.services.project.repo_membership import normalize_repo_path
@@ -252,7 +253,7 @@ class JobService:
 
         return title, description, branch, worktree_name
 
-    async def enrich_naming_async(self, job_id: str, spec: JobSpec, resolved_repo: str) -> None:
+    async def enrich_naming_async(self, job_id: str, spec: JobSpec, resolved_repo: str) -> SessionEvent | None:
         """Background LLM naming enrichment: fills in title/description after creation.
 
         Runs after `create_job` has already returned using the instant
@@ -261,10 +262,10 @@ class JobService:
         changing them post-hoc would desync the DB from git reality.
         """
         if self._naming is None:
-            return
+            return None
         job = await self._job_repo.get(job_id)
         if job is None or job.title is not None:
-            return
+            return None
         try:
             existing_branches = await self._git.list_branches(resolved_repo) if self._git else set()
             existing_worktrees = await self._list_worktree_names(resolved_repo)
@@ -276,25 +277,22 @@ class JobService:
             )
         except NamingError as exc:
             log.warning("naming_enrichment_failed", job_id=job_id, error=str(exc))
-            return
+            return None
 
         job = await self._job_repo.get(job_id)
         if job is None:
-            return
+            return None
         await self._job_repo.update_title_and_branch(job_id, title=title, description=description)
 
-        if self._event_bus is not None:
-            from backend.models.events import EventKind, new_event
+        from backend.models.events import EventKind, new_event
 
-            await self._event_bus.publish(
-                new_event(
-                    session_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=EventKind.job_title_updated,
-                    payload={"title": title, "description": description},
-                )
-            )
         log.info("naming_enrichment_complete", job_id=job_id, title=title)
+        return new_event(
+            session_id=job_id,
+            timestamp=datetime.now(UTC),
+            kind=EventKind.job_title_updated,
+            payload={"title": title, "description": description},
+        )
 
     async def create_job(self, spec: JobSpec) -> Job:
         """Create a new job record in ``preparing`` state.
@@ -317,16 +315,14 @@ class JobService:
             SDKModelMismatchError: if the requested model is incompatible
                 with the resolved SDK.
         """
+        policy = IntegrationPolicy(self._config)
+        resolved_sdk = policy.require_enabled(spec.sdk or policy.default_sdk).value
+        validate_sdk_model(resolved_sdk, spec.model)
         resolved_repo = await self.validate_repo_async(spec.repo)
         project_id = await self._resolve_job_project_id(resolved_repo, spec.project_id)
 
         if self._git is None:
             raise ServiceInitError("GitService required for job creation")
-
-        resolved_sdk = spec.sdk or self._config.runtime.default_sdk
-
-        # Validate SDK-model compatibility upfront
-        validate_sdk_model(resolved_sdk, spec.model)
 
         # Determine base_ref
         base_ref = spec.base_ref
@@ -477,6 +473,13 @@ class JobService:
             return job
 
         # Register worktree with CodeRecon for live reindexing
+        current = await self._job_repo.get(job_id)
+        if current is None:
+            raise JobNotFoundError(f"Job {job_id} disappeared during workspace creation")
+        if current.state != JobState.preparing:
+            await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
+            return current
+
         if self._coderecon is not None and self._coderecon.available:
             try:
                 repo_name = await self._coderecon.ensure_repo_indexed(job.repo)
@@ -487,9 +490,8 @@ class JobService:
 
         # Update the job with worktree info and transition to queued
         now = datetime.now(UTC)
-        await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
-        validate_state_transition(JobState.preparing, JobState.queued)
-        await self._job_repo.update_state(job_id, JobState.queued, now)
+        if not await self._job_repo.finish_workspace_setup(job_id, worktree_path, branch_name, now):
+            await self._job_repo.update_worktree(job_id, worktree_path, branch_name)
 
         log.info("job_workspace_ready", job_id=job_id, worktree_path=worktree_path, branch=branch_name)
 

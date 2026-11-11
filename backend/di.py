@@ -8,6 +8,7 @@ Defines the DI container wiring that replaces the previous hand-rolled
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, NewType
 
 import httpx
@@ -67,6 +68,14 @@ from backend.services.trail import TrailService
 CachedModelsBySdk = NewType("CachedModelsBySdk", dict[str, Any])
 VoiceMaxBytes = NewType("VoiceMaxBytes", int)
 PreviewHttpClient = NewType("PreviewHttpClient", httpx.AsyncClient)
+
+
+class _RejectPreviewCookies(DefaultCookiePolicy):
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+    def return_ok(self, cookie: Any, request: Any) -> bool:
+        return False
 
 
 class AppProvider(Provider):
@@ -141,6 +150,9 @@ class AppProvider(Provider):
     async def preview_http_client(self) -> AsyncIterator[PreviewHttpClient]:
         client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            cookies=CookieJar(policy=_RejectPreviewCookies()),
+            follow_redirects=False,
+            trust_env=False,
         )
         try:
             yield PreviewHttpClient(client)

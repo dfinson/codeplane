@@ -410,7 +410,7 @@ class TestSendMessage:
         mock_runtime_service: AsyncMock,
     ) -> None:
         job_id = await seed_job()
-        mock_runtime_service.send_message.return_value = True
+        mock_runtime_service.send_operator_message.return_value = True
 
         resp = await client.post(
             f"/api/jobs/{job_id}/messages",
@@ -420,7 +420,7 @@ class TestSendMessage:
         body = resp.json()
         assert "seq" in body
         assert "timestamp" in body
-        mock_runtime_service.send_message.assert_called_once_with(job_id, "Try a different approach")
+        mock_runtime_service.send_operator_message.assert_called_once_with(job_id, "Try a different approach")
 
     @pytest.mark.asyncio
     async def test_non_running_job_returns_409(
@@ -430,7 +430,7 @@ class TestSendMessage:
         mock_runtime_service: AsyncMock,
     ) -> None:
         job_id = await seed_job(state="review")
-        mock_runtime_service.send_message.return_value = False
+        mock_runtime_service.send_operator_message.return_value = False
 
         resp = await client.post(
             f"/api/jobs/{job_id}/messages",

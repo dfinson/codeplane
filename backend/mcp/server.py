@@ -296,16 +296,13 @@ def _register_job_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
         if action == "cancel":
             if not job_id:
                 return {"error": "job_id is required for cancel"}
-            from backend.persistence.database import serialized_write
-
-            async with serialized_write(sf) as session:
-                svc = _make_job_service(mcp_state, session, config)
-                try:
-                    job = await svc.cancel_job(job_id)
-                except (JobNotFoundError, StateConflictError) as exc:
-                    return {"error": str(exc)}
             runtime = mcp_state.runtime_service
-            await runtime.cancel(job_id)
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            try:
+                job = await runtime.cancel_job(job_id)
+            except (JobNotFoundError, StateConflictError, NativeDeliveryError, SDKModelMismatchError) as exc:
+                return {"error": str(exc)}
             return _job_to_response(job)
 
         if action == "rerun":
@@ -350,7 +347,12 @@ def _register_job_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
             if len(content) > 10000:
                 return {"error": "Content must be at most 10,000 characters"}
             runtime = mcp_state.runtime_service
-            sent = await runtime.send_message(job_id, content)
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            try:
+                sent = await runtime.send_operator_message(job_id, content)
+            except (JobNotFoundError, StateConflictError, NativeDeliveryError, SDKModelMismatchError) as exc:
+                return {"error": str(exc)}
             if not sent:
                 return {"error": "Job is not currently running"}
             from datetime import UTC, datetime
@@ -833,10 +835,12 @@ def _register_repo_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
 
         import httpx
 
-        config = load_config()
-        base_url = f"http://{config.server.host}:{config.server.port}/api"
+        from backend.services.auth.middleware import internal_api_url, internal_request_headers
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        base_url = internal_api_url()
+        async with httpx.AsyncClient(
+            timeout=120, headers=internal_request_headers(base_url), follow_redirects=False, trust_env=False
+        ) as client:
             if action == "list":
                 resp = await client.get(f"{base_url}/settings/repos")
                 resp.raise_for_status()
@@ -897,10 +901,12 @@ def _register_project_tool(mcp: FastMCP) -> None:
     ) -> McpToolResult:
         import httpx
 
-        config = load_config()
-        base_url = f"http://{config.server.host}:{config.server.port}/api"
+        from backend.services.auth.middleware import internal_api_url, internal_request_headers
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        base_url = internal_api_url()
+        async with httpx.AsyncClient(
+            timeout=120, headers=internal_request_headers(base_url), follow_redirects=False, trust_env=False
+        ) as client:
             if action == "list":
                 resp = await client.get(f"{base_url}/settings/projects")
                 resp.raise_for_status()

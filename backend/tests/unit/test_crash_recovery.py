@@ -113,7 +113,6 @@ class TestApprovalRecovery:
         assert future is None  # popped after resolve
         assert resolved.resolved_at is not None
 
-
     @pytest.mark.asyncio
     async def test_already_resolved_not_recovered(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         """Approvals that were resolved before restart are not recovered."""

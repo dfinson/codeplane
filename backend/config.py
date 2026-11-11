@@ -87,6 +87,7 @@ runtime:
     max_concurrent_jobs: 2
     worktrees_dirname: .codeplane-worktrees
     default_sdk: copilot
+    copilot_only: true
     suppressed_preflight_agent_prompts: []
 
 retention:
@@ -116,12 +117,17 @@ class RuntimeConfig:
     worktrees_dirname: str = ".codeplane-worktrees"
     utility_model: str = ""  # cheap/fast model for naming, summaries, etc. Auto-set from default_sdk if empty.
     default_sdk: str = "copilot"  # copilot | claude
+    copilot_only: bool = True
     suppressed_preflight_agent_prompts: list[str] = field(default_factory=list)
     cli_sidecars: list[str] | None = None  # sidecar names for CLI sessions; None = built-in defaults
 
     def __post_init__(self) -> None:
+        if not isinstance(self.copilot_only, bool):
+            raise ValueError("runtime.copilot_only must be a boolean")
         if not self.utility_model:
-            self.utility_model = "claude-haiku-4.5" if self.default_sdk == "claude" else "gpt-5-mini"
+            self.utility_model = (
+                "claude-haiku-4.5" if self.default_sdk == "claude" and not self.copilot_only else "gpt-5-mini"
+            )
 
 
 @dataclass

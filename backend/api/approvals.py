@@ -109,12 +109,15 @@ async def send_message(
     from datetime import UTC, datetime
 
     # Delegate to IngestService for imported sessions
-    job = await job_service.get_job(job_id)
-    if job and job.source != "managed":
-        await ingest.send_operator_message(job_id, body.content)
-        return SendMessageResponse(seq=0, timestamp=datetime.now(UTC))
+    from backend.services.completers.copilot_steer import NativeDeliveryError
 
-    sent = await runtime_service.send_message(job_id, body.content)
+    try:
+        sent = await runtime_service.send_operator_message(job_id, body.content)
+    except NativeDeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "delivery_unknown" if exc.uncertain else "delivery_failed", "message": str(exc)},
+        ) from exc
     if not sent:
         raise HTTPException(
             status_code=409,

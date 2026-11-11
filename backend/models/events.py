@@ -113,6 +113,8 @@ class EventKind(StrEnum):
     plan_step_updated = "plan.step_updated"
     step_entries_reassigned = "step.entries_reassigned"
     turn_summary = "turn.summary"
+    verification_started = "verification.started"
+    verification_result = "verification.result"
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
     # --- Repo index ---

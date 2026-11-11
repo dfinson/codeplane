@@ -226,6 +226,7 @@ async def _reenrich_locked(
         # Re-enrich through a fresh TF Enricher in batches
         enricher = TFEnricher(flush_on_session_end=True)
         updated = 0
+        failed = 0
         offset = 0
 
         # Pre-enrichment metadata snapshots for buffered tool-starts, so an
@@ -254,6 +255,7 @@ async def _reenrich_locked(
                 try:
                     enriched = enricher.process(event)
                 except Exception:
+                    failed += 1
                     log.warning(
                         "reenrich_event_failed",
                         job_id=job_id,
@@ -304,6 +306,8 @@ async def _reenrich_locked(
                 updated += 1
 
         # Insert fresh marker event (old one deleted above if force)
+        if failed:
+            raise RuntimeError(f"Re-enrichment failed for {failed} events. No completion marker was written.")
         marker = new_event(
             session_id=job_id,
             timestamp=datetime.now(UTC),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,8 +29,9 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-_SESSION_STORE_PATH = Path.home() / ".copilot" / "session-store.db"
-_SESSION_STATE_DIR = Path.home() / ".copilot" / "session-state"
+_COPILOT_HOME = Path(os.environ.get("COPILOT_HOME", str(Path.home() / ".copilot"))).expanduser().resolve()
+_SESSION_STORE_PATH = _COPILOT_HOME / "session-store.db"
+_SESSION_STATE_DIR = _COPILOT_HOME / "session-state"
 _DISCOVERY_POLL_S = 2.0
 _SESSION_ID_PATTERN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 
@@ -63,7 +65,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
     async def start(self) -> None:
         if not _SESSION_STORE_PATH.exists():
             log.info("session_state_watcher_no_store", path=str(_SESSION_STORE_PATH))
-            return
         self._running = True
         self._started_at = datetime.now(UTC).isoformat()
         await self._load_existing_sessions()
@@ -75,14 +76,16 @@ class SessionStateWatcher(TraceForgeIngestBase):
 
     async def send_message(self, session_id: str, message: str) -> None:
         if self._steer is None:
-            log.warning("session_state_watcher_no_steer_client")
-            return
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            raise NativeDeliveryError("Copilot steering is unavailable")
         await self._steer.send_message(session_id, message)
 
     async def abort_session(self, session_id: str) -> None:
         if self._steer is None:
-            log.warning("session_state_watcher_no_steer_client")
-            return
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            raise NativeDeliveryError("Copilot steering is unavailable")
         await self._steer.abort(session_id)
 
     async def _load_existing_sessions(self) -> None:
@@ -120,7 +123,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
 
             for job_id, ext_sid, count, wt, base, repo in running_jobs:
                 alive = await self._steer.check_alive(ext_sid) if self._steer else True
-                if not alive:
+                if alive is False:
                     await self._finalize_session(job_id, error_reason="session ended while CodePlane was offline")
                     continue
                 self._session_to_job[ext_sid] = job_id
@@ -168,8 +171,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
             return []
         results: list[tuple[str, str, str]] = []
         try:
-            db = sqlite3.connect(str(_SESSION_STORE_PATH), timeout=2.0)
-            db.execute("PRAGMA journal_mode=WAL")
+            db = sqlite3.connect(f"{_SESSION_STORE_PATH.as_uri()}?mode=ro", uri=True, timeout=2.0)
             try:
                 query = "SELECT id, cwd, summary FROM sessions WHERE 1=1"
                 params: tuple[Any, ...] = ()
@@ -245,7 +247,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
             return
         while self._running and session_id in self._session_to_job:
             await asyncio.sleep(_DISCOVERY_POLL_S)
-            if not await self._steer.check_alive(session_id):
+            if await self._steer.check_alive(session_id) is False:
                 await self._finalize_session(job_id, error_reason="session ended without clean shutdown")
                 task = self._tail_tasks.get(session_id)
                 if task:

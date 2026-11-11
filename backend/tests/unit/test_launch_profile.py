@@ -166,6 +166,7 @@ class TestLaunchProfileSchema:
             "tunnelOrigin",
             "tunnelOriginReusable",
             "passwordSource",
+            "authMode",
             "tunnelCredentialSource",
             "startedPid",
             "startedProcessTime",

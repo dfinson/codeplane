@@ -790,11 +790,21 @@ class TestCleanupWorktrees:
 
     @pytest.mark.asyncio
     async def test_cleanup_skips_symlinks(self, git_service: GitService, tmp_path: Path) -> None:
+        import os
+        import subprocess
+
         wt_dir = tmp_path / ".codeplane-worktrees"
         wt_dir.mkdir()
         real_dir = tmp_path / "real"
         real_dir.mkdir()
-        (wt_dir / "symlink").symlink_to(real_dir)
+        if os.name == "nt":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(wt_dir / "symlink"), str(real_dir)],
+                check=True,
+                capture_output=True,
+            )
+        else:
+            (wt_dir / "symlink").symlink_to(real_dir, target_is_directory=True)
         (wt_dir / "job-1").mkdir()
 
         async def mock_exec(*args, **kwargs):

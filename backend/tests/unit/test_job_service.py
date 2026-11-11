@@ -80,6 +80,23 @@ async def job_service(
 
 
 class TestRuntimeContract:
+    async def test_naming_returns_event_for_post_commit_publication(self):
+        from backend.tests.unit.conftest import make_job
+
+        repo = AsyncMock()
+        repo.get.return_value = make_job(title=None)
+        git = AsyncMock()
+        git.list_branches.return_value = set()
+        git.list_worktree_names.return_value = set()
+        naming = AsyncMock()
+        naming.generate.return_value = ("Fixture title", "Fixture description", "branch", "worktree")
+        bus = AsyncMock()
+        service = JobService(repo, git, CPLConfig(), naming_service=naming, event_bus=bus)
+        event = await service.enrich_naming_async("job-1", JobSpec(repo="fixture", prompt="fixture"), "fixture")
+        assert event.kind == "job.title_updated"
+        repo.update_title_and_branch.assert_awaited_once()
+        bus.publish.assert_not_awaited()
+
     async def test_cancel_during_setup_cannot_revive_job(self):
         from backend.tests.unit.conftest import make_job
 

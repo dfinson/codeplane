@@ -22,6 +22,7 @@ This is the one funnel for both producers — there is exactly one event shape.
 from __future__ import annotations
 
 import uuid
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 import structlog
@@ -34,6 +35,8 @@ from backend.models.events import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from traceforge.enricher import Enricher as TFEnricher
     from traceforge.pipeline import EventPipeline as TFEventPipeline
 
@@ -47,6 +50,7 @@ log = structlog.get_logger()
 # report_intent is an internal Copilot marker tool — it never mutates the
 # worktree, so it must not trigger a diff recalculation.
 _DIFF_SKIP_TOOL = "report_intent"
+RECONSTRUCTING_EVENTS: ContextVar[bool] = ContextVar("reconstructing_native_events", default=False)
 
 
 class EventProcessor:
@@ -66,6 +70,7 @@ class EventProcessor:
         *,
         enricher: TFEnricher | None = None,
         title_pipeline: TFEventPipeline | None = None,
+        persisted: Callable[[SessionEvent], Awaitable[bool]] | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._diff_service = diff_service
@@ -73,6 +78,7 @@ class EventProcessor:
         self._trail_service = trail_service
         self._enricher = enricher
         self._title_pipeline = title_pipeline
+        self._persisted = persisted
         # Synthesized turn_id per job for producers that don't provide one
         # (imported CLI sessions). Rotated on completed agent messages.
         self._turn_ids: dict[str, str] = {}
@@ -82,12 +88,19 @@ class EventProcessor:
         if self._step_tracker is not None:
             self._step_tracker.register_worktree(job_id, worktree_path)
 
+    def restore_projection(self, job_id: str, events: list[SessionEvent]) -> None:
+        if self._step_tracker is not None:
+            for event in events:
+                self._step_tracker.restore_event(job_id, event)
+
     async def process_event(
         self,
         job_id: str,
         event: SessionEvent,
         worktree_path: str | None = None,
         base_ref: str | None = None,
+        *,
+        replay: bool = False,
     ) -> SessionEvent | None:
         """Process a TF-native ``SessionEvent`` through the standard pipeline.
 
@@ -95,6 +108,9 @@ class EventProcessor:
         internally (e.g. a ``file.edited`` diff trigger) and nothing was emitted.
         """
         kind = event.kind
+        if replay:
+            await self._reconstruct(event)
+            return None
         diff_eligible = self._diff_service is not None and bool(worktree_path) and bool(base_ref)
 
         # Diff recalculation on native file-edit events — consumed, not published
@@ -135,6 +151,16 @@ class EventProcessor:
                 return last
 
             event = enriched
+
+        if (
+            self._persisted is not None
+            and "_codeplane_source" in event.payload
+            and event.kind != EventKind.message_delta
+            and await self._persisted(event)
+        ):
+            if self._title_pipeline is not None and event.kind in TRANSCRIPT_KINDS:
+                await self._title_pipeline.push(event)
+            return event
 
         # Diff recalculation on tool completions (skip internal marker tools)
         if (
@@ -205,6 +231,15 @@ class EventProcessor:
         same diff / turn_id / step-tracking annotation as a normal event.
         """
         kind = event.kind
+        if (
+            self._persisted is not None
+            and "_codeplane_source" in event.payload
+            and event.kind != EventKind.message_delta
+            and await self._persisted(event)
+        ):
+            if self._title_pipeline is not None and kind in TRANSCRIPT_KINDS:
+                await self._title_pipeline.push(event)
+            return event
 
         if (
             diff_eligible
@@ -251,6 +286,18 @@ class EventProcessor:
 
         return event
 
+    async def _reconstruct(self, event: SessionEvent) -> None:
+        enriched = self._enricher.process(event) if self._enricher is not None else event
+        if enriched is None:
+            return
+        for item in enriched if isinstance(enriched, list) else [enriched]:
+            if self._title_pipeline is not None and item.kind in TRANSCRIPT_KINDS:
+                token = RECONSTRUCTING_EVENTS.set(True)
+                try:
+                    await self._title_pipeline.push(item)
+                finally:
+                    RECONSTRUCTING_EVENTS.reset(token)
+
     async def on_job_terminal(self, job_id: str, outcome: str) -> None:
         """Notify step tracker and finalize this job's session through TraceForge.
 
@@ -265,7 +312,7 @@ class EventProcessor:
         # Flush orphan tool-starts buffered for this job's session only
         if self._enricher is not None:
             for orphan in self._enricher.flush_session(job_id):
-                await self._event_bus.publish(orphan)
+                await self._process_enriched(job_id, orphan, None, None, False)
         # Finalize this session's title streams (per-session, not global)
         if self._title_pipeline is not None:
             try:

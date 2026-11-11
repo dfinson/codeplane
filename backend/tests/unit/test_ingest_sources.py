@@ -302,6 +302,27 @@ class TestTraceForgeReattach:
         claude_watcher._job_to_session["job-skip"] = "sess-skip"
         claude_watcher._job_worktrees["job-skip"] = "C:\\repo\\myproject"
         claude_watcher._job_base_refs["job-skip"] = "HEAD"
+        from backend.persistence.job_repo import JobRepository
+        from backend.services.ingest._base import _advance_prefix, _canonical_record, _NativeIdentity
+
+        async with db_session() as session:
+            repo = JobRepository(session)
+            job = await repo.get("job-skip")
+            identity = _NativeIdentity("claude", "sess-skip", "job-skip", job.created_at)
+            await repo.update_ingest_checkpoint(
+                "job-skip",
+                {
+                    "version": 1,
+                    "record_count": 1,
+                    "external_session_id": "sess-skip",
+                    "mapping_sha256": identity.mapping_digest,
+                    "prefix_sha256": _advance_prefix(
+                        bytes(32), _canonical_record({"type": "user", "message": {"content": "first"}})
+                    ).hex(),
+                },
+                1,
+            )
+            await session.commit()
 
         await claude_watcher._tail_traceforge_events(
             "sess-skip",
@@ -311,9 +332,12 @@ class TestTraceForgeReattach:
             finalize_on_raw=claude_watcher._raw_terminal,
         )
 
-        transcript_kinds = [call.args[1].kind for call in event_processor.process_event.call_args_list]
+        transcript_kinds = [
+            call.args[1].kind for call in event_processor.process_event.call_args_list if not call.kwargs.get("replay")
+        ]
         assert EventKind.message_user not in transcript_kinds
         assert EventKind.message_assistant in transcript_kinds
+        assert any(call.kwargs.get("replay") for call in event_processor.process_event.call_args_list)
 
 
 async def _insert_job(

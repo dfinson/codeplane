@@ -128,6 +128,16 @@ class LaunchProfile:
     started_pid: int
     started_process_time: float
     written_at: str
+    auth_mode: str | None = None
+
+    @property
+    def effective_auth_mode(self) -> str:
+        """Missing legacy posture is inferred conservatively, never Access-only."""
+        if self.auth_mode is not None:
+            return self.auth_mode
+        if self.remote or self.password_source.kind != "not_required":
+            return "password"
+        return "local"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -144,6 +154,7 @@ class LaunchProfile:
             "tunnelOrigin": self.tunnel_origin,
             "tunnelOriginReusable": self.tunnel_origin_reusable,
             "passwordSource": self.password_source.to_dict(),
+            "authMode": self.effective_auth_mode,
             "tunnelCredentialSource": self.tunnel_credential_source.to_dict(),
             "startedPid": self.started_pid,
             "startedProcessTime": self.started_process_time,
@@ -234,12 +245,26 @@ class LaunchProfile:
             started_pid=started_pid,
             started_process_time=started_process_time,
             written_at=written_at,
+            auth_mode=data.get("authMode"),
         )
         profile.validate_combination()
         return profile
 
     def validate_combination(self) -> None:
         """Reject impossible local/remote field combinations (AC 5)."""
+        mode = self.effective_auth_mode
+        if not isinstance(mode, str) or mode not in {"local", "password", "access_only"}:
+            raise LaunchProfileInvalidError("invalid authMode")
+        if mode == "access_only":
+            if not self.remote or self.provider != "cloudflare":
+                raise LaunchProfileInvalidError("Access-only requires remote Cloudflare")
+            if self.password_source.kind != "not_required":
+                raise LaunchProfileInvalidError("Access-only conflicts with passwordSource")
+        elif mode == "local":
+            if self.remote or self.password_source.kind != "not_required":
+                raise LaunchProfileInvalidError("local authMode conflicts with remote/password configuration")
+        elif self.password_source.kind == "not_required":
+            raise LaunchProfileInvalidError("password authMode requires a recorded password source")
         if not self.remote:
             if self.provider != "local":
                 raise LaunchProfileInvalidError("provider must be 'local' when remote is false")
@@ -278,6 +303,7 @@ def build_active_launch_profile(
     tunnel_credential_source: SecretSource,
     started_pid: int,
     started_process_time: float,
+    auth_mode: str | None = None,
 ) -> LaunchProfile:
     """Build and structurally validate a profile ready for atomic publication."""
     profile = LaunchProfile(
@@ -298,6 +324,7 @@ def build_active_launch_profile(
         started_pid=started_pid,
         started_process_time=started_process_time,
         written_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        auth_mode=auth_mode or ("password" if remote or password_source.kind != "not_required" else "local"),
     )
     profile.validate_combination()
     return profile

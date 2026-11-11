@@ -82,9 +82,7 @@ class TestRuntimeContract:
         from backend.api.terminal import terminal_ws
 
         app = protected_app("chosen-password")
-        ws = MagicMock(
-            app=app, client=SimpleNamespace(host="127.0.0.1"), cookies={}, headers={}
-        )
+        ws = MagicMock(app=app, client=SimpleNamespace(host="127.0.0.1"), cookies={}, headers={})
         ws.accept = AsyncMock()
         ws.close = AsyncMock()
         from starlette.websockets import WebSocketDisconnect

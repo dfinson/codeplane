@@ -5,6 +5,33 @@ hide:
 
 # Usage Guide
 
+## Copilot-only operation
+
+`runtime.copilot_only` defaults to `true`. CodePlane admits GitHub Copilot
+execution, including models from other providers that Copilot serves. It keeps
+other adapters and their historical jobs. Set the flag to `false` in the
+CodePlane configuration to re-enable them. A stored non-Copilot default is
+preserved while the effective default is Copilot.
+
+Disabled integrations cannot create, resume or recover execution. History
+remains readable. Startup records a specific failure for an in-flight managed
+job whose integration is disabled. Normal operator terminals remain shells,
+not provider sandboxes.
+
+Scout remains a governed full-session context brief before primary execution.
+It is distinct from text-only naming, narration and Chat completion. Discussion
+Chats cannot use tools and do not create a workspace.
+
+Native observation honors process-scoped `COPILOT_HOME`. If native source
+history or its mapping changed, observation stops with a recorded diagnostic
+instead of silently reinterpreting accepted progress. A steering receipt means
+admission, not proof the agent executed the instruction. An uncertain delivery
+must not be retried automatically.
+
+Verification results distinguish completed, failed and interrupted agent
+verification turns. A completed turn is not evidence that tests passed.
+Review remains the operator's decision state.
+
 ## Creating Jobs
 
 Jobs are the core unit of work. Each job runs an agent against a repository in an isolated Git worktree.

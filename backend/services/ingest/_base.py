@@ -4,22 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import inspect
 import json
-from datetime import UTC, datetime
-from pathlib import PureWindowsPath
+import uuid
+from collections import OrderedDict
+from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
+from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from traceforge.adapters.mapped_json import MappedJsonAdapter
+import yaml
+from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
 from traceforge.config.mappings import resolve_mapping_path
+from traceforge.preprocessors import get_preprocessor
 from traceforge.sources.file_watch import FileWatchSource
 
 from backend.models.domain import JobState
-from backend.models.events import EventKind, new_event
+from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
+from backend.services.runtime.execution_control import ExecutionControl
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
-    from pathlib import Path
+    from collections.abc import Callable, Coroutine, Iterator
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from traceforge.types import SessionEvent
@@ -30,6 +37,103 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 _PERSIST_EVERY_EVENTS = 64
+
+
+def _canonical_record(raw: dict[str, Any]) -> bytes:
+    return json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _advance_prefix(prefix: bytes, canonical: bytes) -> bytes:
+    return hashlib.sha256(prefix + len(canonical).to_bytes(8, "big") + canonical).digest()
+
+
+class _NativeIdentity:
+    def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
+        resolved_mapping = resolve_mapping_path(framework)
+        if resolved_mapping is None:
+            raise ValueError(f"No native event mapping for framework {framework}")
+        mapping_path = Path(resolved_mapping)
+        self.mapping = FrameworkMapping.model_validate(yaml.safe_load(mapping_path.read_text(encoding="utf-8")))
+        self.adapter = MappedJsonAdapter(self.mapping, session_id=external_id)
+        preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
+        source = inspect.getsourcefile(preprocessor) if preprocessor else None
+        identity = {
+            "distribution_version": version("traceforge-toolkit"),
+            "mapping_file_sha256": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+            "preprocessor_file_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest() if source else None,
+        }
+        self.mapping_digest = hashlib.sha256(_canonical_record(identity)).hexdigest()
+        self.framework = framework
+        self.external_id = external_id
+        self.job_id = job_id
+        self.anchor = anchor.replace(tzinfo=UTC) if anchor.tzinfo is None else anchor
+        self.references: OrderedDict[str, str] = OrderedDict()
+        self.window = self.mapping.get_motivation_config().source_window
+        self.source_kinds = {kind for item in self.mapping.get_motivation_config().sources for kind in item.events}
+        self.turn = 0
+
+    def events(self, raw: dict[str, Any], ordinal: int) -> Iterator[SessionEvent]:
+        digest = hashlib.sha256(_canonical_record(raw)).hexdigest()
+        for index, event in enumerate(self.adapter.parse_dict(raw)):
+            identity = json.dumps(
+                ["codeplane-native-v1", self.framework, self.external_id, ordinal, index, digest],
+                separators=(",", ":"),
+            )
+            stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+            if event.metadata.raw_kind in self.source_kinds:
+                self.references[event.id] = stable_id
+                while len(self.references) > self.window:
+                    self.references.popitem(last=False)
+            motivation = event.metadata.motivation
+            if motivation:
+                motivation = motivation.model_copy(
+                    update={"source_event_ids": tuple(self.references[item] for item in motivation.source_event_ids)}
+                )
+            metadata = event.metadata.model_copy(update={"run_id": self.external_id, "motivation": motivation})
+            payload = dict(event.payload)
+            payload["_codeplane_source"] = {
+                "contract": "codeplane-native-v1",
+                "framework": self.framework,
+                "session_id": self.external_id,
+                "record_index": ordinal,
+                "output_index": index,
+                "record_sha256": digest,
+                "vendor_event_id": raw.get("id"),
+            }
+            if not payload.get("turn_id"):
+                payload["turn_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.job_id}:native-turn:{self.turn}"))
+            if event.kind == EventKind.message_assistant:
+                self.turn += 1
+            timestamp_value: Any = raw
+            for part in (self.mapping.timestamp_field or "").split("."):
+                timestamp_value = timestamp_value.get(part) if isinstance(timestamp_value, dict) else None
+            timestamp = (
+                event.timestamp if timestamp_value is not None else self.anchor + timedelta(microseconds=ordinal)
+            )
+            yield event.model_copy(
+                update={
+                    "id": stable_id,
+                    "session_id": self.job_id,
+                    "metadata": metadata,
+                    "payload": payload,
+                    "timestamp": timestamp,
+                }
+            )
+
+
+def _verify_source_prefix(path: Path, count: int, expected: str) -> None:
+    prefix = bytes(32)
+    seen = 0
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            if seen == count:
+                break
+            raw = json.loads(line) if line.strip() else None
+            canonical = _canonical_record(raw) if isinstance(raw, dict) else b""
+            prefix = _advance_prefix(prefix, canonical)
+            seen += 1
+    if seen != count or prefix.hex() != expected:
+        raise RuntimeError("Native source was truncated or rewritten before its accepted checkpoint")
 
 
 def repo_basename(repo_path: str) -> str:
@@ -65,6 +169,8 @@ class TraceForgeIngestBase:
         self._bg_tasks: set[asyncio.Task[Any]] = set()
         self._emitted_counts: dict[str, int] = {}
         self._finalized_jobs: set[str] = set()
+        self._source_locks: dict[str, asyncio.Lock] = {}
+        self._finalization_control = ExecutionControl()
 
     async def _stop_common(self) -> None:
         self._running = False
@@ -109,47 +215,126 @@ class TraceForgeIngestBase:
         initial_skip_count: int = 0,
         finalize_on_raw: Callable[[dict[str, Any]], tuple[bool, str | None]] | None = None,
     ) -> None:
-        """Tail JSONL from the beginning and skip already-emitted TF events on reattach."""
-        adapter = MappedJsonAdapter.from_yaml(str(resolve_mapping_path(self._mapping_name)), session_id=session_id)
-        skipped = 0
-        emitted = initial_skip_count
+        """Validate prior progress, reconstruct state and durably accept new records."""
+        lock = self._source_locks.setdefault(job_id, asyncio.Lock())
+        if lock.locked():
+            return
+        try:
+            async with lock:
+                await self._tail_source(session_id, job_id, jsonl_path, initial_skip_count, finalize_on_raw)
+        finally:
+            self._source_locks.pop(job_id, None)
+
+    async def _tail_source(
+        self,
+        session_id: str,
+        job_id: str,
+        jsonl_path: Path,
+        initial_skip_count: int,
+        finalize_on_raw: Callable[[dict[str, Any]], tuple[bool, str | None]] | None,
+    ) -> None:
+        from backend.persistence.database import serialized_write
+        from backend.persistence.event_repo import EventRepository
+        from backend.persistence.job_repo import JobRepository
+
+        emitted = 0
         self._emitted_counts[job_id] = emitted
         terminal_reason: str | None = None
         terminal_seen = False
         try:
+            async with self._session_factory() as session:
+                repo = JobRepository(session)
+                job = await repo.get(job_id)
+                if job is None:
+                    raise RuntimeError("Native job no longer exists")
+                checkpoint = await repo.get_ingest_checkpoint(job_id)
+                prior = await EventRepository(session).list_by_job(job_id, list(TRANSCRIPT_KINDS), limit=1)
+            normalizer = _NativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
+            accepted = int(checkpoint["record_count"]) if checkpoint else 0
+            if checkpoint:
+                if (
+                    checkpoint.get("version") != 1
+                    or checkpoint.get("mapping_sha256") != normalizer.mapping_digest
+                    or checkpoint.get("external_session_id") != session_id
+                ):
+                    raise RuntimeError("Native checkpoint mapping or session identity changed")
+                await asyncio.to_thread(_verify_source_prefix, jsonl_path, accepted, checkpoint["prefix_sha256"])
+            elif initial_skip_count and prior:
+                raise RuntimeError("Legacy native history has no provable source checkpoint")
+            if checkpoint:
+                offset = 0
+                while True:
+                    async with self._session_factory() as session:
+                        history = await EventRepository(session).list_all_events_by_job(
+                            job_id, limit=500, offset=offset
+                        )
+                    self._event_processor.restore_projection(job_id, history)
+                    if len(history) < 500:
+                        break
+                    offset += len(history)
+            prefix = bytes(32)
+            ordinal = 0
+            file_identity = jsonl_path.stat().st_ino if jsonl_path.exists() else None
+            last_size = jsonl_path.stat().st_size if jsonl_path.exists() else 0
             async with FileWatchSource(jsonl_path, name=session_id, start_at="beginning") as source:
                 async for record in source:
+                    stat = jsonl_path.stat()
+                    if (file_identity and stat.st_ino != file_identity) or stat.st_size < last_size:
+                        raise RuntimeError("Native source rotated or truncated during observation")
+                    file_identity, last_size = stat.st_ino, stat.st_size
+                    if not record.payload.strip():
+                        prefix = _advance_prefix(prefix, b"")
+                        ordinal += 1
+                        continue
                     raw = self._load_json_payload(record.payload)
                     if raw is None:
-                        continue
+                        raise RuntimeError("Native source contains an invalid JSON record")
+                    reconstruct = ordinal < accepted
                     if finalize_on_raw is not None:
                         terminal_seen, terminal_reason = finalize_on_raw(raw)
-                    for event in adapter.parse_dict(raw):
-                        if skipped < initial_skip_count:
-                            skipped += 1
-                            continue
-                        await self._handle_tf_event(job_id, event)
+                    for event in normalizer.events(raw, ordinal):
+                        if reconstruct:
+                            await self._event_processor.process_event(job_id, event, replay=True)
+                        else:
+                            await self._handle_tf_event(job_id, event)
                         emitted += 1
                         self._emitted_counts[job_id] = emitted
-                        if emitted % _PERSIST_EVERY_EVENTS == 0:
-                            self._fire_bg(
-                                self._persist_emitted_count(job_id, emitted),
-                                name=f"{self._mapping_name}-count-{job_id[:8]}",
-                            )
                         if event.kind == EventKind.session_error:
                             terminal_seen = True
                             terminal_reason = self._event_error_reason(event)
                         elif event.kind == EventKind.session_ended:
                             terminal_seen = True
-                    if terminal_seen:
-                        await self._persist_emitted_count(job_id, emitted)
+                    prefix = _advance_prefix(prefix, _canonical_record(raw))
+                    ordinal += 1
+                    if not reconstruct:
+                        checkpoint = {
+                            "version": 1,
+                            "framework": self._mapping_name,
+                            "external_session_id": session_id,
+                            "record_count": ordinal,
+                            "prefix_sha256": prefix.hex(),
+                            "mapping_sha256": normalizer.mapping_digest,
+                            "timestamp_anchor": normalizer.anchor.isoformat(),
+                            "output_contract": "codeplane-native-v1",
+                        }
+                        async with serialized_write(self._session_factory) as session:
+                            await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, emitted)
+                    if terminal_seen and ordinal >= accepted:
                         await self._finalize_session(job_id, error_reason=terminal_reason)
                         return
         except asyncio.CancelledError:
-            await self._persist_emitted_count(job_id, self._emitted_counts.get(job_id, emitted))
             raise
-        except Exception:
-            log.debug("%s_tail_error", self._watcher_log_prefix, job_id=job_id, exc_info=True)
+        except Exception as exc:
+            log.error("native_observation_failed", job_id=job_id, error=str(exc), exc_info=True)
+            await self._publish_lifecycle(
+                job_id,
+                EventKind.log_line_emitted,
+                {
+                    "level": "error",
+                    "message": f"Native observation stopped: {exc}",
+                    "context": {"observation_status": "failed"},
+                },
+            )
 
     @staticmethod
     def _load_json_payload(payload: str | bytes) -> dict[str, Any] | None:
@@ -161,6 +346,13 @@ class TraceForgeIngestBase:
         return raw if isinstance(raw, dict) else None
 
     async def _handle_tf_event(self, job_id: str, event: SessionEvent) -> None:
+        if event.session_id != job_id:
+            event = event.model_copy(
+                update={
+                    "session_id": job_id,
+                    "metadata": event.metadata.model_copy(update={"run_id": event.session_id}),
+                }
+            )
         if event.kind == EventKind.message_user:
             content = str(event.payload.get("content") or event.payload.get("text") or "")
             if job_id not in self._prompt_captured and content.strip():
@@ -201,9 +393,12 @@ class TraceForgeIngestBase:
         await self._event_processor.process_event(job_id, new_event(job_id, kind, payload))
 
     async def _finalize_session(self, job_id: str, *, error_reason: str | None = None) -> None:
+        async with self._finalization_control.hold(job_id):
+            await self._finalize_locked(job_id, error_reason=error_reason)
+
+    async def _finalize_locked(self, job_id: str, *, error_reason: str | None = None) -> None:
         if job_id in self._finalized_jobs:
             return
-        self._finalized_jobs.add(job_id)
         now = datetime.now(UTC)
         new_state = JobState.failed if error_reason else JobState.review
         try:
@@ -214,6 +409,8 @@ class TraceForgeIngestBase:
             async with serialized_write(self._session_factory) as session:
                 repo = JobRepository(session)
                 job = await repo.get(job_id)
+                if job is not None and job.state in (JobState.canceled, JobState.completed):
+                    new_state = job.state
                 await repo.update_state(
                     job_id,
                     new_state,
@@ -243,9 +440,18 @@ class TraceForgeIngestBase:
             base_ref=self._job_base_refs.get(job_id),
             error_reason=error_reason,
         )
+        self._finalized_jobs.add(job_id)
         self._cleanup_job(job_id)
 
     def _cleanup_job(self, job_id: str) -> None:
+        current = asyncio.current_task()
+        for sid, owner in list(self._session_to_job.items()):
+            if owner != job_id:
+                continue
+            self._session_to_job.pop(sid, None)
+            for task in (self._tail_tasks.get(sid), self._liveness_tasks.get(sid)):
+                if task is not None and task is not current:
+                    task.cancel()
         self._job_worktrees.pop(job_id, None)
         self._job_base_refs.pop(job_id, None)
         self._prompt_captured.discard(job_id)

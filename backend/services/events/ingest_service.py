@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.config import load_config
 from backend.models.domain import Job, JobSource
+from backend.services.adapters.integration_policy import IntegrationPolicy
+from backend.services.completers.copilot_steer import NativeDeliveryError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -45,13 +48,17 @@ class IngestService:
         """Queue an operator message for delivery to the agent."""
         job = await self._get_job(job_id)
         if not job:
-            return
+            raise NativeDeliveryError(f"Job {job_id} does not exist")
+        IntegrationPolicy(load_config()).require_enabled(job.sdk)
+        if not job.external_session_id:
+            raise NativeDeliveryError("Native session identity is missing")
 
         if job.source == JobSource.claude_cli:
             if self._claude_watcher:
                 await self._claude_watcher.send_operator_message(job_id, message)
             else:
                 log.warning("operator_message_no_claude_watcher", job_id=job_id)
+                raise NativeDeliveryError("Claude observation is disabled")
         elif job.source == JobSource.copilot_cli:
             if self._session_state_watcher:
                 ext_id = job.external_session_id
@@ -63,8 +70,11 @@ class IngestService:
                 if ext_id:
                     await self._steer.send_message(ext_id, message)
                     log.info("operator_message_sent_copilot", job_id=job_id)
+            else:
+                raise NativeDeliveryError("Copilot steering is unavailable")
         else:
             log.warning("operator_message_no_channel", job_id=job_id, source=job.source)
+            raise NativeDeliveryError("No native message channel for this job")
 
     async def abort_session(self, job_id: str) -> None:
         """Abort the external session.
@@ -74,11 +84,16 @@ class IngestService:
         """
         job = await self._get_job(job_id)
         if not job:
-            return
+            raise NativeDeliveryError(f"Job {job_id} does not exist")
+        IntegrationPolicy(load_config()).require_enabled(job.sdk)
+        if not job.external_session_id:
+            raise NativeDeliveryError("Native session identity is missing")
 
         if job.source == JobSource.claude_cli:
             if self._claude_watcher:
                 await self._claude_watcher.abort_session(job_id)
+            else:
+                raise NativeDeliveryError("Claude observation is disabled")
         elif job.source == JobSource.copilot_cli:
             if self._session_state_watcher:
                 ext_id = job.external_session_id
@@ -88,6 +103,17 @@ class IngestService:
                 ext_id = job.external_session_id
                 if ext_id:
                     await self._steer.abort(ext_id)
+            else:
+                raise NativeDeliveryError("Copilot steering is unavailable")
+        else:
+            raise NativeDeliveryError("No native cancellation channel for this job")
+
+    async def confirms_live(self, job: Job) -> bool:
+        if job.source != JobSource.copilot_cli or not job.external_session_id:
+            return False
+        if self._steer is None:
+            return False
+        return await self._steer.check_alive(job.external_session_id) is True
 
     async def _get_job(self, job_id: str) -> Job | None:
         async with self._session_factory() as session:

@@ -15,7 +15,9 @@ from backend.di import PreviewHttpClient
 
 @pytest.fixture()
 def preview_client() -> AsyncMock:
-    return AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.build_request.side_effect = httpx.Request
+    return client
 
 
 @pytest.fixture()
@@ -60,18 +62,18 @@ class TestPreviewProxy:
             content=b"<html>OK</html>",
             headers={"content-type": "text/html"},
         )
-        preview_client.request.return_value = upstream
+        preview_client.send.return_value = upstream
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/preview/3000/index.html")
 
         assert resp.status_code == 200
         assert resp.text == "<html>OK</html>"
-        preview_client.request.assert_called_once()
+        preview_client.send.assert_called_once()
 
     @pytest.mark.anyio()
     async def test_upstream_connection_error_returns_502(self, app: FastAPI, preview_client: AsyncMock) -> None:
-        preview_client.request.side_effect = httpx.ConnectError("refused")
+        preview_client.send.side_effect = httpx.ConnectError("refused")
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/preview/3000/")
@@ -82,18 +84,18 @@ class TestPreviewProxy:
     @pytest.mark.anyio()
     async def test_query_string_forwarded(self, app: FastAPI, preview_client: AsyncMock) -> None:
         upstream = httpx.Response(200, content=b"ok")
-        preview_client.request.return_value = upstream
+        preview_client.send.return_value = upstream
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             await ac.get("/api/preview/8080/path?foo=bar&baz=1")
 
-        call_args = preview_client.request.call_args
+        call_args = preview_client.build_request.call_args
         assert "foo=bar" in call_args.kwargs["url"]
 
     @pytest.mark.anyio()
     async def test_blocked_headers_not_forwarded(self, app: FastAPI, preview_client: AsyncMock) -> None:
         upstream = httpx.Response(200, content=b"ok")
-        preview_client.request.return_value = upstream
+        preview_client.send.return_value = upstream
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             await ac.get(
@@ -101,10 +103,120 @@ class TestPreviewProxy:
                 headers={"x-forwarded-for": "evil", "x-real-ip": "evil"},
             )
 
-        call_args = preview_client.request.call_args
+        call_args = preview_client.build_request.call_args
         forwarded = call_args.kwargs.get("headers", {})
         assert "x-forwarded-for" not in forwarded
         assert "x-real-ip" not in forwarded
+
+
+class TestPreviewTransportPreservation:
+    @pytest.mark.anyio()
+    async def test_concurrent_ports_never_receive_another_preview_cookie(self):
+        import asyncio
+
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        seen = []
+
+        async def upstream(request):
+            seen.append(request.headers.get("cookie"))
+            await asyncio.sleep(0)
+            return httpx.Response(200, headers={"set-cookie": f"preview={request.url.port}; Path=/"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+
+            async def visit(port):
+                request = Request(
+                    {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+                    receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+                )
+                return await preview_proxy(port, "", request, PreviewHttpClient(client))
+
+            await visit(3000)
+            await asyncio.gather(visit(4000), visit(5000))
+        assert seen == [None, None, None]
+
+    @pytest.mark.anyio()
+    async def test_cancelled_read_closes_upstream(self):
+        import asyncio
+
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        class CancelledStream(httpx.AsyncByteStream):
+            closed = False
+
+            async def __aiter__(self):
+                yield b"partial"
+                raise asyncio.CancelledError
+
+            async def aclose(self):
+                self.closed = True
+
+        stream = CancelledStream()
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+            receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=stream))
+        ) as client:
+            with pytest.raises(asyncio.CancelledError):
+                await preview_proxy(3000, "", request, PreviewHttpClient(client))
+        assert stream.closed
+
+    @pytest.mark.anyio()
+    async def test_redirect_is_returned_without_following(self):
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        seen = []
+
+        async def upstream(request):
+            seen.append(str(request.url))
+            return httpx.Response(302, headers={"location": "https://external.example.com/next"})
+
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+            receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+        )
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), follow_redirects=True) as client:
+            response = await preview_proxy(3000, "", request, PreviewHttpClient(client))
+        assert response.status_code == 302
+        assert seen == ["http://127.0.0.1:3000/"]
+
+    @pytest.mark.anyio()
+    async def test_decode_error_still_closes_upstream(self):
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        class InvalidGzip(httpx.AsyncByteStream):
+            closed = False
+
+            async def __aiter__(self):
+                yield b"not-gzip"
+
+            async def aclose(self):
+                self.closed = True
+
+        stream = InvalidGzip()
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+            receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers={"content-encoding": "gzip"}, stream=stream)
+            )
+        ) as client:
+            response = await preview_proxy(3000, "", request, PreviewHttpClient(client))
+        assert response.status_code == 502
+        assert stream.closed
 
 
 class TestRuntimeContract:
@@ -120,19 +232,27 @@ class TestRuntimeContract:
             seen.append(request)
             return httpx.Response(201, content=b"preview", headers={"set-cookie": "other=secret; Path=/"})
 
-        request = Request({
-            "type": "http", "method": "POST", "path": "/api/preview/3000/",
-            "query_string": b"x=1",
-            "headers": [
-                (b"cookie", b"cpl_session=private"), (b"authorization", b"Bearer private"),
-                (b"cf-access-jwt-assertion", b"private"), (b"x-codeplane-internal-token", b"private"),
-                (b"x-ordinary", b"keep"),
-            ],
-        }, receive=AsyncMock(return_value={"type": "http.request", "body": b"payload"}))
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/preview/3000/",
+                "query_string": b"x=1",
+                "headers": [
+                    (b"cookie", b"cpl_session=private"),
+                    (b"authorization", b"Bearer private"),
+                    (b"cf-access-jwt-assertion", b"private"),
+                    (b"x-codeplane-internal-token", b"private"),
+                    (b"x-ordinary", b"keep"),
+                ],
+            },
+            receive=AsyncMock(return_value={"type": "http.request", "body": b"payload"}),
+        )
         async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
             response = await preview_proxy(3000, "", request, PreviewHttpClient(client))
-        assert not ({"cookie", "authorization", "cf-access-jwt-assertion", "x-codeplane-internal-token"}
-                    & set(seen[0].headers))
+        assert not (
+            {"cookie", "authorization", "cf-access-jwt-assertion", "x-codeplane-internal-token"} & set(seen[0].headers)
+        )
         assert "set-cookie" not in response.headers
         assert (seen[0].method, seen[0].content, seen[0].headers["x-ordinary"]) == ("POST", b"payload", "keep")
         assert (response.status_code, response.body) == (201, b"preview")

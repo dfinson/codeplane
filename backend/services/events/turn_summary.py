@@ -35,6 +35,8 @@ def build_turn_summary_payload(update: TitleUpdate) -> dict[str, Any] | None:
         "title": update.title,
         "activity_id": update.parent_id or update.segment_id,
         "is_new_activity": is_new_activity,
+        "kind": update.kind,
+        "version": update.version,
     }
     # Only an activity-kind update natively carries the activity's label (its
     # title). Map it directly — no synthetic inference for step updates.

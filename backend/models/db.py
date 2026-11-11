@@ -59,6 +59,7 @@ class JobRow(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, default="managed", server_default="managed")
     external_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     tail_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    ingest_checkpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="standard", server_default="standard")
     story_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_story_json: Mapped[str | None] = mapped_column(Text, nullable=True)

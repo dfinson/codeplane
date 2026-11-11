@@ -34,13 +34,18 @@ class EventRepository(BaseRepository):
             event_id=row.event_id,
             session_id=row.job_id,
             timestamp=row.timestamp,
-            kind=EventKind(row.kind),
+            kind=row.kind,
             payload=json.loads(row.payload),
             metadata=metadata,
         )
 
     async def append(self, event: SessionEvent) -> int:
         """Persist a domain event. Returns the autoincrement DB id."""
+        existing = await self._session.execute(select(EventRow).where(EventRow.event_id == event.id))
+        previous = existing.scalar_one_or_none()
+        if previous is not None:
+            self._verify_identity(previous, event)
+            return previous.id
         row = EventRow(
             event_id=event.id,
             job_id=event.session_id or None,
@@ -52,6 +57,22 @@ class EventRepository(BaseRepository):
         self._session.add(row)
         await self._session.flush()
         return row.id
+
+    @staticmethod
+    def _verify_identity(row: EventRow, event: SessionEvent) -> None:
+        previous = json.loads(row.payload)
+        source = event.payload.get("_codeplane_source")
+        same = previous.get("_codeplane_source") == source if source else previous == dict(event.payload)
+        if row.job_id != event.session_id or row.kind != str(event.kind) or not same:
+            raise ValueError(f"Conflicting content for event identity {event.id}")
+
+    async def contains(self, event: SessionEvent) -> bool:
+        result = await self._session.execute(select(EventRow).where(EventRow.event_id == event.id))
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        self._verify_identity(row, event)
+        return True
 
     async def list_after(
         self,

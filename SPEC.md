@@ -2,6 +2,38 @@
 
 ---
 
+## Runtime admission and evidence invariants
+
+`runtime.copilot_only` defaults to true. This restricts CodePlane-managed
+provider integrations, not model families served by Copilot or manually typed
+terminal commands. Disabled integrations retain their code, configuration and
+history. Explicit disabled execution fails before side effects, and disabled
+in-flight managed jobs fail explicitly during recovery rather than changing SDK.
+
+Native observation uses deterministic source identities and a validated source
+checkpoint. CodePlane job identity owns persistence and SSE routing. Replayed
+records do not repeat execution, permission decisions or durable projections.
+Observation failure does not imply the external agent stopped.
+
+Approval decisions remain durable across waiter races and server restart.
+Explicit approval markers cannot be waived by bulk trust. Superseded SDK
+permission invocations are retired with a reason, while independent tracker and
+task-spawn approvals are retained.
+
+Coordinated dispatch uses an exact live-execution token and refuses stale,
+non-running or gated targets. It never implicitly resumes or unpauses a job.
+Admission is distinct from execution, and uncertain delivery is not retried.
+
+Verification results describe completed, failed or interrupted verification
+agent turns. Completion is not proof of test success or operator acceptance.
+The existing review/completed distinction remains.
+
+Remote mode enforces credentials on HTTP, SSE and WebSockets throughout startup
+and steady state, including connector traffic arriving from loopback. Explicit
+passwords are preserved. Access-only mode requires an explicit selection and
+per-request verified JWT. Preview transport never forwards control-plane
+credentials or cookies and enforces the decoded response limit during reading.
+
 ## Table of Contents
 
 1. [Product Overview](#1-product-overview)

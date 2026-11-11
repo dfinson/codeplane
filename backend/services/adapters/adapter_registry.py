@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.config import CPLConfig
 from backend.models.domain import AgentSDK
+from backend.services.adapters.integration_policy import IntegrationPolicy
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,16 +29,17 @@ class AdapterRegistry:
         approval_service: ApprovalService | None = None,
         event_bus: EventBus | None = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
+        config: CPLConfig | None = None,
     ) -> None:
         self._approval_service = approval_service
         self._event_bus = event_bus
         self._session_factory = session_factory
         self._adapters: dict[AgentSDK, AgentAdapterInterface] = {}
+        self.policy = IntegrationPolicy(config if config is not None else CPLConfig())
 
     def get_adapter(self, sdk: AgentSDK | str) -> AgentAdapterInterface:
         """Return a (possibly cached) adapter instance for the given SDK."""
-        if isinstance(sdk, str):
-            sdk = AgentSDK(sdk)
+        sdk = self.policy.require_enabled(sdk)
         if sdk not in self._adapters:
             adapter = self._create(sdk)
             self._adapters[sdk] = adapter

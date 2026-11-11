@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import time
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 from backend.services.auth.middleware import (
     _check_password,
     _create_session_token,
@@ -102,3 +108,31 @@ class TestPasswordLifecycle:
 
     def test_none_token(self):
         assert is_valid_token(None) is False
+
+
+class TestAccessJwtVerification:
+    @pytest.mark.parametrize("invalid", [None, "expired", "audience", "issuer", "signature"])
+    def test_signed_access_claims(self, monkeypatch, invalid):
+        from backend.services.auth import cf_access
+
+        cf_access.reset()
+        try:
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            cf_access.configure(team="example", aud="application", eager=False)
+            public_key = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+            monkeypatch.setattr(cf_access, "_jwks_keys", [public_key])
+            monkeypatch.setattr(cf_access, "_jwks_fetched_at", time.monotonic())
+            now = int(time.time())
+            claims = {"iss": "https://example.cloudflareaccess.com", "aud": "application", "iat": now, "exp": now + 60}
+            if invalid == "expired":
+                claims["exp"] = now - 1
+            elif invalid == "audience":
+                claims["aud"] = "other"
+            elif invalid == "issuer":
+                claims["iss"] = "https://other.cloudflareaccess.com"
+            elif invalid == "signature":
+                key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            token = jwt.encode(claims, key, algorithm="RS256")
+            assert cf_access.verify_token(token) is (invalid is None)
+        finally:
+            cf_access.reset()

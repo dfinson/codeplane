@@ -14,6 +14,12 @@ log = structlog.get_logger()
 _STEER_BASE = "https://api.enterprise.githubcopilot.com/agents/tasks"
 
 
+class NativeDeliveryError(RuntimeError):
+    def __init__(self, message: str, *, uncertain: bool = False) -> None:
+        super().__init__(message)
+        self.uncertain = uncertain
+
+
 class CopilotSteerClient:
     """Sends steering commands to a Copilot CLI --remote session."""
 
@@ -36,8 +42,12 @@ class CopilotSteerClient:
             log.info("copilot_steer_message_sent", task_id=task_id)
         except httpx.HTTPStatusError:
             log.warning("copilot_steer_message_failed", task_id=task_id, exc_info=True)
+            raise NativeDeliveryError("Copilot rejected the message") from None
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            raise NativeDeliveryError("Copilot message was not admitted") from None
         except httpx.HTTPError:
             log.warning("copilot_steer_message_error", task_id=task_id, exc_info=True)
+            raise NativeDeliveryError("Copilot message delivery is unknown", uncertain=True) from None
 
     async def abort(self, task_id: str) -> None:
         """POST /agents/tasks/{task_id}/steer with type=abort."""
@@ -48,19 +58,25 @@ class CopilotSteerClient:
             log.info("copilot_steer_abort_sent", task_id=task_id)
         except httpx.HTTPStatusError:
             log.warning("copilot_steer_abort_failed", task_id=task_id, exc_info=True)
+            raise NativeDeliveryError("Copilot rejected cancellation") from None
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            raise NativeDeliveryError("Copilot cancellation was not admitted") from None
         except httpx.HTTPError:
             log.warning("copilot_steer_abort_error", task_id=task_id, exc_info=True)
+            raise NativeDeliveryError("Copilot cancellation delivery is unknown", uncertain=True) from None
 
-    async def check_alive(self, task_id: str) -> bool:
+    async def check_alive(self, task_id: str) -> bool | None:
         """GET /agents/tasks/{task_id} — returns True if the session exists (200), False on 404."""
         url = f"{_STEER_BASE}/{task_id}"
         try:
             resp = await self._client.get(url)
-            return resp.status_code != 404
+            if resp.status_code == 404:
+                return False
+            return True if resp.status_code == 200 else None
         except httpx.HTTPError:
             log.debug("copilot_steer_check_alive_error", task_id=task_id, exc_info=True)
             # Network error — assume alive to avoid false positives
-            return True
+            return None
 
     async def close(self) -> None:
         await self._client.aclose()

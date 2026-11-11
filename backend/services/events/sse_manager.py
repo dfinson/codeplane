@@ -58,6 +58,8 @@ _BROADCAST_KINDS: frozenset[str] = frozenset(
         EventKind.plan_step_updated,
         EventKind.step_entries_reassigned,
         EventKind.turn_summary,
+        EventKind.verification_started,
+        EventKind.verification_result,
         EventKind.action_classified,
         EventKind.policy_settings_changed,
         EventKind.repo_index_progress,

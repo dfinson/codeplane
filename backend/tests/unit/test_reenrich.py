@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -53,10 +54,8 @@ class TestRuntimeContract:
             )
             enricher_cls.return_value.process.side_effect = ValueError("fixture enrichment failure")
             enricher_cls.return_value.flush.return_value = []
-            try:
+            with contextlib.suppress(RuntimeError):
                 await reenrich_job_events("j1", mock_session_factory)
-            except RuntimeError:
-                pass
             assert marker.await_count == 0
 
 

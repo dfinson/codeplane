@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.models.events import EventKind
+from backend.services.adapters.agent_adapter import UtilityCompletionError
 from backend.services.completers.lightweight_completer import LightweightCompleter
 
 if TYPE_CHECKING:
@@ -89,7 +90,8 @@ class SidecarSession:
         excluded_tools: list[str] | None = None,
     ) -> None:
         self._adapter = adapter
-        self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
+        self._system_prompt = system_prompt if system_prompt is not None else _DEFAULT_SYSTEM_PROMPT
+        self._custom_system_prompt = system_prompt is not None
         self._prime_lock = asyncio.Lock()
         self._primed = False
         self._model = model
@@ -125,7 +127,7 @@ class SidecarSession:
     async def _ensure_primed(self, prompt: str) -> str:
         """Prepend system prompt on the very first call, then let all
         subsequent calls proceed without any lock contention."""
-        if self._primed:
+        if self._custom_system_prompt or self._primed:
             return prompt
         async with self._prime_lock:
             if self._primed:
@@ -157,6 +159,8 @@ class SidecarSession:
                     raise
                 log.debug("sidecar_complete_retry", attempt=attempt + 1)
                 continue
+            if not result.text or not result.text.strip():
+                raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
             elapsed_ms = (time.monotonic() - t0) * 1000
             self.call_count += 1
             self.total_latency_ms += elapsed_ms
@@ -572,12 +576,13 @@ class SidecarSessionManager:
 
     # -- Non-job one-shot (Completable protocol) -----------------------------
 
-    async def complete(self, prompt: str, timeout: float = 30.0) -> str:
+    async def complete(self, prompt: str, timeout: float = 30.0, *, system_prompt: str | None = None) -> str:
         """One-shot completion for callers without a job context.
 
-        Routes through the SDK adapter via a pooled SidecarSession.
+        Default metadata calls use pooled wrappers. Custom system contexts
+        use disposable wrappers and never enter the metadata pool.
         """
-        session = self._pop_or_create()
+        session = self._pop_or_create(system_prompt=system_prompt)
         try:
             for attempt in range(_TIMEOUT_RETRIES + 1):
                 try:
@@ -587,12 +592,17 @@ class SidecarSessionManager:
                         raise
                     session._primed = False  # noqa: SLF001
             return ""
-        except (OSError, RuntimeError, TimeoutError):
+        except UtilityCompletionError:
             log.warning("sidecar_oneshot_failed", exc_info=True)
-            return ""
+            raise
+        except TimeoutError as exc:
+            raise UtilityCompletionError("Text-only completion timed out", reason="timeout") from exc
+        except (OSError, RuntimeError) as exc:
+            log.warning("sidecar_oneshot_failed", exc_info=True)
+            raise UtilityCompletionError("Text-only completion failed", reason="sdk_error") from exc
         finally:
             self._accumulate_global(session)
-            if len(self._pool) < self._pool_size:
+            if system_prompt is None and len(self._pool) < self._pool_size:
                 session._primed = False  # noqa: SLF001
                 session._reset_metrics()  # noqa: SLF001
                 self._pool.append(session)

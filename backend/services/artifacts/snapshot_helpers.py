@@ -24,6 +24,7 @@ from backend.models.api_schemas import (
     SecondarySessionResponse,
     TranscriptPayload,
     TurnSummaryPayload,
+    VerificationResultResponse,
 )
 from backend.models.domain import JobState
 from backend.models.events import TRANSCRIPT_KINDS, TRANSCRIPT_STREAMING_KINDS, EventKind
@@ -266,28 +267,37 @@ def _build_turn_summaries(
         inherited_new: dict[str, bool] = {}  # replacing_turn_id → inherited flag
         for idx, ev in enumerate(turn_summary_events):
             tid = ev.payload.get("turn_id", "")
+            key = f"{ev.payload.get('kind', '')}:{tid}"
             if tid:
-                if tid not in first_new:
-                    first_new[tid] = bool(ev.payload.get("is_new_activity", False))
-                latest[tid] = idx
+                if key not in first_new:
+                    first_new[key] = bool(ev.payload.get("is_new_activity", False))
+                previous = latest.get(key)
+                previous_version = (
+                    turn_summary_events[previous].payload.get("version", 0) if previous is not None else -1
+                )
+                if ev.payload.get("version", 0) >= previous_version:
+                    latest[key] = idx
             replaces = ev.payload.get("replaces_turn_id")
             if replaces:
                 replaced_turn_ids.add(replaces)
                 # The replacing entry inherits the replaced entry's is_new_activity
-                if replaces in first_new:
-                    inherited_new[tid] = first_new[replaces]
+                replaced_key = f"{ev.payload.get('kind', '')}:{replaces}"
+                if replaced_key in first_new:
+                    inherited_new[tid] = first_new[replaced_key]
         keep_idxs = set(latest.values())
         return [
             TurnSummaryPayload(
                 job_id=job_id,
                 turn_id=ev.payload.get("turn_id", ""),
                 title=ev.payload.get("title", ""),
+                kind=ev.payload.get("kind"),
+                version=ev.payload.get("version"),
                 activity_id=ev.payload.get("activity_id", ""),
                 activity_label=ev.payload.get("activity_label", ""),
                 activity_status=ev.payload.get("activity_status", "active"),
                 is_new_activity=inherited_new.get(
                     ev.payload.get("turn_id", ""),
-                    first_new.get(ev.payload.get("turn_id", ""), False),
+                    first_new.get(f"{ev.payload.get('kind', '')}:{ev.payload.get('turn_id', '')}", False),
                 ),
                 replaces_turn_id=ev.payload.get("replaces_turn_id"),
             )
@@ -302,6 +312,8 @@ def _build_turn_summaries(
             job_id=job_id,
             turn_id=ev.payload.get("turn_id", ""),
             title=ev.payload.get("title", ""),
+            kind=ev.payload.get("kind"),
+            version=ev.payload.get("version"),
             activity_id=ev.payload.get("activity_id", ""),
             activity_label=ev.payload.get("activity_label", ""),
             activity_status=ev.payload.get("activity_status", "active"),
@@ -438,6 +450,9 @@ async def assemble_snapshot(
         except Exception:
             pass  # graceful degradation — don't break snapshot if table doesn't exist yet
 
+    verification_events = await svc.list_events_by_job(
+        job_id, [EventKind.verification_result], limit=EVENT_QUERY_CEILING
+    )
     return JobSnapshotResponse(
         job=job_to_response(job, progress_preview),
         logs=logs,
@@ -448,6 +463,7 @@ async def assemble_snapshot(
         steps=plan_steps,
         turn_summaries=turn_summaries,
         secondary_sessions=secondary_sessions,
+        verification_results=[VerificationResultResponse.model_validate(e.payload) for e in verification_events],
         context_handoffs=[
             ContextHandoffPayload(
                 job_id=job_id,

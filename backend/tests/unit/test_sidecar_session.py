@@ -138,9 +138,10 @@ class TestSidecarSession:
         adapter = _mock_adapter()
         session = SidecarSession(adapter, system_prompt="Custom prompt.")
         await session.complete("hello")
-        call_args = adapter.complete.call_args[0][0]
-        assert "Custom prompt." in call_args
-        assert _DEFAULT_SYSTEM_PROMPT not in call_args
+        call = adapter.complete.call_args
+        assert call.args == ("hello",)
+        assert call.kwargs["system_message"] == "Custom prompt."
+        assert call.kwargs["excluded_tools"] == ["*"]
 
     @pytest.mark.asyncio
     async def test_metrics_updated(self) -> None:

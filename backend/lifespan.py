@@ -449,6 +449,11 @@ def _init_event_infrastructure(
                 session_factory=session_factory,
             )
         except OperationalError:
+            if "_codeplane_source" in event.payload or event.kind in (
+                EventKind.verification_started,
+                EventKind.verification_result,
+            ):
+                raise
             log.error(
                 "event_persist_failed_queued_for_retry",
                 event_id=event.id,
@@ -502,7 +507,7 @@ def _init_event_infrastructure(
                         kind=str(event.kind),
                     )
 
-    event_bus.subscribe(_persist_and_broadcast)
+    event_bus.subscribe(_persist_and_broadcast, required=True)
 
     # Step persistence subscriber — persists step_started/step_completed events
     step_repo = StepRepository(session_factory)
@@ -555,6 +560,7 @@ async def _wire_core_services(
         approval_service=approval_service,
         event_bus=event_bus,
         session_factory=session_factory,
+        config=config,
     )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
@@ -570,7 +576,7 @@ async def _wire_core_services(
     )
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
-    utility_adapter = adapter_registry.get_adapter(config.runtime.default_sdk)
+    utility_adapter = adapter_registry.get_adapter(adapter_registry.policy.default_sdk)
     sidecar_sessions = SidecarSessionManager(
         adapter=utility_adapter,
         model=config.runtime.utility_model,
@@ -874,6 +880,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = load_config()
 
     # --- CodeRecon structural analysis service (always-on, in-process) ---
+    from backend.services.auth.middleware import configure_internal_endpoint
+
+    launch = getattr(app.state, "banner_args", None) or {}
+    configure_internal_endpoint(
+        host=launch.get("host", config.server.host),
+        port=launch.get("port", config.server.port),
+    )
+
     coderecon_service = CodeReconService()
     coderecon_service.set_event_bus(event_bus)
 
@@ -990,7 +1004,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from traceforge.pipeline import EventPipeline as TFEventPipeline
     from traceforge.sinks.callback import CallbackSink as TFCallbackSink
 
-    from backend.services.events.event_processor import EventProcessor
+    from backend.services.events.event_processor import RECONSTRUCTING_EVENTS, EventProcessor
     from backend.services.events.turn_summary import build_turn_summary_payload
 
     tf_enricher = TFEnricher(
@@ -1003,17 +1017,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         Delegates the field mapping to ``build_turn_summary_payload`` (pure,
         unit-tested). Session-kind titles map to ``None`` and are skipped.
         """
+        if RECONSTRUCTING_EVENTS.get():
+            return
         payload = build_turn_summary_payload(update)
         if payload is None:
             return
-        await event_bus.publish(
-            new_event(
-                session_id=update.session_id,
-                timestamp=datetime.now(UTC),
-                kind=EventKind.turn_summary,
-                payload=payload,
-            )
+        import uuid
+
+        event = new_event(
+            session_id=update.session_id,
+            timestamp=datetime.now(UTC),
+            kind=EventKind.turn_summary,
+            payload=payload,
+            event_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"codeplane-title-v1:{update.session_id}:{update.segment_id}:{update.kind}:{update.version}",
+                )
+            ),
         )
+        if not await _event_is_persisted(event):
+            await event_bus.publish(event)
+
+    async def _event_is_persisted(event: SessionEvent) -> bool:
+        from backend.persistence.event_repo import EventRepository
+
+        async with session_factory() as session:
+            return await EventRepository(session).contains(event)
 
     title_sink = TFCallbackSink(on_title_update=_on_title_update)
     title_pipeline = TFEventPipeline(
@@ -1031,6 +1061,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         trail_service=trail_service,
         enricher=tf_enricher,
         title_pipeline=title_pipeline,
+        persisted=_event_is_persisted,
     )
     services.runtime_service.set_event_processor(event_processor)
 
@@ -1543,7 +1574,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         coderecon_service=coderecon_service,
         model_pricing=model_pricing_service,
     )
-    await claude_session_watcher.start()
+    if services.adapter_registry.policy.enabled("claude"):
+        await claude_session_watcher.start()
 
     ingest_service = IngestService(
         session_factory=session_factory,
@@ -1673,6 +1705,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await services.sidecar_dispatcher.shutdown()
         await services.sidecar_sessions.shutdown()
         await services.runtime_service.shutdown()
+        await asyncio.gather(*(adapter.shutdown() for adapter in services.adapter_registry._adapters.values()))
         # Flush event processor (global enricher + title pipeline drain) AFTER
         # runtime stops pushing events. Safe because no new push() calls occur.
         await event_processor.shutdown()
@@ -1680,8 +1713,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await engine.dispose()
 
     try:
-        await asyncio.wait_for(_quiet_shutdown(), timeout=8.0)
+        await asyncio.wait_for(_quiet_shutdown(), timeout=45.0)
     except TimeoutError:
-        log.warning("shutdown_timeout", msg="Shutdown timed out after 8s — forcing exit")
+        log.error("shutdown_timeout", msg="Shutdown exceeded its 45s resource-drain deadline")
     except (asyncio.CancelledError, Exception) as exc:
         log.debug("shutdown_interrupted", error=str(exc))

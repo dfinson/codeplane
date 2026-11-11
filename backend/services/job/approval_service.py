@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ from backend.models.domain import (
     ApprovalNotFoundError,
     ApprovalResolution,
 )
+from backend.services.runtime.execution_control import ExecutionControl
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,8 +34,11 @@ class ApprovalService:
     its permission callback.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], execution_control: ExecutionControl | None = None
+    ) -> None:
         self._session_factory = session_factory
+        self.execution_control = execution_control or ExecutionControl()
         self._lock = asyncio.Lock()
         self._pending_futures: dict[str, asyncio.Future[ApprovalResolution]] = {}
         self._approval_to_job: dict[str, str] = {}  # approval_id → job_id
@@ -52,6 +57,19 @@ class ApprovalService:
         return ApprovalRepository(session)
 
     async def create_request(
+        self,
+        job_id: str,
+        description: str,
+        proposed_action: str | None = None,
+        *,
+        requires_explicit_approval: bool = False,
+    ) -> Approval:
+        async with self.execution_control.hold(job_id):
+            return await self._create_request(
+                job_id, description, proposed_action, requires_explicit_approval=requires_explicit_approval
+            )
+
+    async def _create_request(
         self,
         job_id: str,
         description: str,
@@ -101,6 +119,13 @@ class ApprovalService:
 
     async def resolve(self, approval_id: str, resolution: ApprovalResolution, notes: str | None = None) -> Approval:
         """Resolve an approval and unblock the waiting runtime future."""
+        existing = await self.get(approval_id)
+        if existing is None:
+            raise ApprovalNotFoundError(f"Approval {approval_id} not found")
+        async with self.execution_control.hold(existing.job_id):
+            return await self._resolve(approval_id, resolution, notes)
+
+    async def _resolve(self, approval_id: str, resolution: ApprovalResolution, notes: str | None) -> Approval:
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             repo = self._make_repo(session)
@@ -134,8 +159,11 @@ class ApprovalService:
         async with self._lock:
             future = self._pending_futures.get(approval_id)
         if future is None:
+            approval = await self.get(approval_id)
+            if approval is not None and approval.resolution is not None:
+                return approval.resolution
             raise ApprovalNotFoundError(f"No pending future for approval {approval_id}")
-        return await future
+        return await asyncio.shield(future)
 
     async def get(self, approval_id: str) -> Approval | None:
         """Fetch a single approval by ID."""
@@ -155,51 +183,50 @@ class ApprovalService:
             repo = self._make_repo(session)
             return await repo.list_pending(job_id)
 
-    async def cleanup_job(self, job_id: str) -> None:
+    async def cleanup_job(self, job_id: str, *, preserve_pending: bool = False) -> None:
         """Cancel any pending futures for a job (e.g. on job cancel/fail).
 
         Also marks orphaned DB approvals as denied so they don't accumulate
         as unresolved rows across restarts.
         """
-        async with self._lock:
-            self._trusted_jobs.discard(job_id)
-            to_remove = [
-                aid
-                for aid, fut in self._pending_futures.items()
-                if not fut.done() and self._approval_to_job.get(aid) == job_id
-            ]
-            for aid in to_remove:
-                fut = self._pending_futures.pop(aid, None)
-                self._approval_to_job.pop(aid, None)
-                self._explicit_approval_ids.discard(aid)
-                if fut is not None and not fut.done():
-                    fut.cancel()
-        if to_remove:
-            # Best-effort DB cleanup — resolve orphaned approvals so they
-            # don't remain as pending rows after a restart.
-            import asyncio
+        async with self.execution_control.hold(job_id):
+            if not preserve_pending:
+                await self.retire_execution_requests(job_id, "Execution ended before approval was consumed")
+            async with self._lock:
+                self._trusted_jobs.discard(job_id)
+                to_remove = [aid for aid, jid in self._approval_to_job.items() if jid == job_id]
+                for aid in to_remove:
+                    fut = self._pending_futures.pop(aid, None)
+                    self._approval_to_job.pop(aid, None)
+                    self._explicit_approval_ids.discard(aid)
+                    if fut is not None and not fut.done():
+                        fut.cancel()
 
-            async def _resolve_orphans() -> None:
+    @staticmethod
+    def _is_orchestration_request(approval: Approval) -> bool:
+        action = approval.proposed_action or ""
+        if action.startswith("spawn_task:"):
+            return True
+        try:
+            data = json.loads(action)
+        except (ValueError, TypeError):
+            return False
+        return isinstance(data, dict) and (
+            data.get("kind") == "spawn_task" or data.get("action") in ("comment", "transition") or "operationId" in data
+        )
+
+    async def retire_execution_requests(self, job_id: str, reason: str) -> int:
+        retired = 0
+        async with self.execution_control.hold(job_id):
+            for approval in await self.list_pending(job_id):
+                if self._is_orchestration_request(approval):
+                    continue
                 try:
-                    from datetime import UTC, datetime
-
-                    from backend.models.domain import ApprovalResolution
-
-                    async with self._session_factory() as session:
-                        repo = self._make_repo(session)
-                        now = datetime.now(UTC)
-                        for aid in to_remove:
-                            await repo.resolve(aid, ApprovalResolution.rejected, now)
-                        await session.commit()
-                except Exception:
-                    log.warning("cleanup_orphan_resolve_failed", job_id=job_id, exc_info=True)
-
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_resolve_orphans(), name=f"approval-cleanup-{job_id[:8]}")
-            except RuntimeError:
-                log.warning("approval_cleanup_task_scheduling_failed", job_id=job_id)
-            log.debug("approval_futures_canceled", job_id=job_id, count=len(to_remove))
+                    await self._resolve(approval.id, ApprovalResolution.rejected, reason)
+                except ApprovalAlreadyResolvedError:
+                    continue
+                retired += 1
+        return retired
 
     def is_trusted(self, job_id: str) -> bool:
         """Return True if the operator has approved all for this job."""
@@ -227,6 +254,8 @@ class ApprovalService:
                 future: asyncio.Future[ApprovalResolution] = loop.create_future()
                 self._pending_futures[approval.id] = future
                 self._approval_to_job[approval.id] = approval.job_id
+                if approval.requires_explicit_approval:
+                    self._explicit_approval_ids.add(approval.id)
                 recovered += 1
 
         if recovered:
