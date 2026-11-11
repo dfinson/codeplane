@@ -458,7 +458,6 @@ class TestMultiPassGeneration:
             refs=refs,
             ctx=ctx,
             system="short system",
-            structural_section=None,
             # Budget that fits context + ~1 ref but not all 3
             max_input_tokens=2000,
             job_id="j1",
