@@ -241,8 +241,8 @@ async def get_repo_summary(
     )
 
 
-# NOTE: This catch-all route MUST be registered AFTER more specific
-# /health and /summary routes, because {repo_path:path} is greedy
+# NOTE: This catch-all route MUST be registered AFTER the more specific
+# /summary route, because {repo_path:path} is greedy
 # and would otherwise consume the suffix as part of repo_path.
 @router.get("/settings/repos/{repo_path:path}", response_model=RepoDetailResponse)
 async def get_repo_detail(
