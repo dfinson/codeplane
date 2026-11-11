@@ -65,11 +65,6 @@ class IngestService:
                 if ext_id:
                     await self._session_state_watcher.send_message(ext_id, message)
                     log.info("operator_message_sent_copilot", job_id=job_id)
-            elif self._steer:
-                ext_id = job.external_session_id
-                if ext_id:
-                    await self._steer.send_message(ext_id, message)
-                    log.info("operator_message_sent_copilot", job_id=job_id)
             else:
                 raise NativeDeliveryError("Copilot steering is unavailable")
         else:
@@ -99,21 +94,14 @@ class IngestService:
                 ext_id = job.external_session_id
                 if ext_id:
                     await self._session_state_watcher.abort_session(ext_id)
-            elif self._steer:
-                ext_id = job.external_session_id
-                if ext_id:
-                    await self._steer.abort(ext_id)
             else:
                 raise NativeDeliveryError("Copilot steering is unavailable")
         else:
             raise NativeDeliveryError("No native cancellation channel for this job")
 
     async def confirms_live(self, job: Job) -> bool:
-        if job.source != JobSource.copilot_cli or not job.external_session_id:
-            return False
-        if self._steer is None:
-            return False
-        return await self._steer.check_alive(job.external_session_id) is True
+        """Imported source metadata cannot establish a current live execution."""
+        return False
 
     async def _get_job(self, job_id: str) -> Job | None:
         async with self._session_factory() as session:

@@ -24,11 +24,15 @@ Chats cannot use tools and do not create a workspace.
 
 Native discovery stays within registered repositories and sessions created after observation starts. It follows the latest valid steering marker, including later enable/disable changes. Already imported sessions recover from their saved checkpoints.
 
+Native history and checkpoints retain the local session ID. Ordinary steering uses the separate published task ID from that session's owned metadata. Missing, mismatched or disabled bindings deny control without guessing a target or changing the local identity.
+
 Native observation honors process-scoped `COPILOT_HOME`. If native source
 history or its mapping changed, observation stops with a recorded diagnostic
 instead of silently reinterpreting accepted progress. A steering receipt means
 admission, not proof the agent executed the instruction. An uncertain delivery
 must not be retried automatically.
+
+Cloud task existence, cached flags and HTTP errors prove neither a live CLI execution nor its termination. The current native integration has no authoritative live-identity signal, so strict coordinated dispatch withholds a token and fails closed. Ordinary operator-requested relay admission remains separate from that stricter guarantee.
 
 Verification results distinguish completed, failed and interrupted agent
 verification turns. A completed turn is not evidence that tests passed.

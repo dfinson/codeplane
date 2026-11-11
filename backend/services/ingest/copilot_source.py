@@ -10,11 +10,14 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
+import yaml
 
 from backend.models.domain import Job, JobSource, JobState
 from backend.models.events import EventKind
+from backend.services.completers.copilot_steer import NativeDeliveryError, NativeSessionBinding
 from backend.services.ingest._base import TraceForgeIngestBase, repo_basename
 
 if TYPE_CHECKING:
@@ -38,6 +41,15 @@ _SESSION_ID_PATTERN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU
 
 def _cwd_matches_repo(cwd: str, repo_path: str) -> bool:
     return cwd == repo_path or cwd.startswith(repo_path + "/") or cwd.startswith(repo_path + "\\")
+
+
+def _is_uuid(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
 
 
 class SessionStateWatcher(TraceForgeIngestBase):
@@ -74,19 +86,49 @@ class SessionStateWatcher(TraceForgeIngestBase):
         await self._stop_common()
         log.info("session_state_watcher_stopped")
 
+    def _resolve_binding(self, session_id: str) -> NativeSessionBinding:
+        if not _is_uuid(session_id):
+            raise NativeDeliveryError("Copilot local session identity is invalid")
+        try:
+            root = _SESSION_STATE_DIR.resolve(strict=True)
+            directory = root / session_id
+            workspace = directory / "workspace.yaml"
+            events = directory / "events.jsonl"
+            if (
+                directory.resolve(strict=True) != directory
+                or workspace.resolve(strict=True) != workspace
+                or events.resolve(strict=True) != events
+            ):
+                raise NativeDeliveryError("Copilot session metadata is outside its owned path")
+            metadata = yaml.safe_load(workspace.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, RuntimeError, yaml.YAMLError) as exc:
+            if isinstance(exc, NativeDeliveryError):
+                raise
+            raise NativeDeliveryError("Copilot published task binding is missing or unreadable") from None
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("id") != session_id
+            or metadata.get("mc_session_id") != session_id
+        ):
+            raise NativeDeliveryError("Copilot published task binding does not match the local session")
+        task_id = metadata.get("mc_task_id")
+        if not isinstance(task_id, str) or not _is_uuid(task_id):
+            raise NativeDeliveryError("Copilot published task identity is missing or invalid")
+        if metadata.get("remote_steerable") is not True or not self._is_remote_steerable(session_id):
+            raise NativeDeliveryError("Copilot remote control is not enabled")
+        return NativeSessionBinding(session_id, task_id)
+
     async def send_message(self, session_id: str, message: str) -> None:
         if self._steer is None:
-            from backend.services.completers.copilot_steer import NativeDeliveryError
-
             raise NativeDeliveryError("Copilot steering is unavailable")
-        await self._steer.send_message(session_id, message)
+        binding = self._resolve_binding(session_id)
+        await self._steer.send_message(binding.task_id, message)
 
     async def abort_session(self, session_id: str) -> None:
         if self._steer is None:
-            from backend.services.completers.copilot_steer import NativeDeliveryError
-
             raise NativeDeliveryError("Copilot steering is unavailable")
-        await self._steer.abort(session_id)
+        binding = self._resolve_binding(session_id)
+        await self._steer.abort(binding.task_id)
 
     async def _load_existing_sessions(self) -> None:
         running_jobs: list[tuple[str, str, int, str | None, str | None, str | None]] = []
@@ -122,10 +164,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
                     self._tracked_sessions.add(row[0])
 
             for job_id, ext_sid, count, wt, base, repo in running_jobs:
-                alive = await self._steer.check_alive(ext_sid) if self._steer else True
-                if alive is False:
-                    await self._finalize_session(job_id, error_reason="session ended while CodePlane was offline")
-                    continue
+                # Reattach observation; only explicit source termination establishes an end.
                 self._session_to_job[ext_sid] = job_id
                 self._job_worktrees[job_id] = wt or repo or ""
                 self._job_base_refs[job_id] = base or "HEAD"
@@ -248,12 +287,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
         )
         self._tail_tasks[session_id] = task
         task.add_done_callback(self._make_tail_pop_callback(session_id))
-        live = asyncio.create_task(
-            self._copilot_liveness_loop(session_id, job_id),
-            name=f"copilot-live-{session_id[:8]}",
-        )
-        self._liveness_tasks[session_id] = live
-        live.add_done_callback(self._make_liveness_pop_callback(session_id))
 
     @staticmethod
     def _raw_terminal(raw: dict[str, Any]) -> tuple[bool, str | None]:
@@ -262,18 +295,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
             data = raw.get("data") or {}
             return True, str(data.get("message") or data.get("error") or "session error")
         return typ == "session.shutdown", None
-
-    async def _copilot_liveness_loop(self, session_id: str, job_id: str) -> None:
-        if self._steer is None:
-            return
-        while self._running and session_id in self._session_to_job:
-            await asyncio.sleep(_DISCOVERY_POLL_S)
-            if await self._steer.check_alive(session_id) is False:
-                await self._finalize_session(job_id, error_reason="session ended without clean shutdown")
-                task = self._tail_tasks.get(session_id)
-                if task:
-                    task.cancel()
-                return
 
     async def _create_job(self, session_id: str, cwd: str) -> Job | None:
         if not self._git:

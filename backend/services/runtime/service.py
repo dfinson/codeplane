@@ -2172,6 +2172,11 @@ class RuntimeService:
             if handle is None or not handle.session_id:
                 return None
             identity = f"{id(handle)}:{handle.session_id}"
+        elif job.source == JobSource.copilot_cli:
+            # Publication and permission markers do not identify a live CLI execution.
+            # Until a supported live identity signal exists, do not certify a target
+            # for strict preview/confirmation. Ordinary relay admission is separate.
+            return None
         else:
             generation = self._external_generations.get(job.id)
             if not generation or self._ingest_service is None or not await self._ingest_service.confirms_live(job):
