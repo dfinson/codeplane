@@ -240,6 +240,8 @@ async def _build_approvals(
             requested_at=a.requested_at,
             resolved_at=a.resolved_at,
             resolution=a.resolution,
+            requires_explicit_approval=a.requires_explicit_approval,
+            notes=a.notes,
         )
         for a in db_approvals
     ]

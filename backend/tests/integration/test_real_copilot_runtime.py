@@ -357,7 +357,13 @@ def test_approval_recovery_and_mcp_cancellation(real_runtime):
         runtime.request("POST", f"/api/approvals/{item['id']}/resolve", json={"resolution": "approved"})
     runtime.wait_state(job_id, {"review"})
     restored = runtime.request("GET", f"/api/jobs/{job_id}/snapshot")
-    assert restored["approvals"]
+    approvals = runtime.request("GET", f"/api/jobs/{job_id}/approvals")["items"]
+    assert {item["id"] for item in restored["approvals"]} == {item["id"] for item in approvals}
+    for item in restored["approvals"]:
+        durable = next(approval for approval in approvals if approval["id"] == item["id"])
+        assert item["requiresExplicitApproval"] == durable["requiresExplicitApproval"]
+        assert item["notes"] == durable["notes"]
+    assert any(item["requiresExplicitApproval"] and item["resolution"] == "approved" for item in restored["approvals"])
     (runtime.root / "approval-recovery.json").write_text(json.dumps(restored, indent=2), encoding="utf-8")
 
     denied = runtime.job(gate_prompt, verify=False, preset="locked")
@@ -432,6 +438,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
     reader = threading.Thread(target=drain, daemon=True)
     reader.start()
     incoming_changed = False
+    in_environments = False
 
     def send_command(command):
         process.write(command)
@@ -442,18 +449,22 @@ def test_native_capability_is_real_and_observed(real_runtime):
         return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", "".join(output[index:]))
 
     def incoming_status():
-        # Escape closes this CLI's environment screen, never a global setting.
-        process.write("\x1b")
-        time.sleep(1)
+        nonlocal in_environments
+        if in_environments:
+            process.write("\x1b")
+            time.sleep(1)
+            in_environments = False
         begin = len(output)
         send_command("/environments")
-        _wait(lambda: "Environments tabs" in screen_since(begin), timeout=45,
-              description="supported environments menu")
+        _wait(lambda: "Environments tabs" in screen_since(begin), timeout=45, description="supported environments menu")
+        in_environments = True
         time.sleep(2)
-        process.write("\x1b[C")
+        if "current tab: Incoming connections" not in screen_since(begin):
+            process.write("\x1b[C")
         found = _wait(
             lambda: re.search(r"Accept remote connections\s+(Off|On)", screen_since(begin)),
-            timeout=30, description="explicit incoming connection state",
+            timeout=30,
+            description="explicit incoming connection state",
         )
         return found.group(1)
 
@@ -471,6 +482,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
             description="actual native Copilot model response",
         )
         _wait(lambda: "Interactive" in screen_since(0), timeout=45, description="native command input ready")
+        time.sleep(3)
         assert incoming_status() == "Off", "Do not replace an independently changed incoming-connection setting"
         runtime.manifest["incoming_before"] = "Off"
         incoming_changed = True
@@ -480,6 +492,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
         runtime.manifest["incoming_enabled"] = "On"
         runtime.save()
         process.write("\x1b")
+        in_environments = False
         time.sleep(1)
         send_command("/remote on")
 
@@ -534,6 +547,11 @@ def test_native_capability_is_real_and_observed(real_runtime):
                 runtime.manifest["incoming_restored"] = "Off"
                 runtime.save()
         finally:
+            console = screen_since(0)
+            console = re.sub(r"https?://\S+", "[URL]", console)
+            console = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[JWT]", console)
+            console = re.sub(r"(--(?:token|secret|password)(?:=|\s+))\S+", r"\1[REDACTED]", console)
+            (runtime.root / "native-console.txt").write_text(console, encoding="utf-8")
             if process.isalive():
                 process.write("\x03")
                 time.sleep(0.5)
