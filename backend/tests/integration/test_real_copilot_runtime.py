@@ -404,8 +404,9 @@ def test_native_capability_is_real_and_observed(real_runtime):
             shutil.which("node"),
             str(Path(executable).parent / "node_modules" / "@github" / "copilot" / "npm-loader.js"),
         ]
-    process = PtyProcess.spawn(
-        [
+
+    def spawn_native(*, initial):
+        arguments = [
             *launcher,
             "-C",
             str(runtime.repository),
@@ -418,24 +419,28 @@ def test_native_capability_is_real_and_observed(real_runtime):
             "--no-ask-user",
             "--screen-reader",
             "--no-color",
-            "-i",
-            "Reply exactly NATIVE_ACCEPTANCE_READY. Use no tools.",
-        ],
-        cwd=str(runtime.repository),
-        env=runtime.env,
-        dimensions=(40, 120),
-        backend=Backend.WinPTY,
-    )
+        ]
+        if initial:
+            arguments += ["-i", "Reply exactly NATIVE_ACCEPTANCE_READY. Use no tools."]
+        return PtyProcess.spawn(
+            arguments,
+            cwd=str(runtime.repository),
+            env=runtime.env,
+            dimensions=(40, 120),
+            backend=Backend.WinPTY,
+        )
+
+    process = spawn_native(initial=True)
     output = []
 
-    def drain():
-        while process.isalive():
+    def drain(owned_process):
+        while owned_process.isalive():
             try:
-                output.append(process.read(4096))
+                output.append(owned_process.read(4096))
             except EOFError:
                 return
 
-    reader = threading.Thread(target=drain, daemon=True)
+    reader = threading.Thread(target=drain, args=(process,), daemon=True)
     reader.start()
     incoming_changed = False
     in_environments = False
@@ -448,6 +453,17 @@ def test_native_capability_is_real_and_observed(real_runtime):
     def screen_since(index):
         return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", "".join(output[index:]))
 
+    def close_native():
+        if process.isalive():
+            process.write("\x03")
+            time.sleep(0.5)
+            process.write("\x03")
+            time.sleep(2)
+        if process.isalive():
+            process.terminate(force=True)
+        reader.join(timeout=3)
+        assert not process.isalive(), "Owned native CLI must stop before another instance starts"
+
     def incoming_status():
         nonlocal in_environments
         if in_environments:
@@ -456,14 +472,19 @@ def test_native_capability_is_real_and_observed(real_runtime):
             in_environments = False
         begin = len(output)
         send_command("/environments")
-        _wait(lambda: "Environments tabs" in screen_since(begin), timeout=45, description="supported environments menu")
+        _wait(
+            lambda: "Environments tabs" in screen_since(begin) or "Unknown command" in screen_since(begin),
+            timeout=90,
+            description="supported environments menu",
+        )
+        assert "Environments tabs" in screen_since(begin), "Current native CLI does not expose /environments"
         in_environments = True
         time.sleep(2)
         if "current tab: Incoming connections" not in screen_since(begin):
             process.write("\x1b[C")
         found = _wait(
-            lambda: re.search(r"Accept remote connections\s+(Off|On)", screen_since(begin)),
-            timeout=30,
+            lambda: re.search(r"Accept\s+remote\s+connections\s+(Off|On)", screen_since(begin)),
+            timeout=90,
             description="explicit incoming connection state",
         )
         return found.group(1)
@@ -481,10 +502,23 @@ def test_native_capability_is_real_and_observed(real_runtime):
             timeout=180,
             description="actual native Copilot model response",
         )
-        _wait(lambda: "Interactive" in screen_since(0), timeout=45, description="native command input ready")
+        close_native()
+        begin = len(output)
+        process = spawn_native(initial=False)
+        reader = threading.Thread(target=drain, args=(process,), daemon=True)
+        reader.start()
+        _wait(
+            lambda: "Do you trust the files" in screen_since(begin) or "Interactive" in screen_since(begin),
+            timeout=60,
+            description="resumed native CLI readiness",
+        )
+        if "Do you trust the files" in screen_since(begin):
+            process.write("\r")
+        _wait(lambda: "Interactive" in screen_since(begin), timeout=60, description="native command input ready")
         time.sleep(3)
         assert incoming_status() == "Off", "Do not replace an independently changed incoming-connection setting"
         runtime.manifest["incoming_before"] = "Off"
+        runtime.save()
         incoming_changed = True
         process.write("\r")
         time.sleep(3)
@@ -552,11 +586,6 @@ def test_native_capability_is_real_and_observed(real_runtime):
             console = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[JWT]", console)
             console = re.sub(r"(--(?:token|secret|password)(?:=|\s+))\S+", r"\1[REDACTED]", console)
             (runtime.root / "native-console.txt").write_text(console, encoding="utf-8")
-            if process.isalive():
-                process.write("\x03")
-                time.sleep(0.5)
-                process.write("\x03")
-                time.sleep(2)
-            if process.isalive():
-                process.terminate(force=True)
-            reader.join(timeout=3)
+            close_native()
+            runtime.manifest["native_process_stopped"] = True
+            runtime.save()
