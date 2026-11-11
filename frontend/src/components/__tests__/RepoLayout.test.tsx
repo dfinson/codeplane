@@ -74,6 +74,32 @@ function ProjectCreator() {
 }
 
 describe("RepoLayout project sidebar", () => {
+  it("removes retired Health navigation while retaining real shell destinations", async () => {
+    const repo = "C:\\repos\\api";
+    vi.mocked(fetchProjects).mockResolvedValueOnce({
+      items: [{ id: "single", name: "single-project", repoPaths: [repo], createdAt: "", updatedAt: "" }],
+    });
+    render(
+      <MemoryRouter initialEntries={[`/projects/id/single/repos/${encodeURIComponent(repo)}/jobs`]}>
+        <Routes>
+          <Route path="/projects" element={<RepoLayout />}>
+            <Route path="id/:projectId/board" element={<div>Board destination</div>} />
+            <Route path="id/:projectId/chats" element={<div>Chats destination</div>} />
+            <Route path="id/:projectId/repos/:repoPath/jobs" element={<div>Jobs destination</div>} />
+            <Route path="id/:projectId/repos/:repoPath/cost" element={<div>Cost destination</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText("Jobs destination")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Health" })).toBeNull();
+    for (const destination of ["Cost", "Board", "Chats", "Jobs"]) {
+      fireEvent.click(screen.getByRole("button", { name: destination }));
+      expect(await screen.findByText(`${destination} destination`)).toBeInTheDocument();
+    }
+  });
+
   it("filters Projects by a partial, case-insensitive name match", async () => {
     vi.mocked(fetchProjects).mockResolvedValueOnce({
       items: [
@@ -134,9 +160,9 @@ describe("RepoLayout project sidebar", () => {
 
     const selector = await screen.findByLabelText("Repository");
     expect(selector).toHaveValue("");
-    expect(screen.getByText("Select a repository above to view Jobs, Health, and Cost.")).toBeInTheDocument();
+    expect(screen.getByText("Select a repository above to view Jobs and Cost.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jobs" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Health" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Health" })).toBeNull();
     expect(screen.getByRole("button", { name: "Cost" })).toBeDisabled();
   });
 
@@ -148,7 +174,7 @@ describe("RepoLayout project sidebar", () => {
     renderLayout("/projects/id/single");
 
     await waitFor(() => expect(screen.getByLabelText("Repository")).toHaveValue("/repos/api"));
-    expect(screen.queryByText("Select a repository above to view Jobs, Health, and Cost.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Select a repository above to view Jobs and Cost.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jobs" })).not.toBeDisabled();
   });
 

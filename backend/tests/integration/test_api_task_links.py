@@ -53,7 +53,10 @@ class TestTaskSourceRetirement:
         repo.mkdir()
         source = repo / "tasks.md"
         source.write_text("- [ ] T001 Do not import this file\n", encoding="utf-8")
-        original_source = source.read_bytes()
+        nested_source = repo / "specs" / "nested" / "tasks.md"
+        nested_source.parent.mkdir(parents=True)
+        nested_source.write_text("- [ ] T002 Do not discover nested task files\n", encoding="utf-8")
+        original_sources = {path: path.read_bytes() for path in (source, nested_source)}
         project = await client.post(
             "/api/settings/projects", json={"name": "Preserved tasks", "repoPaths": [str(repo)]}
         )
@@ -77,7 +80,7 @@ class TestTaskSourceRetirement:
         response = await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
         assert response.status_code == 404
         assert (await client.get(endpoint)).json() == before
-        assert source.read_bytes() == original_source
+        assert {path: path.read_bytes() for path in original_sources} == original_sources
 
     def test_openapi_omits_source_ingestion_contract(self) -> None:
         from backend.app_factory import create_app
