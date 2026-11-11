@@ -560,7 +560,10 @@ async def test_cancel_during_scout_stops_scout_and_never_launches_primary(
 async def test_http_cancel_order_preserves_scout_terminal_history(
     runtime: RuntimeService, config: CPLConfig, tmp_path: Path
 ) -> None:
+    from contextlib import asynccontextmanager
+
     from backend.api.jobs import cancel_job
+    from backend.di import RequestProvider
     from backend.persistence.secondary_session_repo import SecondarySessionRepository
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'cancel.db'}")
@@ -587,11 +590,12 @@ async def test_http_cancel_order_preserves_scout_terminal_history(
     start = asyncio.create_task(runtime._start_job(job))
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
-        async with factory() as request_session:
+        request_scope = asynccontextmanager(RequestProvider().session)
+        async with request_scope(factory) as request_session:
             response = await cancel_job(job.id, runtime._make_job_service(request_session), runtime, AsyncMock())
             assert response.state == "canceled"
-            # The request-scoped session commits after the endpoint returns.
-            await request_session.commit()
+            # Response transmission can yield before the real provider commits.
+            await asyncio.sleep(0.05)
         await asyncio.gather(start, return_exceptions=True)
         sessions = await SecondarySessionRepository(factory).get_by_job(job.id)
         assert len(sessions) == 1
