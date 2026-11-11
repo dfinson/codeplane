@@ -194,12 +194,33 @@ class SessionStateWatcher(TraceForgeIngestBase):
 
     def _is_remote_steerable(self, session_id: str) -> bool:
         events_path = _SESSION_STATE_DIR / session_id / "events.jsonl"
+        steerable = False
         try:
-            first_line = events_path.read_text(encoding="utf-8").splitlines()[0]
-            event = json.loads(first_line)
-            return bool(event.get("data", {}).get("remoteSteerable"))
-        except (IndexError, OSError, json.JSONDecodeError):
+            with events_path.open(encoding="utf-8") as stream:
+                for line_number, line in enumerate(stream, 1):
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        log.debug(
+                            "session_state_watcher_control_record_incomplete",
+                            session_id=session_id,
+                            line_number=line_number,
+                        )
+                        continue
+                    if not isinstance(event, dict) or event.get("type") not in {
+                        "session.start",
+                        "session.started",
+                        "session.resume",
+                        "session.remote_steerable_changed",
+                    }:
+                        continue
+                    data = event.get("data")
+                    if isinstance(data, dict) and isinstance(data.get("remoteSteerable"), bool):
+                        steerable = data["remoteSteerable"]
+        except (OSError, UnicodeError):
+            log.debug("session_state_watcher_control_read_failed", session_id=session_id, exc_info=True)
             return False
+        return steerable
 
     async def _attach_session(self, session_id: str, cwd: str) -> None:
         job = await self._create_job(session_id, cwd)
