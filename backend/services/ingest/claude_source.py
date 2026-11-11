@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
     from backend.config import CPLConfig
     from backend.services.analytics.model_pricing import ModelPricingService
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_processor import EventProcessor
     from backend.services.git.git_service import GitService
     from backend.services.runtime import RuntimeService
@@ -119,13 +118,11 @@ class ClaudeSessionStateWatcher(TraceForgeIngestBase):
         session_factory: async_sessionmaker[AsyncSession],
         config: CPLConfig,
         git_service: GitService | None = None,
-        coderecon_service: CodeReconService | None = None,
         model_pricing: ModelPricingService | None = None,
     ) -> None:
         super().__init__(event_processor, runtime_service, session_factory, "claude")
         self._config = config
         self._git = git_service
-        self._coderecon = coderecon_service
         self._model_pricing = model_pricing
         self._job_to_session: dict[str, str] = {}
         self._pending_messages: dict[str, list[str]] = {}
@@ -307,7 +304,6 @@ class ClaudeSessionStateWatcher(TraceForgeIngestBase):
             self._session_pids[session_id] = pids[0]
         await self._runtime.register_external_session(job_id, self._job_worktrees[job_id], self._job_base_refs[job_id])
         self._start_tail(session_id, job_id, jsonl_path)
-        self._fire_bg(self._run_coderecon(job_id, repo_path, self._coderecon), name=f"claude-coderecon-{job_id[:8]}")
 
     def _start_tail(self, session_id: str, job_id: str, jsonl_path: Path, *, initial_skip_count: int = 0) -> None:
         task = asyncio.create_task(

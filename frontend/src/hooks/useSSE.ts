@@ -143,11 +143,6 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "job_failed",
         // Policy settings changed (triggers settings panel refresh)
         "policy.settings_changed",
-        // Repository structural index progress
-        "repo.index_progress",
-        "repo.index_complete",
-        // Structural health warnings at step boundaries (§7.2)
-        "structural.warning",
         // Unified secondary session events
         "secondary_session.started",
         "secondary_session.entry",

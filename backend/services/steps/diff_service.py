@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.models.api_schemas import (
-    DiffFileModel,
-    DiffFileSymbolImpact,
     FileMotivation,
     HunkMotivation,
     StepDiffPayload,
@@ -25,7 +23,6 @@ if TYPE_CHECKING:
     from backend.models.domain import TelemetrySpanRow
     from backend.persistence.step_repo import StepRepository
     from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.git.git_service import GitService
     from backend.services.job.job_service import JobService
 
@@ -36,21 +33,6 @@ log = structlog.get_logger()
 _EVENT_QUERY_CEILING = 5000
 
 
-def _classify_step_category(c: Any) -> str:
-    """Classify a structural change into review categories."""
-    kind = c.change
-    ref_count = c.impact.reference_count if c.impact and c.impact.reference_count else 0
-    if kind == "removed":
-        return "breaking" if ref_count > 0 else "non-structural"
-    if kind == "modified":
-        if c.old_sig is not None and c.new_sig is not None and c.old_sig != c.new_sig:
-            return "breaking"
-        return "body"
-    if kind == "added":
-        return "additive"
-    if kind == "moved":
-        return "body"
-    return "non-structural"
 
 
 class StepDiffService:
@@ -62,13 +44,11 @@ class StepDiffService:
         step_repo: StepRepository,
         git_service: GitService,
         spans_repo: TelemetrySpansRepository,
-        coderecon: CodeReconService | None = None,
     ) -> None:
         self._job_svc = job_svc
         self._step_repo = step_repo
         self._git_service = git_service
         self._spans_repo = spans_repo
-        self._coderecon = coderecon
 
     async def get_step_diff(self, job_id: str, step_id: str) -> StepDiffPayload:
         """Compute the Git diff for a specific step with motivation annotations."""
@@ -93,15 +73,6 @@ class StepDiffService:
             worktree_path=job.worktree_path,
         )
 
-        # Enrich with per-file symbol impact from CodeRecon semantic_diff
-        if changed_files and self._coderecon and self._coderecon.available and job.repo and job.worktree_path:
-            await self._enrich_files_with_symbols(
-                changed_files,
-                job.repo,
-                job.worktree_path,
-                start_sha,
-                end_sha,
-            )
 
         return StepDiffPayload(
             step_id=step_id,
@@ -113,65 +84,6 @@ class StepDiffService:
             hunk_motivations=hunk_motivations,
         )
 
-    async def _enrich_files_with_symbols(
-        self,
-        files: list[DiffFileModel],
-        repo: str,
-        worktree_path: str,
-        start_sha: str,
-        end_sha: str,
-    ) -> None:
-        """Attach per-file symbol impact from CodeRecon semantic_diff for the step's SHA range."""
-        coderecon = self._coderecon
-        if not coderecon:
-            return
-        try:
-            repo_name = await coderecon.ensure_repo_indexed(repo)
-            await coderecon.register_worktree(repo_name, worktree_path)
-            diff_result = await coderecon.semantic_diff(
-                repo_name,
-                base=start_sha,
-                target=end_sha,
-                worktree=worktree_path,
-            )
-        except Exception:
-            log.debug("step_enrich_symbols_failed", repo=repo, start=start_sha, end=end_sha, exc_info=True)
-            return
-
-        by_file: dict[str, list[DiffFileSymbolImpact]] = {}
-        for c in diff_result.structural_changes:
-            name = c.qualified_name or c.name
-            if not name:
-                continue
-            impact = c.impact
-            ref_tiers: dict[str, int] = {}
-            if impact and impact.ref_tiers:
-                tiers = impact.ref_tiers
-                proven = tiers.proven or 0
-                strong = tiers.strong or 0
-                anchored = tiers.anchored or 0
-                unknown = tiers.unknown or 0
-                if proven:
-                    ref_tiers["verified"] = proven
-                if strong or anchored:
-                    ref_tiers["inferred"] = strong + anchored
-                if unknown:
-                    ref_tiers["unverified"] = unknown
-            sym = DiffFileSymbolImpact(
-                symbol=name,
-                kind=c.change,
-                category=_classify_step_category(c),
-                line_range=[c.start_line, c.end_line] if c.start_line else None,
-                ref_count=impact.reference_count if impact and impact.reference_count else 0,
-                ref_tiers=ref_tiers,
-                test_files=impact.affected_test_files if impact and impact.affected_test_files else [],
-            )
-            by_file.setdefault(c.path, []).append(sym)
-
-        for f in files:
-            symbols = by_file.get(f.path)
-            if symbols:
-                f.symbols = symbols
 
     async def _resolve_shas(
         self,

@@ -1,1 +1,1 @@
-"""Tool classification, preflight curation, and parsing utilities."""
+"""Tool classification, repository scouting, and parsing utilities."""

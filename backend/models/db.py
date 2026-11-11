@@ -61,13 +61,6 @@ class JobRow(Base):
     tail_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     mode: Mapped[str] = mapped_column(String, nullable=False, default="standard", server_default="standard")
     story_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    review_story_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    review_story_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    structural_coupling_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
-    structural_cycle_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    structural_changes_touch_tests: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    structural_change_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    structural_merge_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)
     trail_state_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     artifact_collection_status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -468,7 +461,6 @@ class TrailNodeRow(Base):
     error_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
     write_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     edit_motivations: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
-    semantic_targets: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of structural changes
     tool_display: Mapped[str | None] = mapped_column(String(200), nullable=True)
     tool_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -566,7 +558,7 @@ class TaskLinkRow(Base):
     """A thin, Project-scoped correlation row for an ingested/assigned task node (Story 4.2, AD-9).
 
     Populated by two independent creation paths (only ingestion is implemented
-    in this story): (1) ingestion — parsed from BMAD stories or spec-kit
+    in this story): (1) ingestion — parsed from spec-kit
     ``tasks.md`` in a Project's member repos, setting ``story_node_id``; or
     (2) manual assignment (Story 4.3, not yet implemented) — targeting an
     existing tracker ticket, setting ``tracker_ticket_ref``/``prompt_override``

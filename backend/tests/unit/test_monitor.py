@@ -196,7 +196,6 @@ def _make_monitor(
     session._job_prompt = "test"
     session._completer = MagicMock()
     session._trail_repo = MagicMock()
-    session._coderecon = None
     session._context = _FakeProjectContext(hosts=hosts, deps=deps, services=services)  # type: ignore[assignment]
     session._context_lock = MagicMock()
     session._llm_call_times = []

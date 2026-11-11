@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from backend.persistence.event_repo import EventRepository
     from backend.persistence.job_repo import JobRepository
     from backend.persistence.project_repo import ProjectRepository
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.completers.naming_service import NamingService
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
@@ -66,7 +65,6 @@ class JobService:
         naming_service: NamingService | None = None,
         event_repo: EventRepository | None = None,
         event_bus: EventBus | None = None,
-        coderecon: CodeReconService | None = None,
         project_repo: ProjectRepository | None = None,
     ) -> None:
         self._job_repo = job_repo
@@ -75,7 +73,6 @@ class JobService:
         self._naming = naming_service
         self._event_repo = event_repo
         self._event_bus = event_bus
-        self._coderecon = coderecon
         self._project_repo = project_repo
 
     @classmethod
@@ -476,14 +473,6 @@ class JobService:
                 raise JobNotFoundError(f"Job {job_id} disappeared after state update") from exc
             return job
 
-        # Register worktree with CodeRecon for live reindexing
-        if self._coderecon is not None and self._coderecon.available:
-            try:
-                repo_name = await self._coderecon.ensure_repo_indexed(job.repo)
-                await self._coderecon.register_worktree(repo_name, worktree_path)
-                await _emit_progress("worktree_indexed")
-            except Exception:
-                log.warning("job_coderecon_worktree_failed", job_id=job_id, exc_info=True)
 
         # Update the job with worktree info and transition to queued
         now = datetime.now(UTC)
@@ -784,18 +773,7 @@ class JobService:
         # Clean up worktree and branch immediately rather than waiting for
         # the daily retention sweep — the UI promises this happens on archive.
         if self._git and job.worktree_path and job.worktree_path != job.repo:
-            # Drop the CodeRecon structural index for this worktree first
             # (only for abandoned jobs — merged jobs are handled by merge_index)
-            if self._coderecon and self._coderecon.available:
-                try:
-                    from pathlib import Path
-
-                    wt_name = Path(job.worktree_path).name
-                    repo_name = await self._coderecon.ensure_repo_indexed(job.repo)
-                    await self._coderecon.drop_worktree(repo_name, wt_name)
-                    log.info("archive_coderecon_index_dropped", job_id=job_id, worktree=wt_name)
-                except Exception:
-                    log.debug("archive_coderecon_drop_failed", job_id=job_id, exc_info=True)
 
             try:
                 await self._git.remove_worktree(job.repo, job.worktree_path)

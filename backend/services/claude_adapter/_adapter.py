@@ -143,6 +143,16 @@ class ClaudeAdapter(BaseAgentAdapter):
             tool_kind = _claude_tool_kind.get(tool_name, "custom-tool")
             full_cmd = str(input_data.get("command", "")) if tool_name == "Bash" else None
             file_name = str(input_data.get("file_path", "") or input_data.get("path", "")) or None
+            if config.session_kind == "preflight":
+                from backend.services.tools.preflight_curator import scout_read_allowed
+
+                if not scout_read_allowed(
+                    config.workspace_path,
+                    tool_kind,
+                    tool_name,
+                    [value for key in ("file_path", "path") if isinstance(value := input_data.get(key), str) and value],
+                ):
+                    return PermissionResultDeny(message="Scout tools are limited to workspace reads and searches")
             decision = await self._evaluate_permission(
                 session_id,
                 job_id,
@@ -316,7 +326,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         job_id = self._session_to_job.get(session_id)
 
         # Lock in the main model from the first AssistantMessage that carries one
-        if job_id and model:
+        if job_id and model and self.get_session_kind(session_id) != "preflight":
             requested = self._requested_models.get(job_id, "")
             if not self._model_verified.get(job_id):
                 self._model_verified[job_id] = True
@@ -547,12 +557,9 @@ class ClaudeAdapter(BaseAgentAdapter):
         self._stderr_files[session_id] = stderr_path
         self._stderr_file_objects[session_id] = stderr_file
 
-        # Build system prompt — append CodeRecon tool guidance when tools are provisioned (§8.5)
         # Sidecar/preflight sessions define their own identity — skip the
         # main-agent CODEPLANE_SYSTEM_PROMPT entirely.
         system_prompt = config.system_prompt_override or CODEPLANE_SYSTEM_PROMPT
-        if config.coderecon_tools is not None and config.coderecon_tools.system_prompt:
-            system_prompt = system_prompt + "\n\n" + config.coderecon_tools.system_prompt
 
         # Workspace memory — curated context hidden from transcript
         if config.memory_context:
@@ -588,13 +595,6 @@ class ClaudeAdapter(BaseAgentAdapter):
                 if srv.env:
                     entry["env"] = srv.env
                 mcp_config[name] = entry
-
-        # CodeRecon in-process SDK tools (§8.1)
-        if config.coderecon_tools is not None and config.coderecon_tools.claude_mcp_server is not None:
-            mcp_config["coderecon"] = config.coderecon_tools.claude_mcp_server
-            # Auto-allow CodeRecon tools so they run without permission prompts
-            if config.coderecon_tools.allowed_tool_names:
-                options.allowed_tools = list(options.allowed_tools or []) + config.coderecon_tools.allowed_tool_names
 
         if mcp_config:
             options.mcp_servers = mcp_config

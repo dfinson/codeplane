@@ -32,7 +32,6 @@ from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.platform_adapter import PlatformRegistry
 from backend.services.analytics.model_pricing import ModelPricingService
 from backend.services.artifacts.diff_service import DiffService
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.completers.narrator_completer import NarratorCompleter
 from backend.services.completers.summarization_service import SummarizationService
 from backend.services.completers.voice_service import VoiceService
@@ -51,20 +50,6 @@ from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.steps.persistence import StepPersistenceSubscriber
 from backend.services.steps.tracker import StepTracker
 from backend.services.terminal.terminal_service import TerminalService
-
-
-class _JobLike:
-    """Lightweight adapter matching the fields _generate_review_story expects."""
-
-    __slots__ = ("repo", "worktree_path", "base_ref", "title", "prompt")
-
-    def __init__(self, row: tuple[Any, ...]) -> None:
-        self.repo = row[0]
-        self.worktree_path = row[1]
-        self.base_ref = row[2]
-        self.title = row[3] if len(row) > 3 else None
-        self.prompt = row[4] if len(row) > 4 else None
-
 
 # Tracks fire-and-forget background tasks so they can be awaited on shutdown.
 _ephemeral_tasks: set[asyncio.Task[Any]] = set()  # noqa: WPS407
@@ -547,7 +532,6 @@ async def _wire_core_services(
     session_factory: async_sessionmaker[AsyncSession],
     event_bus: EventBus,
     config: CPLConfig,
-    coderecon_service: CodeReconService,
 ) -> _CoreServices:
     """Instantiate and wire together the core application services."""
     approval_service = ApprovalService(session_factory=session_factory)
@@ -566,7 +550,6 @@ async def _wire_core_services(
         config=config.completion,
         platform_registry=platform_registry,
         diff_service=diff_service,
-        coderecon=coderecon_service,
     )
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
@@ -591,7 +574,7 @@ async def _wire_core_services(
     # --- Preflight curator (pre-job context curation: memory + structural) ---
     from backend.services.tools.preflight_curator import PreflightCurator
 
-    preflight_curator = PreflightCurator(adapter=utility_adapter, coderecon=coderecon_service)
+    preflight_curator = PreflightCurator(adapter=utility_adapter, model=config.runtime.utility_model)
 
     # --- Narrator completer (dedicated long-form story generation) ---
     narrator_completer = NarratorCompleter(
@@ -627,7 +610,6 @@ async def _wire_core_services(
         platform_registry=platform_registry,
         sidecar_sessions=sidecar_sessions,
         step_tracker=step_tracker,
-        coderecon_service=coderecon_service,
         sidecar_dispatcher=sidecar_dispatcher,
     )
 
@@ -873,11 +855,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     config = load_config()
 
-    # --- CodeRecon structural analysis service (always-on, in-process) ---
-    coderecon_service = CodeReconService()
-    coderecon_service.set_event_bus(event_bus)
 
-    services = await _wire_core_services(session_factory, event_bus, config, coderecon_service)
+    services = await _wire_core_services(session_factory, event_bus, config)
 
     optional = await _init_optional_services(
         app,
@@ -973,7 +952,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         event_bus=event_bus,
         sidecar_sessions=services.sidecar_sessions,
         config=config.trail,
-        coderecon=coderecon_service,
     )
     event_bus.subscribe(trail_service.handle_event)
     services.runtime_service.set_trail_service(trail_service)
@@ -1116,269 +1094,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     services.sidecar_dispatcher.register_context("recent_messages", _recent_messages_provider)
     services.sidecar_dispatcher.register_context("worktree_path", _worktree_path_provider)
 
-    # --- CodeRecon start (always-on, degrades gracefully if package missing) ---
-    # Propagate feature toggles as env vars before the SDK loads its config.
-    # Direct assignment (not setdefault) so CodePlane config is authoritative.
-    os.environ["CODERECON__FEATURES__SPLADE"] = str(config.coderecon.splade).lower()
-    os.environ["CODERECON__FEATURES__CROSS_ENCODER"] = str(config.coderecon.cross_encoder).lower()
-    await coderecon_service.start()
-
-    # Index all Project-owned and legacy repositories in the background.
-    async with session_factory() as session:
-        from backend.persistence.project_repo import ProjectRepository
-        from backend.services.project.repo_membership import list_managed_repo_paths
-
-        startup_repo_paths = await list_managed_repo_paths(config, ProjectRepository(session))
-    if startup_repo_paths and coderecon_service.available:
-        _fire_and_forget(
-            coderecon_service.index_repos(startup_repo_paths),
-            name="coderecon-startup-index",
-        )
-
-    # Structural health subscriber — emits warnings at step boundaries (§7.2)
-    async def _structural_health_on_step(event: SessionEvent) -> None:
-        if event.kind != EventKind.step_completed:
-            return
-        if not coderecon_service.available:
-            return
-        worktree_path = str(event.payload.get("worktree_path", ""))
-        if not worktree_path:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-        raw_files = event.payload.get("files_written", [])
-        changed_files: list[str] = [str(f) for f in raw_files] if isinstance(raw_files, list) else []
-
-        async def _run_check() -> None:
-            try:
-                # Look up repo path from the job record
-                from sqlalchemy import text
-
-                async with session_factory() as session:
-                    row = await session.execute(
-                        text("SELECT repo FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    repo_path = row.scalar_one_or_none()
-                if not repo_path:
-                    return
-
-                repo_name = await coderecon_service.ensure_repo_indexed(repo_path)
-                if changed_files:
-                    await coderecon_service.reindex(repo_name, changed_files, worktree=worktree_path)
-                else:
-                    await coderecon_service.sync_from_git(repo_name, worktree=worktree_path)
-                warnings = await coderecon_service.check_step_structural_health(repo_name, worktree=worktree_path)
-                for w in warnings:
-                    await event_bus.publish(
-                        new_event(
-                            session_id=job_id,
-                            timestamp=datetime.now(UTC),
-                            kind=EventKind.structural_warning,
-                            payload=w,
-                        )
-                    )
-            except Exception:
-                log.debug("structural_health_check_failed", job_id=job_id, exc_info=True)
-
-        # Fire-and-forget — don't block the event pipeline
-        _fire_and_forget(_run_check(), name=f"structural-health-{job_id[:8]}")
-
-    event_bus.subscribe(_structural_health_on_step)
-
-    # Review story prefetch subscriber — pre-generates and caches review story
-    # when a job enters review state so the frontend load is instant.
-    async def _prefetch_review_story(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_review:
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_prefetch() -> None:
-            try:
-                from backend.api.job_artifacts import _cache_put, _generate_review_story
-
-                async with session_factory() as session:
-                    from sqlalchemy import text
-
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref, title, prompt FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                job_like = _JobLike(tuple(job_row))
-                result = await _generate_review_story(job_id, job_like, coderecon_service)
-
-                # Cache the result using latest end_sha
-                step_repo_local = StepRepository(session_factory)
-                all_steps = await step_repo_local.get_by_job(job_id)
-                sha = None
-                for step in reversed(all_steps):
-                    if step.end_sha:
-                        sha = step.end_sha
-                        break
-                _cache_put(job_id, "review-story", sha, result)
-                log.debug("review_story_prefetched", job_id=job_id)
-            except Exception:
-                log.debug("review_story_prefetch_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_prefetch(), name=f"review-story-prefetch-{job_id[:8]}")
-
-    event_bus.subscribe(_prefetch_review_story)
-
-    # --- §11.11 Persist review story as approval artifact on merge ---
-    async def _persist_review_story_on_resolve(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_resolved:
-            return
-        resolution = event.payload.get("resolution")
-        if resolution not in ("merged", "pr_created", "smart_merged"):
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_persist() -> None:
-            try:
-                import hashlib
-
-                from backend.api.job_artifacts import _generate_review_story
-
-                async with session_factory() as session:
-                    from sqlalchemy import text
-
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref, title, prompt FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                job_like = _JobLike(tuple(job_row))
-                result = await _generate_review_story(job_id, job_like, coderecon_service)
-
-                story_json = result.model_dump_json()
-                story_hash = hashlib.sha256(story_json.encode()).hexdigest()
-
-                async with serialized_write(session_factory) as session:
-                    await session.execute(
-                        text("UPDATE jobs SET review_story_json = :story, review_story_hash = :hash WHERE id = :jid"),
-                        {"story": story_json, "hash": story_hash, "jid": job_id},
-                    )
-                log.debug("review_story_persisted", job_id=job_id)
-            except Exception:
-                log.debug("review_story_persist_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_persist(), name=f"review-story-persist-{job_id[:8]}")
-
-    event_bus.subscribe(_persist_review_story_on_resolve)
-
-    # --- §7.5 Post-resolution structural analytics ---
-    async def _persist_structural_analytics(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_resolved:
-            return
-        resolution = event.payload.get("resolution")
-        if resolution not in ("merged", "pr_created", "smart_merged"):
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_analytics() -> None:
-            try:
-                from sqlalchemy import text
-
-                async with session_factory() as session:
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                repo_path, worktree_path, base_ref = job_row[0], job_row[1], job_row[2]
-                if not repo_path or not worktree_path:
-                    return
-
-                repo_name = await coderecon_service.ensure_repo_indexed(repo_path)
-
-                # Structural diff for change count and confidence
-                diff_result = await coderecon_service.semantic_diff(
-                    repo_name,
-                    base=base_ref or "HEAD",
-                    worktree=worktree_path,
-                )
-                change_count = len(diff_result.structural_changes)
-                merge_confidence = getattr(diff_result, "merge_confidence", None)
-
-                # Did any structural changes touch test files?
-                changes_touch_tests = any(
-                    c.path.startswith("test") or "/test" in c.path for c in diff_result.structural_changes
-                )
-
-                # Cycle count in worktree
-                cycle_count = 0
-                try:
-                    cycles = await coderecon_service.graph_cycles(repo_name, worktree=worktree_path)
-                    cycle_count = len(cycles.cycles) if cycles.cycles else 0
-                except Exception:
-                    pass
-
-                # Cross-community coupling delta
-                coupling_delta: float | None = None
-                try:
-                    communities = await coderecon_service.graph_communities(repo_name, worktree=worktree_path)
-                    touched: set[int] = set()
-                    for c in diff_result.structural_changes:
-                        for comm in communities.communities:
-                            if c.path in comm.members:
-                                touched.add(comm.community_id)
-                    # Coupling delta = communities touched / total communities (0-1 scale)
-                    total = len(communities.communities) if communities.communities else 1
-                    coupling_delta = len(touched) / total
-                except Exception:
-                    pass
-
-                async with serialized_write(session_factory) as session:
-                    await session.execute(
-                        text(
-                            "UPDATE jobs SET "
-                            "structural_change_count = :cc, "
-                            "structural_cycle_count = :cyc, "
-                            "structural_changes_touch_tests = :tc, "
-                            "structural_coupling_delta = :cd, "
-                            "structural_merge_confidence = :mc "
-                            "WHERE id = :jid"
-                        ),
-                        {
-                            "cc": change_count,
-                            "cyc": cycle_count,
-                            "tc": changes_touch_tests,
-                            "cd": coupling_delta,
-                            "mc": merge_confidence,
-                            "jid": job_id,
-                        },
-                    )
-                log.debug("structural_analytics_persisted", job_id=job_id, changes=change_count)
-            except Exception:
-                log.debug("structural_analytics_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_analytics(), name=f"struct-analytics-{job_id[:8]}")
-
-    event_bus.subscribe(_persist_structural_analytics)
-
     # --- Story 4.5/4.6: auto-spawn a dependent TaskLink's job on completion, and
     # route the completed TaskLink's tracker write-back through the approval gate ---
     # Fires only on EventKind.job_completed (a job reaching JobState.completed —
@@ -1508,7 +1223,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     story_drain_service = _StoryServiceCls(
         completer=services.narrator_completer,
-        coderecon=coderecon_service,
         session_factory=session_factory,
         model_pricing=model_pricing_service,
         git_service=services.git_service,
@@ -1526,7 +1240,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config,
         git_service=services.git_service,
-        coderecon_service=coderecon_service,
         steer_client=steer_client,
     )
     await session_state_watcher.start()
@@ -1540,7 +1253,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config,
         git_service=services.git_service,
-        coderecon_service=coderecon_service,
         model_pricing=model_pricing_service,
     )
     await claude_session_watcher.start()
@@ -1586,7 +1298,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ShareService: share_service,
             TrailService: trail_service,
             TerminalService: optional.terminal_service,
-            CodeReconService: coderecon_service,
             IngestService: ingest_service,
             ModelPricingService: model_pricing_service,
             SessionStateWatcher: session_state_watcher,
@@ -1669,7 +1380,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Drain any in-flight ephemeral background tasks before tearing down services.
         if _ephemeral_tasks:
             await asyncio.gather(*_ephemeral_tasks, return_exceptions=True)
-        await coderecon_service.stop()
         await services.sidecar_dispatcher.shutdown()
         await services.sidecar_sessions.shutdown()
         await services.runtime_service.shutdown()

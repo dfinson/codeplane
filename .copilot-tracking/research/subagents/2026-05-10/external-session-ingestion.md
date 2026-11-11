@@ -234,7 +234,6 @@ class SessionConfig:
     protected_paths: list[str] = field(default_factory=list)
     blocking_permission_handler: Callable | None = None
     resume_sdk_session_id: str | None = None
-    coderecon_tools: Any | None = None
 ```
 
 ### `SessionEvent` (adapter output)

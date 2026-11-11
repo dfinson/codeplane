@@ -11,7 +11,7 @@ CodePlane is a **local server** that wraps the agent CLIs you already use and bu
 
 - A **BYOCLI platform**. You install and authenticate agent CLIs (Claude Code, GitHub Copilot). CodePlane manages them — or simply observes them.
 - A **headless, local-first server** that runs on your workstation — no editor required. Access it from any browser, or remotely from your phone via tunnels.
-- An **intelligence layer** that enriches raw agent sessions with semantic trails, cost attribution, structural risk scoring, narrative review, and workspace memory.
+- An **intelligence layer** that enriches raw agent sessions with semantic trails, cost attribution, narrative review, and workspace memory.
 - **Zero workflow change** if you want it. Mirror native CLI sessions you’re already running — no need to launch jobs through CodePlane to get the value.
 
 ## High-Level Architecture
@@ -30,7 +30,7 @@ Every agent session — managed or mirrored — is normalized into a **local SQL
 - **Trails** — structured intent graph nodes with enrichment (rationale, intent, motivation)
 - **Activities** — semantic groupings of related turns (implementation, verification, investigation) with cost rollups
 - **Observations** — cross-job patterns: waste, rework, cost anomalies, behavioral signals that persist across sessions
-- **Steps** — plan tracking with structural health checks per step
+- **Steps** — plan tracking with step-level Git changes
 
 No data leaves your machine unless you explicitly configure OTEL export or push a branch to a remote.
 
@@ -56,19 +56,6 @@ Define custom sidecars in plain English. A sidecar is a system prompt, a trigger
 ### Feedback Loop
 
 Sidecars can feed intelligence back to the agent via `AgentMessageRoute`. This is unique — most tools fire one-shot hooks. CodePlane maintains a persistent reasoning session that can intervene mid-run.
-
-## Structural Code Analysis
-
-CodePlane integrates **CodeRecon** for graph-based structural analysis of agent-generated code changes. After each step, CodeRecon:
-
-- Classifies changes as symbol additions, removals, modifications, or moves
-- Traces callers and references of modified symbols and assigns confidence tiers
-- Scores each change by risk (severity × unknown ratio × test gap)
-- Detects dependency cycles introduced by the change
-- Groups related changes into communities and measures coupling drift
-- Produces a **merge confidence verdict** (HIGH / MEDIUM / LOW)
-
-This provides reviewers with a structural signal grounded in code graph analysis — a fundamentally different input from LLM-based code review.
 
 ## Key Concepts
 

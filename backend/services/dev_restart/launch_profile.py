@@ -8,7 +8,7 @@ validates the profile so the schema is never duplicated between ``cpl up``
 and restart tooling (Story 1.1 Dev Notes).
 
 Field names are camelCase in the JSON wire format; see
-``_bmad-output/implementation-artifacts/1-1-persist-the-active-launch-profile.md``
+``internal-docs/design/developer-restart.md``
 for the authoritative schema table and secret-source classification rules.
 """
 

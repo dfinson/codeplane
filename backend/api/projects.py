@@ -144,7 +144,7 @@ async def ingest_project_tasks(
     project_id: str,
     recipe_service: FromDishka[RecipeService],
 ) -> IngestTaskGraphResponse:
-    """Ingest BMAD stories / spec-kit tasks for every member repo of a Project (CAP-9).
+    """Ingest spec-kit tasks for every member repo of a Project (CAP-9).
 
     Stateless, on-demand, read-only against every source repo; re-running
     upserts existing TaskLinks rather than duplicating them.

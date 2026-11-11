@@ -2,7 +2,7 @@
 
 ``RecipeService.ingest_project`` is a stateless, on-demand function — never
 a background watcher/poller. It is Project-scoped: it iterates exactly
-``project.repo_paths`` (AD-5), parses each member repo's BMAD stories and
+``project.repo_paths`` (AD-5), parses each member repo's
 spec-kit ``tasks.md`` independently and read-only, resolves ``depends_on``
 edges into unambiguous composite ``"{repo_path}::{story_node_id}"`` keys
 across the whole Project (since ``story_node_id`` is only unique within one
@@ -29,7 +29,6 @@ from backend.models.domain import (
 )
 from backend.services.recipe.parsers import (
     ParsedTask,
-    parse_bmad_stories,
     parse_spec_kit_tasks,
 )
 from backend.services.tracker_write_service import (
@@ -130,7 +129,7 @@ class RecipeService:
         return f"{current_repo_path}::{raw}"
 
     async def ingest_project(self, project_id: str) -> list[TaskLink]:
-        """Ingest BMAD stories and spec-kit tasks for every member repo of a Project.
+        """Ingest spec-kit tasks for every member repo of a Project.
 
         Read-only against every source repo; never reads or writes outside
         ``project.repo_paths``. Re-running is idempotent: existing
@@ -142,7 +141,7 @@ class RecipeService:
 
         parsed_by_repo: dict[str, list[ParsedTask]] = {}
         for repo_path in project.repo_paths:
-            parsed = parse_bmad_stories(repo_path) + parse_spec_kit_tasks(repo_path)
+            parsed = parse_spec_kit_tasks(repo_path)
             parsed_by_repo[repo_path] = parsed
 
         entries: list[dict[str, object]] = []
@@ -237,10 +236,9 @@ class RecipeService:
             return task_link.prompt_override
         return (
             f"Implement task '{task_link.story_node_id}' in this repo. Locate and follow "
-            "its full task/story definition (BMAD story file under "
-            "_bmad-output/implementation-artifacts/, or the matching spec-kit tasks.md "
-            "entry) for complete requirements — this prompt only identifies which task "
-            "to implement."
+            "its full task definition in the repository for complete requirements. "
+            "If the definition is missing, report that rather than inventing requirements. "
+            "This prompt only identifies which task to implement."
         )
 
     async def _is_satisfied(self, dep_key: str, links_by_key: dict[str, TaskLink]) -> bool:

@@ -273,7 +273,6 @@
 - Calls `finalize_job_telemetry()` (cost attribution, artifacts)
 - Cancels heartbeat
 - Calls `trail_service.stop_tracking()` and `trail_service.finalize()` (finalizes plan steps)
-- Calls `_cleanup_job_state()` (removes all in-memory state, closes CodeRecon session, dequeues next job)
 - Handles: completed, failed, canceled, model_downgrade paths
 
 **Imported** (`ingest_service.py:_finalize_session`, lines 588-622):
@@ -290,7 +289,6 @@
 - **GAP-m3**: No trail_service.finalize() call — plan steps not marked completed/failed
 - **GAP-m4**: No trail_service.stop_tracking()/cleanup() — trail state may leak
 - **GAP-m5**: Never transitions to completed — stays in review indefinitely
-- **GAP-m6**: No CodeRecon session cleanup
 - **GAP-m7**: No dequeue_next() — won't start next queued job (though this is less relevant for imported sessions)
 
 ### (n) Error Handling
@@ -430,7 +428,6 @@
 | GAP-c3 | No heartbeats | No session health indicator | ingest_service.py (missing) |
 | GAP-a2 | No worktree_name | UI display issue | ingest_service.py:_create_job_from_session |
 | GAP-m4 | No trail cleanup | Memory leak | ingest_service.py:_finalize_session |
-| GAP-m6 | No CodeRecon session cleanup | Resource leak | ingest_service.py:_finalize_session |
 | GAP-r1 | Rerun fails for imported sessions | Feature unavailable | backend/api/jobs.py |
 | GAP-r3 | Interrupt returns 404 | Feature unavailable | backend/api/jobs.py |
 | GAP-b4 | State transitions bypass validation | Potential invalid states | ingest_service.py:_transition_state |

@@ -122,6 +122,32 @@ async def test_scout_uses_utility_model_and_repository_tools(scout: SimpleNamesp
 
 
 @pytest.mark.asyncio
+async def test_scout_report_accumulates_usage_and_observed_model(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        yield new_event(
+            session_id,
+            EventKind.telemetry_usage,
+            {"model": "utility-observed", "input_tokens": 120, "output_tokens": 30, "cost_usd": 0.0015},
+        )
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Inspecting one more caller"})
+        yield new_event(
+            session_id,
+            EventKind.telemetry_usage,
+            {"model": "utility-observed", "input_tokens": 80, "output_tokens": 20, "cost_usd": 0.0005},
+        )
+        yield new_event(session_id, EventKind.session_ended, {"result": "src.py contains the shared parser."})
+
+    scout.adapter.stream_events.side_effect = events
+    report = await _curate(scout)
+
+    assert getattr(report, "input_tokens", None) == 200
+    assert getattr(report, "output_tokens", None) == 50
+    assert getattr(report, "cost_usd", None) == pytest.approx(0.002)
+    assert getattr(report, "model", None) == "utility-observed"
+    assert report.brief == "src.py contains the shared parser."
+
+
+@pytest.mark.asyncio
 async def test_scout_error_does_not_promote_partial_reasoning_to_brief(scout: SimpleNamespace) -> None:
     async def events(session_id: str):
         yield new_event(session_id, EventKind.message_assistant, {"content": "Still exploring; not a final brief"})

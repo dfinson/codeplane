@@ -1,76 +1,15 @@
-"""Tests for BMAD story / spec-kit tasks.md parsers (Story 4.2, CAP-9/AD-9)."""
+"""Tests for spec-kit tasks.md parsers (Story 4.2, CAP-9/AD-9)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from backend.services.recipe.parsers import parse_bmad_stories, parse_spec_kit_tasks
+from backend.services.recipe.parsers import parse_spec_kit_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-class TestParseBmadStories:
-    def test_missing_directory_returns_empty(self, tmp_path: Path) -> None:
-        assert parse_bmad_stories(str(tmp_path)) == []
-
-    def test_parses_story_node_id_and_epic_id_from_filename(self, tmp_path: Path) -> None:
-        stories_dir = tmp_path / "_bmad-output" / "implementation-artifacts"
-        stories_dir.mkdir(parents=True)
-        (stories_dir / "4-1-widen-the-task-recipe-vocabulary.md").write_text(
-            "# Story 4.1\n\nNo dependencies section.\n", encoding="utf-8"
-        )
-
-        tasks = parse_bmad_stories(str(tmp_path))
-
-        assert len(tasks) == 1
-        task = tasks[0]
-        assert task.story_node_id == "4-1-widen-the-task-recipe-vocabulary"
-        assert task.epic_id == "epic-4"
-        assert task.depends_on == []
-
-    def test_parses_dependencies_section(self, tmp_path: Path) -> None:
-        stories_dir = tmp_path / "_bmad-output" / "implementation-artifacts"
-        stories_dir.mkdir(parents=True)
-        (stories_dir / "4-2-ingest-a-task-graph-into-a-project.md").write_text(
-            "# Story 4.2\n\n"
-            "## Dependencies\n\n"
-            "- 4-1-widen-the-task-recipe-vocabulary\n"
-            "- codeplane-frontend/2-1-create-edit-a-project\n\n"
-            "## Dev Notes\n\nSome unrelated content mentioning 9-9-not-a-dependency.\n",
-            encoding="utf-8",
-        )
-
-        tasks = parse_bmad_stories(str(tmp_path))
-
-        assert len(tasks) == 1
-        task = tasks[0]
-        assert task.story_node_id == "4-2-ingest-a-task-graph-into-a-project"
-        assert task.epic_id == "epic-4"
-        assert task.depends_on == [
-            "4-1-widen-the-task-recipe-vocabulary",
-            "codeplane-frontend/2-1-create-edit-a-project",
-        ]
-
-    def test_filename_not_matching_convention_gets_null_epic_id(self, tmp_path: Path) -> None:
-        stories_dir = tmp_path / "_bmad-output" / "implementation-artifacts"
-        stories_dir.mkdir(parents=True)
-        (stories_dir / "retrospective-notes.md").write_text("# Notes\n", encoding="utf-8")
-
-        tasks = parse_bmad_stories(str(tmp_path))
-
-        assert len(tasks) == 1
-        assert tasks[0].epic_id is None
-
-    def test_multiple_stories_sorted(self, tmp_path: Path) -> None:
-        stories_dir = tmp_path / "_bmad-output" / "implementation-artifacts"
-        stories_dir.mkdir(parents=True)
-        (stories_dir / "1-2-second.md").write_text("# S\n", encoding="utf-8")
-        (stories_dir / "1-1-first.md").write_text("# S\n", encoding="utf-8")
-
-        tasks = parse_bmad_stories(str(tmp_path))
-
-        assert [t.story_node_id for t in tasks] == ["1-1-first", "1-2-second"]
 
 
 class TestParseSpecKitTasks:

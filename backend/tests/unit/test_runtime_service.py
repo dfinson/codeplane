@@ -383,6 +383,49 @@ async def test_scout_brief_reaches_primary_without_structural_service(
 
 
 @pytest.mark.asyncio
+async def test_scout_accounting_is_persisted_without_changing_primary_model(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+) -> None:
+    from backend.persistence.job_repo import JobRepository
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    report = SimpleNamespace(
+        brief="src.py contains the shared parser.",
+        tool_calls=[],
+        elapsed_ms=15.0,
+        input_tokens=200,
+        output_tokens=50,
+        cost_usd=0.002,
+        model="utility-observed",
+    )
+    curator = MagicMock()
+    curator.curate = AsyncMock(return_value=report)
+    runtime.set_preflight_curator(curator)
+
+    await runtime._start_job(job)
+    await runtime._tasks[job.id]
+
+    sessions = await SecondarySessionRepository(session_factory).get_by_job(job.id)
+    assert len(sessions) == 1
+    assert sessions[0].input_tokens == report.input_tokens
+    assert sessions[0].output_tokens == report.output_tokens
+    assert sessions[0].cost_usd == pytest.approx(report.cost_usd)
+    assert json.loads(sessions[0].metadata_json)["model"] == report.model
+    assert sessions[0].status == "completed"
+    assert sessions[0].output == report.brief
+    primary = runtime._run_job_guarded.call_args.args[2]
+    assert primary.model == job.model
+    assert primary.memory_context == report.brief
+    async with session_factory() as session:
+        persisted_job = await JobRepository(session).get(job.id)
+    assert persisted_job is not None
+    assert persisted_job.model == job.model
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("error", [RuntimeError("Scout failed"), TimeoutError("Scout timed out")])
 async def test_scout_failure_remains_visible_without_fabricated_handoff(
     runtime: RuntimeService,
@@ -508,6 +551,38 @@ async def test_cancel_during_scout_stops_scout_and_never_launches_primary(
         assert not any(
             e.kind == EventKind.job_setup_progress and e.payload["step"] == "starting_agent" for e in published
         )
+    finally:
+        start.cancel()
+        await asyncio.gather(start, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_stops_scout_before_primary_launch(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+) -> None:
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+    curator = MagicMock()
+
+    async def curate(**kwargs: Any) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    curator.curate = AsyncMock(side_effect=curate)
+    runtime.set_preflight_curator(curator)
+    start = asyncio.create_task(runtime._start_job(job))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await runtime.shutdown()
+        await asyncio.gather(start, return_exceptions=True)
+        assert stopped.is_set()
+        runtime._run_job_guarded.assert_not_awaited()
     finally:
         start.cancel()
         await asyncio.gather(start, return_exceptions=True)

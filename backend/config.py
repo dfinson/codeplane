@@ -255,14 +255,6 @@ class TrailConfig:
 
 
 @dataclass
-class CodeReconConfig:
-    """CodeRecon structural analysis feature toggles."""
-
-    splade: bool = False
-    cross_encoder: bool = False
-
-
-@dataclass
 class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -275,7 +267,6 @@ class CPLConfig:
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     trail: TrailConfig = field(default_factory=TrailConfig)
-    coderecon: CodeReconConfig = field(default_factory=CodeReconConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -290,6 +281,50 @@ def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
     return cls(**{k: v for k, v in section.items() if k in valid_keys})
 
 
+def _read_config_data(path: Path) -> dict[str, Any]:
+    """Read settings, retiring the obsolete analysis section atomically."""
+    target = path.resolve(strict=True)
+    original = target.read_bytes()
+    parsed = yaml.safe_load(original)
+    if parsed is None and yaml.compose(original) is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        raise ValueError(f"CodePlane configuration must be a mapping: {path}")
+    if "coderecon" not in parsed:
+        return parsed
+
+    import tempfile
+
+    original_stat = target.stat()
+    del parsed["coderecon"]
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            yaml.safe_dump(parsed, handle, default_flow_style=False, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        current_stat = target.stat()
+        if (
+            path.resolve(strict=True) != target
+            or (current_stat.st_dev, current_stat.st_ino, current_stat.st_mtime_ns, current_stat.st_size)
+            != (original_stat.st_dev, original_stat.st_ino, original_stat.st_mtime_ns, original_stat.st_size)
+            or target.read_bytes() != original
+        ):
+            raise OSError(f"Configuration changed during structural retirement: {path}")
+        os.chmod(temporary, original_stat.st_mode)
+        os.replace(temporary, target)
+        temporary = None
+    except (OSError, yaml.YAMLError):
+        log.error("retired_analysis_config_removal_failed", path=str(path), exc_info=True)
+        raise
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    log.info("retired_analysis_config_removed", path=str(path))
+    return parsed
+
+
 def load_config(path: Path | None = None) -> CPLConfig:
     """Load CodePlane configuration from a YAML file."""
     if path is None:
@@ -298,8 +333,7 @@ def load_config(path: Path | None = None) -> CPLConfig:
     if not path.exists():
         return CPLConfig()
 
-    with open(path) as f:
-        raw = yaml.safe_load(f) or {}
+    raw = _read_config_data(path)
 
     # Parse platforms section: platforms.<name>.{auth, repos}
     platforms: dict[str, PlatformConfig] = {}
@@ -324,7 +358,6 @@ def load_config(path: Path | None = None) -> CPLConfig:
         telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
         pricing=_parse_section(raw, PricingConfig, "pricing"),
         trail=_parse_section(raw, TrailConfig, "trail"),
-        coderecon=_parse_section(raw, CodeReconConfig, "coderecon"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )
@@ -366,8 +399,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # Load existing config to preserve unknown keys
     existing: dict[str, Any] = {}
     if path.exists():
-        with open(path) as f:
-            existing = yaml.safe_load(f) or {}
+        existing = _read_config_data(path)
 
     # Merge our known sections — existing keys not in our model are preserved
     def _to_dict(dc: Any) -> dict[str, Any]:
@@ -398,7 +430,6 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # Tracker synchronization uses a fixed production cadence. Remove the
     # retired persisted section when any settings save occurs.
     existing.pop("tracker", None)
-    existing["coderecon"] = _to_dict(config.coderecon)
     if config.platforms:
         existing["platforms"] = {name: _to_dict(pc) for name, pc in config.platforms.items()}
 
@@ -416,8 +447,7 @@ def _update_repos_in_file(repos: list[str], path: Path) -> None:
     """
     existing: dict[str, Any] = {}
     if path.exists():
-        with open(path) as f:
-            existing = yaml.safe_load(f) or {}
+        existing = _read_config_data(path)
     existing["repos"] = repos
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:

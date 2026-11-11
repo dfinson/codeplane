@@ -19,10 +19,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
-def _write_bmad_story(repo_root: Path, filename: str, body: str = "# S\n") -> None:
-    stories_dir = repo_root / "_bmad-output" / "implementation-artifacts"
-    stories_dir.mkdir(parents=True, exist_ok=True)
-    (stories_dir / filename).write_text(body, encoding="utf-8")
 
 
 async def _attach_tracker_link(client: AsyncClient, project_id: str) -> str:
@@ -44,13 +40,22 @@ async def _attach_tracker_link(client: AsyncClient, project_id: str) -> str:
     return str(tracker_link.json()["id"])
 
 
+
+def _write_spec_task(repo_root: Path, filename: str, dependency: str = "") -> None:
+    tasks_file = repo_root / "specs" / "fixture" / "tasks.md"
+    tasks_file.parent.mkdir(parents=True, exist_ok=True)
+    task_id = filename.removesuffix(".md")
+    suffix = f" (depends on: {dependency})" if dependency else ""
+    with tasks_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"- [ ] {task_id} Fixture task{suffix}\n")
+
 class TestIngestTasks:
     @pytest.mark.asyncio
     async def test_ingest_creates_task_links_for_member_repos(self, client: AsyncClient, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-a"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "1-1-first.md")
-        _write_bmad_story(repo_a, "1-2-second.md", "# S\n\n## Dependencies\n\n- 1-1-first\n")
+        _write_spec_task(repo_a, "T001.md")
+        _write_spec_task(repo_a, "T002.md", "T001")
 
         created = await client.post(
             "/api/settings/projects",
@@ -64,14 +69,14 @@ class TestIngestTasks:
         items = resp.json()["items"]
         assert len(items) == 2
         by_node = {i["storyNodeId"]: i for i in items}
-        assert by_node["1-1-first"]["epicId"] == "epic-1"
-        assert by_node["1-2-second"]["dependsOn"][0].endswith("::1-1-first")
+        assert by_node["T001"]["epicId"] is None
+        assert by_node["T002"]["dependsOn"][0].endswith("::T001")
 
     @pytest.mark.asyncio
     async def test_reingest_upserts_not_duplicates(self, client: AsyncClient, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-b"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "2-1-task.md")
+        _write_spec_task(repo_a, "T002.md")
 
         created = await client.post(
             "/api/settings/projects",
@@ -95,8 +100,8 @@ class TestIngestTasks:
     async def test_ingest_never_writes_to_source_repo(self, client: AsyncClient, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-c"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "3-1-task.md")
-        story_file = repo_a / "_bmad-output" / "implementation-artifacts" / "3-1-task.md"
+        _write_spec_task(repo_a, "T003.md")
+        story_file = repo_a / "specs" / "fixture" / "tasks.md"
         before = story_file.read_text(encoding="utf-8")
 
         created = await client.post(
@@ -114,7 +119,7 @@ class TestListTaskLinks:
     async def test_list_returns_ingested_task_links(self, client: AsyncClient, tmp_path: Path) -> None:
         repo_a = tmp_path / "repo-d"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "5-1-task.md")
+        _write_spec_task(repo_a, "T005.md")
 
         created = await client.post(
             "/api/settings/projects",

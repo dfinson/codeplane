@@ -1,6 +1,6 @@
-"""Read-only parsers for BMAD stories and spec-kit ``tasks.md`` (Story 4.2, CAP-9/AD-9).
+"""Read-only parser for spec-kit ``tasks.md`` (Story 4.2, CAP-9/AD-9).
 
-Both parsers are pure, stateless functions: given a repo path, they read
+The parser is pure, stateless functions: given a repo path, they read
 whatever source files exist (tolerating their absence) and return a list of
 :class:`ParsedTask` describing the tasks found. Nothing here ever writes to
 the source repo, and nothing here resolves cross-repo ``depends_on``
@@ -22,13 +22,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-_BMAD_FILENAME_RE = re.compile(r"^(?P<epic>\d+)-(?P<story>\d+)-(?P<slug>.+)$")
-_DEPENDENCIES_SECTION_RE = re.compile(
-    r"^##\s+Dependencies\s*$(?P<body>.*?)(?=^##\s|\Z)",
-    re.MULTILINE | re.DOTALL,
-)
-_DEPENDENCY_ITEM_RE = re.compile(r"^\s*[-*]\s+`?([\w./-]+)`?\s*$", re.MULTILINE)
 
 _SPEC_KIT_TASK_RE = re.compile(r"^-\s*\[.\]\s*(?P<task_id>T\d+)\b\s*(?P<rest>.*)$")
 _SPEC_KIT_DEPENDS_RE = re.compile(r"depends on:?\s*([\w./,\s-]+?)(?:\)|$)", re.IGNORECASE)
@@ -52,39 +45,6 @@ def _split_dependency_ids(raw: str) -> list[str]:
     return [part.strip() for part in re.split(r"[,\s]+", raw) if part.strip()]
 
 
-def parse_bmad_stories(repo_path: str) -> list[ParsedTask]:
-    """Parse every BMAD story file in ``repo_path/_bmad-output/implementation-artifacts/``.
-
-    ``story_node_id`` is the filename stem (e.g.
-    ``4-2-ingest-a-task-graph-into-a-project``). ``epic_id`` is derived only
-    from the ``{epic}-{story}-{slug}.md`` naming convention (``epic-{epic}``,
-    matching the keys already used in ``sprint-status.yaml``) — never
-    invented when the filename doesn't match that shape. ``depends_on`` is
-    read from an explicit ``## Dependencies`` section listing other story
-    keys, one per bullet; absent when no such section exists.
-
-    Tolerates a missing ``implementation-artifacts`` directory by returning
-    an empty list rather than raising, so one repo's absence never fails
-    ingestion for the whole Project.
-    """
-    base = Path(repo_path) / "_bmad-output" / "implementation-artifacts"
-    if not base.is_dir():
-        return []
-
-    tasks: list[ParsedTask] = []
-    for story_file in sorted(base.glob("*.md")):
-        stem = story_file.stem
-        match = _BMAD_FILENAME_RE.match(stem)
-        epic_id = f"epic-{match.group('epic')}" if match else None
-
-        text = story_file.read_text(encoding="utf-8")
-        depends_on: list[str] = []
-        dep_match = _DEPENDENCIES_SECTION_RE.search(text)
-        if dep_match:
-            depends_on = _DEPENDENCY_ITEM_RE.findall(dep_match.group("body"))
-
-        tasks.append(ParsedTask(story_node_id=stem, depends_on=depends_on, epic_id=epic_id))
-    return tasks
 
 
 def _find_tasks_md_files(repo_path: str) -> list[Path]:

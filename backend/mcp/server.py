@@ -883,7 +883,7 @@ def _register_project_tool(mcp: FastMCP) -> None:
             "\n- create: name (required), repo_paths (required, list of one or more repo paths)"
             "\n- update: project_id (required); name and/or repo_paths (optional, repo_paths replaces "
             "the full membership list); confirm_repo_removal confirms destructive membership removal"
-            "\n- ingest_tasks: project_id (required) — parses BMAD stories/spec-kit tasks.md across "
+            "\n- ingest_tasks: project_id (required) — parses spec-kit tasks.md across "
             "every member repo (read-only, stateless) and upserts the Project's TaskLink set"
             "\n- list_task_links: project_id (required) — lists the Project's currently persisted TaskLinks"
         ),

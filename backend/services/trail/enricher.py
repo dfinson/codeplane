@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
@@ -37,7 +36,6 @@ from backend.services.trail.prompts import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_bus import EventBus
     from backend.services.sidecar.session import SidecarSessionManager
 
@@ -55,7 +53,6 @@ class TrailEnricher:
         config: TrailConfig | None = None,
         *,
         job_state: dict[str, TrailJobState] | None = None,
-        coderecon: CodeReconService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
@@ -63,8 +60,6 @@ class TrailEnricher:
         self._config = config or TrailConfig()
         self._repo = TrailNodeRepository(session_factory)
         self._job_state = job_state if job_state is not None else {}
-        self._coderecon = coderecon
-        self._coverage_ingested: set[tuple[str, str, float]] = set()
         # Jobs whose trail data changed this drain iteration — story cache
         # will be invalidated at the end of each loop sweep.
         self._dirty_job_ids: set[str] = set()
@@ -382,218 +377,8 @@ class TrailEnricher:
         return processed
 
     # ------------------------------------------------------------------
-    # §13.3: Semantic target resolution (CodeRecon structural diff)
     # ------------------------------------------------------------------
 
-    async def drain_semantic_targets(self) -> int:
-        """Resolve semantic targets for write sub-nodes using CodeRecon semantic_diff.
-
-        For each parent modify node with start_sha != end_sha, runs semantic_diff
-        to identify which symbols were affected, then distributes the results to
-        child write nodes by matching file paths.
-        """
-        if not self._coderecon:
-            log.error("semantic_targets_skipped", reason="coderecon not injected")
-            return 0
-
-        modify_nodes = await self._repo.get_modify_nodes_needing_semantic_targets(
-            limit=self._config.enrich_batch_size,
-        )
-        if not modify_nodes:
-            return 0
-
-        # Pre-fetch job repo/worktree info
-        from sqlalchemy import text
-
-        job_info: dict[str, dict[str, str]] = {}
-        async with self._session_factory() as session:
-            job_ids = {n.job_id for n in modify_nodes}
-            for jid in job_ids:
-                row = await session.execute(
-                    text("SELECT repo, worktree_path FROM jobs WHERE id = :jid"),
-                    {"jid": jid},
-                )
-                mapping = row.mappings().first()
-                if mapping and mapping.get("repo") and mapping.get("worktree_path"):
-                    job_info[jid] = {
-                        "repo": str(mapping["repo"]),
-                        "worktree_path": str(mapping["worktree_path"]),
-                    }
-
-        processed = 0
-        for modify_node in modify_nodes:
-            try:
-                info = job_info.get(modify_node.job_id)
-                if not info:
-                    log.error(
-                        "semantic_targets_no_job_info",
-                        modify_node_id=modify_node.id,
-                        job_id=modify_node.job_id,
-                    )
-                    continue
-
-                worktree_path = info["worktree_path"]
-
-                # Ensure repo indexed and worktree registered
-                repo_name = await self._coderecon.ensure_repo_indexed(info["repo"])
-                await self._coderecon.register_worktree(repo_name, worktree_path)
-
-                # Run semantic_diff between the modify node's SHAs
-                if not modify_node.start_sha or not modify_node.end_sha:
-                    continue
-                diff_result = await self._coderecon.semantic_diff(
-                    repo_name,
-                    base=modify_node.start_sha,
-                    target=modify_node.end_sha,
-                    worktree=worktree_path,
-                )
-
-                structural_changes = diff_result.structural_changes or []
-
-                # Build a file→changes index for distribution
-                changes_by_file: dict[str, list[dict[str, Any]]] = {}
-                for ch in structural_changes:
-                    entry: dict[str, Any] = {
-                        "symbol": ch.qualified_name or ch.name,
-                        "kind": ch.kind,
-                        "change": ch.change,
-                        "file": ch.path,
-                        "severity": ch.structural_severity,
-                        "risk": ch.behavior_change_risk,
-                    }
-                    if ch.start_line:
-                        entry["line_range"] = [ch.start_line, ch.end_line]
-                    if ch.impact and ch.impact.reference_count:
-                        entry["ref_count"] = ch.impact.reference_count
-                    if ch.delta_tags:
-                        entry["delta_tags"] = ch.delta_tags
-                    if ch.change_preview:
-                        entry["preview"] = ch.change_preview
-                    changes_by_file.setdefault(ch.path, []).append(entry)
-
-                # Distribute to write children
-                children = await self._repo.get_write_children(modify_node.id)
-                worktree_prefix = info["worktree_path"].rstrip("/") + "/"
-
-                for child in children:
-                    if child.semantic_targets is not None:
-                        continue  # Already populated
-
-                    matched: list[dict[str, Any]] = []
-                    if child.files:
-                        child_files = json.loads(child.files)
-                        for full_path in child_files:
-                            # Strip worktree prefix to get repo-relative path
-                            if full_path.startswith(worktree_prefix):
-                                rel_path = full_path[len(worktree_prefix) :]
-                            else:
-                                rel_path = full_path.rsplit("/", 1)[-1]
-                            if rel_path in changes_by_file:
-                                matched.extend(changes_by_file[rel_path])
-
-                    await self._repo.set_semantic_targets(
-                        child.id,
-                        json.dumps(matched, ensure_ascii=False),
-                    )
-                    processed += 1
-
-            except Exception:
-                log.error(
-                    "semantic_targets_failed",
-                    modify_node_id=modify_node.id,
-                    exc_info=True,
-                )
-                # Leave semantic_targets NULL so the node is retried next cycle.
-
-        if processed:
-            self._dirty_job_ids.update(n.job_id for n in modify_nodes)
-        return processed
-
-    # ── Coverage report scanning ──
-
-    # Common locations where coverage tools write reports
-    _COVERAGE_REPORT_CANDIDATES: tuple[str, ...] = (
-        "coverage.json",
-        "coverage/coverage.json",
-        "coverage/lcov.info",
-        "lcov.info",
-        "coverage.xml",
-        ".coverage/coverage.json",
-        "htmlcov/coverage.json",
-    )
-
-    async def drain_coverage_scan(self) -> int:
-        """Scan active job worktrees for coverage reports and ingest them.
-
-        Runs each cycle — checks all jobs with worktree_path for freshly-written
-        coverage files.  Ingests any found files that haven't been ingested yet
-        (tracked by mtime in _coverage_ingested).
-        """
-        if not self._coderecon:
-            return 0
-
-        from sqlalchemy import text
-
-        ingested = 0
-        async with self._session_factory() as session:
-            rows = await session.execute(
-                text(
-                    "SELECT id, repo, worktree_path FROM jobs"
-                    " WHERE state IN ('running', 'paused')"
-                    " AND worktree_path IS NOT NULL"
-                ),
-            )
-            jobs = rows.mappings().all()
-
-        for job in jobs:
-            worktree_path = str(job["worktree_path"])
-            repo = str(job["repo"])
-            job_id = str(job["id"])
-
-            report_path = await self._find_coverage_report(worktree_path)
-            if not report_path:
-                continue
-
-            # Track ingested files by (job_id, path, mtime) to avoid re-ingestion
-            mtime = report_path.stat().st_mtime
-            cache_key = (job_id, str(report_path), mtime)
-            if cache_key in self._coverage_ingested:
-                continue
-
-            try:
-                repo_name = await self._coderecon.ensure_repo_indexed(repo)
-                await self._coderecon.register_worktree(repo_name, worktree_path)
-
-                result = await self._coderecon.ingest_coverage(
-                    repo_name,
-                    str(report_path),
-                    worktree=worktree_path,
-                )
-                # Only mark as ingested if at least 1 file was covered
-                if result and getattr(result, "files_covered", 0) > 0:
-                    self._coverage_ingested.add(cache_key)
-                    ingested += 1
-                    log.info(
-                        "coverage_ingested",
-                        job_id=job_id,
-                        report=str(report_path),
-                        files_covered=getattr(result, "files_covered", 0),
-                    )
-            except Exception:
-                log.debug("coverage_ingest_failed", job_id=job_id, report=str(report_path), exc_info=True)
-
-        return ingested
-
-    async def _find_coverage_report(self, worktree_path: str) -> Path | None:
-        """Find the first existing coverage report in the worktree."""
-        wt = Path(worktree_path)
-        if not wt.is_dir():
-            return None
-        for candidate in self._COVERAGE_REPORT_CANDIDATES:
-            p = wt / candidate
-            if p.is_file() and p.stat().st_size > 0:
-                return p
-        return None
 
     async def drain_loop(self) -> None:
         """Run forever, periodically processing enrichment and motivations."""
@@ -609,15 +394,6 @@ class TrailEnricher:
                 edit_count = await self.drain_edit_motivations()
                 if edit_count:
                     log.info("edit_motivation_batch_processed", count=edit_count)
-                # §13.3: Semantic target resolution via CodeRecon
-                semantic_count = await self.drain_semantic_targets()
-                if semantic_count:
-                    log.info("semantic_targets_batch_processed", count=semantic_count)
-                # Coverage report auto-ingestion
-                cov_count = await self.drain_coverage_scan()
-                if cov_count:
-                    log.info("coverage_scan_batch_ingested", count=cov_count)
-
                 # Invalidate story cache for jobs whose trail data changed
                 if self._dirty_job_ids:
                     from backend.services.story.service import invalidate_story_cache_for_jobs

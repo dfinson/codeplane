@@ -7,10 +7,6 @@
 
 import type { DiffFileModel, StoryResponse } from "../api/types";
 import type {
-  MultiSessionResponse,
-  ReviewStoryResponse as StructuralReviewStoryResponse,
-} from "../api/client";
-import type {
   AppState,
   JobSummary,
   LogLine,
@@ -47,10 +43,6 @@ export const selectJobStory = (jobId: string) => (state: AppState) =>
   state.stories[jobId] ?? EMPTY_STORY;
 
 // Structural analysis selectors
-export const selectMultiSession = (jobId: string) => (state: AppState): MultiSessionResponse | null =>
-  state.multiSessions[jobId] ?? null;
-export const selectReviewStory = (jobId: string) => (state: AppState): StructuralReviewStoryResponse | null =>
-  state.reviewStories[jobId] ?? null;
 
 /** Select accumulated streaming tool output for a job, keyed by toolCallId. */
 export const selectStreamingToolOutput = (jobId: string) => (state: AppState) => {

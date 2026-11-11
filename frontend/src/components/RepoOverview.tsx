@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, Navigate } from "react-router-dom";
 import {
-  Activity, DollarSign, Boxes,
-  AlertTriangle, Briefcase, LayoutGrid,
+  Activity, DollarSign,
+  Briefcase, LayoutGrid,
 } from "lucide-react";
 import { toast } from "sonner";
 import { fetchRepoSummary, fetchProject } from "../api/client";
@@ -99,7 +99,6 @@ export function RepoOverview() {
               toast.error("Failed to load repository summaries");
               return;
             }
-            const health = summaries.flatMap((item) => item.health ? [item.health] : []);
             setSummary({
               path: proj.id,
               originUrl: null,
@@ -115,17 +114,6 @@ export function RepoOverview() {
                 totalCostUsd: summaries.reduce((total, item) => total + item.cost.totalCostUsd, 0),
                 totalJobs: summaries.reduce((total, item) => total + item.cost.totalJobs, 0),
                 totalTokens: summaries.reduce((total, item) => total + item.cost.totalTokens, 0),
-              },
-              health: health.length === 0 ? null : {
-                repo: proj.id,
-                available: health.some((item) => item.available),
-                indexStatus: health.some((item) => item.indexStatus === "error") ? "error" : "ready",
-                symbolCount: health.reduce((total, item) => total + item.symbolCount, 0),
-                fileCount: health.reduce((total, item) => total + item.fileCount, 0),
-                lastIndexedSha: null,
-                communityCount: health.reduce((total, item) => total + item.communityCount, 0),
-                cycleCount: health.reduce((total, item) => total + item.cycleCount, 0),
-                stale: health.some((item) => item.stale),
               },
             });
             if (failures > 0) toast.error(`${failures} repository summaries could not be loaded`);
@@ -283,45 +271,6 @@ export function RepoOverview() {
           </div>
         </div>
 
-        {/* Structural Health */}
-        <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold flex items-center gap-2">
-              <Boxes size={14} className="text-muted-foreground" />
-              Structural Health
-            </span>
-            <span className="text-xs text-muted-foreground">Select a repository above for details</span>
-          </div>
-          {!summary.health ? (
-            <p className="text-xs text-muted-foreground py-3 text-center">
-              CodeRecon not available
-            </p>
-          ) : summary.health.indexStatus === "error" ? (
-            <p className="text-xs text-red-400 py-3 text-center flex items-center justify-center gap-1.5">
-              <AlertTriangle size={12} />
-              Index error
-            </p>
-          ) : (
-            <div className="space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <StatBadge icon={Boxes} label="Symbols" value={summary.health.symbolCount.toLocaleString()} />
-                <StatBadge icon={Boxes} label="Files" value={summary.health.fileCount.toLocaleString()} />
-                <StatBadge icon={Boxes} label="Communities" value={summary.health.communityCount} />
-                <StatBadge
-                  icon={AlertTriangle}
-                  label="Cycles"
-                  value={summary.health.cycleCount}
-                  className={summary.health.cycleCount > 0 ? "text-yellow-400" : undefined}
-                />
-              </div>
-              {summary.health.lastIndexedSha && (
-                <p className="text-[10px] text-muted-foreground/60">
-                  Last indexed: {summary.health.lastIndexedSha.slice(0, 7)}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
       </div>
       )}
     </div>

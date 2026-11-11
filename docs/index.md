@@ -50,7 +50,7 @@ Run `claude` or `copilot` in your terminal as usual. CodePlane auto-discovers th
 
 </div>
 
-Either way, you get the same intelligence pipeline: trail enrichment, cost attribution, structural review, narrative story, and workspace memory.
+Either way, you get the same intelligence pipeline: trail enrichment, cost attribution, narrative story, and workspace memory.
 
 | Agent | Managed (headless) | Mirrored (native CLI) |
 |-------|-------------------|-----------------------|
@@ -77,7 +77,7 @@ Launch headless jobs from a dashboard or discover native CLI sessions automatica
 <div class="feature-card" markdown>
 ### :material-book-open-variant: Review as a Story
 
-When the agent finishes, you don't get a raw diff. You get a narrative that explains what changed and why — with verified file references traced back through the decision trail. Structural risk scoring tells you which changes are breaking, which are additive, and whether callers were verified. A merge confidence verdict before you read a single line of code.
+When the agent finishes, you don't get a raw diff. You get a narrative that explains what changed and why — with verified file references traced back through the decision trail. Inspect the actual diff alongside the recorded decisions and motivations before choosing the next action.
 
 <!-- PLACEHOLDER: Narrative review -->
 
@@ -115,11 +115,6 @@ CodePlane runs parallel LLM sessions alongside the agent — not hooks that fire
 </div>
 
 <div class="feature-card" markdown>
-### :material-shield-check: Structural Code Analysis
-Graph-based risk scoring, not LLM vibes. CodeRecon traces callers of every modified symbol, detects dependency cycles introduced by the change, measures coupling drift across module communities, and produces a merge confidence verdict grounded in code structure. A fundamentally different signal from LLM-based code review.
-</div>
-
-<div class="feature-card" markdown>
 ### :material-graph: Decision Trail
 Not a transcript — a structured intent graph. Each action is recorded as a trail node capturing what the agent did, why, and where it changed course. Nodes are enriched with rationale, purpose, and edit motivations by parallel LLM analysis. The trail feeds the narrative review and powers post-hoc debugging of agent behavior.
 </div>
@@ -140,5 +135,5 @@ Agents use MCP tools. CodePlane *exposes itself as* an MCP server — 7 tools fo
 
 - **Solo devs using Claude Code or Copilot CLI** who want cost visibility and review tools without changing their workflow
 - **Teams running many agent sessions** who need cost forensics and behavioral pattern analysis across jobs, not just a billing page
-- **Reviewers of agent output** who need structural risk triage and a narrative explanation, not just a raw diff
+- **Reviewers of agent output** who need a navigable diff and an evidence-based narrative explanation, not just a raw diff
 - **Regulated environments** where AI-generated code changes require decision provenance and an audit trail

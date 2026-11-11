@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 from pathlib import Path
@@ -34,7 +33,6 @@ from backend.models.api_schemas import (
     RegisterRepoResponse,
     RepoCostSummary,
     RepoDetailResponse,
-    RepoHealthResponse,
     RepoJobSummary,
     RepoListResponse,
     RepoSummaryResponse,
@@ -47,7 +45,6 @@ from backend.models.db import JobRow
 from backend.models.domain import ACTIVE_STATES
 from backend.persistence.project_repo import ProjectRepository
 from backend.services.adapters.platform_adapter import PlatformRegistry, detect_platform
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.git.git_service import GitError, GitService
 from backend.services.project.repo_membership import list_managed_repo_paths
 
@@ -74,8 +71,6 @@ def _config_to_response(config: CPLConfig) -> SettingsResponse:
         verify_prompt=config.verification.verify_prompt or DEFAULT_VERIFY_PROMPT,
         self_review_prompt=config.verification.self_review_prompt or DEFAULT_SELF_REVIEW_PROMPT,
         cli_sidecars=config.runtime.cli_sidecars,
-        coderecon_splade=config.coderecon.splade,
-        coderecon_cross_encoder=config.coderecon.cross_encoder,
     )
 
 
@@ -116,8 +111,6 @@ async def update_settings(
         "verify_prompt": ("verification", "verify_prompt"),
         "self_review_prompt": ("verification", "self_review_prompt"),
         "cli_sidecars": ("runtime", "cli_sidecars"),
-        "coderecon_splade": ("coderecon", "splade"),
-        "coderecon_cross_encoder": ("coderecon", "cross_encoder"),
     }
 
     for field, (section, attr) in _FIELD_MAP.items():
@@ -126,10 +119,6 @@ async def update_settings(
 
     save_config(config)
 
-    # Keep env vars in sync so new coderecon ReviewKit instances use fresh values.
-    if "coderecon_splade" in updates or "coderecon_cross_encoder" in updates:
-        os.environ["CODERECON__FEATURES__SPLADE"] = str(config.coderecon.splade).lower()
-        os.environ["CODERECON__FEATURES__CROSS_ENCODER"] = str(config.coderecon.cross_encoder).lower()
 
     return _config_to_response(config)
 
@@ -143,69 +132,6 @@ async def list_repos(
     return RepoListResponse(items=await list_managed_repo_paths(config, project_repo))
 
 
-@router.get("/settings/repos/{repo_path:path}/health", response_model=RepoHealthResponse)
-async def get_repo_health(
-    repo_path: str,
-    config: FromDishka[CPLConfig],
-    project_repo: FromDishka[ProjectRepository],
-    coderecon: FromDishka[CodeReconService],
-) -> RepoHealthResponse:
-    """Structural health status for a repository (§6.2)."""
-    log = structlog.get_logger()
-    resolved = str(Path(repo_path).expanduser().resolve())
-    if resolved not in config.repos and not await _is_project_member(resolved, project_repo):
-        raise HTTPException(status_code=404, detail=f"Repository '{repo_path}' is not registered.")
-
-    if not coderecon.available:
-        return RepoHealthResponse(repo=resolved)
-
-    try:
-        repo_name = await asyncio.wait_for(coderecon.ensure_repo_indexed(resolved), timeout=30.0)
-    except TimeoutError:
-        log.warning("repo_health.index_timeout", repo=resolved)
-        return RepoHealthResponse(repo=resolved, index_status="timeout")
-    except Exception:
-        log.warning("repo_health.index_failed", repo=resolved, exc_info=True)
-        return RepoHealthResponse(repo=resolved, index_status="error")
-
-    # Gather health metrics
-    symbol_count = 0
-    file_count = 0
-    last_sha = None
-    community_count = 0
-    cycle_count = 0
-
-    try:
-        status = await coderecon.repo_status(repo_name)
-        if status:
-            symbol_count = status.get("symbol_count", 0)
-            file_count = status.get("file_count", 0)
-            last_sha = status.get("last_indexed_sha")
-    except Exception:
-        log.debug("repo_health.status_failed", repo=resolved, exc_info=True)
-
-    try:
-        communities = await coderecon.graph_communities(repo_name, worktree="main")
-        community_count = len(communities.communities) if communities.communities else 0
-    except Exception:
-        log.debug("repo_health.communities_failed", repo=resolved, exc_info=True)
-
-    try:
-        cycles = await coderecon.graph_cycles(repo_name, worktree="main")
-        cycle_count = len(cycles.cycles) if cycles.cycles else 0
-    except Exception:
-        log.debug("repo_health.cycles_failed", repo=resolved, exc_info=True)
-
-    return RepoHealthResponse(
-        repo=resolved,
-        available=True,
-        index_status="ready",
-        symbol_count=symbol_count,
-        file_count=file_count,
-        last_indexed_sha=last_sha,
-        community_count=community_count,
-        cycle_count=cycle_count,
-    )
 
 
 @router.get("/settings/repos/{repo_path:path}/summary", response_model=RepoSummaryResponse)
@@ -214,7 +140,6 @@ async def get_repo_summary(
     config: FromDishka[CPLConfig],
     project_repo: FromDishka[ProjectRepository],
     git_service: FromDishka[GitService],
-    coderecon: FromDishka[CodeReconService],
     sf: FromDishka[async_sessionmaker[AsyncSession]],
 ) -> RepoSummaryResponse:
     """Aggregated dashboard overview for a single repository."""
@@ -304,55 +229,6 @@ async def get_repo_summary(
     except Exception:
         log.warning("repo_summary.jobs_query_failed", repo=resolved, exc_info=True)
 
-    # --- Health (best-effort) ---
-    health: RepoHealthResponse | None = None
-    if coderecon.available:
-        try:
-            repo_name = await asyncio.wait_for(coderecon.ensure_repo_indexed(resolved), timeout=30.0)
-            h_symbol_count = 0
-            h_file_count = 0
-            h_last_sha = None
-            h_community_count = 0
-            h_cycle_count = 0
-
-            try:
-                status = await coderecon.repo_status(repo_name)
-                if status:
-                    h_symbol_count = status.get("symbol_count", 0)
-                    h_file_count = status.get("file_count", 0)
-                    h_last_sha = status.get("last_indexed_sha")
-            except Exception:
-                log.debug("repo_summary.health_status_failed", repo=resolved, exc_info=True)
-
-            try:
-                communities = await coderecon.graph_communities(repo_name, worktree="main")
-                h_community_count = len(communities.communities) if communities.communities else 0
-            except Exception:
-                log.debug("repo_summary.communities_failed", repo=resolved, exc_info=True)
-
-            try:
-                cycles = await coderecon.graph_cycles(repo_name, worktree="main")
-                h_cycle_count = len(cycles.cycles) if cycles.cycles else 0
-            except Exception:
-                log.debug("repo_summary.cycles_failed", repo=resolved, exc_info=True)
-
-            health = RepoHealthResponse(
-                repo=resolved,
-                available=True,
-                index_status="ready",
-                symbol_count=h_symbol_count,
-                file_count=h_file_count,
-                last_indexed_sha=h_last_sha,
-                community_count=h_community_count,
-                cycle_count=h_cycle_count,
-            )
-        except TimeoutError:
-            log.warning("repo_summary.index_timeout", repo=resolved)
-            health = RepoHealthResponse(repo=resolved, index_status="timeout")
-        except Exception:
-            log.warning("repo_summary.index_failed", repo=resolved, exc_info=True)
-            health = RepoHealthResponse(repo=resolved, index_status="error")
-
     return RepoSummaryResponse(
         path=resolved,
         origin_url=origin_url,
@@ -362,7 +238,6 @@ async def get_repo_summary(
         recent_jobs=recent_jobs,
         active_job_count=active_job_count,
         cost=cost_summary,
-        health=health,
     )
 
 
@@ -422,7 +297,6 @@ async def register_repo_endpoint(
     body: RegisterRepoRequest,
     config: FromDishka[CPLConfig],
     git_service: FromDishka[GitService],
-    coderecon: FromDishka[CodeReconService],
 ) -> RegisterRepoResponse:
     """Register a repository (local path or remote URL)."""
     source = body.source
@@ -449,8 +323,6 @@ async def register_repo_endpoint(
             structlog.get_logger().warning("clone_failed", source=source, exc_info=exc)
             raise HTTPException(status_code=400, detail="Clone failed") from exc
         register_repo(config, cloned_path)
-        if coderecon.available:
-            asyncio.create_task(coderecon.ensure_repo_indexed(cloned_path))
         return RegisterRepoResponse(path=cloned_path, source=source, cloned=True, registered=True)
 
     if inferred_clone:
@@ -465,8 +337,6 @@ async def register_repo_endpoint(
         )
     newly_registered = resolved not in config.repos
     register_repo(config, resolved)
-    if coderecon.available:
-        asyncio.create_task(coderecon.ensure_repo_indexed(resolved))
     return RegisterRepoResponse(
         path=resolved,
         source=source,
@@ -480,7 +350,6 @@ async def create_repo_endpoint(
     body: CreateRepoRequest,
     config: FromDishka[CPLConfig],
     git_service: FromDishka[GitService],
-    coderecon: FromDishka[CodeReconService],
 ) -> CreateRepoResponse:
     """Create a new git repository and register it."""
     parent = Path(body.path).expanduser().resolve()
@@ -503,8 +372,6 @@ async def create_repo_endpoint(
         raise HTTPException(status_code=400, detail="Failed to create repository") from exc
 
     register_repo(config, repo_path)
-    if coderecon.available:
-        asyncio.create_task(coderecon.ensure_repo_indexed(repo_path))
     return CreateRepoResponse(path=repo_path, name=resolved.name)
 
 

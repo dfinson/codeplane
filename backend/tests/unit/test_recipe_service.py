@@ -37,10 +37,6 @@ def _make_project(project_id: str, repo_paths: list[str]) -> Project:
     )
 
 
-def _write_bmad_story(repo_root: Path, filename: str, body: str = "") -> None:
-    stories_dir = repo_root / "_bmad-output" / "implementation-artifacts"
-    stories_dir.mkdir(parents=True, exist_ok=True)
-    (stories_dir / filename).write_text(body, encoding="utf-8")
 
 
 @pytest.fixture
@@ -55,6 +51,15 @@ def mock_project_service() -> AsyncMock:
     return AsyncMock()
 
 
+
+def _write_spec_task(repo_root: Path, filename: str, dependency: str = "") -> None:
+    tasks_file = repo_root / "specs" / "fixture" / "tasks.md"
+    tasks_file.parent.mkdir(parents=True, exist_ok=True)
+    task_id = filename.removesuffix(".md")
+    suffix = f" (depends on: {dependency})" if dependency else ""
+    with tasks_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"- [ ] {task_id} Fixture task{suffix}\n")
+
 class TestIngestProject:
     @pytest.mark.asyncio
     async def test_single_repo_same_repo_dependency(
@@ -65,11 +70,11 @@ class TestIngestProject:
     ) -> None:
         repo_a = tmp_path / "backend-repo"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "1-1-first.md", "# S\n")
-        _write_bmad_story(
+        _write_spec_task(repo_a, "T001.md")
+        _write_spec_task(
             repo_a,
-            "1-2-second.md",
-            "# S\n\n## Dependencies\n\n- 1-1-first\n",
+            "T002.md",
+            "T001",
         )
         mock_project_service.get.return_value = _make_project("proj-1", [str(repo_a)])
 
@@ -78,9 +83,9 @@ class TestIngestProject:
 
         entries = mock_task_link_repo.upsert_many.call_args.args[1]
         by_node = {e["story_node_id"]: e for e in entries}
-        assert by_node["1-2-second"]["depends_on"] == [f"{repo_a}::1-1-first"]
-        assert by_node["1-1-first"]["depends_on"] == []
-        assert by_node["1-1-first"]["epic_id"] == "epic-1"
+        assert by_node["T002"]["depends_on"] == [f"{repo_a}::T001"]
+        assert by_node["T001"]["depends_on"] == []
+        assert by_node["T001"]["epic_id"] is None
 
     @pytest.mark.asyncio
     async def test_cross_repo_dependency_resolves_to_sibling_repo(
@@ -93,11 +98,11 @@ class TestIngestProject:
         frontend_repo = tmp_path / "codeplane-frontend"
         backend_repo.mkdir()
         frontend_repo.mkdir()
-        _write_bmad_story(backend_repo, "2-1-backend-task.md", "# S\n")
-        _write_bmad_story(
+        _write_spec_task(backend_repo, "T010.md")
+        _write_spec_task(
             frontend_repo,
-            "3-1-frontend-task.md",
-            "# S\n\n## Dependencies\n\n- codeplane-backend/2-1-backend-task\n",
+            "T020.md",
+            "codeplane-backend/T010",
         )
         mock_project_service.get.return_value = _make_project("proj-1", [str(backend_repo), str(frontend_repo)])
 
@@ -105,8 +110,8 @@ class TestIngestProject:
         await service.ingest_project("proj-1")
 
         entries = mock_task_link_repo.upsert_many.call_args.args[1]
-        frontend_entry = next(e for e in entries if e["story_node_id"] == "3-1-frontend-task")
-        assert frontend_entry["depends_on"] == [f"{backend_repo}::2-1-backend-task"]
+        frontend_entry = next(e for e in entries if e["story_node_id"] == "T020")
+        assert frontend_entry["depends_on"] == [f"{backend_repo}::T010"]
 
     @pytest.mark.asyncio
     async def test_unresolvable_cross_repo_dependency_preserved_raw(
@@ -117,10 +122,10 @@ class TestIngestProject:
     ) -> None:
         repo_a = tmp_path / "solo-repo"
         repo_a.mkdir()
-        _write_bmad_story(
+        _write_spec_task(
             repo_a,
-            "1-1-task.md",
-            "# S\n\n## Dependencies\n\n- unknown-repo/9-9-ghost\n",
+            "T001.md",
+            "unknown-repo/T999",
         )
         mock_project_service.get.return_value = _make_project("proj-1", [str(repo_a)])
 
@@ -128,10 +133,10 @@ class TestIngestProject:
         await service.ingest_project("proj-1")
 
         entries = mock_task_link_repo.upsert_many.call_args.args[1]
-        assert entries[0]["depends_on"] == ["unknown-repo/9-9-ghost"]
+        assert entries[0]["depends_on"] == ["unknown-repo/T999"]
 
     @pytest.mark.asyncio
-    async def test_spec_kit_and_bmad_both_ingested(
+    async def test_root_and_nested_spec_tasks_both_ingested(
         self,
         tmp_path: Path,
         mock_task_link_repo: AsyncMock,
@@ -139,7 +144,7 @@ class TestIngestProject:
     ) -> None:
         repo_a = tmp_path / "mixed-repo"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "1-1-story.md", "# S\n")
+        _write_spec_task(repo_a, "T002.md")
         (repo_a / "tasks.md").write_text("- [ ] T001 Spec-kit task\n", encoding="utf-8")
         mock_project_service.get.return_value = _make_project("proj-1", [str(repo_a)])
 
@@ -148,7 +153,7 @@ class TestIngestProject:
 
         entries = mock_task_link_repo.upsert_many.call_args.args[1]
         node_ids = {e["story_node_id"] for e in entries}
-        assert node_ids == {"1-1-story", "T001"}
+        assert node_ids == {"T002", "T001"}
 
     @pytest.mark.asyncio
     async def test_repo_with_no_source_files_yields_no_entries_but_does_not_fail(
@@ -176,8 +181,8 @@ class TestIngestProject:
     ) -> None:
         repo_a = tmp_path / "repo-a"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "1-1-story.md", "# S\n")
-        story_file = repo_a / "_bmad-output" / "implementation-artifacts" / "1-1-story.md"
+        _write_spec_task(repo_a, "T002.md")
+        story_file = repo_a / "specs" / "fixture" / "tasks.md"
         before_mtime = story_file.stat().st_mtime
         before_content = story_file.read_text(encoding="utf-8")
         mock_project_service.get.return_value = _make_project("proj-1", [str(repo_a)])
@@ -197,7 +202,7 @@ class TestIngestProject:
     ) -> None:
         repo_a = tmp_path / "repo-a"
         repo_a.mkdir()
-        _write_bmad_story(repo_a, "1-1-story.md", "# S\n")
+        _write_spec_task(repo_a, "T002.md")
         mock_project_service.get.return_value = _make_project("proj-1", [str(repo_a)])
 
         service = RecipeService(mock_task_link_repo, mock_project_service)

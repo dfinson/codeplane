@@ -19,7 +19,6 @@ from backend.services.trail.query_service import TrailQueryService
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_bus import EventBus
     from backend.services.sidecar.session import SidecarSessionManager
     from backend.services.trail.models import TrailJobState, TrailResponse, TrailSummary
@@ -55,7 +54,6 @@ class TrailService:
         event_bus: EventBus,
         sidecar_sessions: SidecarSessionManager | None = None,
         config: TrailConfig | None = None,
-        coderecon: CodeReconService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._event_bus = event_bus
@@ -86,7 +84,6 @@ class TrailService:
             sidecar_sessions=sidecar_sessions,
             config=self._config,
             job_state=self._job_state,
-            coderecon=coderecon,
         )
 
         self._query = TrailQueryService(session_factory)

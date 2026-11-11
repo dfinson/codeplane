@@ -142,6 +142,14 @@ class CopilotAdapter(BaseAgentAdapter):
         if request.possible_paths:
             candidate_paths.extend(request.possible_paths)
 
+        if config.session_kind == "preflight":
+            from backend.services.tools.preflight_curator import scout_read_allowed
+
+            if request.full_command_text or not scout_read_allowed(
+                config.workspace_path, kind_val, request.tool_name or "", candidate_paths
+            ):
+                return _Result(kind="reject")
+
         # Build tool_input dict for the base method
         tool_input: dict[str, Any] = {}
         if request.full_command_text:
@@ -373,7 +381,16 @@ class CopilotAdapter(BaseAgentAdapter):
                 # Model verification (first call only)
                 if not model_verified[0] and requested_model and actual_model:
                     model_verified[0] = True
-                    self._verify_and_set_model(session_id, job_id, actual_model, requested_model)
+                    if self.get_session_kind(session_id) == "preflight":
+                        log.info(
+                            "preflight_model_observed",
+                            job_id=job_id,
+                            session_id=session_id,
+                            requested_model=requested_model,
+                            actual_model=actual_model,
+                        )
+                    else:
+                        self._verify_and_set_model(session_id, job_id, actual_model, requested_model)
 
                 # Sub-agent detection
                 main_model = self._job_main_models.get(job_id, "")
@@ -444,7 +461,7 @@ class CopilotAdapter(BaseAgentAdapter):
 
         elif kind_str == "session.model_change":
             mc = cast("SessionModelChangeData", data) if data else None
-            if mc and mc.new_model:
+            if mc and mc.new_model and self.get_session_kind(session_id) != "preflight":
                 self._job_main_models[job_id] = mc.new_model
                 self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=mc.new_model))
                 self._emit_log_line(session_id, job_id, f"Model changed to {mc.new_model}", "info")
@@ -512,7 +529,6 @@ class CopilotAdapter(BaseAgentAdapter):
         async def _on_permission(request: PermissionRequest, invocation: dict[str, str]) -> PermissionRequestResult:
             return await self._handle_permission_request(request, invocation, config)
 
-        # Build system prompt — append CodeRecon tool guidance when tools are provisioned (§8.5)
         if config.system_prompt_override:
             # Sidecar/preflight sessions define their own identity — skip the
             # main-agent CODEPLANE_SYSTEM_PROMPT and report_intent boilerplate.
@@ -530,8 +546,6 @@ class CopilotAdapter(BaseAgentAdapter):
                 "to a new sub-task. Never call it in isolation — always pair it with at least "
                 "one other tool call in the same turn."
             )
-        if config.coderecon_tools is not None and config.coderecon_tools.system_prompt:
-            base_prompt = base_prompt + "\n\n" + config.coderecon_tools.system_prompt
 
         # Workspace memory — curated context hidden from transcript
         if config.memory_context:
@@ -543,10 +557,6 @@ class CopilotAdapter(BaseAgentAdapter):
             "content": base_prompt,
         }
 
-        # CodeRecon native tools (§8.1)
-        copilot_custom_tools = None
-        if config.coderecon_tools is not None and config.coderecon_tools.copilot_tools:
-            copilot_custom_tools = config.coderecon_tools.copilot_tools
 
         requested_model = config.model or ""
         if config.model:
@@ -570,7 +580,6 @@ class CopilotAdapter(BaseAgentAdapter):
                     working_directory=config.workspace_path,
                     system_message=system_message,
                     model=config.model or None,
-                    tools=copilot_custom_tools,
                     excluded_tools=config.disallowed_tools or None,
                 )
         else:
@@ -579,7 +588,6 @@ class CopilotAdapter(BaseAgentAdapter):
                 working_directory=config.workspace_path,
                 system_message=system_message,
                 model=config.model or None,
-                tools=copilot_custom_tools,
                 excluded_tools=config.disallowed_tools or None,
             )
 

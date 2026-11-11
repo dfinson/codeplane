@@ -3,7 +3,7 @@
  *
  * Sub-views:
  * - Changes: code diff viewer (was a top-level tab)
- * - Story: structured review story with verdict
+ * - Story: trail-based narrative
  */
 import { Suspense, useEffect, useState } from "react";
 import { Spinner } from "./ui/spinner";

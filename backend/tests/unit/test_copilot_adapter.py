@@ -1612,6 +1612,96 @@ class TestHandlePermissionRequestGitResetHard:
         approval_service.create_request.assert_not_called()
 
 
+class TestScoutAccounting:
+    @pytest.mark.asyncio
+    async def test_scout_usage_keeps_primary_model_unset_until_primary_usage(self, adapter: CopilotAdapter) -> None:
+        scout_id = "scout-accounting"
+        primary_id = "primary-accounting"
+        for session_id in (scout_id, primary_id):
+            adapter.set_job_id(session_id, "job-accounting")
+            adapter._queues[session_id] = asyncio.Queue()
+        adapter.set_session_kind(scout_id, "preflight")
+        adapter._db_write_set_model = AsyncMock()
+        adapter._schedule_db_write = lambda coro: coro.close()
+        usage = _FakeEventData(
+            model="gpt-4o-mini",
+            input_tokens=120,
+            output_tokens=30,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            cost=0.0015,
+            duration=15,
+            quota_snapshots=None,
+        )
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("assistant.usage", usage),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [False],
+            adapter._queues[scout_id],
+        )
+
+        assert "job-accounting" not in adapter._job_main_models, "Scout usage must not claim the primary model"
+        adapter._db_write_set_model.assert_not_called()
+        event = adapter._queues[scout_id].get_nowait()
+        assert event is not None
+        assert event.kind == EventKind.telemetry_usage
+        assert event.payload["model"] == "gpt-4o-mini"
+        assert event.payload["input_tokens"] == 120
+        assert event.payload["output_tokens"] == 30
+        assert event.payload["cost_usd"] == pytest.approx(0.0015)
+        assert adapter.get_session_kind(scout_id) == "preflight"
+
+        usage.model = "primary-heavy-model"
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("assistant.usage", usage),
+            primary_id,
+            "job-accounting",
+            "primary-heavy-model",
+            [False],
+            adapter._queues[primary_id],
+        )
+        assert adapter._job_main_models["job-accounting"] == "primary-heavy-model"
+        adapter._db_write_set_model.assert_called_once_with(job_id="job-accounting", model="primary-heavy-model")
+
+    @pytest.mark.asyncio
+    async def test_scout_model_change_does_not_overwrite_primary_model(self, adapter: CopilotAdapter) -> None:
+        scout_id = "scout-model-change"
+        primary_id = "primary-model-change"
+        for session_id in (scout_id, primary_id):
+            adapter.set_job_id(session_id, "job-accounting")
+            adapter._queues[session_id] = asyncio.Queue()
+        adapter.set_session_kind(scout_id, "preflight")
+        adapter._job_main_models["job-accounting"] = "primary-heavy-model"
+        adapter._db_write_set_model = AsyncMock()
+        adapter._schedule_db_write = lambda coro: coro.close()
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.model_change", _FakeEventData(new_model="utility-fallback")),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [True],
+            adapter._queues[scout_id],
+        )
+
+        assert adapter._job_main_models["job-accounting"] == "primary-heavy-model"
+        adapter._db_write_set_model.assert_not_called()
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.model_change", _FakeEventData(new_model="primary-selected-next")),
+            primary_id,
+            "job-accounting",
+            "primary-heavy-model",
+            [True],
+            adapter._queues[primary_id],
+        )
+        assert adapter._job_main_models["job-accounting"] == "primary-selected-next"
+        adapter._db_write_set_model.assert_called_once_with(job_id="job-accounting", model="primary-selected-next")
+
+
 class TestScoutPermissions:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

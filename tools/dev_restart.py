@@ -6,7 +6,7 @@ Prepares a restart while the current server stays available (frontend build,
 backend compile/import preflight, active-launch-profile and secret
 re-validation), then hands execution to a detached helper that survives both
 this process and the CodePlane server it replaces. See
-``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/SOLUTION-DESIGN.md``
+``internal-docs/design/developer-restart.md``
 for the full parent/helper design.
 
 Usage:

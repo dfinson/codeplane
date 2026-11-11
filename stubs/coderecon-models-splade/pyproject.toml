@@ -1,9 +1,0 @@
-[project]
-name = "coderecon-ai-models-splade"
-version = "1.0.0"
-description = "Stub package — real models loaded at runtime"
-requires-python = ">=3.12"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"

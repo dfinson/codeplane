@@ -9,8 +9,8 @@ persistence, and validation in one focused internal helper surface") and
 generalized here so Stories 1.2-1.7 share one implementation.
 
 See:
-- ``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/ARCHITECTURE-SPINE.md``
-- ``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/SOLUTION-DESIGN.md``
+- ``internal-docs/design/developer-restart.md``
+- ``internal-docs/design/developer-restart.md``
 """
 
 from __future__ import annotations

@@ -237,23 +237,3 @@ Shared links bypass CodePlane's password for read-only access to job status and 
 ### Port Preview Proxy
 
 A reverse proxy at `/api/preview/{port}/` forwards to `127.0.0.1:{port}`. This is useful when combined with `--remote` to access development servers from another device. Only ports 1024–65535 are allowed.
-
-## CodeRecon (Structural Analysis)
-
-CodePlane integrates with [CodeRecon](https://github.com/peteromallet/coderecon) for structural code review — semantic diffs, risk scoring, merge confidence, and dependency analysis.
-
-```yaml
-coderecon:
-  enabled: true                     # enable structural analysis (default: false)
-  binary: /path/to/coderecon        # path to CodeRecon binary (auto-detected if on PATH)
-  home: ~/.coderecon                # daemon state directory (default)
-  tool_tier: standard               # minimal | standard | full
-```
-
-| Tool Tier | Description |
-|-----------|-------------|
-| `minimal` | Basic structural diff only |
-| `standard` | Diff + risk scoring + reference analysis (default) |
-| `full` | All features including community detection and story generation |
-
-When enabled, a structural review dashboard appears on job completion with change risk analysis and merge confidence verdicts. See [Usage Guide > Structural Review](guide.md#structural-review-coderecon) for details.
