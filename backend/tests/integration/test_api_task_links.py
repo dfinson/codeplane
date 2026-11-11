@@ -1,7 +1,7 @@
-"""Integration tests for TaskLink ingestion endpoints (Story 4.2 / CAP-9).
+"""Source-ingestion retirement and preserved TaskLink assignment APIs.
 
 Exercises:
-  POST /api/settings/projects/{id}/ingest-tasks
+  POST /api/settings/projects/{id}/task-links
   GET  /api/settings/projects/{id}/task-links
 """
 
@@ -41,13 +41,6 @@ async def _attach_tracker_link(client: AsyncClient, project_id: str) -> str:
 
 
 
-def _write_spec_task(repo_root: Path, filename: str, dependency: str = "") -> None:
-    tasks_file = repo_root / "specs" / "fixture" / "tasks.md"
-    tasks_file.parent.mkdir(parents=True, exist_ok=True)
-    task_id = filename.removesuffix(".md")
-    suffix = f" (depends on: {dependency})" if dependency else ""
-    with tasks_file.open("a", encoding="utf-8") as handle:
-        handle.write(f"- [ ] {task_id} Fixture task{suffix}\n")
 
 class TestTaskSourceRetirement:
     @pytest.mark.asyncio
@@ -94,91 +87,35 @@ class TestTaskSourceRetirement:
         assert "IngestTaskGraphResponse" not in schema["components"]["schemas"]
 
 
-class TestIngestTasks:
-    @pytest.mark.asyncio
-    async def test_ingest_creates_task_links_for_member_repos(self, client: AsyncClient, tmp_path: Path) -> None:
-        repo_a = tmp_path / "repo-a"
-        repo_a.mkdir()
-        _write_spec_task(repo_a, "T001.md")
-        _write_spec_task(repo_a, "T002.md", "T001")
-
-        created = await client.post(
-            "/api/settings/projects",
-            json={"name": "Ingest Me", "repoPaths": [str(repo_a)]},
-        )
-        assert created.status_code == 201
-        project_id = created.json()["id"]
-
-        resp = await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
-        assert resp.status_code == 201
-        items = resp.json()["items"]
-        assert len(items) == 2
-        by_node = {i["storyNodeId"]: i for i in items}
-        assert by_node["T001"]["epicId"] is None
-        assert by_node["T002"]["dependsOn"][0].endswith("::T001")
-
-    @pytest.mark.asyncio
-    async def test_reingest_upserts_not_duplicates(self, client: AsyncClient, tmp_path: Path) -> None:
-        repo_a = tmp_path / "repo-b"
-        repo_a.mkdir()
-        _write_spec_task(repo_a, "T002.md")
-
-        created = await client.post(
-            "/api/settings/projects",
-            json={"name": "Reingest Me", "repoPaths": [str(repo_a)]},
-        )
-        project_id = created.json()["id"]
-
-        first = await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
-        second = await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
-
-        assert len(first.json()["items"]) == 1
-        assert len(second.json()["items"]) == 1
-        assert first.json()["items"][0]["id"] == second.json()["items"][0]["id"]
-
-    @pytest.mark.asyncio
-    async def test_ingest_missing_project_returns_404(self, client: AsyncClient) -> None:
-        resp = await client.post("/api/settings/projects/does-not-exist/ingest-tasks")
-        assert resp.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_ingest_never_writes_to_source_repo(self, client: AsyncClient, tmp_path: Path) -> None:
-        repo_a = tmp_path / "repo-c"
-        repo_a.mkdir()
-        _write_spec_task(repo_a, "T003.md")
-        story_file = repo_a / "specs" / "fixture" / "tasks.md"
-        before = story_file.read_text(encoding="utf-8")
-
-        created = await client.post(
-            "/api/settings/projects",
-            json={"name": "Read Only", "repoPaths": [str(repo_a)]},
-        )
-        project_id = created.json()["id"]
-        await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
-
-        assert story_file.read_text(encoding="utf-8") == before
 
 
 class TestListTaskLinks:
     @pytest.mark.asyncio
-    async def test_list_returns_ingested_task_links(self, client: AsyncClient, tmp_path: Path) -> None:
+    async def test_list_returns_saved_task_links(
+        self, client: AsyncClient, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from backend.persistence.task_link_repo import TaskLinkRepository
+
         repo_a = tmp_path / "repo-d"
         repo_a.mkdir()
-        _write_spec_task(repo_a, "T005.md")
 
         created = await client.post(
             "/api/settings/projects",
             json={"name": "Listable", "repoPaths": [str(repo_a)]},
         )
         project_id = created.json()["id"]
-        await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
+        async with session_factory() as session:
+            await TaskLinkRepository(session).upsert_many(
+                project_id, [{"repo_path": str(repo_a), "story_node_id": "saved-task", "depends_on": []}]
+            )
+            await session.commit()
 
         resp = await client.get(f"/api/settings/projects/{project_id}/task-links")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
 
     @pytest.mark.asyncio
-    async def test_list_before_ingest_is_empty(self, client: AsyncClient) -> None:
+    async def test_list_without_saved_tasks_is_empty(self, client: AsyncClient) -> None:
         created = await client.post(
             "/api/settings/projects",
             json={"name": "Empty Project", "repoPaths": ["/test/empty-proj"]},

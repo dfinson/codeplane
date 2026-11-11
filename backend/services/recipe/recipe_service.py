@@ -1,14 +1,4 @@
-"""Task Recipe ingestion orchestration (Story 4.2, CAP-9/AD-9).
-
-``RecipeService.ingest_project`` is a stateless, on-demand function — never
-a background watcher/poller. It is Project-scoped: it iterates exactly
-``project.repo_paths`` (AD-5), parses each member repo's
-spec-kit ``tasks.md`` independently and read-only, resolves ``depends_on``
-edges into unambiguous composite ``"{repo_path}::{story_node_id}"`` keys
-across the whole Project (since ``story_node_id`` is only unique within one
-repo), and upserts one ``TaskLinkRow`` per parsed task — never duplicating
-across re-runs.
-"""
+"""Project-scoped task assignment and execution."""
 
 from __future__ import annotations
 
@@ -26,10 +16,6 @@ from backend.models.domain import (
     StateConflictError,
     TaskLinkNotFoundError,
     TaskLinkState,
-)
-from backend.services.recipe.parsers import (
-    ParsedTask,
-    parse_spec_kit_tasks,
 )
 from backend.services.tracker_write_service import (
     TrackerWriteAction,
@@ -69,7 +55,7 @@ _SPAWN_TASK_ACTION_PREFIX = "spawn_task:"
 
 
 class RecipeService:
-    """Orchestrates Project-scoped TaskLink creation and ingestion."""
+    """Orchestrates Project-scoped task assignment and execution."""
 
     def __init__(
         self,
@@ -85,7 +71,7 @@ class RecipeService:
     ) -> None:
         self._task_link_repo = task_link_repo
         self._project_service = project_service
-        # All optional: request-scoped DI call sites (ingestion/listing, Story
+        # All optional: request-scoped DI call sites (assignment/listing, Story
         # 4.2-4.4) never spawn jobs and don't need them. The job-completion
         # subscriber wired in backend/lifespan.py supplies job_service/job_repo
         # (Story 4.5) plus chat_repo/approval_service (Story 5.4, gating), plus
@@ -108,63 +94,6 @@ class RecipeService:
         # module-level `_fire_and_forget` helper, whose `_ephemeral_tasks` set
         # has app-lifetime scope — the same fix used for Story 5.4/PR #70.
         self.pending_tracker_writes: list[Coroutine[None, None, TrackerWriteOutcome]] = []
-
-    @staticmethod
-    def _resolve_dependency(raw: str, *, current_repo_path: str, repo_path_by_folder: dict[str, str]) -> str:
-        """Resolve a raw (bare or ``folder/id``) dependency reference to a composite key.
-
-        A bare id resolves against ``current_repo_path``. An id containing a
-        ``/`` resolves the part before the last ``/`` as a sibling repo's
-        folder name (``Path(repo_path).name``); if no member repo matches
-        that folder name, the raw string is preserved as-is (best-effort,
-        never raises) so a single unresolvable reference never fails the
-        whole ingestion run.
-        """
-        if "/" in raw:
-            folder, _, node_id = raw.rpartition("/")
-            matched_repo = repo_path_by_folder.get(folder)
-            if matched_repo is not None:
-                return f"{matched_repo}::{node_id}"
-            return raw
-        return f"{current_repo_path}::{raw}"
-
-    async def ingest_project(self, project_id: str) -> list[TaskLink]:
-        """Ingest spec-kit tasks for every member repo of a Project.
-
-        Read-only against every source repo; never reads or writes outside
-        ``project.repo_paths``. Re-running is idempotent: existing
-        ``TaskLink``s are upserted by ``(project_id, repo_path,
-        story_node_id)``, never duplicated.
-        """
-        project = await self._project_service.get(project_id)
-        repo_path_by_folder = {Path(p).name: p for p in project.repo_paths}
-
-        parsed_by_repo: dict[str, list[ParsedTask]] = {}
-        for repo_path in project.repo_paths:
-            parsed = parse_spec_kit_tasks(repo_path)
-            parsed_by_repo[repo_path] = parsed
-
-        entries: list[dict[str, object]] = []
-        for repo_path, parsed_tasks in parsed_by_repo.items():
-            for task in parsed_tasks:
-                resolved_depends_on = [
-                    self._resolve_dependency(
-                        dep,
-                        current_repo_path=repo_path,
-                        repo_path_by_folder=repo_path_by_folder,
-                    )
-                    for dep in task.depends_on
-                ]
-                entries.append(
-                    {
-                        "repo_path": repo_path,
-                        "story_node_id": task.story_node_id,
-                        "depends_on": resolved_depends_on,
-                        "epic_id": task.epic_id,
-                    }
-                )
-
-        return await self._task_link_repo.upsert_many(project_id, entries)
 
     async def create_manual_task_link(
         self,
@@ -223,14 +152,10 @@ class RecipeService:
 
     @staticmethod
     def _derive_prompt(task_link: TaskLink) -> str:
-        """Prompt for a task link's spawned job.
+        """Use an explicit override or identify an existing historical task.
 
-        Manually-assigned TaskLinks (Story 4.3) always carry a `prompt_override`
-        — used verbatim. Ingested TaskLinks (Story 4.2) have no persisted task
-        body (the parser only captures id/depends_on/epic_id — see
-        ``backend/services/recipe/parsers.py``), so a prompt is synthesized
-        that points the agent at the source story/task file by id, keeping the
-        source-of-truth read-only and in the repo rather than duplicating it.
+        Source-backed rows retain their IDs without a stored task body. Their
+        agent must locate the existing definition or report missing requirements.
         """
         if task_link.prompt_override:
             return task_link.prompt_override

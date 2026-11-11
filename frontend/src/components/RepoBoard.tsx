@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, LayoutGrid, Plus } from "lucide-react";
+import { ArrowLeft, LayoutGrid, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -11,7 +11,7 @@ import {
   selectAttentionJobsForProject,
 } from "../store";
 import type { JobSummary } from "../store";
-import { fetchJobs, fetchProject, fetchProjectTaskLinks, ingestProjectTasks, startTaskLink } from "../api/client";
+import { fetchJobs, fetchProject, fetchProjectTaskLinks, startTaskLink } from "../api/client";
 import type { ProjectResponse, TaskLinkResponse } from "../api/types";
 import { KanbanColumn } from "./KanbanColumn";
 import { KanbanSkeleton } from "./KanbanSkeleton";
@@ -88,7 +88,6 @@ export function RepoBoard() {
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<ProjectResponse | null>(null);
   const [taskLinks, setTaskLinks] = useState<TaskLinkResponse[]>([]);
-  const [ingesting, setIngesting] = useState(false);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const currentProject = project?.id === projectId ? project : null;
@@ -215,20 +214,6 @@ export function RepoBoard() {
     );
   }
 
-  const handleIngest = async () => {
-    if (!projectId) return;
-    setIngesting(true);
-    try {
-      const result = await ingestProjectTasks(projectId);
-      setTaskLinks(result.items);
-      toast.success(`Ingested ${result.items.length} tasks.`);
-    } catch (error) {
-      toast.error(String(error));
-    } finally {
-      setIngesting(false);
-    }
-  };
-
   const handleStart = async (taskLink: TaskLinkResponse) => {
     if (!projectId) return;
     setStartingId(taskLink.id);
@@ -267,10 +252,6 @@ export function RepoBoard() {
               New Job
             </Link>
           </Button>
-          <Button variant="outline" size="sm" disabled={ingesting} onClick={() => void handleIngest()}>
-            <Download size={14} className={ingesting ? "animate-pulse" : ""} />
-            {ingesting ? "Ingesting…" : "Ingest tasks"}
-          </Button>
         </div>
       </div>
 
@@ -299,12 +280,9 @@ export function RepoBoard() {
       {taskLinks.length === 0 && (
         <div className="mb-4 rounded-lg border border-border bg-card px-4 py-4">
           <h2 className="text-sm font-semibold">No tracker tasks yet.</h2>
-          <p className="mt-1 text-sm text-muted-foreground">To see tasks here:</p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-            <li>Connect a tracker credential.</li>
-            <li>Add a tracker link in Project settings.</li>
-            <li>Click Ingest tasks.</li>
-          </ol>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Saved task assignments appear here. Use New Job to start work directly.
+          </p>
           <Button asChild variant="outline" size="sm" className="mt-3">
             <Link to={`/projects/id/${encodeURIComponent(projectId ?? "")}/settings`}>Open Project settings</Link>
           </Button>

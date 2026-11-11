@@ -10,7 +10,6 @@ vi.mock("../../api/client", () => ({
   fetchJobs: vi.fn(),
   fetchProject: vi.fn(),
   fetchProjectTaskLinks: vi.fn(),
-  ingestProjectTasks: vi.fn(),
   startTaskLink: vi.fn(),
 }));
 
@@ -18,7 +17,6 @@ import {
   fetchJobs,
   fetchProject,
   fetchProjectTaskLinks,
-  ingestProjectTasks,
   startTaskLink,
 } from "../../api/client";
 import { RepoBoard } from "../RepoBoard";
@@ -91,7 +89,6 @@ beforeEach(() => {
   vi.mocked(fetchJobs).mockReset();
   vi.mocked(fetchProject).mockReset();
   vi.mocked(fetchProjectTaskLinks).mockReset();
-  vi.mocked(ingestProjectTasks).mockReset();
   vi.mocked(startTaskLink).mockReset();
   vi.mocked(fetchProject).mockResolvedValue(makeProject() as any);
   vi.mocked(fetchProjectTaskLinks).mockResolvedValue({ items: [] } as any);
@@ -435,17 +432,6 @@ describe("RepoBoard", () => {
     expect(await screen.findByText("job-new")).toBeInTheDocument();
   });
 
-  it("ingests the Project task graph from the board", async () => {
-    vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
-    vi.mocked(ingestProjectTasks).mockResolvedValueOnce({
-      items: [makeTaskLink({ storyNodeId: "ingested-task" })],
-    } as any);
-    renderBoard();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Ingest tasks" }));
-    await waitFor(() => expect(ingestProjectTasks).toHaveBeenCalledWith("proj-1"));
-    expect(await screen.findByText("ingested-task")).toBeInTheDocument();
-  });
 });
 
 

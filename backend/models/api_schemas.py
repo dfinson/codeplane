@@ -534,12 +534,6 @@ class TaskLinkListResponse(CamelModel):
     items: list[TaskLinkResponse]
 
 
-class IngestTaskGraphResponse(CamelModel):
-    """Result of an ingestion run — the full upserted TaskLink set for the Project."""
-
-    items: list[TaskLinkResponse]
-
-
 class RepoSummaryResponse(CamelModel):
     """Aggregated overview for a single repo dashboard."""
 

@@ -2795,29 +2795,6 @@ export interface paths {
         patch: operations["update_project_api_settings_projects__project_id__patch"];
         trace?: never;
     };
-    "/api/settings/projects/{project_id}/ingest-tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ingest Project Tasks
-         * @description Ingest spec-kit tasks for every member repo of a Project (CAP-9).
-         *
-         *     Stateless, on-demand, read-only against every source repo; re-running
-         *     upserts existing TaskLinks rather than duplicating them.
-         */
-        post: operations["ingest_project_tasks_api_settings_projects__project_id__ingest_tasks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/settings/projects/{project_id}/task-links": {
         parameters: {
             query?: never;
@@ -4231,14 +4208,6 @@ export interface components {
             title: string;
             /** Why */
             why: string;
-        };
-        /**
-         * IngestTaskGraphResponse
-         * @description Result of an ingestion run — the full upserted TaskLink set for the Project.
-         */
-        IngestTaskGraphResponse: {
-            /** Items */
-            items: components["schemas"]["TaskLinkResponse"][];
         };
         /** JobContextFlag */
         JobContextFlag: {
@@ -12327,37 +12296,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ingest_project_tasks_api_settings_projects__project_id__ingest_tasks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestTaskGraphResponse"];
                 };
             };
             /** @description Validation Error */

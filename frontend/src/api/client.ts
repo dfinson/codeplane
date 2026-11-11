@@ -450,12 +450,6 @@ export function fetchProjectTaskLinks(projectId: string): Promise<TaskLinkListRe
   return request(`/settings/projects/${encodeURIComponent(projectId)}/task-links`);
 }
 
-export function ingestProjectTasks(projectId: string): Promise<TaskLinkListResponse> {
-  return request(`/settings/projects/${encodeURIComponent(projectId)}/ingest-tasks`, {
-    method: "POST",
-  });
-}
-
 export function createManualTaskLink(
   projectId: string,
   body: import("./types").CreateManualTaskLinkRequest,

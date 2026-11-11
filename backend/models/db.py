@@ -555,22 +555,14 @@ class TrackerLinkRow(Base):
 
 
 class TaskLinkRow(Base):
-    """A thin, Project-scoped correlation row for an ingested/assigned task node (Story 4.2, AD-9).
+    """Project-scoped correlation for saved task nodes and tracker assignments.
 
-    Populated by two independent creation paths (only ingestion is implemented
-    in this story): (1) ingestion — parsed from spec-kit
-    ``tasks.md`` in a Project's member repos, setting ``story_node_id``; or
-    (2) manual assignment (Story 4.3, not yet implemented) — targeting an
-    existing tracker ticket, setting ``tracker_ticket_ref``/``prompt_override``
-    with ``story_node_id`` left null. Exactly one of ``story_node_id`` /
-    ``tracker_ticket_ref`` is guaranteed non-null at creation, never neither.
-
-    ``story_node_id`` is only unique within one repo, so uniqueness/upsert
-    matching is on ``(project_id, repo_path, story_node_id)`` — never a bare
-    ``story_node_id``. ``depends_on`` is stored as a JSON list of composite
-    ``"{repo_path}::{story_node_id}"`` strings so a dependency edge always
-    unambiguously names its target, whether same-repo or a sibling member
-    repo of the same Project.
+    Historical source-backed nodes retain their story identifiers and dependency
+    graph. New manual assignments identify an existing tracker ticket and carry
+    a prompt override, with story_node_id left null. Source identifiers are
+    unique within a repository, so persisted dependency keys include both the
+    repository path and identifier. Retirement of source discovery does not
+    rewrite these identities, chain roots, or historical job links.
     """
 
     __tablename__ = "task_links"
