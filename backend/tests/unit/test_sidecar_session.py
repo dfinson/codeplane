@@ -62,6 +62,58 @@ class _FakeSidecarConfig:
 # ===================================================================
 
 
+class TestUtilityModelContract:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["pooled", "custom", "ephemeral", "named", "warm"])
+    async def test_configured_model_reaches_every_wrapper(self, path: str) -> None:
+        adapter = _mock_adapter("response")
+        manager = SidecarSessionManager(adapter, model="configured-utility")
+        if path == "pooled":
+            await manager.complete("prompt")
+        elif path == "custom":
+            await manager.complete("prompt", system_prompt="Discussion only")
+        elif path == "ephemeral":
+            await manager.make_ephemeral().complete("prompt")
+        elif path == "named":
+            await manager.open("job-model", "utility").complete("prompt")
+        else:
+            await manager.open("job-model", "utility", token=manager.warm()).complete("prompt")
+        assert adapter.complete.call_args.kwargs["model"] == "configured-utility"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("override", ["explicit-model", "  unavailable/override  "])
+    async def test_explicit_model_wins_without_changing_pooled_default(self, override: str) -> None:
+        adapter = _mock_adapter("response")
+        manager = SidecarSessionManager(adapter, model="configured-utility")
+        await manager.make_ephemeral(model=override).complete("custom")
+        assert adapter.complete.call_args.kwargs["model"] == override
+        await manager.complete("generic")
+        assert adapter.complete.call_args.kwargs["model"] == "configured-utility"
+        assert manager.model == "configured-utility"
+
+    @pytest.mark.asyncio
+    async def test_explicit_unavailable_model_reaches_sdk_and_failure_is_not_replaced(self, monkeypatch) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.copilot_adapter import CopilotAdapter
+
+        configured = "gpt-5-mini"
+        provider_error = ValueError(f"Configured model {configured!r} is unavailable in this Copilot catalog")
+        client = MagicMock()
+        client.create_session = AsyncMock(side_effect=provider_error)
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+        monkeypatch.setattr("backend.services.copilot_adapter._adapter.create_copilot_client", lambda: client)
+        adapter = CopilotAdapter()
+        manager = SidecarSessionManager(adapter, model=configured)
+        with pytest.raises(UtilityCompletionError) as failure:
+            await manager.complete("Return a context brief")
+        assert client.create_session.await_count == 1
+        assert client.create_session.call_args.kwargs["model"] == configured
+        assert failure.value.__cause__ is provider_error
+        assert manager.model == configured
+        assert not adapter._clients
+
+
 class TestRuntimeContract:
     @pytest.mark.asyncio
     async def test_custom_context_is_system_only_and_not_pooled(self) -> None:

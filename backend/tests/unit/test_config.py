@@ -4,10 +4,92 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+import yaml
+
 from backend.config import CPLConfig, init_config, load_config, save_config
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+class TestUtilityModelContract:
+    @pytest.mark.parametrize("configured", [None, "", " \t "])
+    @pytest.mark.parametrize("default_sdk,copilot_only", [("copilot", True), ("copilot", False), ("claude", True)])
+    def test_blank_utility_uses_approved_copilot_default(
+        self, tmp_path: Path, configured, default_sdk: str, copilot_only: bool
+    ) -> None:
+        from backend.services.adapters.integration_policy import IntegrationPolicy
+
+        path = tmp_path / "utility.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {"runtime": {"default_sdk": default_sdk, "copilot_only": copilot_only, "utility_model": configured}}
+            ),
+            encoding="utf-8",
+        )
+        config = load_config(path)
+        assert config.runtime.utility_model == "claude-haiku-4.5"
+        assert config.runtime.default_sdk == default_sdk
+        assert config.runtime.copilot_only is copilot_only
+        assert IntegrationPolicy(config).default_sdk == "copilot"
+
+    def test_missing_utility_and_new_config_use_approved_default(self, tmp_path: Path) -> None:
+        assert load_config(tmp_path / "missing.yaml").runtime.utility_model == "claude-haiku-4.5"
+        path = tmp_path / "new.yaml"
+        init_config(path)
+        assert load_config(path).runtime.utility_model == "claude-haiku-4.5"
+
+    @pytest.mark.parametrize("configured", ["gpt-5-mini", "claude-opus-4.5", "  unavailable/vendor-model  "])
+    @pytest.mark.parametrize("default_sdk,copilot_only", [("copilot", True), ("claude", False)])
+    def test_explicit_utility_survives_load_and_save_verbatim(
+        self, tmp_path: Path, configured: str, default_sdk: str, copilot_only: bool
+    ) -> None:
+        path = tmp_path / "explicit.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {"runtime": {"default_sdk": default_sdk, "copilot_only": copilot_only, "utility_model": configured}}
+            ),
+            encoding="utf-8",
+        )
+        config = load_config(path)
+        assert config.runtime.utility_model == configured
+        save_config(config, path)
+        assert load_config(path).runtime.utility_model == configured
+        assert yaml.safe_load(path.read_text(encoding="utf-8"))["runtime"]["utility_model"] == configured
+
+    def test_flag_off_retains_independent_non_copilot_default(self, monkeypatch) -> None:
+        import backend.config as config_module
+        from backend.services.adapters.integration_policy import IntegrationPolicy
+
+        monkeypatch.setattr(config_module, "_DEFAULT_COPILOT_UTILITY_MODEL", "future-copilot-default", raising=False)
+        config = CPLConfig(runtime=config_module.RuntimeConfig(default_sdk="claude", copilot_only=False))
+        assert IntegrationPolicy(config).default_sdk == "claude"
+        assert config.runtime.utility_model == "claude-haiku-4.5"
+        restricted = config_module.RuntimeConfig(default_sdk="claude", copilot_only=True)
+        assert restricted.utility_model == "future-copilot-default"
+        assert restricted.default_sdk == "claude"
+
+    def test_primary_job_model_is_independent_of_utility_default(self, tmp_path: Path, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        import backend.config as config_module
+
+        monkeypatch.setattr(config_module, "discover_mcp_servers", lambda *args: {})
+        monkeypatch.setattr(config_module, "resolve_protected_paths", lambda *args: [])
+        job = SimpleNamespace(
+            worktree_path=None,
+            repo=str(tmp_path),
+            prompt="Primary task",
+            id="primary",
+            model="primary-model",
+            sdk="copilot",
+        )
+        config = CPLConfig()
+        session = config_module.build_session_config(job, config)
+        assert session.model == "primary-model"
+        assert job.model == "primary-model"
+        assert config.runtime.utility_model == "claude-haiku-4.5"
 
 
 def test_load_config_returns_defaults_when_missing(tmp_path: Path) -> None:

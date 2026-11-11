@@ -321,3 +321,68 @@ class TestRestartLock:
 
         assert lock.path.exists()
         assert json.loads(lock.path.read_text(encoding="utf-8"))["helperPid"] == 222
+class TestAccessOnlyHandoffFraming:
+    @staticmethod
+    def api(name):
+        from backend.services.dev_restart import restart_protocol as protocol
+
+        function = getattr(protocol, name, None)
+        assert callable(function), f"Introduce {name} for the bounded authenticated handoff protocol"
+        return function
+
+    @pytest.mark.parametrize("case", ["partial", "oversized", "invalid_json", "eof", "deadline"])
+    def test_invalid_or_incomplete_channel_fails_closed(self, case):
+        import os
+        import time
+
+        read = self.api("read_handoff_frame")
+        read_fd, write_fd = os.pipe()
+        try:
+            data = {
+                "partial": b"\x00\x00", "oversized": (65537).to_bytes(4, "big"),
+                "invalid_json": b"\x00\x00\x00\x01{", "eof": b"", "deadline": b"",
+            }[case]
+            if data:
+                os.write(write_fd, data)
+            if case != "deadline":
+                os.close(write_fd)
+                write_fd = -1
+            with pytest.raises(RestartProtocolError, match="handoff_"):
+                read(read_fd, time.monotonic() + 0.05)
+        finally:
+            os.close(read_fd)
+            if write_fd >= 0:
+                os.close(write_fd)
+
+    def test_credential_and_commit_are_distinct_bounded_frames(self):
+        import os
+        import time
+
+        encode = self.api("encode_handoff_frame")
+        read = self.api("read_handoff_frame")
+        validate = self.api("validate_handoff_frame")
+        commit = self.api("validate_commit_frame")
+        frame = {
+            "version": 1, "kind": "credential", "requestId": "request-1",
+            "serverPid": 123, "serverProcessTime": 12.5,
+            "origin": "https://access.example.test", "jwt": "a.b.c",
+        }
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, encode(frame))
+            parsed = read(read_fd, time.monotonic() + 1)
+            assert validate(
+                parsed, request_id="request-1", server_pid=123,
+                server_process_time=12.5, origin="https://access.example.test",
+            ) == "a.b.c"
+            with pytest.raises(RestartProtocolError, match="identity"):
+                validate(parsed, request_id="other", server_pid=123,
+                         server_process_time=12.5, origin="https://access.example.test")
+            with pytest.raises(RestartProtocolError, match="commit"):
+                commit(parsed, "request-1")
+            commit({"version": 1, "kind": "commit", "requestId": "request-1"}, "request-1")
+            with pytest.raises(RestartProtocolError, match="oversized"):
+                encode({"jwt": "x" * 65536})
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
