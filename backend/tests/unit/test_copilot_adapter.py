@@ -1832,6 +1832,8 @@ class TestScoutPermissions:
 
         fake_client = _FakeCopilotClient()
         fake_client.create_session = AsyncMock(wraps=fake_client.create_session)
+        fake_client.stop = AsyncMock()
+        fake_client.force_stop = AsyncMock()
         config = _make_config(
             workspace_path=str(tmp_path),
             model="gpt-4o-mini",
@@ -1849,9 +1851,30 @@ class TestScoutPermissions:
             excluded = set(options["excluded_tools"])
             assert {"bash", "powershell", "create_file", "str_replace_editor", "run_in_terminal"} <= excluded
             assert not excluded.intersection({"view", "glob", "grep", "read_file", "list_dir", "grep_search"})
+            available = set(options.get("available_tools") or [])
+            assert {"view", "glob", "grep"} <= available
+            assert not available.intersection({"create", "write_powershell", "list_powershell", "task", "web_fetch"})
             assert callable(options["on_permission_request"])
         finally:
-            adapter._cleanup_session(session_id)
+            await adapter.abort_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_scout_resume_restricts_sdk_to_read_search_tools(self, adapter: CopilotAdapter) -> None:
+        fake_client = _FakeCopilotClient()
+        fake_client.resume_session = AsyncMock(wraps=fake_client.resume_session)
+        fake_client.stop = AsyncMock()
+        fake_client.force_stop = AsyncMock()
+        with patch("copilot.CopilotClient", return_value=fake_client):
+            session_id = await adapter.create_session(
+                _make_config(session_kind="preflight", resume_sdk_session_id="resumed-scout")
+            )
+        try:
+            options = fake_client.resume_session.call_args.kwargs
+            available = set(options.get("available_tools") or [])
+            assert {"view", "glob", "grep"} <= available
+            assert not available.intersection({"create", "write_powershell", "list_powershell", "task", "web_fetch"})
+        finally:
+            await adapter.abort_session(session_id)
 
 
 # ---------------------------------------------------------------------------

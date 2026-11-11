@@ -29,6 +29,9 @@ Before primary execution, the Scout uses the configured utility model to read
 and search the job worktree. Its read-only boundary is enforced by the SDK
 restrictions and permission callbacks. The primary session keeps its selected
 model and receives the exact Scout brief through `memory_context`.
+Copilot exposes only read/search tools to the Scout. Narration followed by more
+tool activity is not a finished brief. If the stream ends there without a final
+response, curation fails and the primary continues without a fabricated handoff.
 
 Scout entries and results are stored as secondary-session data. A
 `context.handoff` event records the brief transferred from the preflight session.

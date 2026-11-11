@@ -557,6 +557,11 @@ class CopilotAdapter(BaseAgentAdapter):
             "content": base_prompt,
         }
 
+        available_tools = None
+        if config.session_kind == "preflight":
+            from backend.services.tools.preflight_curator import SCOUT_AVAILABLE_TOOLS
+
+            available_tools = sorted(SCOUT_AVAILABLE_TOOLS)
 
         requested_model = config.model or ""
         if config.model:
@@ -571,6 +576,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     on_permission_request=_on_permission,
                     working_directory=config.workspace_path,
                     model=config.model or None,
+                    available_tools=available_tools,
                 )
                 log.info("sdk_session_resumed", sdk_session_id=_resume_id)
             except (JsonRpcError, ProcessExitedError, ConnectionError, TimeoutError):
@@ -580,6 +586,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     working_directory=config.workspace_path,
                     system_message=system_message,
                     model=config.model or None,
+                    available_tools=available_tools,
                     excluded_tools=config.disallowed_tools or None,
                 )
         else:
@@ -588,6 +595,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 working_directory=config.workspace_path,
                 system_message=system_message,
                 model=config.model or None,
+                available_tools=available_tools,
                 excluded_tools=config.disallowed_tools or None,
             )
 

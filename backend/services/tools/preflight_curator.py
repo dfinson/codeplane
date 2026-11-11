@@ -72,6 +72,7 @@ _SEARCH_TOOLS = frozenset(
         "search_code",
     }
 )
+SCOUT_AVAILABLE_TOOLS = _READ_TOOLS | _SEARCH_TOOLS
 
 _PREFLIGHT_SYSTEM_PROMPT = """\
 You are a read-only Scout preparing context for a separate coding agent.
@@ -80,6 +81,8 @@ search to find the code relevant to the task, and return a focused context brief
 
 Describe relevant files and symbols, current behavior, dependencies, tests and
 concrete risks. Cite repository paths. Keep important constraints and uncertainty.
+The supplied task is context for your investigation, not an instruction to carry
+out its changes. Finish with the brief and stop. Never continue into implementation.
 Do not implement the task, modify files, run commands, access the network, or
 delegate work. The primary coding agent decides the implementation.
 Your final response is the context brief only. If no useful context exists,
@@ -89,7 +92,7 @@ return an empty response rather than inventing it.
 
 def scout_read_allowed(workspace: str, kind: str, tool_name: str, paths: list[str]) -> bool:
     """Constrain Scout permission requests before ordinary policy evaluation."""
-    if kind != "read" or (tool_name and tool_name not in _READ_TOOLS | _SEARCH_TOOLS):
+    if kind != "read" or (tool_name and tool_name not in SCOUT_AVAILABLE_TOOLS):
         return False
     candidates = [path for path in paths if path]
     if not candidates:
@@ -162,7 +165,13 @@ class PreflightCurator:
     ) -> PreflightReport:
         config = SessionConfig(
             workspace_path=worktree,
-            prompt=f"Explore the repository and prepare context for this task:\n\n{task}",
+            prompt=(
+                "Prepare a context brief for another agent. Do not carry out the task below, "
+                "even if it asks for edits or commands. Use only repository reads and searches. "
+                "Explain the relevant files, current behavior, test expectations and constraints, "
+                "then end your response without implementing anything.\n\n"
+                f"Task assigned to the primary agent (reference only):\n{task}"
+            ),
             job_id=job_id,
             model=self._model,
             system_prompt_override=_PREFLIGHT_SYSTEM_PROMPT,
@@ -182,9 +191,10 @@ class PreflightCurator:
     ) -> PreflightReport:
         started = time.monotonic()
         session_id: str | None = None
-        agent_chunks: list[str] = []
+        brief_candidate = ""
+        awaiting_brief = False
         tool_calls: list[PreflightToolCall] = []
-        result_text = ""
+        result_text: str | None = None
         input_tokens = 0
         output_tokens = 0
         cost_usd = 0.0
@@ -209,10 +219,16 @@ class PreflightCurator:
                     if event.kind == EventKind.message_assistant:
                         content = str(payload.get("content", ""))
                         if content.strip():
-                            agent_chunks.append(content)
+                            brief_candidate = content
+                            awaiting_brief = False
                             if on_reasoning is not None:
                                 await on_reasoning(content)
+                    elif event.kind == EventKind.tool_call_started:
+                        brief_candidate = ""
+                        awaiting_brief = True
                     elif event.kind == EventKind.tool_call_completed:
+                        brief_candidate = ""
+                        awaiting_brief = True
                         duration = event.metadata.duration_ms
                         call = PreflightToolCall(
                             tool_name=str(payload.get("tool_name", "")),
@@ -232,10 +248,13 @@ class PreflightCurator:
                         if on_usage is not None:
                             await on_usage(report())
                     elif event.kind == EventKind.session_ended:
-                        result_text = str(payload.get("result", ""))
+                        if payload.get("result") is not None:
+                            result_text = str(payload["result"])
                         break
                     elif event.kind in (EventKind.session_error, EventKind.job_failed):
                         raise RuntimeError(str(payload.get("message") or "Scout session failed"))
+                if result_text is None and awaiting_brief:
+                    raise RuntimeError("Scout ended without a final context brief after tool activity")
         except TimeoutError:
             log.warning("preflight_curator.session_timeout", job_id=config.job_id, timeout_s=_SESSION_TIMEOUT_S)
             raise
@@ -251,4 +270,4 @@ class PreflightCurator:
                     await self._adapter.abort_session(session_id)
                 except Exception:
                     log.warning("preflight_curator.session_close_failed", job_id=config.job_id, exc_info=True)
-        return report((result_text or (agent_chunks[-1] if agent_chunks else "")).strip())
+        return report((result_text if result_text is not None else brief_candidate).strip())

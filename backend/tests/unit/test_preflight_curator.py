@@ -275,3 +275,43 @@ async def test_scout_empty_success_has_no_invented_brief(scout: SimpleNamespace)
     report = await _curate(scout)
     assert report.brief == ""
     assert report.tool_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success", [True, False])
+async def test_scout_does_not_promote_pre_tool_narration_at_stream_end(
+    scout: SimpleNamespace, success: bool
+) -> None:
+    async def events(session_id: str):
+        yield new_event(
+            session_id,
+            EventKind.message_assistant,
+            {"content": "Let me create a temporary script that modifies sum.py and execute it:"},
+        )
+        yield new_event(
+            session_id,
+            EventKind.tool_call_completed,
+            {"tool_name": "create", "arguments": {"path": "fix.py"}, "success": success},
+        )
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="final context brief"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_accepts_final_brief_after_tools_without_explicit_result(scout: SimpleNamespace) -> None:
+    brief = "sum.py:add subtracts its arguments. check.py expects add(2, 3) == 5. Preserve the sentinel file."
+
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Reading the implementation."})
+        yield new_event(session_id, EventKind.tool_call_completed, {"tool_name": "view", "success": True})
+        yield new_event(session_id, EventKind.message_assistant, {"content": brief})
+        yield new_event(session_id, EventKind.telemetry_usage, {"input_tokens": 10, "output_tokens": 5})
+
+    scout.adapter.stream_events.side_effect = events
+    report = await _curate(scout)
+    assert report.brief == brief
+    assert report.input_tokens == 10
+    assert report.output_tokens == 5
