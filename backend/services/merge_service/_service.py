@@ -422,9 +422,6 @@ class MergeService:
         branch: str,
     ) -> None:
         """Clean up worktree and branch after a successful merge."""
-        # Reconcile structural index: adopt source worktree data into main,
-        # then drop the source.  Must happen before worktree removal.
-
         if self._config.cleanup_worktree and worktree_path:
             try:
                 await self._git.remove_worktree(repo_path, worktree_path)
