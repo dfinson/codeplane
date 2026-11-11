@@ -421,6 +421,10 @@ class TrackerWriteService:
                 tracker_link_ref=tracker_link_ref,
             )
 
+    async def list_operations_for_job(self, job_ref: str) -> list[TrackerOperationResponse]:
+        async with self._factory()() as session:
+            return await TrackerOperationRepository(session).list_for_job_ref(job_ref)
+
     async def reconcile_operation(
         self,
         project_ref: str,

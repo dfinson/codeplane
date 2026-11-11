@@ -1249,3 +1249,235 @@ async def test_legacy_root_cannot_borrow_approval_from_another_same_project_job(
     assert len(jobs) == 3
     assert jobs[tasks[root.id].job_id].parent_job_id == "actual-owner"
     assert tasks[root.id].depends_on == []
+
+
+async def _crash_new_atomic_start(task_db, task_id, phase):
+    import json
+
+    _, _, engine, path = task_db
+    await engine.dispose()
+    code = r"""
+import asyncio
+import json
+import os
+import sys
+from pathlib import Path
+
+from sqlalchemy import event
+
+import backend
+from backend.config import CPLConfig
+from backend.persistence.database import create_engine, create_session_factory
+from backend.persistence.job_repo import JobRepository
+from backend.persistence.task_link_repo import TaskLinkRepository
+from backend.services.job.approval_service import ApprovalService
+from backend.services.task_execution_service import TaskExecutionService
+
+assert Path(backend.__file__).resolve().parents[1] == Path.cwd().resolve()
+db_path, repo_path, task_id, phase = sys.argv[1:]
+exit_codes = {"preflight": 71, "after_insert": 72, "after_commit": 73}
+
+def crash(**evidence):
+    print("TASK_START_CRASH:" + json.dumps({"phase": phase, **evidence}), flush=True)
+    os._exit(exit_codes[phase])
+
+async def main():
+    engine = create_engine(Path(db_path))
+    factory = create_session_factory(engine)
+
+    class GitBoundary:
+        async def get_default_branch(self, repo):
+            assert repo == repo_path
+            if phase == "preflight":
+                async with factory() as session:
+                    task = await TaskLinkRepository(session).get(task_id)
+                    job_ids = sorted(await JobRepository(session).list_ids())
+                    assert task is not None
+                    assert task.state == "ready" and task.job_id is None and job_ids == []
+                    crash(task_state=task.state, task_job_id=task.job_id, job_ids=job_ids)
+            return "main"
+
+        def list_worktree_names(self, repo):
+            assert repo == repo_path
+            return set()
+
+        async def list_branches(self, repo):
+            assert repo == repo_path
+            return set()
+
+        async def create_worktree(self, **kwargs):
+            raise AssertionError("Task acceptance must not set up a workspace")
+
+    if phase == "after_insert":
+        def exit_after_real_job_insert(connection, cursor, statement, parameters, context, executemany):
+            if not context.isinsert or context.compiled.statement.table.name != "jobs":
+                return
+            # Observe the real, still-uncommitted INSERT and earlier claim.
+            # Nothing replaces JobRepository.create or TaskLink attachment.
+            task_state, task_job_id = connection.exec_driver_sql(
+                "SELECT state, job_id FROM task_links WHERE id = ?", (task_id,),
+            ).one()
+            job_ids = list(connection.exec_driver_sql("SELECT id FROM jobs").scalars())
+            assert task_state == "starting" and task_job_id is None and len(job_ids) == 1
+            crash(task_state=task_state, task_job_id=task_job_id, job_ids=job_ids)
+
+        event.listen(engine.sync_engine, "after_cursor_execute", exit_after_real_job_insert)
+
+    execution = TaskExecutionService(
+        factory, CPLConfig(repos=[repo_path]),
+        git_service=GitBoundary(), approval_service=ApprovalService(factory),
+    )
+    attached, job = await execution.start_task_link("project", task_id)
+    assert phase == "after_commit", "Requested crash boundary was not reached"
+    async with factory() as session:
+        persisted = await JobRepository(session).get(job.id)
+        task = await TaskLinkRepository(session).get(task_id)
+        job_ids = sorted(await JobRepository(session).list_ids())
+        assert persisted is not None and persisted.state == "preparing"
+        assert persisted.worktree_path is None
+        assert task is not None and task.job_id == attached.job_id == job.id
+        assert job_ids == [job.id]
+        crash(task_state=task.state, task_job_id=task.job_id, job_ids=job_ids)
+
+asyncio.run(main())
+"""
+    result = await asyncio.to_thread(
+        subprocess.run,
+        ["uv", "run", "--no-sync", "python", "-c", code, str(path / "tasks.db"), str(path), task_id, phase],
+        capture_output=True,
+        text=True,
+        timeout=25,
+        cwd=str(Path.cwd()),
+    )
+    (path / f"atomic-crash-{phase}.json").write_text(
+        json.dumps({"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}, indent=2),
+        encoding="utf-8",
+    )
+    expected_exit = {"preflight": 71, "after_insert": 72, "after_commit": 73}[phase]
+    assert result.returncode == expected_exit, (
+        f"Child did not exit at {phase}: {result.returncode}\n{result.stdout}\n{result.stderr}"
+    )
+    markers = [
+        line.removeprefix("TASK_START_CRASH:")
+        for line in result.stdout.splitlines()
+        if line.startswith("TASK_START_CRASH:")
+    ]
+    assert len(markers) == 1, result.stdout
+    evidence = json.loads(markers[0])
+    assert evidence["phase"] == phase
+    await engine.dispose()
+    return evidence
+
+
+async def _assert_unaccepted_process_loss_is_retryable(task_db, phase):
+    from backend.models.domain import JobState, StateConflictError
+
+    factory, _, engine, _ = task_db
+    root = (await _seed(task_db))[0]
+    evidence = await _crash_new_atomic_start(task_db, root.id, phase)
+    assert evidence["task_job_id"] is None
+    if phase == "after_insert":
+        assert evidence["task_state"] == "starting"
+        assert len(evidence["job_ids"]) == 1
+    else:
+        assert evidence["task_state"] == "ready"
+        assert evidence["job_ids"] == []
+
+    # Check before startup repair: the new transaction itself must roll back.
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert tasks[root.id].state == TaskLinkState.ready
+    assert tasks[root.id].job_id is None
+    assert jobs == {}
+    git = _git()
+    execution = _execution_for_behavior(task_db, git=git, approvals=ApprovalService(factory))
+    await execution.recover_on_startup()
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert tasks[root.id].state == TaskLinkState.ready
+    assert jobs == {}
+    git.get_default_branch.assert_not_awaited()
+
+    attached, retry_job = await execution.start_task_link("project", root.id)
+    with pytest.raises(StateConflictError):
+        await execution.start_task_link("project", root.id)
+
+    await engine.dispose()
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert set(jobs) == {retry_job.id}
+    assert tasks[root.id].job_id == attached.job_id == retry_job.id
+    assert jobs[retry_job.id].state == JobState.preparing
+    git.get_default_branch.assert_awaited_once()
+    git.create_worktree.assert_not_awaited()
+
+
+async def test_new_start_process_loss_during_read_only_preflight(task_db):
+    await _assert_unaccepted_process_loss_is_retryable(task_db, "preflight")
+
+
+async def test_new_start_process_loss_after_job_insert_before_attachment_commit(task_db):
+    await _assert_unaccepted_process_loss_is_retryable(task_db, "after_insert")
+
+
+async def test_new_start_process_loss_after_commit_is_recovered_by_runtime_once(task_db, monkeypatch):
+    from backend.models.domain import JobState
+
+    factory, config, engine, _ = task_db
+    root = (await _seed(task_db))[0]
+    evidence = await _crash_new_atomic_start(task_db, root.id, "after_commit")
+    original_job_id = evidence["task_job_id"]
+    assert original_job_id is not None
+    assert evidence["job_ids"] == [original_job_id]
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert tasks[root.id].job_id == original_job_id
+    assert set(jobs) == {original_job_id}
+    assert jobs[original_job_id].state == JobState.preparing
+
+    git = _git()
+    approvals = ApprovalService(factory)
+    execution = _execution_for_behavior(task_db, git=git, approvals=approvals)
+    await execution.recover_on_startup()
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert tasks[root.id].job_id == original_job_id
+    assert set(jobs) == {original_job_id}
+    assert jobs[original_job_id].state == JobState.preparing
+    git.get_default_branch.assert_not_awaited()
+
+    runtime = RuntimeService(
+        factory, EventBus(), AdapterRegistry(), config, approval_service=approvals, git_service=git,
+    )
+    setup_finished = asyncio.Event()
+    setup_tasks = []
+    observed_jobs = []
+
+    async def controlled_setup(job):
+        setup_tasks.append(asyncio.current_task())
+        try:
+            tasks, jobs = await _behavior_evidence(task_db)
+            assert job.id == original_job_id
+            assert set(jobs) == {original_job_id}
+            assert jobs[job.id].state == JobState.preparing
+            assert tasks[root.id].job_id == job.id
+            observed_jobs.append(job.id)
+        finally:
+            setup_finished.set()
+
+    setup = AsyncMock(side_effect=controlled_setup)
+    monkeypatch.setattr(runtime, "setup_and_start", setup)
+    try:
+        await runtime.recover_on_startup()
+        await asyncio.wait_for(setup_finished.wait(), 3)
+        await asyncio.gather(*setup_tasks)
+        setup.assert_awaited_once()
+        assert observed_jobs == [original_job_id]
+    finally:
+        for task in setup_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*setup_tasks, return_exceptions=True)
+        await runtime.shutdown()
+
+    await engine.dispose()
+    tasks, jobs = await _behavior_evidence(task_db)
+    assert tasks[root.id].job_id == original_job_id
+    assert set(jobs) == {original_job_id}
+    assert jobs[original_job_id].worktree_path is None
+    git.create_worktree.assert_not_awaited()

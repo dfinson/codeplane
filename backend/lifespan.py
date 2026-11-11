@@ -88,6 +88,8 @@ if TYPE_CHECKING:
     from traceforge.types import TitleUpdate
 
     from backend.services.completers.copilot_steer import CopilotSteerClient
+    from backend.services.events.ingest_service import IngestService
+    from backend.services.events.telemetry_subscriber import TelemetrySubscriber
 
 
 log = structlog.get_logger()
@@ -412,6 +414,25 @@ class _CoreServices:
     step_tracker: StepTracker
     task_execution_service: TaskExecutionService
     tracker_write_service: TrackerWriteService
+
+
+def _schedule_execution_recovery(
+    services: _CoreServices,
+    telemetry_subscriber: TelemetrySubscriber,
+    ingest_service: IngestService,
+) -> asyncio.Task[None]:
+    """Bind constructed consumers before any recovered SDK can emit events."""
+    services.runtime_service.set_telemetry_subscriber(telemetry_subscriber)
+    services.runtime_service.set_ingest_service(ingest_service)
+
+    async def recover() -> None:
+        await services.approval_service.recover_pending_approvals()
+        await services.task_execution_service.recover_on_startup()
+        await services.tracker_write_service.recover_on_startup()
+        await services.runtime_service.recover_on_startup()
+        services.tracker_write_service.wake()
+
+    return asyncio.create_task(recover(), name="recover-on-startup")
 
 
 # ---------------------------------------------------------------------------
@@ -1426,16 +1447,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     event_bus.subscribe(_spawn_dependent_task_links)
 
-    async def _recover_execution() -> None:
-        await services.approval_service.recover_pending_approvals()
-        await services.task_execution_service.recover_on_startup()
-        await services.tracker_write_service.recover_on_startup()
-        await services.runtime_service.recover_on_startup()
-        services.tracker_write_service.wake()
-
-    recovery_task = asyncio.create_task(_recover_execution(), name="recover-on-startup")
-    await recovery_task
-
     # --- IngestService (operator message routing) ---
     from backend.services.events.ingest_service import IngestService
 
@@ -1515,7 +1526,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         claude_watcher=claude_session_watcher,
         session_state_watcher=session_state_watcher,
     )
-    services.runtime_service.set_ingest_service(ingest_service)
+    recovery_task = _schedule_execution_recovery(services, telemetry_subscriber, ingest_service)
+    await recovery_task
 
     # --- Share service ---
     share_service = ShareService()

@@ -54,6 +54,65 @@ async def _seed_completed_job(session: AsyncSession, job_id: str, repo: str, pro
     await session.commit()
 
 
+async def test_recovery_emission_reaches_telemetry_with_ingestion_bound(session_factory, event_bus):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from backend.lifespan import _schedule_execution_recovery
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+    from backend.services.adapters.adapter_registry import AdapterRegistry
+    from backend.services.events.ingest_service import IngestService
+    from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+    from backend.services.runtime import RuntimeService
+
+    async with session_factory() as session:
+        await ProjectRepository(session).create("recovery-project", "Recovery", ["/recovery"])
+        await _seed_completed_job(session, "recovery-job", "/recovery", "recovery-project")
+    writes = []
+    subscriber = TelemetrySubscriber(
+        session_factory=session_factory,
+        schedule_write=lambda coroutine: writes.append(asyncio.create_task(coroutine)),
+    )
+    subscriber.subscribe(event_bus)
+    ingest = IngestService(session_factory)
+    runtime = RuntimeService(session_factory, event_bus, AdapterRegistry(), CPLConfig())
+    order = []
+
+    async def resume_sdk_work():
+        assert runtime._telemetry_subscriber is subscriber
+        assert runtime._ingest_service is ingest
+        order.append("runtime")
+        await event_bus.publish(
+            new_event(
+                session_id="recovery-job",
+                kind=EventKind.message_assistant,
+                payload={"content": "Recovered SDK work"},
+            )
+        )
+
+    runtime.recover_on_startup = AsyncMock(side_effect=resume_sdk_work)
+    services = SimpleNamespace(
+        runtime_service=runtime,
+        approval_service=SimpleNamespace(
+            recover_pending_approvals=AsyncMock(side_effect=lambda: order.append("approvals")),
+        ),
+        task_execution_service=SimpleNamespace(
+            recover_on_startup=AsyncMock(side_effect=lambda: order.append("tasks")),
+        ),
+        tracker_write_service=SimpleNamespace(
+            recover_on_startup=AsyncMock(side_effect=lambda: order.append("tracker")),
+            wake=Mock(side_effect=lambda: order.append("worker")),
+        ),
+    )
+    await _schedule_execution_recovery(services, subscriber, ingest)
+    await asyncio.gather(*writes)
+    assert order == ["approvals", "tasks", "tracker", "runtime", "worker"]
+    async with session_factory() as session:
+        summary = await TelemetrySummaryRepository(session).get("recovery-job")
+    assert summary is not None and summary["agent_messages"] == 1
+
+
 class TestJobCompletionSpawnsTaskLinks:
     @pytest.mark.asyncio
     async def test_dependent_task_link_is_spawned_when_dependency_job_completes(

@@ -618,3 +618,172 @@ async def test_0075_upgrade_preserves_existing_jobs_and_approvals(tmp_path):
         assert preserved.proposed_action == "legacy-action"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("pause_at", ["before_commit", "after_commit"])
+async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkeypatch, pause_at):
+    from datetime import timedelta
+
+    from backend.persistence.project_repo import ProjectRepository
+    from backend.persistence.tracker_operation_repo import TrackerOperationRepository
+
+    factory, _, _ = tracker_db
+
+    class PausingApprovals(ApprovalService):
+        def __init__(self):
+            super().__init__(factory)
+            self.create_count = 0
+            self.created_requests = {}
+            self.first_worker = None
+            self.first_paused = asyncio.Event()
+            self.release_first = asyncio.Event()
+            self.first_returned = asyncio.Event()
+            self.stale_worker_resumed = asyncio.Event()
+            self.resolutions = []
+            self.worker_tasks = set()
+            self.canonical_id = None
+            self.approved_readers = set()
+            self.both_read_approval = asyncio.Event()
+            self.release_decisions = asyncio.Event()
+
+        async def create_request(self, *args, **kwargs):
+            index = self.create_count
+            self.create_count += 1
+            if index == 0:
+                self.first_worker = asyncio.current_task()
+                if pause_at == "before_commit":
+                    # Pause before the producer opens its own short writer transaction.
+                    self.first_paused.set()
+                    await self.release_first.wait()
+            approval = await super().create_request(*args, **kwargs)
+            self.created_requests[index] = approval
+            if index == 0:
+                if pause_at == "after_commit":
+                    self.first_paused.set()
+                    await self.release_first.wait()
+                self.first_returned.set()
+            return approval
+
+        async def get(self, approval_id):
+            approval = await super().get(approval_id)
+            task = asyncio.current_task()
+            if self.first_returned.is_set() and task is self.first_worker:
+                self.stale_worker_resumed.set()
+            if (
+                approval is not None
+                and approval.id == self.canonical_id
+                and approval.resolution == ApprovalResolution.approved
+                and task in self.worker_tasks
+            ):
+                self.approved_readers.add(task)
+                if self.approved_readers == self.worker_tasks:
+                    self.both_read_approval.set()
+                await self.release_decisions.wait()
+            return approval
+
+        async def resolve(self, approval_id, resolution, notes=None):
+            approval = await super().resolve(approval_id, resolution, notes=notes)
+            self.resolutions.append((approval_id, approval.resolution, notes))
+            return approval
+
+    approvals = PausingApprovals()
+    first = TrackerWriteService(approvals, session_factory=factory)
+    second = TrackerWriteService(approvals, session_factory=factory)
+    deliveries = []
+
+    async def provider(_factory, request):
+        async with factory() as session:
+            operation = await TrackerOperationRepository(session).get(request.operation_id)
+        assert operation is not None and operation.state == "dispatching"
+        assert operation.approval_ref == approvals.canonical_id
+        decision = await approvals.get(operation.approval_ref)
+        assert decision.resolution == ApprovalResolution.approved
+        deliveries.append((operation.id, operation.approval_ref, request.value))
+        return {"id": "single-provider-comment", "http_status": 201}
+
+    monkeypatch.setattr("backend.services.tracker_resolution.dispatch_tracker_write", provider)
+
+    async def expire_claim_and_prove_writer_progress(operation_id):
+        async with database.serialized_write(factory) as session:
+            repo = TrackerOperationRepository(session)
+            claimed = await repo.get(operation_id)
+            assert claimed is not None and claimed.claim_token is not None
+            assert claimed.approval_ref is None
+            await ProjectRepository(session).create("writer-proof", "Unrelated writer", ["/unrelated-writer"])
+            now = datetime.now(UTC)
+            expired = await repo.compare_and_set(
+                claimed, now=now, changes={"claim_expires_at": now - timedelta(seconds=1)},
+            )
+            assert expired is not None and expired.claim_token == claimed.claim_token
+        return expired
+
+    try:
+        original = await first.enqueue("job", _request(), source_key=f"competing-workers:{pause_at}")
+        await asyncio.wait_for(approvals.first_paused.wait(), 5)
+        try:
+            expired = await asyncio.wait_for(expire_claim_and_prove_writer_progress(original.id), 5)
+        except TimeoutError:
+            pytest.fail("Approval provisioning retained a writer lock or uncommitted write across create_request")
+        assert not approvals.release_first.is_set()
+        async with factory() as session:
+            assert await ProjectRepository(session).get("writer-proof") is not None
+
+        duplicate = await second.enqueue("job", _request(), source_key=f"competing-workers:{pause_at}")
+        assert duplicate.id == original.id
+        bound = await _operation_at(second, original.id, lambda item: item.approval_ref is not None)
+        assert not approvals.release_first.is_set()
+        assert bound.version == expired.version + 2
+        assert bound.claim_token is None
+        assert bound.state == "awaiting_approval"
+        canonical_creator = 1 if pause_at == "before_commit" else 0
+        canonical = approvals.created_requests[canonical_creator]
+        assert bound.approval_ref == canonical.id
+        assert approvals.create_count == (2 if pause_at == "before_commit" else 1)
+        assert json.loads(canonical.proposed_action)["operationId"] == original.id
+        assert canonical.requires_explicit_approval
+
+        approvals.release_first.set()
+        await asyncio.wait_for(approvals.first_returned.wait(), 5)
+        await asyncio.wait_for(approvals.stale_worker_resumed.wait(), 5)
+        rows = await approvals.list_for_job("job")
+        extras = [row for row in rows if row.id != canonical.id]
+        assert len(rows) == (2 if pause_at == "before_commit" else 1)
+        assert all(row.resolution == ApprovalResolution.rejected for row in extras)
+        assert {
+            approval_id for approval_id, decision, _ in approvals.resolutions
+            if decision == ApprovalResolution.rejected
+        } == {row.id for row in extras}
+        assert all(f"canonical tracker approval {canonical.id}" in row.notes for row in extras)
+        after_stale_creator = await first.get_operation(original.id)
+        assert after_stale_creator.approval_ref == canonical.id
+        assert after_stale_creator.version == bound.version
+        assert after_stale_creator.state == "awaiting_approval"
+        assert deliveries == []
+        assert (await approvals.get(canonical.id)).resolution is None
+
+        # Both genuine worker loops read the durable decision before either can attempt the state CAS.
+        approvals.worker_tasks = {first._worker, second._worker}
+        assert None not in approvals.worker_tasks and len(approvals.worker_tasks) == 2
+        approvals.canonical_id = canonical.id
+        await approvals.resolve(canonical.id, ApprovalResolution.approved)
+        first.wake()
+        second.wake()
+        await asyncio.wait_for(approvals.both_read_approval.wait(), 5)
+        assert (await first.get_operation(original.id)).state == "awaiting_approval"
+        assert deliveries == []
+        approvals.release_decisions.set()
+        applied = await _operation_at(first, original.id, lambda item: item.state == "applied")
+        assert deliveries == [(original.id, canonical.id, "Task completed.")]
+        assert applied.provider_receipt.id == "single-provider-comment"
+        assert applied.approval_snapshot.id == canonical.id
+        assert applied.approval_snapshot.resolution == "approved"
+        history = await second.list_operations("project")
+        assert [operation.id for operation in history] == [original.id]
+        assert len(await approvals.list_for_job("job")) == len(rows)
+    finally:
+        approvals.release_first.set()
+        approvals.release_decisions.set()
+        closed = await asyncio.gather(first.close(), second.close(), return_exceptions=True)
+        for result in closed:
+            if isinstance(result, BaseException):
+                raise result

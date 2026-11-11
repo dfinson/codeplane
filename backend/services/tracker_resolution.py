@@ -38,6 +38,7 @@ class ResolvedTracker:
     tracker_link_id: str
     credential_id: str
     ticket_ref: str
+    task_link_id: str | None = None
 
 
 async def resolve_tracker_for_job(session: AsyncSession, job_id: str) -> ResolvedTracker:
@@ -53,7 +54,10 @@ async def resolve_tracker_for_job(session: AsyncSession, job_id: str) -> Resolve
             f"TrackerLink '{task_link.tracker_link_id}' is not attached to Project '{task_link.project_id}'"
         )
     return ResolvedTracker(
-        tracker_link_id=link["id"], credential_id=link["credential_id"], ticket_ref=task_link.tracker_ticket_ref
+        tracker_link_id=link["id"],
+        credential_id=link["credential_id"],
+        ticket_ref=task_link.tracker_ticket_ref,
+        task_link_id=task_link.id,
     )
 
 

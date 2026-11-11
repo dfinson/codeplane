@@ -134,6 +134,14 @@ class TrackerOperationRepository(BaseRepository):
         result = await self._session.scalars(statement.order_by(TrackerOperationRow.created_at, TrackerOperationRow.id))
         return [self._response(row) for row in result]
 
+    async def list_for_job_ref(self, job_ref: str) -> list[TrackerOperationResponse]:
+        statement = (
+            select(TrackerOperationRow)
+            .where(TrackerOperationRow.job_ref == job_ref)
+            .order_by(TrackerOperationRow.created_at, TrackerOperationRow.id)
+        )
+        return [self._response(row) for row in await self._session.scalars(statement)]
+
     async def list_approvals(self) -> list[Approval]:
         rows = await self._session.scalars(select(ApprovalRow).order_by(ApprovalRow.requested_at, ApprovalRow.id))
         return [ApprovalRepository._to_domain(row) for row in rows]

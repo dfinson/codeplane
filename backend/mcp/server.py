@@ -458,12 +458,7 @@ def _register_tracker_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
                 return {"error": "Tracker operation not found for this Job"}
             return operation.model_dump(mode="json", by_alias=True)
         if action == "list":
-            async with mcp_state.session_factory() as session:
-                try:
-                    job = await _make_job_service(mcp_state, session, load_config(), git=False).get_job(job_id)
-                except JobNotFoundError as exc:
-                    return {"error": str(exc)}
-            operations = await service.list_operations(job.project_id, job_ref=job_id)
+            operations = await service.list_operations_for_job(job_id)
             return {"items": [item.model_dump(mode="json", by_alias=True) for item in operations]}
         if not value:
             return {"error": "value is required"}
@@ -484,6 +479,7 @@ def _register_tracker_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
                 job_id,
                 request,
                 source_key=f"mcp:{job_id}:{request_id}" if request_id else None,
+                task_link_id=resolved.task_link_id,
             )
         except (StateConflictError, TrackerResolutionError, TrackerAdapterError) as exc:
             return {"error": str(exc)}

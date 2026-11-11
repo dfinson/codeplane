@@ -380,7 +380,12 @@ class TestTrackerTool:
             TrackerWriteState,
         )
 
-        resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
+        resolved = ResolvedTracker(
+            tracker_link_id="link-1",
+            credential_id="cred-1",
+            ticket_ref="ABC-123",
+            task_link_id="task-1",
+        )
         outcome = TrackerWriteOutcome(
             TrackerWriteState.applied,
             operation_id="operation-1",
@@ -408,6 +413,7 @@ class TestTrackerTool:
             "job-123",
             TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
             source_key="mcp:job-123:request-1",
+            task_link_id="task-1",
         )
 
     @pytest.mark.asyncio
@@ -421,7 +427,12 @@ class TestTrackerTool:
             TrackerWriteState,
         )
 
-        resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
+        resolved = ResolvedTracker(
+            tracker_link_id="link-1",
+            credential_id="cred-1",
+            ticket_ref="ABC-123",
+            task_link_id="task-1",
+        )
         outcome = TrackerWriteOutcome(TrackerWriteState.rejected, operation_id="operation-2")
 
         with (
@@ -441,6 +452,7 @@ class TestTrackerTool:
             "job-123",
             TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.transition, "Done"),
             source_key=None,
+            task_link_id="task-1",
         )
 
     @pytest.mark.asyncio
@@ -458,6 +470,7 @@ class TestTrackerTool:
             tracker_link_id="link-1",
             credential_id="cred-1",
             ticket_ref="ABC-123",
+            task_link_id="task-1",
         )
         outcome = TrackerWriteOutcome(TrackerWriteState.failed, "provider unavailable", operation_id="operation-3")
 
@@ -481,6 +494,7 @@ class TestTrackerTool:
             "job-123",
             TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
             source_key=None,
+            task_link_id="task-1",
         )
 
 
