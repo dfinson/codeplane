@@ -33,6 +33,7 @@ log = structlog.get_logger()
 _BROADCAST_KINDS: frozenset[str] = frozenset(
     {
         EventKind.job_created,
+        EventKind.tracker_operation_updated,
         EventKind.job_setup_progress,
         EventKind.log_line_emitted,
         EventKind.diff_updated,

@@ -30,6 +30,10 @@ import type {
   TrackerLinkListResponse,
   TrackerLinkResponse,
   TrackerSummaryResponse,
+  TrackerOperationResponse,
+  TrackerOperationListResponse,
+  ReconcileTrackerOperationRequest,
+  RetryTrackerOperationRequest,
   SDKListResponse,
   Settings,
   SidecarTemplate,
@@ -766,6 +770,43 @@ export function updateJiraCredentialEmail(credentialId: string, email: string): 
 }
 
 // --- Project tracker state (Story 3.3) ---
+
+export function fetchTrackerOperations(
+  projectId: string,
+  filters?: { job_ref?: string; tracker_link_ref?: string },
+): Promise<TrackerOperationListResponse> {
+  const params = new URLSearchParams();
+  if (filters?.job_ref) params.set("job_ref", filters.job_ref);
+  if (filters?.tracker_link_ref) params.set("tracker_link_ref", filters.tracker_link_ref);
+  const query = params.toString();
+  return request(`/projects/${encodeURIComponent(projectId)}/tracker-links/operations${query ? `?${query}` : ""}`);
+}
+
+export function fetchTrackerOperation(projectId: string, operationId: string): Promise<TrackerOperationResponse> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tracker-links/operations/${encodeURIComponent(operationId)}`);
+}
+
+export function reconcileTrackerOperation(
+  projectId: string,
+  operationId: string,
+  body: ReconcileTrackerOperationRequest,
+): Promise<TrackerOperationResponse> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tracker-links/operations/${encodeURIComponent(operationId)}/reconcile`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function retryTrackerOperation(
+  projectId: string,
+  operationId: string,
+  body: RetryTrackerOperationRequest,
+): Promise<TrackerOperationResponse> {
+  return request(`/projects/${encodeURIComponent(projectId)}/tracker-links/operations/${encodeURIComponent(operationId)}/retry`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
 
 export function fetchTrackerLinks(projectId: string): Promise<TrackerLinkListResponse> {
   return request(`/projects/${encodeURIComponent(projectId)}/tracker-links`);

@@ -8,6 +8,7 @@
 
 export type { SSEHandler } from "./handlers/types";
 export { enrichJob } from "./handlers/jobHandlers";
+export { mergeTrackerOperations } from "./handlers/miscHandlers";
 
 import type { SSEHandler } from "./handlers/types";
 import { jobHandlers } from "./handlers/jobHandlers";

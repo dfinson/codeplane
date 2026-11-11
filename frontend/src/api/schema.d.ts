@@ -2172,33 +2172,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__put"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__put"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__put"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__put"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__put"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__put"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -3072,6 +3072,74 @@ export interface paths {
          * @description Atomically claim and start one ready TaskLink.
          */
         post: operations["start_task_link_api_settings_projects__project_id__task_links__task_link_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tracker Operations */
+        get: operations["list_tracker_operations_api_projects__project_id__tracker_links_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tracker Operation */
+        get: operations["get_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile Tracker Operation */
+        post: operations["reconcile_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Tracker Operation */
+        post: operations["retry_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6146,6 +6214,18 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** ReconcileTrackerOperationRequest */
+        ReconcileTrackerOperationRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "applied" | "not_applied";
+            /** Evidence */
+            evidence: string;
+        };
         /** RegisterRepoRequest */
         RegisterRepoRequest: {
             /** Source */
@@ -6153,7 +6233,7 @@ export interface components {
             /** Cloneto */
             cloneTo?: string | null;
             /** Mode */
-            mode?: "register" | "clone" | null;
+            mode?: ("register" | "clone") | null;
         };
         /** RegisterRepoResponse */
         RegisterRepoResponse: {
@@ -6482,6 +6562,13 @@ export interface components {
              * @default 0
              */
             retryPct: number;
+        };
+        /** RetryTrackerOperationRequest */
+        RetryTrackerOperationRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Requestid */
+            requestId: string;
         };
         /**
          * ReviewStoryHeader
@@ -7874,6 +7961,30 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** TrackerApprovalSnapshot */
+        TrackerApprovalSnapshot: {
+            /** Id */
+            id: string;
+            /** Jobid */
+            jobId: string;
+            /** Description */
+            description: string;
+            /** Proposedaction */
+            proposedAction: string | null;
+            /**
+             * Requestedat
+             * Format: date-time
+             */
+            requestedAt: string;
+            /** Resolvedat */
+            resolvedAt?: string | null;
+            /** Resolution */
+            resolution?: ("approved" | "rejected") | null;
+            /** Requiresexplicitapproval */
+            requiresExplicitApproval: boolean;
+            /** Notes */
+            notes?: string | null;
+        };
         /** TrackerLinkListResponse */
         TrackerLinkListResponse: {
             /** Trackerlinks */
@@ -7892,6 +8003,130 @@ export interface components {
             /** Createdat */
             createdAt: string;
             summary?: components["schemas"]["TrackerSummaryResponse"] | null;
+        };
+        /** TrackerOperationListResponse */
+        TrackerOperationListResponse: {
+            /** Items */
+            items: components["schemas"]["TrackerOperationResponse"][];
+        };
+        /** TrackerOperationResponse */
+        TrackerOperationResponse: {
+            /** Id */
+            id: string;
+            /** Sourcekey */
+            sourceKey: string;
+            /** Projectid */
+            projectId: string | null;
+            /** Jobid */
+            jobId: string | null;
+            /** Tasklinkid */
+            taskLinkId: string | null;
+            /** Projectref */
+            projectRef: string;
+            /** Jobref */
+            jobRef: string;
+            /** Tasklinkref */
+            taskLinkRef: string | null;
+            /** Trackerlinkid */
+            trackerLinkId: string | null;
+            /** Trackerlinkref */
+            trackerLinkRef: string;
+            /** Provider */
+            provider: string;
+            /** Baseurl */
+            baseUrl: string;
+            /** Externalref */
+            externalRef: string;
+            /** Credentialidref */
+            credentialIdRef: string;
+            /** Ticketref */
+            ticketRef: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "comment" | "transition";
+            /**
+             * Targetkind
+             * @enum {string}
+             */
+            targetKind: "comment" | "github_issue_state" | "jira_workflow_transition" | "azure_devops_work_item_state";
+            /** Value */
+            value: string;
+            /** Normalizedvalue */
+            normalizedValue: string | null;
+            /** Approvalid */
+            approvalId?: string | null;
+            /** Approvalref */
+            approvalRef?: string | null;
+            approvalSnapshot?: components["schemas"]["TrackerApprovalSnapshot"] | null;
+            state: components["schemas"]["TrackerOperationState"];
+            /** Claimtoken */
+            claimToken?: string | null;
+            /** Claimexpiresat */
+            claimExpiresAt?: string | null;
+            /** Version */
+            version: number;
+            /** Retryofid */
+            retryOfId?: string | null;
+            providerReceipt?: components["schemas"]["TrackerProviderReceipt"] | null;
+            /** Errorcode */
+            errorCode?: string | null;
+            /** Errordetail */
+            errorDetail?: string | null;
+            reconciliation?: components["schemas"]["TrackerReconciliation"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Dispatchstartedat */
+            dispatchStartedAt?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
+            /** Operationid */
+            readonly operationId: string;
+            /** Normalizedtarget */
+            readonly normalizedTarget: string | null;
+        };
+        /**
+         * TrackerOperationState
+         * @enum {string}
+         */
+        TrackerOperationState: "awaiting_approval" | "approved" | "dispatching" | "applied" | "rejected" | "failed" | "uncertain" | "not_applied";
+        /**
+         * TrackerProviderReceipt
+         * @description Only allowlisted acknowledgement fields, never response bodies or headers.
+         */
+        TrackerProviderReceipt: {
+            /** Id */
+            id?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Httpstatus */
+            httpStatus?: number | null;
+        };
+        /** TrackerReconciliation */
+        TrackerReconciliation: {
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "applied" | "not_applied";
+            /** Evidence */
+            evidence: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Recordedat
+             * Format: date-time
+             */
+            recordedAt: string;
         };
         /** TrackerSummaryResponse */
         TrackerSummaryResponse: {
@@ -11792,7 +12027,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11822,7 +12057,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11852,7 +12087,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11882,7 +12117,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11912,7 +12147,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11942,7 +12177,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13654,6 +13889,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tracker_operations_api_projects__project_id__tracker_links_operations_get: {
+        parameters: {
+            query?: {
+                job_ref?: string | null;
+                tracker_link_ref?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileTrackerOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryTrackerOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
                 };
             };
             /** @description Validation Error */

@@ -50,6 +50,180 @@ async def _create_credential(client: AsyncClient) -> str:
     return str(resp.json()["id"])
 
 
+class TestTrackerOperations:
+    @pytest.fixture
+    async def engine(self, tmp_path, monkeypatch):
+        from backend.models.db import Base
+        from backend.persistence import database
+
+        monkeypatch.setattr(database, "_write_lock", None)
+        engine = database.create_engine(tmp_path / "operation-api.db")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield engine
+        await engine.dispose()
+
+    async def _operation(self, client, app, session_factory):
+        from datetime import UTC, datetime
+
+        from backend.models.db import JobRow
+        from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest, TrackerWriteService
+
+        await _seed_project(session_factory)
+        credential_id = await _create_credential(client)
+        link = await client.post(
+            "/api/projects/proj-1/tracker-links",
+            json={"credentialId": credential_id, "externalRef": "owner/1"},
+        )
+        assert link.status_code == 201
+        now = datetime.now(UTC)
+        async with session_factory() as session:
+            session.add(
+                JobRow(
+                    id="operation-job",
+                    project_id="proj-1",
+                    repo="/test/repo",
+                    prompt="Test",
+                    state="completed",
+                    resolution="merged",
+                    base_ref="main",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+        service = await app.state.dishka_container.get(TrackerWriteService)
+        operation = await service.enqueue(
+            "operation-job",
+            TrackerWriteRequest(
+                link.json()["id"],
+                "owner/repo#7",
+                TrackerWriteAction.comment,
+                "Exact comment.\nNo marker.",
+            ),
+            source_key="api-operation",
+        )
+        return service, operation
+
+    async def _wait(self, service, operation_id, predicate):
+        import asyncio
+
+        for _ in range(200):
+            operation = await service.get_operation(operation_id)
+            if predicate(operation):
+                return operation
+            await asyncio.sleep(0.01)
+        pytest.fail(f"Operation did not reach expected condition: {operation.state}")
+
+    async def test_list_and_detail_are_project_scoped(self, client, app, session_factory):
+        service, operation = await self._operation(client, app, session_factory)
+        response = await client.get(
+            "/api/projects/proj-1/tracker-links/operations", params={"job_ref": "operation-job"}
+        )
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["id"] == operation.id
+        assert item["projectRef"] == "proj-1"
+        assert item["jobRef"] == "operation-job"
+        assert item["value"] == "Exact comment.\nNo marker."
+        assert item["state"] == "awaiting_approval"
+        detail = await client.get(f"/api/projects/proj-1/tracker-links/operations/{operation.id}")
+        assert detail.status_code == 200 and detail.json()["id"] == operation.id
+        wrong_scope = await client.get(f"/api/projects/foreign/tracker-links/operations/{operation.id}")
+        assert wrong_scope.status_code == 404
+        filtered = await client.get(
+            "/api/projects/proj-1/tracker-links/operations",
+            params={"job_ref": "unrelated"},
+        )
+        assert filtered.json() == {"items": []}
+        assert len(await service.list_operations("proj-1")) == 1
+
+    async def test_reconciliation_and_retry_enforce_evidence_version_and_approval(
+        self,
+        client,
+        app,
+        session_factory,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        import httpx
+
+        dispatch = AsyncMock(side_effect=httpx.ReadTimeout("Lost response"))
+        monkeypatch.setattr("backend.services.tracker_resolution.dispatch_tracker_write", dispatch)
+        service, operation = await self._operation(client, app, session_factory)
+        pending = await self._wait(service, operation.id, lambda item: item.approval_id is not None)
+        approved = await client.post(
+            f"/api/approvals/{pending.approval_id}/resolve",
+            json={"resolution": "approved"},
+        )
+        assert approved.status_code == 200
+        uncertain = await self._wait(service, operation.id, lambda item: item.state == "uncertain")
+        endpoint = f"/api/projects/proj-1/tracker-links/operations/{operation.id}"
+        refused = await client.post(
+            endpoint + "/retry",
+            json={"expectedVersion": uncertain.version, "requestId": "unsafe"},
+        )
+        assert refused.status_code == 409
+        blank = await client.post(
+            endpoint + "/reconcile",
+            json={"expectedVersion": uncertain.version, "resolution": "not_applied", "evidence": " "},
+        )
+        assert blank.status_code == 422
+        reconciled = await client.post(
+            endpoint + "/reconcile",
+            json={
+                "expectedVersion": uncertain.version,
+                "resolution": "not_applied",
+                "evidence": "Verified no write in controlled provider audit log.",
+            },
+        )
+        assert reconciled.status_code == 200
+        assert reconciled.json()["reconciliation"]["actor"] == "operator"
+        stale = await client.post(
+            endpoint + "/reconcile",
+            json={"expectedVersion": uncertain.version, "resolution": "applied", "evidence": "Stale decision"},
+        )
+        assert stale.status_code == 409
+        body = {"expectedVersion": reconciled.json()["version"], "requestId": "retry"}
+        retry = await client.post(endpoint + "/retry", json=body)
+        repeated = await client.post(endpoint + "/retry", json=body)
+        assert retry.status_code == repeated.status_code == 201
+        assert retry.json()["id"] == repeated.json()["id"] != operation.id
+        assert retry.json()["retryOfId"] == operation.id
+        new_pending = await self._wait(service, retry.json()["id"], lambda item: item.approval_id is not None)
+        assert new_pending.approval_id != pending.approval_id
+        assert new_pending.state == "awaiting_approval"
+        dispatch.assert_awaited_once()
+
+    async def test_deleted_parent_keeps_readable_history_and_refuses_retry(self, client, app, session_factory):
+        from sqlalchemy import delete
+
+        from backend.models.db import ApprovalRow, JobRow, ProjectRow
+
+        service, operation = await self._operation(client, app, session_factory)
+        await self._wait(service, operation.id, lambda item: item.approval_id is not None)
+        async with session_factory() as session:
+            await session.execute(delete(ApprovalRow).where(ApprovalRow.job_id == "operation-job"))
+            await session.execute(delete(JobRow).where(JobRow.id == "operation-job"))
+            await session.execute(delete(ProjectRow).where(ProjectRow.id == "proj-1"))
+            await session.commit()
+        service.wake()
+        failed = await self._wait(service, operation.id, lambda item: item.state == "failed")
+        endpoint = f"/api/projects/proj-1/tracker-links/operations/{operation.id}"
+        detail = await client.get(endpoint)
+        assert detail.status_code == 200
+        assert detail.json()["jobId"] is None and detail.json()["projectId"] is None
+        assert detail.json()["jobRef"] == "operation-job" and detail.json()["projectRef"] == "proj-1"
+        assert detail.json()["approvalSnapshot"]["id"] == failed.approval_ref
+        retry = await client.post(
+            endpoint + "/retry",
+            json={"expectedVersion": failed.version, "requestId": "missing-owner"},
+        )
+        assert retry.status_code == 409
+        assert len((await client.get("/api/projects/proj-1/tracker-links/operations")).json()["items"]) == 1
+
+
 class TestCreateTrackerLink:
     @pytest.mark.asyncio
     async def test_validates_before_starting_insert_transaction(

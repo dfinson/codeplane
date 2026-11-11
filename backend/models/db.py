@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - SQLAlchemy needs this at runtime for annotation eval
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # All DateTime columns use timezone=True so timestamps are stored
@@ -612,6 +612,76 @@ class TaskLinkRow(Base):
     output_routes: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class TrackerOperationRow(Base):
+    """One explicit, at-most-once dispatch attempt with retained delivery evidence."""
+
+    __tablename__ = "tracker_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('awaiting_approval','approved','dispatching','applied',"
+            "'rejected','failed','uncertain','not_applied')",
+            name="ck_tracker_operations_state",
+        ),
+        CheckConstraint("action IN ('comment','transition')", name="ck_tracker_operations_action"),
+        CheckConstraint(
+            "target_kind IN ('comment','github_issue_state','jira_workflow_transition','azure_devops_work_item_state')",
+            name="ck_tracker_operations_target_kind",
+        ),
+        CheckConstraint("version >= 0", name="ck_tracker_operations_version"),
+        Index("ix_tracker_operations_project_created", "project_ref", "created_at"),
+        Index("ix_tracker_operations_job_created", "job_ref", "created_at"),
+        Index("ix_tracker_operations_state_claim", "state", "claim_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    task_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("task_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    project_ref: Mapped[str] = mapped_column(String, nullable=False)
+    job_ref: Mapped[str] = mapped_column(String, nullable=False)
+    task_link_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    tracker_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    tracker_link_ref: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    base_url: Mapped[str] = mapped_column(String, nullable=False)
+    external_ref: Mapped[str] = mapped_column(String, nullable=False)
+    credential_id_ref: Mapped[str] = mapped_column(String, nullable=False)
+    ticket_ref: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    target_kind: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True, unique=True, index=True
+    )
+    approval_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    approval_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    retry_of_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_operations.id"), nullable=True, index=True
+    )
+    provider_receipt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciliation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class TrackerSummaryRow(Base):

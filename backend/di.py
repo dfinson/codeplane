@@ -58,6 +58,7 @@ from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.sidecar.template_service import SidecarTemplateService
 from backend.services.steps.diff_service import StepDiffService
 from backend.services.story.service import StoryService
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
 from backend.services.tracker_sync_service import TrackerSyncService
 from backend.services.tracker_write_service import TrackerWriteService
@@ -104,13 +105,8 @@ class AppProvider(Provider):
     def git_service(self, config: CPLConfig) -> GitService:
         return GitService(config)
 
-    @provide
-    def tracker_write_service(
-        self,
-        approval_service: ApprovalService,
-        sf: async_sessionmaker[AsyncSession],
-    ) -> TrackerWriteService:
-        return TrackerWriteService(approval_service, session_factory=sf)
+    tracker_write_service = from_context(provides=TrackerWriteService)
+    task_execution_service = from_context(provides=TaskExecutionService)
 
     @provide
     def diff_service(self, git_service: GitService, event_bus: EventBus, coderecon: CodeReconService) -> DiffService:
@@ -297,6 +293,7 @@ class RequestProvider(Provider):
         chat_repo: ChatRepository,
         approval_service: ApprovalService,
         tracker_link_repo: TrackerLinkRepository,
+        execution_service: TaskExecutionService,
     ) -> RecipeService:
         return RecipeService(
             task_link_repo,
@@ -306,6 +303,7 @@ class RequestProvider(Provider):
             chat_repo=chat_repo,
             approval_service=approval_service,
             tracker_link_repo=tracker_link_repo,
+            execution_service=execution_service,
         )
 
     @provide

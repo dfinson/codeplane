@@ -46,9 +46,12 @@ from backend.models.domain import (
     SDKModelMismatchError,
     StateConflictError,
 )
+from backend.persistence.tracker_operation_repo import TrackerOperationNotFoundError
 from backend.services.artifacts.artifact_service import ArtifactService
 from backend.services.git.git_service import GitError, GitService
 from backend.services.job.job_service import JobService
+from backend.services.task_execution_service import TaskExecutionService, parse_spawn_action
+from backend.services.tracker_adapter import TrackerAdapterError
 from backend.services.tracker_resolution import TrackerResolutionError, resolve_tracker_for_job
 from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest, TrackerWriteService
 
@@ -96,6 +99,8 @@ class MCPState:
     approval_service: ApprovalService
     merge_service: MergeService
     sidecar_sessions: SidecarSessionManager | None = None
+    tracker_write_service: TrackerWriteService | None = None
+    task_execution_service: TaskExecutionService | None = None
 
 
 # Strong refs to fire-and-forget tasks to prevent GC before completion.
@@ -149,6 +154,8 @@ def create_mcp_server(
     approval_service: ApprovalService,
     merge_service: MergeService,
     sidecar_sessions: SidecarSessionManager | None = None,
+    tracker_write_service: TrackerWriteService | None = None,
+    task_execution_service: TaskExecutionService | None = None,
 ) -> FastMCP:
     """Create and configure the MCP server with all CodePlane tools."""
     state = MCPState(
@@ -157,6 +164,12 @@ def create_mcp_server(
         approval_service=approval_service,
         merge_service=merge_service,
         sidecar_sessions=sidecar_sessions,
+        tracker_write_service=tracker_write_service
+        or TrackerWriteService(
+            approval_service,
+            session_factory=session_factory,
+        ),
+        task_execution_service=task_execution_service,
     )
 
     mcp = FastMCP(
@@ -413,61 +426,74 @@ def _register_pr_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
 def _register_tracker_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
     @mcp.tool(
         name="codeplane_tracker",
-        title="Comment or Transition Tracker Ticket",
-        annotations=ToolAnnotations(
-            title="Comment or Transition Tracker Ticket", destructiveHint=True, openWorldHint=True
-        ),
+        title="Tracker operations",
+        annotations=ToolAnnotations(title="Tracker operations", destructiveHint=True, openWorldHint=True),
         description=(
-            "Comment on or transition the external tracker ticket paired with the calling "
-            "Job's Project, while the Job is still running — instead of waiting for a "
-            "recipe's completion-time tracker_write output route."
-            "\n\n"
-            "- comment: job_id (required), value (required, the comment text)"
-            "\n- transition: job_id (required), value (required, the target status)"
-            "\n\n"
-            "CodePlane resolves the Job's Project and TrackerLink server-side and creates a "
-            "codeplane_approval entry via the exact same gate CAP-11's recipe-driven "
-            "tracker_write route already uses — nothing is written to the external tracker "
-            "until that approval is granted. The agent never receives or handles the "
-            "Credential's decrypted PAT at any point; CodePlane resolves and uses it "
-            "server-side on the agent's behalf."
+            "Propose an explicitly approved comment or transition for the calling Job's paired ticket. "
+            "comment/transition require job_id and value. Optional request_id deduplicates a retried call. "
+            "status requires job_id and operation_id. list requires job_id. "
+            "Approval is not delivery. An uncertain operation must not be blindly repeated. "
+            "GitHub transition changes issue open/closed state, not Projects Status."
         ),
     )
     async def codeplane_tracker(
-        action: Literal["comment", "transition"],
+        action: Literal["comment", "transition", "status", "list"],
         job_id: str | None = None,
         value: str | None = None,
+        operation_id: str | None = None,
+        request_id: str | None = None,
     ) -> McpToolResult:
         if not job_id:
             return {"error": "job_id is required"}
+        service = mcp_state.tracker_write_service
+        assert service is not None
+        if action == "status":
+            if not operation_id:
+                return {"error": "operation_id is required"}
+            try:
+                operation = await service.get_operation(operation_id)
+            except TrackerOperationNotFoundError:
+                return {"error": "Tracker operation not found for this Job"}
+            if operation.job_ref != job_id:
+                return {"error": "Tracker operation not found for this Job"}
+            return operation.model_dump(mode="json", by_alias=True)
+        if action == "list":
+            async with mcp_state.session_factory() as session:
+                try:
+                    job = await _make_job_service(mcp_state, session, load_config(), git=False).get_job(job_id)
+                except JobNotFoundError as exc:
+                    return {"error": str(exc)}
+            operations = await service.list_operations(job.project_id, job_ref=job_id)
+            return {"items": [item.model_dump(mode="json", by_alias=True) for item in operations]}
         if not value:
             return {"error": "value is required"}
-
-        sf = mcp_state.session_factory
-        async with sf() as session:
+        async with mcp_state.session_factory() as session:
             try:
                 resolved = await resolve_tracker_for_job(session, job_id)
             except TrackerResolutionError as exc:
                 return {"error": str(exc)}
-
-        tracker_action = TrackerWriteAction.comment if action == "comment" else TrackerWriteAction.transition
+        tracker_action = TrackerWriteAction(action)
         request = TrackerWriteRequest(
             tracker_link_id=resolved.tracker_link_id,
             ticket_ref=resolved.ticket_ref,
             action=tracker_action,
             value=value,
         )
-
-        service = TrackerWriteService(
-            mcp_state.approval_service,
-            session_factory=sf,
-        )
-        outcome = await service.execute(job_id, request)
-
+        try:
+            outcome = await service.execute(
+                job_id,
+                request,
+                source_key=f"mcp:{job_id}:{request_id}" if request_id else None,
+            )
+        except (StateConflictError, TrackerResolutionError, TrackerAdapterError) as exc:
+            return {"error": str(exc)}
         return {
             "applied": outcome.applied,
             "state": outcome.state.value,
             "error": outcome.error,
+            "operationId": outcome.operation_id,
+            "targetKind": outcome.target_kind,
+            "normalizedValue": outcome.normalized_target,
             "ticketRef": resolved.ticket_ref,
             "trackerLinkId": resolved.tracker_link_id,
             "action": tracker_action.value,
@@ -535,6 +561,28 @@ def _register_approval_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
                 return {"error": str(exc)}
             except ApprovalAlreadyResolvedError as exc:
                 return {"error": str(exc)}
+            if mcp_state.tracker_write_service is not None:
+                mcp_state.tracker_write_service.notify_approval_resolved(a)
+            spawn_action = parse_spawn_action(a.proposed_action)
+            if a.resolution == ApprovalResolution.approved and spawn_action is not None:
+                execution = mcp_state.task_execution_service
+                if execution is None:
+                    return {"error": "Task execution service is not configured"}
+                job = await execution.spawn_approved_task_link(
+                    spawn_action["taskLinkId"],
+                    parent_job_id=a.job_id,
+                )
+                if job is not None:
+
+                    async def _start() -> None:
+                        try:
+                            await mcp_state.runtime_service.setup_and_start(job)
+                        except Exception:
+                            log.exception("mcp_task_spawn_failed", job_id=job.id)
+
+                    task = asyncio.create_task(_start(), name=f"mcp-task-spawn-{job.id}")
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
             return ApprovalResponse(
                 id=a.id,
                 job_id=a.job_id,

@@ -5,7 +5,7 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, SDKInfo, StoryResponse } from "../api/types";
+import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse } from "../api/types";
 import type {
   MultiSessionResponse,
   ReviewStoryResponse as StructuralReviewStoryResponse,
@@ -243,6 +243,13 @@ export interface ContextHandoff {
 
 export interface AppState {
   // Data slices
+  trackerOperations: Record<string, TrackerOperationResponse>;
+  trackerOperationLoads: Record<string, {
+    loading: boolean;
+    loaded: boolean;
+    error: string | null;
+    requestVersion: number;
+  }>;
   jobs: Record<string, JobSummary>;
   approvals: Record<string, ApprovalRequest>;
   batchApprovals: Record<string, BatchApproval>; // keyed by batchId
@@ -311,6 +318,9 @@ export interface AppState {
   jobHeartbeats: Record<string, { lastActivityAt: string; activeToolName?: string; activeToolSince?: string }>;
 
   // Actions
+  hydrateTrackerOperations: (operations: TrackerOperationResponse[]) => void;
+  loadTrackerOperations: (projectId: string) => Promise<void>;
+  refreshTrackerOperations: () => Promise<void>;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setReconnectAttempt: (attempt: number) => void;
   /** Fetches SDK list + models for the default SDK. Called once on app mount. */

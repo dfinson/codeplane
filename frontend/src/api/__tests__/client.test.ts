@@ -43,6 +43,10 @@ import {
   attachChatToChain,
   detachChatFromChain,
   detachTrackerLink,
+  fetchTrackerOperations,
+  fetchTrackerOperation,
+  reconcileTrackerOperation,
+  retryTrackerOperation,
   ApiError,
 } from "../client";
 
@@ -574,6 +578,56 @@ describe("request error handling", () => {
     });
     await expect(fetchHealth()).rejects.toMatchObject({ detail: "Internal Server Error" });
   });
+
+    describe("durable tracker operations", () => {
+      it("encodes project and historical reference filters using the API query names", async () => {
+        mockFetch.mockResolvedValueOnce(jsonResponse({ items: [] }));
+        await fetchTrackerOperations("project/one", { job_ref: "job / 1", tracker_link_ref: "link/old" });
+        expect(getFirstFetchUrl()).toBe("/api/projects/project%2Fone/tracker-links/operations?job_ref=job+%2F+1&tracker_link_ref=link%2Fold");
+      });
+
+      it("reads operation detail without interpreting an approved result as applied", async () => {
+        const body = { id: "op/1", state: "approved", version: 2 };
+        mockFetch.mockResolvedValueOnce(jsonResponse(body));
+        expect(await fetchTrackerOperation("project/1", "op/1")).toEqual(body);
+        expect(getFirstFetchUrl()).toBe("/api/projects/project%2F1/tracker-links/operations/op%2F1");
+      });
+
+      it("posts the version and exact evidence without sending a client-supplied actor", async () => {
+        const body = { expectedVersion: 4, resolution: "not_applied" as const, evidence: "  Provider history checked.\nReceipt absent.  " };
+        mockFetch.mockResolvedValueOnce(jsonResponse({ id: "op-1", state: "not_applied" }));
+        await reconcileTrackerOperation("project-1", "op-1", body);
+        expect(getFirstFetchUrl()).toBe("/api/projects/project-1/tracker-links/operations/op-1/reconcile");
+        expect(getFirstFetchInit().method).toBe("POST");
+        expect(JSON.parse(getFirstFetchInit().body as string)).toEqual(body);
+      });
+
+      it("posts a retry identity and version without sending new comment content", async () => {
+        const body = { expectedVersion: 5, requestId: "request-1" };
+        mockFetch.mockResolvedValueOnce(jsonResponse({ id: "retry-1", retryOfId: "op-1", state: "awaiting_approval" }));
+        const result = await retryTrackerOperation("project-1", "op-1", body);
+        expect(getFirstFetchUrl()).toBe("/api/projects/project-1/tracker-links/operations/op-1/retry");
+        expect(getFirstFetchInit().method).toBe("POST");
+        expect(JSON.parse(getFirstFetchInit().body as string)).toEqual(body);
+        expect(result.state).toBe("awaiting_approval");
+      });
+
+      it("surfaces stale reconciliation conflicts through the existing ApiError contract", async () => {
+        mockFetch.mockResolvedValue(jsonResponse({ detail: "Operation version conflict" }, 409));
+        await expect(reconcileTrackerOperation("project-1", "op-1", {
+          expectedVersion: 2, resolution: "applied", evidence: "Receipt #42",
+        })).rejects.toMatchObject({ status: 409, detail: "Operation version conflict" });
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not automatically repeat a retry POST when its response is lost", async () => {
+        mockFetch.mockRejectedValue(new Error("Connection lost"));
+        await expect(retryTrackerOperation("project-1", "op-1", {
+          expectedVersion: 2, requestId: "request-1",
+        })).rejects.toThrow("Connection lost");
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+    });
 
   it("uses HTTP status when detail is not a string or array", async () => {
     mockFetch.mockResolvedValue({

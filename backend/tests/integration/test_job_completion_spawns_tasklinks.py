@@ -23,9 +23,7 @@ from backend.models.events import EventKind, new_event
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.persistence.task_link_repo import TaskLinkRepository
-from backend.services.job.job_service import JobService
-from backend.services.project.project_service import ProjectService
-from backend.services.recipe.recipe_service import RecipeService
+from backend.services.task_execution_service import TaskExecutionService
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -98,21 +96,14 @@ class TestJobCompletionSpawnsTaskLinks:
             await task_link_repo.set_job_id(first_link.id, "job-first")
             await session.commit()
 
+        execution = TaskExecutionService(session_factory, config, git_service=mock_git_service)
+
         async def _spawn_dependent_task_links(event: object) -> None:
             if event.kind != EventKind.job_completed:  # type: ignore[union-attr]
                 return
             job_id = event.session_id  # type: ignore[union-attr]
             resolution = event.payload.get("resolution")  # type: ignore[union-attr]
-            async with session_factory() as session:
-                task_link_repo = TaskLinkRepository(session)
-                job_repo = JobRepository(session)
-                project_service = ProjectService(ProjectRepository(session), config)
-                job_service = JobService.from_session(session, config, git_service=mock_git_service)
-                recipe_service = RecipeService(
-                    task_link_repo, project_service, job_service=job_service, job_repo=job_repo
-                )
-                spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                await session.commit()
+            spawned_jobs = await execution.handle_job_completed(job_id, resolution=resolution)
             for job in spawned_jobs:
                 await mock_runtime_service.setup_and_start(job)
 
@@ -207,27 +198,19 @@ class TestJobCompletionSpawnsTaskLinks:
             await chat_repo.attach_to_chain(chat.id, first_link.id)
             await session.commit()
 
+        execution = TaskExecutionService(
+            session_factory,
+            config,
+            git_service=mock_git_service,
+            approval_service=approval_service,
+        )
+
         async def _spawn_dependent_task_links(event: object) -> None:
             if event.kind != EventKind.job_completed:  # type: ignore[union-attr]
                 return
             job_id = event.session_id  # type: ignore[union-attr]
             resolution = event.payload.get("resolution")  # type: ignore[union-attr]
-            async with session_factory() as session:
-                task_link_repo = TaskLinkRepository(session)
-                job_repo = JobRepository(session)
-                chat_repo = ChatRepository(session)
-                project_service = ProjectService(ProjectRepository(session), config)
-                job_service = JobService.from_session(session, config, git_service=mock_git_service)
-                recipe_service = RecipeService(
-                    task_link_repo,
-                    project_service,
-                    job_service=job_service,
-                    job_repo=job_repo,
-                    chat_repo=chat_repo,
-                    approval_service=approval_service,
-                )
-                spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                await session.commit()
+            spawned_jobs = await execution.handle_job_completed(job_id, resolution=resolution)
             for job in spawned_jobs:
                 await mock_runtime_service.setup_and_start(job)
 
@@ -252,5 +235,10 @@ class TestJobCompletionSpawnsTaskLinks:
         # Instead, a pending approval was created for the deferred spawn.
         pending = await approval_service.list_pending()
         assert len(pending) == 1
-        assert pending[0].proposed_action == f"spawn_task:{second_link.id}"
+        from backend.services.task_execution_service import parse_spawn_action
+
+        action = parse_spawn_action(pending[0].proposed_action)
+        assert action is not None
+        assert action["taskLinkId"] == second_link.id
+        assert action["predecessorJobId"] == "job-first-gated"
         assert pending[0].job_id == "job-first-gated"

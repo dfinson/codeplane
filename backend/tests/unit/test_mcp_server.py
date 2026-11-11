@@ -371,22 +371,31 @@ class TestTrackerTool:
 
     @pytest.mark.asyncio
     async def test_comment_creates_approval_via_tracker_write_service(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
         resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.approved)
+        outcome = TrackerWriteOutcome(
+            TrackerWriteState.applied,
+            operation_id="operation-1",
+            target_kind="comment",
+        )
 
         with (
             patch("backend.mcp.server.resolve_tracker_for_job", AsyncMock(return_value=resolved)),
-            patch(
-                "backend.services.tracker_resolution.dispatch_tracker_write",
-                AsyncMock(),
-            ) as dispatch,
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
         ):
             result = await _tool(mcp_server, "codeplane_tracker")(
-                action="comment", job_id="job-123", value="Ready for review"
+                action="comment",
+                job_id="job-123",
+                value="Ready for review",
+                request_id="request-1",
             )
 
         assert result["applied"] is True
@@ -394,22 +403,30 @@ class TestTrackerTool:
         assert result["ticketRef"] == "ABC-123"
         assert result["trackerLinkId"] == "link-1"
         assert result["action"] == "comment"
-        dispatch.assert_awaited_once()
-        mock_approval.create_request.assert_awaited_once()
-        _, kwargs = mock_approval.create_request.call_args
-        assert kwargs["requires_explicit_approval"] is True
+        assert result["operationId"] == "operation-1"
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
+            source_key="mcp:job-123:request-1",
+        )
 
     @pytest.mark.asyncio
     async def test_rejected_approval_never_dispatches(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
         resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.rejected)
+        outcome = TrackerWriteOutcome(TrackerWriteState.rejected, operation_id="operation-2")
 
         with (
             patch("backend.mcp.server.resolve_tracker_for_job", AsyncMock(return_value=resolved)),
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
             patch(
                 "backend.services.tracker_resolution.dispatch_tracker_write",
                 AsyncMock(),
@@ -420,29 +437,36 @@ class TestTrackerTool:
         assert result["applied"] is False
         assert result["state"] == "rejected"
         dispatch.assert_not_awaited()
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.transition, "Done"),
+            source_key=None,
+        )
 
     @pytest.mark.asyncio
     async def test_provider_failure_reports_failed(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
         resolved = ResolvedTracker(
             tracker_link_id="link-1",
             credential_id="cred-1",
             ticket_ref="ABC-123",
         )
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.approved)
+        outcome = TrackerWriteOutcome(TrackerWriteState.failed, "provider unavailable", operation_id="operation-3")
 
         with (
             patch(
                 "backend.mcp.server.resolve_tracker_for_job",
                 AsyncMock(return_value=resolved),
             ),
-            patch(
-                "backend.services.tracker_resolution.dispatch_tracker_write",
-                AsyncMock(side_effect=RuntimeError("provider unavailable")),
-            ) as dispatch,
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
         ):
             result = await _tool(mcp_server, "codeplane_tracker")(
                 action="comment",
@@ -453,7 +477,11 @@ class TestTrackerTool:
         assert result["applied"] is False
         assert result["state"] == "failed"
         assert result["error"] == "provider unavailable"
-        dispatch.assert_awaited_once()
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
+            source_key=None,
+        )
 
 
 # ── Approval tool ────────────────────────────────────────────────────

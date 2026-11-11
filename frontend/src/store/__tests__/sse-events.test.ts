@@ -22,7 +22,8 @@ import {
   selectArchivedJobs,
   selectArchivedCount,
 } from "../index";
-import type { DiffFileModel } from "../../api/types";
+import type { DiffFileModel, TrackerOperationResponse } from "../../api/types";
+import { normalizeTFEvent } from "../sseNormalize";
 import type {
   AppState,
   ActivityTimelineState,
@@ -197,6 +198,8 @@ function makeCurrentJobSlice(jobId: string) {
 
 beforeEach(() => {
   useStore.setState({
+    trackerOperations: {},
+    trackerOperationLoads: {},
     jobs: {},
     approvals: {},
     logs: {},
@@ -999,6 +1002,139 @@ describe("selector sentinels", () => {
     const b = selectJobLogs("unknown")(useStore.getState());
     expect(a).toBe(b); // Same reference
     expect(a).toEqual([]);
+  });
+
+  describe("tracker operation central dispatcher", () => {
+    function operation(overrides: Partial<TrackerOperationResponse> = {}): TrackerOperationResponse {
+      return {
+        id: "op-1", operationId: "op-1", sourceKey: "source-1",
+        projectId: "project-1", projectRef: "project-1", jobId: "job-1", jobRef: "job-1",
+        taskLinkId: null, taskLinkRef: null, trackerLinkId: "link-1", trackerLinkRef: "link-1",
+        provider: "github", baseUrl: "https://github.com", externalRef: "org/project",
+        credentialIdRef: "credential-1", ticketRef: "org/repo#1",
+        action: "comment", targetKind: "comment", value: "  Exact body\n\n ", normalizedValue: null, normalizedTarget: null,
+        approvalId: "approval-1", approvalRef: "approval-1", approvalSnapshot: null,
+        state: "uncertain", version: 3, retryOfId: null, providerReceipt: null,
+        errorCode: "response_lost", errorDetail: "Response lost", reconciliation: null,
+        createdAt: "2026-11-11T12:00:00Z", updatedAt: "2026-11-11T12:01:00Z",
+        dispatchStartedAt: "2026-11-11T12:00:30Z", completedAt: null, ...overrides,
+      };
+    }
+
+    it("preserves orphaned camelCase operation payloads through the TF boundary", () => {
+      const incoming = operation({ jobId: null, trackerLinkId: null });
+      const payload = normalizeTFEvent({
+        kind: "tracker.operation_updated", session_id: "",
+        payload: { operation: incoming },
+      });
+      useStore.getState().dispatchSSEEvent("tracker.operation_updated", payload);
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual(incoming);
+      expect(useStore.getState().jobs).toEqual({});
+    });
+
+    it("rejects older and equal-version events after a newer reconciliation", () => {
+      const applied = operation({ state: "applied", version: 6 });
+      useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: applied });
+      const currentMap = useStore.getState().trackerOperations;
+      for (const version of [2, 5, 6]) {
+        useStore.getState().dispatchSSEEvent("tracker.operation_updated", {
+          operation: operation({ version }),
+        });
+      }
+      expect(useStore.getState().trackerOperations).toBe(currentMap);
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual(applied);
+    });
+
+    it("does not overwrite an SSE-created row with an older REST list or an empty list", () => {
+      useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: operation({ version: 5 }) });
+      useStore.getState().hydrateTrackerOperations([operation({ state: "approved", version: 2 })]);
+      useStore.getState().hydrateTrackerOperations([]);
+      expect(useStore.getState().trackerOperations["op-1"]?.state).toBe("uncertain");
+      expect(useStore.getState().trackerOperations["op-1"]?.version).toBe(5);
+    });
+
+    it.each(["rest", "sse"] as const)("accepts equal-version FK deletion through %s without replacing outcome evidence or resurrecting references", (source) => {
+      const current = operation({
+        state: "applied", version: 6,
+        taskLinkId: "task-1", taskLinkRef: "task-1",
+        providerReceipt: { id: "receipt-1", httpStatus: 200 },
+        reconciliation: {
+          resolution: "applied", evidence: "Verified receipt-1", actor: "operator",
+          recordedAt: "2026-11-11T12:05:00Z",
+        },
+      });
+      useStore.getState().hydrateTrackerOperations([current]);
+      const deleted = {
+        ...current,
+        projectId: null, jobId: null, taskLinkId: null, trackerLinkId: null, approvalId: null,
+        state: "uncertain" as const, value: "Stale body", providerReceipt: null, reconciliation: null,
+      };
+      if (source === "rest") {
+        useStore.getState().hydrateTrackerOperations([deleted]);
+      } else {
+        useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: deleted });
+      }
+      const expected = {
+        ...current,
+        projectId: null, jobId: null, taskLinkId: null, trackerLinkId: null, approvalId: null,
+      };
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual(expected);
+
+      const deletedMap = useStore.getState().trackerOperations;
+      for (const version of [5, 6]) {
+        useStore.getState().hydrateTrackerOperations([{ ...current, version }]);
+        useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: { ...current, version } });
+      }
+      expect(useStore.getState().trackerOperations).toBe(deletedMap);
+
+      // Newer outcome evidence is valid, but cannot undo the deletion already
+      // observed for the same immutable correlation references.
+      useStore.getState().hydrateTrackerOperations([{
+        ...current, version: 7, providerReceipt: { id: "receipt-2", httpStatus: 200 },
+      }]);
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual({
+        ...expected, version: 7, providerReceipt: { id: "receipt-2", httpStatus: 200 },
+      });
+    });
+
+    it("allows first canonical approval binding but retains a later equal-version approval deletion", () => {
+      const unbound = operation({ state: "awaiting_approval", version: 0, approvalId: null, approvalRef: null });
+      useStore.getState().hydrateTrackerOperations([unbound]);
+      const bound = { ...unbound, version: 1, approvalId: "approval-1", approvalRef: "approval-1" };
+      useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: bound });
+      expect(useStore.getState().trackerOperations["op-1"]?.approvalId).toBe("approval-1");
+
+      useStore.getState().hydrateTrackerOperations([{ ...bound, approvalId: null }]);
+      useStore.getState().dispatchSSEEvent("tracker.operation_updated", { operation: bound });
+      useStore.getState().hydrateTrackerOperations([unbound]);
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual({ ...bound, approvalId: null });
+    });
+
+    it("does not interpret missing, older or differently referenced correlations as equal-version deletion", () => {
+      const current = operation({ version: 4 });
+      useStore.getState().hydrateTrackerOperations([current]);
+      const currentMap = useStore.getState().trackerOperations;
+      useStore.getState().hydrateTrackerOperations([
+        { ...current, jobId: null, version: 3 },
+        { ...current, jobId: null, jobRef: "other-job" },
+        { ...current, approvalId: null, approvalRef: null },
+        { ...current, approvalId: undefined },
+      ]);
+      expect(useStore.getState().trackerOperations).toBe(currentMap);
+      expect(useStore.getState().trackerOperations["op-1"]).toEqual(current);
+    });
+
+    it("ignores malformed versions and mismatched immutable ownership", () => {
+      const dispatch = useStore.getState().dispatchSSEEvent;
+      dispatch("tracker.operation_updated", { operation: operation() });
+      dispatch("tracker.operation_updated", { operation: operation({ projectRef: "other-project", version: 4 }) });
+      for (const version of [-1, Number.NaN, 1.5]) {
+        dispatch("tracker.operation_updated", { operation: operation({ version }) });
+      }
+      dispatch("tracker.operation_updated", { operation: null });
+      expect(useStore.getState().trackerOperations["op-1"]?.projectRef).toBe("project-1");
+      expect(useStore.getState().trackerOperations["op-1"]?.version).toBe(3);
+    });
   });
 
   it("selectJobTranscript returns stable empty array", () => {

@@ -26,6 +26,33 @@ from backend.models.domain import (  # noqa: TC001 — Pydantic resolves annotat
 from backend.models.schemas.base import *  # noqa: E402,F401,F403
 from backend.models.schemas.metrics import *  # noqa: E402,F401,F403
 from backend.models.schemas.telemetry import *  # noqa: E402,F401,F403
+from backend.models.schemas.tracker_operations import (
+    ReconcileTrackerOperationRequest as ReconcileTrackerOperationRequest,
+)
+from backend.models.schemas.tracker_operations import (
+    RetryTrackerOperationRequest as RetryTrackerOperationRequest,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerApprovalSnapshot as TrackerApprovalSnapshot,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationListResponse as TrackerOperationListResponse,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationResponse as TrackerOperationResponse,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationState as TrackerOperationState,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerProviderReceipt as TrackerProviderReceipt,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerReconciliation as TrackerReconciliation,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerTargetKind as TrackerTargetKind,
+)
 
 if TYPE_CHECKING:
     from backend.models.domain import Job

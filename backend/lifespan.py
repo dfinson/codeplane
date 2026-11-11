@@ -50,7 +50,9 @@ from backend.services.sidecar.dispatcher import SidecarDispatcher
 from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.steps.persistence import StepPersistenceSubscriber
 from backend.services.steps.tracker import StepTracker
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
+from backend.services.tracker_write_service import TrackerWriteService
 
 
 class _JobLike:
@@ -408,6 +410,8 @@ class _CoreServices:
     git_service: GitService
     diff_service: DiffService
     step_tracker: StepTracker
+    task_execution_service: TaskExecutionService
+    tracker_write_service: TrackerWriteService
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +635,19 @@ async def _wire_core_services(
         sidecar_dispatcher=sidecar_dispatcher,
     )
 
+    tracker_write_service = TrackerWriteService(
+        approval_service,
+        session_factory=session_factory,
+        event_bus=event_bus,
+    )
+    task_execution_service = TaskExecutionService(
+        session_factory,
+        config,
+        git_service=git_service,
+        approval_service=approval_service,
+        tracker_write_service=tracker_write_service,
+    )
+
     # Wire the preflight curator
     runtime_service.set_preflight_curator(preflight_curator)
 
@@ -662,6 +679,8 @@ async def _wire_core_services(
         git_service=git_service,
         diff_service=diff_service,
         step_tracker=step_tracker,
+        task_execution_service=task_execution_service,
+        tracker_write_service=tracker_write_service,
     )
 
 
@@ -776,6 +795,8 @@ async def _init_optional_services(
         approval_service=services.approval_service,
         merge_service=services.merge_service,
         sidecar_sessions=services.sidecar_sessions,
+        task_execution_service=services.task_execution_service,
+        tracker_write_service=services.tracker_write_service,
     )
     mcp_app = mcp_server.streamable_http_app()
 
@@ -1061,15 +1082,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     governance_subscriber.subscribe(event_bus)
     services.runtime_service.set_governance(governance_decider, governance_subscriber)
 
-    # Recover orphaned jobs from a previous crash (background — don't block startup).
-    # Must run AFTER the trail service is subscribed so it receives SessionResumed events,
-    # and AFTER governance is wired (see note above) since job start requires it.
-    # The task reference is kept (not fire-and-forget-discarded) so a restart-triggered
-    # startup can await its completion before publishing the readiness marker below.
-    recovery_task = asyncio.create_task(
-        services.runtime_service.recover_on_startup(),
-        name="recover-on-startup",
-    )
+    # Recovery follows completion subscriber registration below.
 
     # --- Sidecar context providers ---
     # Each provider is a closure over the owning service, matching the
@@ -1379,98 +1392,49 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     event_bus.subscribe(_persist_structural_analytics)
 
-    # --- Story 4.5/4.6: auto-spawn a dependent TaskLink's job on completion, and
-    # route the completed TaskLink's tracker write-back through the approval gate ---
-    # Fires only on EventKind.job_completed (a job reaching JobState.completed —
-    # merged/pr_created/discarded all land here, see backend/services/runtime/service.py).
-    # `resolution` is read from the payload so a "discarded" completion never
-    # satisfies a dependency (see RecipeService._SUCCESSFUL_RESOLUTIONS). All
-    # decision logic (satisfaction check, spawn, idempotency, tracker write
-    # routing) lives in RecipeService.handle_job_completed — this closure only
-    # wires the event, opens a session, and starts any newly-spawned job's
-    # agent, mirroring the `codeplane_job create` MCP handler's own
-    # setup/start pattern.
     async def _spawn_dependent_task_links(event: SessionEvent) -> None:
-        if event.kind not in {
-            EventKind.job_completed,
-            EventKind.job_failed,
-            EventKind.job_canceled,
-        }:
+        if event.kind not in {EventKind.job_completed, EventKind.job_failed, EventKind.job_canceled}:
             return
         job_id = event.session_id
         if not job_id:
             return
-        resolution = event.payload.get("resolution")
 
         async def _run_spawn() -> None:
             try:
-                from backend.persistence.chat_repo import ChatRepository
-                from backend.persistence.job_repo import JobRepository
-                from backend.persistence.project_repo import ProjectRepository
-                from backend.persistence.task_link_repo import TaskLinkRepository
-                from backend.persistence.tracker_link_repo import TrackerLinkRepository
-                from backend.services.job.job_service import JobService
-                from backend.services.project.project_service import ProjectService
-                from backend.services.recipe.recipe_service import RecipeService
-                from backend.services.tracker_write_service import TrackerWriteService
+                execution = services.task_execution_service
+                if event.kind == EventKind.job_completed:
+                    jobs = await execution.handle_job_completed(job_id, resolution=event.payload.get("resolution"))
+                else:
+                    await execution.handle_job_failed(job_id)
+                    jobs = []
+                for job in jobs:
 
-                async with serialized_write(session_factory) as session:
-                    task_link_repo = TaskLinkRepository(session)
-                    job_repo = JobRepository(session)
-                    chat_repo = ChatRepository(session)
-                    tracker_link_repo = TrackerLinkRepository(session)
-                    project_service = ProjectService(ProjectRepository(session), config)
-                    job_service = JobService.from_session(session, config)
-                    # Story 4.6: routes a completed TaskLink's `tracker_write` output
-                    # route through the same approval gate as any other tracker
-                    # write-back (Story 3.4) — see RecipeService._maybe_route_tracker_write.
-                    tracker_write_service = TrackerWriteService(
-                        services.approval_service,
-                        session_factory=session_factory,
-                    )
-                    recipe_service = RecipeService(
-                        task_link_repo,
-                        project_service,
-                        job_service=job_service,
-                        job_repo=job_repo,
-                        chat_repo=chat_repo,
-                        approval_service=services.approval_service,
-                        tracker_link_repo=tracker_link_repo,
-                        tracker_write_service=tracker_write_service,
-                    )
-                    if event.kind == EventKind.job_completed:
-                        spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                    else:
-                        await recipe_service.handle_job_failed(job_id)
-                        spawned_jobs = []
-                    # Story 4.6: schedule any tracker-write coroutines built during
-                    # handle_job_completed through the module-level _fire_and_forget
-                    # helper (whose _ephemeral_tasks set has app-lifetime scope),
-                    # rather than as a task tracked only on `recipe_service` — that
-                    # local instance has no outer reference and would otherwise let
-                    # the task (and TrackerWriteService.execute's approval wait) be
-                    # garbage-collected once this function returns (same bug class
-                    # as Story 5.4/PR #70).
-                    pending_tracker_writes = list(recipe_service.pending_tracker_writes)
-
-                for index, tracker_write_coro in enumerate(pending_tracker_writes):
-                    _fire_and_forget(tracker_write_coro, name=f"tracker-write-{job_id[:8]}-{index}")
-
-                for spawned_job in spawned_jobs:
-
-                    async def _setup_and_start(job: Any = spawned_job) -> None:
+                    async def _setup_and_start(spawned: Any = job) -> None:
                         try:
-                            await services.runtime_service.setup_and_start(job)
+                            await services.runtime_service.setup_and_start(spawned)
                         except Exception:
-                            log.warning("task_link_spawn_setup_failed", job_id=job.id, exc_info=True)
+                            log.exception("task_link_spawn_setup_failed", job_id=spawned.id)
 
-                    _fire_and_forget(_setup_and_start(), name=f"task-link-spawn-{spawned_job.id[:8]}")
+                    _fire_and_forget(
+                        _setup_and_start(),
+                        name=f"task-link-spawn-{job.id[:8]}",
+                    )
             except Exception:
-                log.warning("task_link_spawn_handler_failed", job_id=job_id, exc_info=True)
+                log.exception("task_link_completion_failed", job_id=job_id)
 
-        _fire_and_forget(_run_spawn(), name=f"task-link-spawn-check-{job_id[:8]}")
+        _fire_and_forget(_run_spawn(), name=f"task-link-completion-{job_id[:8]}")
 
     event_bus.subscribe(_spawn_dependent_task_links)
+
+    async def _recover_execution() -> None:
+        await services.approval_service.recover_pending_approvals()
+        await services.task_execution_service.recover_on_startup()
+        await services.tracker_write_service.recover_on_startup()
+        await services.runtime_service.recover_on_startup()
+        services.tracker_write_service.wake()
+
+    recovery_task = asyncio.create_task(_recover_execution(), name="recover-on-startup")
+    await recovery_task
 
     # --- IngestService (operator message routing) ---
     from backend.services.events.ingest_service import IngestService
@@ -1592,6 +1556,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             SessionStateWatcher: session_state_watcher,
             ClaudeSessionStateWatcher: claude_session_watcher,
             TrackerSyncService: tracker_sync_service,
+            TrackerWriteService: services.tracker_write_service,
+            TaskExecutionService: services.task_execution_service,
         },
     )
     app.state.dishka_container = container
@@ -1650,6 +1616,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async def _quiet_shutdown() -> None:
         """Run teardown steps, suppressing noisy exceptions."""
+        await services.tracker_write_service.close()
         await tracker_sync_service.stop()
         await container.close()
         optional.mcp_stop_event.set()

@@ -11,8 +11,8 @@ import { create } from "zustand";
 // Types — re-exported from ./types for backward compatibility.
 // ---------------------------------------------------------------------------
 
-import { fetchSDKs, fetchModels, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
-import { sseHandlers, enrichJob } from "./sseHandlers";
+import { fetchSDKs, fetchModels, fetchTrackerOperations, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
+import { sseHandlers, enrichJob, mergeTrackerOperations } from "./sseHandlers";
 export { enrichJob } from "./sseHandlers";
 import { deriveJobStateFrame } from "./sseNormalize";
 import { pathBasename } from "../lib/paths";
@@ -39,6 +39,9 @@ export type {
 
 // Re-export all selectors
 export {
+  selectTrackerOperations,
+  selectTrackerOperationsForProject,
+  selectTrackerOperationLoad,
   selectJobs,
   selectConnectionStatus,
   selectReconnectAttempt,
@@ -333,6 +336,8 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  trackerOperations: {},
+  trackerOperationLoads: {},
   jobs: {},
   approvals: {},
   batchApprovals: {},
@@ -378,6 +383,54 @@ export const useStore = create<AppState>((set, get) => ({
     get().connectionStatus !== status && set({ connectionStatus: status }),
 
   setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
+
+  hydrateTrackerOperations: (operations) => set((state) => {
+    const trackerOperations = mergeTrackerOperations(state.trackerOperations, operations);
+    return trackerOperations === state.trackerOperations ? state : { trackerOperations };
+  }),
+
+  loadTrackerOperations: async (projectId) => {
+    const previous = get().trackerOperationLoads[projectId];
+    const requestVersion = (previous?.requestVersion ?? 0) + 1;
+    set((state) => ({
+      trackerOperationLoads: {
+        ...state.trackerOperationLoads,
+        [projectId]: { loading: true, loaded: previous?.loaded ?? false, error: null, requestVersion },
+      },
+    }));
+    try {
+      const response = await fetchTrackerOperations(projectId);
+      // Do not remove absent rows: a list may predate an SSE event or a retry.
+      get().hydrateTrackerOperations(response.items.filter((operation) => operation.projectRef === projectId));
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: { loading: false, loaded: true, error: null, requestVersion },
+        },
+      }));
+    } catch (error) {
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: {
+            loading: false,
+            loaded: state.trackerOperationLoads[projectId]?.loaded ?? false,
+            error: error instanceof Error ? error.message : String(error),
+            requestVersion,
+          },
+        },
+      }));
+    }
+  },
+
+  refreshTrackerOperations: async () => {
+    const state = get();
+    const projectRefs = new Set([
+      ...Object.keys(state.trackerOperationLoads),
+      ...Object.values(state.trackerOperations).map((operation) => operation.projectRef),
+    ]);
+    await Promise.all([...projectRefs].map((projectRef) => get().loadTrackerOperations(projectRef)));
+  },
 
   initSdksAndModels: async () => {
     // No-op if already done (success or failure)
