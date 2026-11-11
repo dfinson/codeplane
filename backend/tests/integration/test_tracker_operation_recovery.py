@@ -667,7 +667,13 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
         async def get(self, approval_id):
             approval = await super().get(approval_id)
             task = asyncio.current_task()
-            if self.first_returned.is_set() and task is self.first_worker:
+            # resolve() may read an extra request before rejecting it. Only a
+            # canonical read marks the worker's next iteration after retirement.
+            if (
+                self.first_returned.is_set()
+                and task is self.first_worker
+                and approval_id == self.canonical_id
+            ):
                 self.stale_worker_resumed.set()
             if (
                 approval is not None
@@ -741,6 +747,7 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
         assert approvals.create_count == (2 if pause_at == "before_commit" else 1)
         assert json.loads(canonical.proposed_action)["operationId"] == original.id
         assert canonical.requires_explicit_approval
+        approvals.canonical_id = canonical.id
 
         approvals.release_first.set()
         await asyncio.wait_for(approvals.first_returned.wait(), 5)
@@ -764,7 +771,6 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
         # Both genuine worker loops read the durable decision before either can attempt the state CAS.
         approvals.worker_tasks = {first._worker, second._worker}
         assert None not in approvals.worker_tasks and len(approvals.worker_tasks) == 2
-        approvals.canonical_id = canonical.id
         await approvals.resolve(canonical.id, ApprovalResolution.approved)
         first.wake()
         second.wake()
