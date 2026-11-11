@@ -22,6 +22,8 @@ Scout remains a governed full-session context brief before primary execution.
 It is distinct from text-only naming, narration and Chat completion. Discussion
 Chats cannot use tools and do not create a workspace.
 
+Native discovery stays within registered repositories and sessions created after observation starts. It follows the latest valid steering marker, including later enable/disable changes. Already imported sessions recover from their saved checkpoints.
+
 Native observation honors process-scoped `COPILOT_HOME`. If native source
 history or its mapping changed, observation stops with a recorded diagnostic
 instead of silently reinterpreting accepted progress. A steering receipt means
@@ -31,6 +33,22 @@ must not be retried automatically.
 Verification results distinguish completed, failed and interrupted agent
 verification turns. A completed turn is not evidence that tests passed.
 Review remains the operator's decision state.
+
+## Runtime homes and generated artifacts
+
+Set `CODEPLANE_HOME` before starting an isolated runtime. Generated artifacts
+and subsequent updates use that home's `artifacts` directory, alongside its
+database, rather than the operator's ordinary artifact store.
+
+Existing records under the known default `~/.codeplane/artifacts` store remain
+downloadable. An explicitly requested update writes the new content into the
+active store and updates the same record's location and size. It leaves the
+old file untouched. CodePlane does not bulk-migrate historical files or trust
+arbitrary persisted paths.
+
+Session-document collection honors an explicit collector directory first,
+then `COPILOT_HOME`, then the ordinary `~/.copilot` default. For an isolated
+Copilot journey, set both home variables to owned fixture directories.
 
 ## Restarting an Access-only development server
 

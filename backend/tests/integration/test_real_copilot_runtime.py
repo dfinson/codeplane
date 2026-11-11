@@ -6,13 +6,11 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import shutil
 import signal
 import sqlite3
 import subprocess
 import sys
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -156,6 +154,7 @@ class _Runtime:
         with sqlite3.connect(self.home / "data.db") as db:
             revision = db.execute("SELECT version_num FROM alembic_version").fetchone()
             assert revision, "Acceptance must run guarded migrations, not direct schema creation"
+            self.manifest["schema_revision"] = revision[0]
         self.save()
 
     def stop(self, *, crash=False):
@@ -264,10 +263,27 @@ class _Runtime:
 
         return asyncio.run(call())
 
+    def assert_artifact_isolation(self):
+        expected = (self.home / "artifacts").resolve()
+        with sqlite3.connect(f"file:{self.home / 'data.db'}?mode=ro", uri=True) as db:
+            artifacts = db.execute("SELECT id, disk_path FROM artifacts").fetchall()
+        observed = []
+        for artifact_id, disk_path in artifacts:
+            path = Path(disk_path).resolve()
+            assert path.is_relative_to(expected), f"Artifact {artifact_id} escaped configured home: {path}"
+            assert path.is_file(), f"Artifact {artifact_id} is missing: {path}"
+            observed.append({"id": artifact_id, "path": str(path)})
+        self.manifest["artifact_storage"] = observed
+        self.save()
+
     def close(self):
-        self.stop()
-        for log in self.logs:
-            log.close()
+        try:
+            self.stop()
+        finally:
+            for log in self.logs:
+                log.close()
+            if "schema_revision" in self.manifest:
+                self.assert_artifact_isolation()
 
 
 @pytest.fixture
@@ -398,8 +414,17 @@ def _verify_native_round_trip(runtime, session_id):
         return next((job for job in jobs if job.get("externalSessionId") == session_id), None)
 
     observed = _wait(imported, timeout=120, description="current supported native control discovery")
-    snapshot = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
-    assert any("NATIVE_ACCEPTANCE_READY" in str(item) for item in snapshot["transcript"])
+
+    def persisted_responses(*markers):
+        snapshot = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
+        messages = [item["content"] for item in snapshot["transcript"] if item["kind"] == "message.assistant"]
+        return snapshot if all(any(marker in content for content in messages) for marker in markers) else None
+
+    _wait(
+        lambda: persisted_responses("NATIVE_ACCEPTANCE_READY"),
+        timeout=120,
+        description="native assistant response persisted in CodePlane",
+    )
     runtime.request(
         "POST",
         f"/api/jobs/{observed['id']}/messages",
@@ -418,13 +443,20 @@ def _verify_native_round_trip(runtime, session_id):
         timeout=180,
         description="actual native MCP steering execution",
     )
+    expected = ("NATIVE_ACCEPTANCE_READY", "NATIVE_STEERING_RECEIVED", "NATIVE_MCP_RECEIVED")
+    snapshot = _wait(
+        lambda: persisted_responses(*expected), timeout=120, description="all real native replies persisted"
+    )
+    (runtime.root / "native-before-restart.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     with sqlite3.connect(runtime.home / "data.db") as db:
         ids = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
     assert ids and len(ids) == len(set(ids))
     runtime.stop()
     runtime.start()
-    restored = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
-    assert restored["transcript"]
+    restored = _wait(
+        lambda: persisted_responses(*expected), timeout=120, description="native replies preserved after restart"
+    )
+    (runtime.root / "native-after-restart.json").write_text(json.dumps(restored, indent=2), encoding="utf-8")
     with sqlite3.connect(runtime.home / "data.db") as db:
         after = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
     assert set(ids) <= set(after)
@@ -434,25 +466,37 @@ def _verify_native_round_trip(runtime, session_id):
 
 
 def test_native_capability_is_real_and_observed(real_runtime):
+    """The visible terminal operator owns CLI creation, control changes and restoration."""
+    from datetime import UTC, datetime
+
     runtime = real_runtime
-    from winpty import Backend, PtyProcess
-
-    assert os.environ.get("CODEPLANE_ENABLE_INCOMING_FOR_TEST") == "1", (
-        "Temporary Incoming connections activation requires separate explicit operator authorization"
-    )
-
     session_id = str(uuid.uuid4())
+    events_path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
+    assert not events_path.exists(), "Native acceptance requires a fresh session after backend readiness"
+    with sqlite3.connect(runtime.home / "data.db") as db:
+        managed = [
+            Path(path).resolve()
+            for (paths,) in db.execute("SELECT repo_paths FROM projects")
+            for path in json.loads(paths)
+        ]
+    assert managed == [runtime.repository.resolve()]
+
     executable = shutil.which("copilot")
     assert executable
     launcher = [executable]
     if executable.lower().endswith(".cmd"):
-        launcher = [
-            shutil.which("node"),
-            str(Path(executable).parent / "node_modules" / "@github" / "copilot" / "npm-loader.js"),
-        ]
-
-    def spawn_native(*, initial):
-        arguments = [
+        node = shutil.which("node")
+        assert node
+        launcher = [node, str(Path(executable).parent / "node_modules" / "@github" / "copilot" / "npm-loader.js")]
+    ready_at = datetime.now(UTC)
+    ready = {
+        "session_id": session_id,
+        "ready_at": ready_at.isoformat(),
+        "backend_pid": runtime.profile["startedPid"],
+        "backend_port": runtime.profile["port"],
+        "working_directory": str(runtime.repository),
+        "copilot_home": str(runtime.copilot_home),
+        "argv": [
             *launcher,
             "-C",
             str(runtime.repository),
@@ -465,134 +509,43 @@ def test_native_capability_is_real_and_observed(real_runtime):
             "--no-ask-user",
             "--screen-reader",
             "--no-color",
-        ]
-        if initial:
-            arguments += ["-i", "Reply exactly NATIVE_ACCEPTANCE_READY. Use no tools."]
-        return PtyProcess.spawn(
-            arguments,
-            cwd=str(runtime.repository),
-            env=runtime.env,
-            dimensions=(40, 120),
-            backend=Backend.WinPTY,
-        )
-
-    process = spawn_native(initial=True)
-    output = []
-
-    def drain(owned_process):
-        while owned_process.isalive():
-            try:
-                output.append(owned_process.read(4096))
-            except EOFError:
-                return
-
-    reader = threading.Thread(target=drain, args=(process,), daemon=True)
-    reader.start()
-    incoming_changed = False
-    in_environments = False
-
-    def send_command(command):
-        process.write(command)
-        time.sleep(0.5)
-        process.write("\r")
-
-    def screen_since(index):
-        return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", "".join(output[index:]))
-
-    def close_native():
-        if process.isalive():
-            process.write("\x03")
-            time.sleep(0.5)
-            process.write("\x03")
-            time.sleep(2)
-        if process.isalive():
-            process.terminate(force=True)
-        reader.join(timeout=3)
-        assert not process.isalive(), "Owned native CLI must stop before another instance starts"
-
-    def incoming_status():
-        nonlocal in_environments
-        if in_environments:
-            process.write("\x1b")
-            time.sleep(1)
-            in_environments = False
-        begin = len(output)
-        send_command("/environments")
-        _wait(
-            lambda: "Environments tabs" in screen_since(begin) or "Unknown command" in screen_since(begin),
-            timeout=90,
-            description="supported environments menu",
-        )
-        assert "Environments tabs" in screen_since(begin), "Current native CLI does not expose /environments"
-        in_environments = True
-        time.sleep(2)
-        if "current tab: Incoming connections" not in screen_since(begin):
-            process.write("\x1b[C")
-        found = _wait(
-            lambda: re.search(r"Accept\s+remote\s+connections\s+(Off|On)", screen_since(begin)),
-            timeout=90,
-            description="explicit incoming connection state",
-        )
-        return found.group(1)
-
+            "-i",
+            "Reply exactly NATIVE_ACCEPTANCE_READY. Use no tools.",
+        ],
+    }
+    (runtime.root / "native-ready.json").write_text(json.dumps(ready, indent=2), encoding="utf-8")
+    print(f"NATIVE_READY {runtime.root / 'native-ready.json'}", flush=True)
+    published = None
+    result = {"session_id": session_id, "status": "waiting_for_visible_operator"}
     try:
-        _wait(lambda: "trust" in "".join(output).lower(), timeout=30, description="native fixture trust prompt")
-        process.write("\r")
-        path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
-
-        def records():
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-
-        _wait(
-            lambda: any(e["type"] == "assistant.message" for e in records()),
-            timeout=180,
-            description="actual native Copilot model response",
-        )
-        close_native()
-        begin = len(output)
-        process = spawn_native(initial=False)
-        reader = threading.Thread(target=drain, args=(process,), daemon=True)
-        reader.start()
-        _wait(
-            lambda: "Do you trust the files" in screen_since(begin) or "Interactive" in screen_since(begin),
-            timeout=60,
-            description="resumed native CLI readiness",
-        )
-        if "Do you trust the files" in screen_since(begin):
-            process.write("\r")
-        _wait(lambda: "Interactive" in screen_since(begin), timeout=60, description="native command input ready")
-        time.sleep(3)
-        assert incoming_status() == "Off", "Do not replace an independently changed incoming-connection setting"
-        runtime.manifest["incoming_before"] = "Off"
+        published_path = runtime.root / "native-published.json"
+        _wait(published_path.exists, timeout=600, description="visible operator publication receipt")
+        published = json.loads(published_path.read_text(encoding="utf-8"))
+        assert published["session_id"] == session_id
+        assert published["steering_enabled"] is True
+        assert published["control_before_text"] and published["control_after_text"]
+        assert published["account_setting_observation"] in {"unchanged", "unknown", "temporarily_changed"}
+        first = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
+        assert first["type"] == "session.start" and first["data"]["sessionId"] == session_id
+        assert datetime.fromisoformat(first["data"]["startTime"]) >= ready_at
+        assert first["data"]["copilotVersion"] == published["native_cli_version"]
+        runtime.manifest["native_publication"] = published
         runtime.save()
-        incoming_changed = True
-        process.write("\r")
-        time.sleep(3)
-        assert incoming_status() == "On"
-        runtime.manifest["incoming_enabled"] = "On"
-        runtime.save()
-        process.write("\x1b")
-        in_environments = False
-        time.sleep(1)
-        send_command("/remote on")
-
         _verify_native_round_trip(runtime, session_id)
+        result["status"] = "control_checks_passed"
+    except Exception as exc:
+        result["status"] = "control_checks_failed"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
-        try:
-            if incoming_changed:
-                status = incoming_status()
-                if status == "On":
-                    process.write("\r")
-                    time.sleep(3)
-                assert incoming_status() == "Off", "Incoming connections must be restored before this test exits"
-                runtime.manifest["incoming_restored"] = "Off"
-                runtime.save()
-        finally:
-            console = screen_since(0)
-            console = re.sub(r"https?://\S+", "[URL]", console)
-            console = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[JWT]", console)
-            console = re.sub(r"(--(?:token|secret|password)(?:=|\s+))\S+", r"\1[REDACTED]", console)
-            (runtime.root / "native-console.txt").write_text(console, encoding="utf-8")
-            close_native()
-            runtime.manifest["native_process_stopped"] = True
+        (runtime.root / "native-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        print(f"NATIVE_RESTORE_STEERING {runtime.root / 'native-result.json'}", flush=True)
+        if published is not None:
+            restored_path = runtime.root / "native-restored.json"
+            _wait(restored_path.exists, timeout=180, description="visible operator steering-disabled receipt")
+            restored = json.loads(restored_path.read_text(encoding="utf-8"))
+            assert restored["session_id"] == session_id
+            assert restored["steering_enabled"] is False
+            assert restored["control_after_text"]
+            runtime.manifest["native_restoration"] = restored
             runtime.save()
