@@ -275,6 +275,98 @@ class TestCopilotControlPlane:
         assert persisted is not None
 
 
+class TestNativeControlMarkers:
+    @pytest.mark.parametrize(
+        ("initial", "updates", "expected"),
+        [
+            (False, [True], True),
+            (False, [True, False], False),
+            (True, [False], False),
+            (True, [False, True], True),
+        ],
+    )
+    def test_latest_valid_control_marker_wins(
+        self, copilot_watcher: SessionStateWatcher, tmp_path: Path, initial: bool, updates: list[bool], expected: bool
+    ) -> None:
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        events = [{"type": "session.start", "data": {"remoteSteerable": initial}}]
+        events.extend(
+            {"type": "session.remote_steerable_changed", "data": {"remoteSteerable": value}} for value in updates
+        )
+        (session_dir / "events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
+        )
+        with patch("backend.services.ingest.copilot_source._SESSION_STATE_DIR", tmp_path):
+            assert copilot_watcher._is_remote_steerable("session") is expected
+
+    @pytest.mark.parametrize("kind", ["session.start", "session.started", "session.resume"])
+    def test_supported_initial_and_resume_markers(
+        self, copilot_watcher: SessionStateWatcher, tmp_path: Path, kind: str
+    ) -> None:
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        (session_dir / "events.jsonl").write_text(
+            json.dumps({"type": "session.start", "data": {"remoteSteerable": False}})
+            + "\n"
+            + json.dumps({"type": kind, "data": {"remoteSteerable": True}})
+            + "\n",
+            encoding="utf-8",
+        )
+        with patch("backend.services.ingest.copilot_source._SESSION_STATE_DIR", tmp_path):
+            assert copilot_watcher._is_remote_steerable("session") is True
+
+    def test_unrelated_invalid_and_partial_records_cannot_override_valid_control(
+        self, copilot_watcher: SessionStateWatcher, tmp_path: Path
+    ) -> None:
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        events = [
+            {"type": "session.start", "data": {"remoteSteerable": True}},
+            {"type": "session.remote_steerable_changed", "data": {"remoteSteerable": False}},
+            {"type": "assistant.message", "data": {"remoteSteerable": True}},
+            {"type": "session.remote_steerable_changed", "data": {"remoteSteerable": "true"}},
+            {"type": "session.remote_steerable_changed", "data": None},
+            ["not", "an", "event"],
+        ]
+        (session_dir / "events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events) + '\n{"type":"session.remote_steerable_changed",',
+            encoding="utf-8",
+        )
+        with patch("backend.services.ingest.copilot_source._SESSION_STATE_DIR", tmp_path):
+            assert copilot_watcher._is_remote_steerable("session") is False
+
+    def test_dynamic_discovery_keeps_repository_and_creation_cutoff(
+        self, copilot_watcher: SessionStateWatcher, tmp_path: Path
+    ) -> None:
+        store = tmp_path / "sessions.db"
+        state = tmp_path / "state"
+        rows = [
+            ("eligible", "C:\\repo\\myproject", "eligible", "2026-01-03T00:00:00+00:00"),
+            ("historical", "C:\\repo\\myproject", "historical", "2026-01-01T00:00:00+00:00"),
+            ("unregistered", "C:\\repo\\elsewhere", "unregistered", "2026-01-03T00:00:00+00:00"),
+        ]
+        with sqlite3.connect(store) as db:
+            db.execute("CREATE TABLE sessions (id TEXT, cwd TEXT, summary TEXT, created_at TEXT)")
+            db.executemany("INSERT INTO sessions VALUES (?, ?, ?, ?)", rows)
+        for session_id, *_ in rows:
+            directory = state / session_id
+            directory.mkdir(parents=True)
+            (directory / "events.jsonl").write_text(
+                json.dumps({"type": "session.start", "data": {"remoteSteerable": False}})
+                + "\n"
+                + json.dumps({"type": "session.remote_steerable_changed", "data": {"remoteSteerable": True}})
+                + "\n",
+                encoding="utf-8",
+            )
+        copilot_watcher._started_at = "2026-01-02T00:00:00+00:00"
+        with (
+            patch("backend.services.ingest.copilot_source._SESSION_STORE_PATH", store),
+            patch("backend.services.ingest.copilot_source._SESSION_STATE_DIR", state),
+        ):
+            assert copilot_watcher._query_new_sessions() == [("eligible", "C:\\repo\\myproject", "eligible")]
+
+
 class TestTraceForgeReattach:
     @pytest.mark.anyio
     async def test_reattach_skips_already_emitted_events(
