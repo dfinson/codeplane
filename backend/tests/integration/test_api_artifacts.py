@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -177,8 +179,8 @@ class TestDownloadArtifact:
         """Artifact exists in DB but the file has been deleted from disk."""
         with tempfile.TemporaryDirectory() as artifacts_base:
             monkeypatch.setattr(
-                "backend.services.artifacts.artifact_service._ARTIFACTS_BASE",
-                Path(artifacts_base),
+                "backend.services.artifacts.artifact_service.get_artifacts_base",
+                lambda: Path(artifacts_base),
             )
             job_id = await seed_job()
             missing_path = str(Path(artifacts_base) / "missing.txt")
@@ -200,11 +202,11 @@ class TestDownloadArtifact:
         session_factory: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Artifact whose disk_path is outside _ARTIFACTS_BASE is rejected."""
+        """Artifact whose disk_path is outside the configured root is rejected."""
         with tempfile.TemporaryDirectory() as artifacts_base:
             monkeypatch.setattr(
-                "backend.services.artifacts.artifact_service._ARTIFACTS_BASE",
-                Path(artifacts_base),
+                "backend.services.artifacts.artifact_service.get_artifacts_base",
+                lambda: Path(artifacts_base),
             )
             job_id = await seed_job()
             await _insert_artifact(
@@ -228,8 +230,8 @@ class TestDownloadArtifact:
         """Downloading a valid artifact returns 200 with correct content."""
         with tempfile.TemporaryDirectory() as artifacts_base:
             monkeypatch.setattr(
-                "backend.services.artifacts.artifact_service._ARTIFACTS_BASE",
-                Path(artifacts_base),
+                "backend.services.artifacts.artifact_service.get_artifacts_base",
+                lambda: Path(artifacts_base),
             )
             job_id = await seed_job()
             file_path = Path(artifacts_base) / "output.txt"
@@ -247,3 +249,100 @@ class TestDownloadArtifact:
             assert resp.status_code == 200
             assert "text/plain" in resp.headers["content-type"]
             assert resp.text == "hello artifact"
+
+
+@pytest.fixture
+def download_homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    import backend.config as config
+    import backend.services.artifacts.artifact_service as mod
+
+    home = tmp_path / "home"
+    active = tmp_path / "configured" / "artifacts"
+    legacy = home / ".codeplane" / "artifacts"
+    for root in (active, legacy):
+        root.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("CODEPLANE_HOME", str(active.parent))
+    monkeypatch.setattr(config, "_codeplane_dir", None)
+    monkeypatch.setattr(mod, "_ARTIFACTS_BASE", legacy, raising=False)
+    return {"active": active, "legacy": legacy}
+
+
+class TestArtifactHomeDownloads:
+    @pytest.mark.parametrize("location", ["active", "legacy", "default"])
+    async def test_persisted_downloads_preserve_bytes_and_metadata_without_migration(
+        self, location, download_homes, client, seed_job, session_factory, monkeypatch
+    ):
+        from backend.persistence.artifact_repo import ArtifactRepository
+
+        if location == "default":
+            monkeypatch.delenv("CODEPLANE_HOME")
+        root = download_homes["legacy" if location == "default" else location]
+        job_id = await seed_job(job_id="job-owner")
+        path = root / job_id / "art-1-output.txt"
+        path.parent.mkdir()
+        path.write_bytes(b"persisted artifact \xc3\xa9")
+        await _insert_artifact(session_factory, job_id=job_id, disk_path=str(path), size_bytes=path.stat().st_size)
+        before = path.read_bytes()
+        response = await client.get("/api/artifacts/art-1")
+        assert response.status_code == 200
+        assert response.content == before
+        assert "text/plain" in response.headers["content-type"]
+        assert "output.txt" in response.headers["content-disposition"]
+        assert path.read_bytes() == before
+        async with session_factory() as session:
+            persisted = await ArtifactRepository(session).get("art-1")
+        assert persisted is not None
+        assert persisted.disk_path == str(path)
+        assert persisted.size_bytes == len(before)
+        if location == "legacy":
+            assert list(download_homes["active"].rglob("*")) == []
+
+    @pytest.mark.parametrize("location", ["active", "legacy"])
+    async def test_missing_persisted_files_and_unknown_ids_remain_404(
+        self, location, download_homes, client, seed_job, session_factory
+    ):
+        job_id = await seed_job(job_id="job-owner")
+        path = download_homes[location] / job_id / "art-1-missing.txt"
+        await _insert_artifact(session_factory, job_id=job_id, disk_path=str(path))
+        response = await client.get("/api/artifacts/art-1")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Artifact file missing from disk"
+        assert (await client.get("/api/artifacts/unregistered")).status_code == 404
+
+    @pytest.mark.parametrize(
+        "escape", ["arbitrary", "traversal", "active_symlink", "legacy_symlink", "wrong_job", "wrong_artifact"]
+    )
+    async def test_persisted_record_does_not_authorize_unbounded_or_other_legacy_files(
+        self, escape, download_homes, client, seed_job, session_factory, tmp_path
+    ):
+        job_id = await seed_job(job_id="job-owner")
+        outside = tmp_path / "outside.txt"
+        outside.write_text("must not be served", encoding="utf-8")
+        legacy = download_homes["legacy"]
+        if escape == "arbitrary":
+            path = outside
+        elif escape == "traversal":
+            path = legacy / ".." / ".." / ".." / outside.name
+        elif escape in {"active_symlink", "legacy_symlink"}:
+            root = download_homes["active" if escape == "active_symlink" else "legacy"]
+            path = root / job_id / "art-1-output.txt"
+            target_dir = tmp_path / "outside-dir"
+            target_dir.mkdir()
+            (target_dir / path.name).write_text("must not be served", encoding="utf-8")
+            if os.name == "nt":
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(path.parent), str(target_dir)], check=True, capture_output=True
+                )
+            else:
+                path.parent.symlink_to(target_dir, target_is_directory=True)
+        else:
+            path = legacy / ("another-job" if escape == "wrong_job" else job_id)
+            path.mkdir()
+            path /= "art-other-output.txt" if escape == "wrong_artifact" else "art-1-output.txt"
+            path.write_text("another artifact", encoding="utf-8")
+        await _insert_artifact(session_factory, job_id=job_id, disk_path=str(path))
+        response = await client.get("/api/artifacts/art-1")
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Artifact path outside allowed directory"
+        assert outside.read_text(encoding="utf-8") == "must not be served"
