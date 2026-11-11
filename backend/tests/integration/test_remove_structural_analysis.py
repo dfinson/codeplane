@@ -84,6 +84,30 @@ def test_fresh_schema_has_no_structural_storage(tmp_path: Path) -> None:
         assert retired.isdisjoint(Base.metadata.tables[table].columns.keys())
 
 
+@pytest.mark.parametrize("packaged", [False, True])
+def test_migration_runner_selects_installed_assets_before_adjacent_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged: bool
+) -> None:
+    from backend.persistence import database
+
+    backend_dir = tmp_path / "backend"
+    source_scripts = tmp_path / "alembic"
+    source_scripts.mkdir()
+    packaged_scripts = backend_dir / "_migrations"
+    if packaged:
+        packaged_scripts.mkdir(parents=True)
+    monkeypatch.setattr(database, "__file__", str(backend_dir / "persistence" / "database.py"))
+    calls = []
+
+    def upgrade(cfg: Config, revision: str) -> None:
+        calls.append((cfg.get_main_option("script_location"), revision))
+
+    monkeypatch.setattr(command, "upgrade", upgrade)
+    run_migrations(tmp_path / "installed.db")
+    expected = packaged_scripts if packaged else source_scripts
+    assert calls == [(str(expected), "head")]
+
+
 def test_unknown_revision_is_not_stamped(tmp_path: Path) -> None:
     db_path = tmp_path / "unknown.db"
     command.upgrade(_alembic(db_path), "head")
@@ -185,7 +209,9 @@ def _seed_predecessor(db_path: Path) -> None:
             for cursor, kind, payload in events:
                 insert("events", id=cursor, event_id=f"event-{cursor}", job_id="job", kind=kind, timestamp=now,
                        payload=json.dumps(payload, indent=2),
-                       event_metadata=json.dumps({"turn_id": "turn-1", "motivation": {"intent": "Preserve exact metadata"}}))
+                       event_metadata=json.dumps({
+                           "turn_id": "turn-1", "motivation": {"intent": "Preserve exact metadata"}
+                       }))
     finally:
         engine.dispose()
 

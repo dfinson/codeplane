@@ -80,6 +80,10 @@ path = "tools/hatch_build.py"
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"alembic/env.py" = "backend/_migrations/env.py"
+"alembic/versions" = "backend/_migrations/versions"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 120
