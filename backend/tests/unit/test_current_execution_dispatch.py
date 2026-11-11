@@ -1,5 +1,7 @@
 """Coordinated dispatch is fenced to an exact live execution."""
 
+import asyncio
+import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -87,3 +89,21 @@ async def test_dispatch_accepts_only_live_ungated_generation(session_factory):
     assert receipt.message_event_id
     handle.send_message.assert_awaited_once_with("fixture")
     handle.resume_tools.assert_not_called()
+
+
+async def test_cancel_releases_fence_before_waiting_for_finalizer(session_factory):
+    runtime, _, _ = _live_runtime(session_factory)
+    finalized = False
+
+    async def finish():
+        nonlocal finalized
+        async with runtime._execution_control.hold("job-1"):
+            finalized = True
+
+    async def cancel(job_id):
+        await asyncio.create_task(finish())
+
+    runtime.cancel = cancel
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(runtime.cancel_job("job-1"), timeout=1)
+    assert finalized, "Cancel must release its admission fence before awaiting a child finalizer"

@@ -2250,9 +2250,9 @@ class RuntimeService:
             async with self._session_factory() as session:
                 canceled = await self._make_job_service(session).cancel_job(job_id)
                 await session.commit()
-            if job.source == JobSource.managed:
-                await self.cancel(job_id)
-            return canceled
+        if job.source == JobSource.managed:
+            await self.cancel(job_id)
+        return canceled
 
     async def cancel(self, job_id: str) -> None:
         """Cancel a running job by cancelling its asyncio task.
