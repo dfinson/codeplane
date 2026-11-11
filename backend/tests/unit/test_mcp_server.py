@@ -9,6 +9,8 @@ import pytest
 
 from backend.mcp.server import create_mcp_server
 from backend.tests.unit.conftest import make_job
+from backend.tests.unit.test_ingest_sources import _TASK_ID
+from backend.tests.unit.test_ingest_sources import native_control_stack as native_control_stack
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -137,6 +139,60 @@ class TestRuntimeContract:
         assert mock_runtime.send_operator_message.await_count == 1
         mock_runtime.send_message.assert_not_awaited()
         assert "error" not in result
+
+
+class TestNativeBindingMCP:
+    @pytest.mark.parametrize("action", ["message", "cancel"])
+    @pytest.mark.parametrize("case", ["accepted", "missing", "mismatch", "off", "rejected", "uncertain"])
+    async def test_native_routing_and_typed_failure(self, mcp_server, mock_runtime, native_control_stack, action, case):
+        import json
+
+        import httpx
+
+        stack = native_control_stack
+        if case == "missing":
+            stack.workspace.unlink()
+        elif case in {"mismatch", "off"}:
+            data = json.loads(stack.workspace.read_text(encoding="utf-8"))
+            data["mc_session_id" if case == "mismatch" else "remote_steerable"] = (
+                _TASK_ID if case == "mismatch" else False
+            )
+            stack.workspace.write_text(json.dumps(data), encoding="utf-8")
+        elif case == "rejected":
+            stack.post.return_value = httpx.Response(
+                404, text="PRIVATE-BODY", request=httpx.Request("POST", "https://fixture.invalid")
+            )
+        elif case == "uncertain":
+            stack.post.side_effect = httpx.ReadTimeout("PRIVATE-DIAGNOSTIC")
+        cancel = AsyncMock(return_value=make_job(id=stack.job.id, state="canceled"))
+        stack.runtime._make_job_service = MagicMock(return_value=MagicMock(cancel_job=cancel))
+        mock_runtime.send_operator_message.side_effect = stack.runtime.send_operator_message
+        mock_runtime.cancel_job.side_effect = stack.runtime.cancel_job
+        result = await _tool(mcp_server, "codeplane_job")(
+            action=action, job_id=stack.job.id, content="fixture" if action == "message" else None
+        )
+        if case == "accepted":
+            assert "error" not in result
+            assert "seq" in result if action == "message" else result["state"] == "canceled"
+            if action == "cancel":
+                cancel.assert_awaited_once_with(stack.job.id)
+        else:
+            assert "error" in result
+            assert "PRIVATE" not in result["error"]
+            if case == "rejected":
+                assert "404" in result["error"]
+            if case == "uncertain":
+                assert "unknown" in result["error"]
+            cancel.assert_not_awaited()
+        if case in {"missing", "mismatch", "off"}:
+            stack.post.assert_not_awaited()
+        else:
+            stack.post.assert_awaited_once_with(
+                f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
+                json={"content": "fixture", "type": "user"} if action == "message" else {"type": "abort"},
+            )
+        stack.runtime.send_message.assert_not_awaited()
+        stack.runtime._resume_orphaned.assert_not_awaited()
 
 
 class TestMCPServerCreation:

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -20,6 +23,9 @@ from backend.models.events import EventKind
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
+from backend.services.completers.copilot_steer import CopilotSteerClient, NativeDeliveryError
+from backend.services.events.event_bus import EventBus
+from backend.services.events.ingest_service import IngestService
 from backend.services.ingest.claude_source import (
     _SESSION_FILE_RE,
     ClaudeSessionStateWatcher,
@@ -29,6 +35,8 @@ from backend.services.ingest.claude_source import (
     _is_pid_alive,
 )
 from backend.services.ingest.copilot_source import SessionStateWatcher
+from backend.services.runtime import RuntimeService
+from backend.tests.unit.conftest import make_job
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -102,6 +110,76 @@ def copilot_watcher(
         git_service=git_service,
         steer_client=AsyncMock(),
     )
+
+
+_LOCAL_ID = "11111111-1111-4111-8111-111111111111"
+_TASK_ID = "22222222-2222-4222-8222-222222222222"
+_OTHER_TASK_ID = "33333333-3333-4333-8333-333333333333"
+
+
+def _write_native_metadata(root: Path, **overrides: object) -> Path:
+    directory = root / _LOCAL_ID
+    directory.mkdir(parents=True, exist_ok=True)
+    workspace = directory / "workspace.yaml"
+    workspace.write_text(
+        json.dumps(
+            {"id": _LOCAL_ID, "mc_session_id": _LOCAL_ID, "mc_task_id": _TASK_ID, "remote_steerable": True} | overrides
+        ),
+        encoding="utf-8",
+    )
+    (directory / "events.jsonl").write_text(
+        json.dumps({"type": "session.remote_steerable_changed", "data": {"remoteSteerable": True}}) + "\n",
+        encoding="utf-8",
+    )
+    return workspace
+
+
+@pytest.fixture
+async def native_control_stack(tmp_path, monkeypatch):
+    """Actual command stack, with persisted-job reads and the HTTP transport stubbed."""
+    root = tmp_path / "session-state"
+    workspace = _write_native_metadata(root)
+    monkeypatch.setattr("backend.services.ingest.copilot_source._SESSION_STATE_DIR", root)
+    monkeypatch.setattr("backend.services.events.ingest_service.load_config", CPLConfig)
+    factory = MagicMock()
+    factory.return_value.__aenter__.return_value = AsyncMock()
+    runtime = RuntimeService(
+        session_factory=factory, event_bus=EventBus(), adapter_registry=MagicMock(), config=CPLConfig()
+    )
+    job = make_job(id="native-job", state="running", source=JobSource.copilot_cli, external_session_id=_LOCAL_ID)
+    runtime._get_job = AsyncMock(return_value=job)
+    runtime._external_generations[job.id] = "fixture-generation"
+    runtime._resume_orphaned = AsyncMock()
+    runtime.send_message = AsyncMock()
+    steer = CopilotSteerClient("fixture-token")
+    post = AsyncMock(return_value=httpx.Response(200, request=httpx.Request("POST", "https://fixture.invalid")))
+    get = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json={"id": _TASK_ID, "state": "idle", "remote_steerable": True},
+            request=httpx.Request("GET", "https://fixture.invalid"),
+        )
+    )
+    monkeypatch.setattr(steer._client, "post", post)
+    monkeypatch.setattr(steer._client, "get", get)
+    watcher = SessionStateWatcher(AsyncMock(), runtime, factory, CPLConfig(), steer_client=steer)
+    ingest = IngestService(factory, steer_client=steer, session_state_watcher=watcher)
+    ingest._get_job = AsyncMock(return_value=job)
+    runtime._ingest_service = ingest
+    try:
+        yield SimpleNamespace(
+            runtime=runtime,
+            job=job,
+            watcher=watcher,
+            ingest=ingest,
+            steer=steer,
+            workspace=workspace,
+            root=root,
+            post=post,
+            get=get,
+        )
+    finally:
+        await steer.close()
 
 
 class TestClaudeControlPlane:
@@ -213,12 +291,14 @@ class TestCopilotControlPlane:
         assert results == [(session_id, "C:\\repo\\myproject", "summary")]
 
     @pytest.mark.anyio
-    async def test_copilot_send_and_abort_use_steer(self, copilot_watcher: SessionStateWatcher) -> None:
-        await copilot_watcher.send_message("sid", "hello")
-        await copilot_watcher.abort_session("sid")
+    async def test_copilot_send_and_abort_use_steer(self, copilot_watcher: SessionStateWatcher, tmp_path: Path) -> None:
+        _write_native_metadata(tmp_path)
+        with patch("backend.services.ingest.copilot_source._SESSION_STATE_DIR", tmp_path):
+            await copilot_watcher.send_message(_LOCAL_ID, "hello")
+            await copilot_watcher.abort_session(_LOCAL_ID)
 
-        copilot_watcher._steer.send_message.assert_awaited_once_with("sid", "hello")
-        copilot_watcher._steer.abort.assert_awaited_once_with("sid")
+        copilot_watcher._steer.send_message.assert_awaited_once_with(_TASK_ID, "hello")
+        copilot_watcher._steer.abort.assert_awaited_once_with(_TASK_ID)
 
     @pytest.mark.anyio
     async def test_discovery_membership_includes_projects_and_legacy_config(
@@ -273,6 +353,239 @@ class TestCopilotControlPlane:
         async with db_session() as session:
             persisted = await JobRepository(session).get(job.id)
         assert persisted is not None
+
+
+class TestNativeBinding:
+    async def test_commands_use_published_target_not_local_identity(self, native_control_stack):
+        stack = native_control_stack
+        assert await stack.runtime.send_operator_message(stack.job.id, "fixture") is True
+        await stack.ingest.abort_session(stack.job.id)
+        assert [call.args[0] for call in stack.post.await_args_list] == [
+            f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer"
+        ] * 2
+        assert [call.kwargs["json"] for call in stack.post.await_args_list] == [
+            {"content": "fixture", "type": "user"},
+            {"type": "abort"},
+        ]
+        assert stack.job.external_session_id == _LOCAL_ID
+        stack.runtime.send_message.assert_not_awaited()
+        stack.runtime._resume_orphaned.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "defect",
+        [
+            "missing",
+            "yaml",
+            "sequence",
+            "unsafe",
+            "missing_task",
+            "task_type",
+            "task_url",
+            "task_path",
+            "id_mismatch",
+            "session_mismatch",
+            "missing_session",
+            "missing_id",
+            "metadata_off",
+            "metadata_string",
+            "marker_off",
+            "marker_missing",
+            "missing_flag",
+        ],
+    )
+    async def test_invalid_or_disabled_binding_denies_control(self, native_control_stack, defect):
+        stack = native_control_stack
+        metadata = json.loads(stack.workspace.read_text(encoding="utf-8"))
+        raw = None
+        if defect == "missing":
+            stack.workspace.unlink()
+        elif defect in {"yaml", "sequence", "unsafe"}:
+            raw = {"yaml": "id: [", "sequence": "[]", "unsafe": "!!python/object:builtins.object {}"}[defect]
+        elif defect.startswith("missing_"):
+            metadata.pop(
+                {
+                    "missing_task": "mc_task_id",
+                    "missing_session": "mc_session_id",
+                    "missing_id": "id",
+                    "missing_flag": "remote_steerable",
+                }[defect]
+            )
+        elif defect.startswith("task_"):
+            metadata["mc_task_id"] = {"task_type": 123, "task_url": "https://fixture.invalid", "task_path": "../other"}[
+                defect
+            ]
+        elif defect in {"id_mismatch", "session_mismatch"}:
+            metadata["id" if defect == "id_mismatch" else "mc_session_id"] = _OTHER_TASK_ID
+        elif defect.startswith("metadata_"):
+            metadata["remote_steerable"] = False if defect == "metadata_off" else "true"
+        elif defect == "marker_missing":
+            stack.workspace.with_name("events.jsonl").unlink()
+        else:
+            with stack.workspace.with_name("events.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps({"type": "session.remote_steerable_changed", "data": {"remoteSteerable": False}}) + "\n"
+                )
+        if defect != "missing":
+            stack.workspace.write_text(raw if raw is not None else json.dumps(metadata), encoding="utf-8")
+        for operation in (
+            stack.runtime.send_operator_message(stack.job.id, "fixture"),
+            stack.ingest.abort_session(stack.job.id),
+        ):
+            with pytest.raises(NativeDeliveryError) as error:
+                await operation
+            assert error.value.uncertain is False
+        assert await stack.ingest.confirms_live(stack.job) is False
+        stack.post.assert_not_awaited()
+        stack.get.assert_not_awaited()
+        stack.runtime._resume_orphaned.assert_not_awaited()
+
+    @pytest.mark.parametrize("local_id", ["../escape", "..\\escape", "C:\\elsewhere", "", "not-a-uuid"])
+    async def test_invalid_local_path_is_not_a_control_target(self, native_control_stack, local_id):
+        stack = native_control_stack
+        with pytest.raises(NativeDeliveryError):
+            await stack.watcher.send_message(local_id, "fixture")
+        stack.post.assert_not_awaited()
+
+    async def test_metadata_outside_owned_root_is_rejected(self, native_control_stack, monkeypatch, tmp_path):
+        from pathlib import Path
+
+        stack = native_control_stack
+        original_resolve = Path.resolve
+        outside = tmp_path / "outside" / "workspace.yaml"
+
+        def redirected(path, *args, **kwargs):
+            if path == stack.workspace:
+                return outside
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", redirected)
+        with pytest.raises(NativeDeliveryError):
+            await stack.runtime.send_operator_message(stack.job.id, "fixture")
+        stack.post.assert_not_awaited()
+
+    async def test_ingest_has_no_direct_local_id_fallback(self, native_control_stack):
+        stack = native_control_stack
+        stack.ingest._session_state_watcher = None
+        for operation in (
+            stack.ingest.send_operator_message(stack.job.id, "fixture"),
+            stack.ingest.abort_session(stack.job.id),
+        ):
+            with pytest.raises(NativeDeliveryError):
+                await operation
+        assert await stack.ingest.confirms_live(stack.job) is False
+        stack.post.assert_not_awaited()
+        stack.get.assert_not_awaited()
+
+    async def test_no_client_is_typed_unavailable(self, native_control_stack):
+        stack = native_control_stack
+        stack.watcher._steer = None
+        with pytest.raises(NativeDeliveryError, match="unavailable"):
+            await stack.runtime.send_operator_message(stack.job.id, "fixture")
+        with pytest.raises(NativeDeliveryError, match="unavailable"):
+            await stack.ingest.abort_session(stack.job.id)
+        assert await stack.ingest.confirms_live(stack.job) is False
+        stack.post.assert_not_awaited()
+
+
+class TestNativeBindingLiveness:
+    async def test_live_check_does_not_read_metadata_or_poll_cloud(self, native_control_stack):
+        stack = native_control_stack
+        with (
+            patch.object(stack.watcher, "_is_remote_steerable") as markers,
+            patch("pathlib.Path.read_text", side_effect=AssertionError("Liveness must not read metadata")),
+        ):
+            assert await stack.ingest.confirms_live(stack.job) is False
+        markers.assert_not_called()
+        stack.get.assert_not_awaited()
+
+    @pytest.mark.parametrize("binding_state", ["published", "missing", "mismatch", "off"])
+    async def test_startup_reattaches_without_metadata_scan_or_cloud_lookup(
+        self, native_control_stack, db_session, binding_state
+    ):
+        stack = native_control_stack
+        await _insert_job(db_session, stack.job.id, JobSource.copilot_cli, _LOCAL_ID)
+        stack.watcher._session_factory = db_session
+        stack.watcher._start_tail = MagicMock()
+        stack.watcher._finalize_session = AsyncMock()
+        stack.watcher._runtime = MagicMock(register_external_session=AsyncMock())
+        if binding_state == "missing":
+            stack.workspace.unlink()
+        elif binding_state != "published":
+            data = json.loads(stack.workspace.read_text(encoding="utf-8"))
+            data["mc_session_id" if binding_state == "mismatch" else "remote_steerable"] = (
+                _OTHER_TASK_ID if binding_state == "mismatch" else False
+            )
+            stack.workspace.write_text(json.dumps(data), encoding="utf-8")
+        with (
+            patch.object(stack.watcher, "_is_remote_steerable") as markers,
+            patch("pathlib.Path.read_text", side_effect=AssertionError("Startup must not read control metadata")),
+        ):
+            await stack.watcher._load_existing_sessions()
+        markers.assert_not_called()
+        stack.watcher._finalize_session.assert_not_awaited()
+        assert stack.watcher._session_to_job == {_LOCAL_ID: stack.job.id}
+        stack.watcher._start_tail.assert_called_once_with(
+            _LOCAL_ID, stack.job.id, stack.root / _LOCAL_ID / "events.jsonl", initial_skip_count=0
+        )
+        async with db_session() as session:
+            persisted = await JobRepository(session).get(stack.job.id)
+        assert persisted.state == JobState.running and persisted.external_session_id == _LOCAL_ID
+        stack.get.assert_not_awaited()
+
+    async def test_tailing_does_not_schedule_diagnostic_liveness_poll(self, native_control_stack):
+        stack = native_control_stack
+        stack.watcher._running = True
+        stack.watcher._session_to_job[_LOCAL_ID] = stack.job.id
+        stack.watcher._finalize_session = AsyncMock()
+        tail_started = asyncio.Event()
+        keep_tailing = asyncio.Event()
+
+        async def tail(*args, **kwargs):
+            tail_started.set()
+            await keep_tailing.wait()
+
+        stack.watcher._tail_traceforge_events = AsyncMock(side_effect=tail)
+        with patch.object(stack.watcher, "_is_remote_steerable") as markers:
+            stack.watcher._start_tail(_LOCAL_ID, stack.job.id, stack.workspace.with_name("events.jsonl"))
+            tasks = list(stack.watcher._tail_tasks.values()) + list(stack.watcher._liveness_tasks.values())
+            try:
+                await asyncio.wait_for(tail_started.wait(), timeout=1)
+                assert not stack.watcher._liveness_tasks, "No diagnostic-only periodic poll should be scheduled"
+                stack.watcher._tail_traceforge_events.assert_awaited_once()
+                assert stack.watcher._tail_traceforge_events.call_args.kwargs["finalize_on_raw"] is (
+                    stack.watcher._raw_terminal
+                )
+                markers.assert_not_called()
+                stack.get.assert_not_awaited()
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        stack.watcher._finalize_session.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("record", "reason"),
+        [
+            ({"type": "session.shutdown", "data": {}}, None),
+            ({"type": "session.error", "data": {"message": "fixture failure"}}, "fixture failure"),
+        ],
+    )
+    async def test_explicit_source_terminal_still_finalizes(self, native_control_stack, db_session, record, reason):
+        stack = native_control_stack
+        await _insert_job(db_session, stack.job.id, JobSource.copilot_cli, _LOCAL_ID)
+        stack.watcher._session_factory = db_session
+        stack.watcher._finalize_session = AsyncMock()
+        stack.watcher._handle_tf_event = AsyncMock()
+        events = stack.workspace.with_name("events.jsonl")
+        events.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        await asyncio.wait_for(
+            stack.watcher._tail_traceforge_events(
+                _LOCAL_ID, stack.job.id, events, finalize_on_raw=stack.watcher._raw_terminal
+            ),
+            timeout=10,
+        )
+        stack.watcher._finalize_session.assert_awaited_once_with(stack.job.id, error_reason=reason)
+        stack.get.assert_not_awaited()
 
 
 class TestNativeControlMarkers:
