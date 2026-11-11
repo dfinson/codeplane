@@ -185,7 +185,7 @@ def _seed_predecessor(db_path: Path) -> None:
             for cursor, kind, payload in events:
                 insert("events", id=cursor, event_id=f"event-{cursor}", job_id="job", kind=kind, timestamp=now,
                        payload=json.dumps(payload, indent=2),
-                       event_metadata=json.dumps({"turn_id": "turn-1", "motivation": "Preserve exact metadata"}))
+                       event_metadata=json.dumps({"turn_id": "turn-1", "motivation": {"intent": "Preserve exact metadata"}}))
     finally:
         engine.dispose()
 
@@ -294,7 +294,7 @@ def test_upgrade_is_repeatable_and_irreversible_downgrade_refuses(predecessor_db
 
 def test_foreign_key_violation_aborts_without_partial_retirement(predecessor_db: Path) -> None:
     with sqlite3.connect(predecessor_db) as db:
-        db.execute("UPDATE jobs SET parent_job_id = 'missing-parent' WHERE id = 'job'")
+        db.execute("UPDATE jobs SET project_id = 'missing-project' WHERE id = 'job'")
         assert db.execute("PRAGMA foreign_key_check").fetchall()
     before = _snapshot(predecessor_db)
     with pytest.raises((RuntimeError, ValueError), match="(?i)foreign.key"):
