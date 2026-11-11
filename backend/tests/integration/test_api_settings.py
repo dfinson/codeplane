@@ -581,10 +581,19 @@ class TestListSDKs:
     """GET /api/sdks"""
 
     @pytest.mark.asyncio
-    async def test_returns_available_sdks(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("copilot_only", [True, False])
+    async def test_returns_available_sdks(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, copilot_only: bool
+    ) -> None:
+        from backend.config import CPLConfig, RuntimeConfig
         from backend.services.setup.checks import AgentAuthStatus, AgentCLIStatus
 
+        config = CPLConfig(runtime=RuntimeConfig(default_sdk="claude", copilot_only=copilot_only))
+        monkeypatch.setattr("backend.api.settings.load_config", lambda: config)
+        checked = []
+
         def _mock_check(sdk_id: str) -> AgentCLIStatus:
+            checked.append(sdk_id)
             return AgentCLIStatus(
                 sdk_id=sdk_id,
                 name=sdk_id,
@@ -609,11 +618,25 @@ class TestListSDKs:
         resp = await client.get("/api/sdks")
         assert resp.status_code == 200
         data = resp.json()
-        assert "default" in data
+        assert data["default"] == ("copilot" if copilot_only else "claude")
+        assert config.runtime.default_sdk == "claude"
         assert "sdks" in data
         assert len(data["sdks"]) >= 1
         sdk_ids = {s["id"] for s in data["sdks"]}
         assert "copilot" in sdk_ids
         for sdk in data["sdks"]:
-            assert sdk["enabled"] is True
-            assert sdk["status"] == "ready"
+            disabled = copilot_only and sdk["id"] == "claude"
+            assert sdk["enabled"] is not disabled
+            assert sdk["status"] == ("disabled_by_policy" if disabled else "ready")
+        assert ("claude" in checked) is not copilot_only
+
+    @pytest.mark.asyncio
+    async def test_copilot_keeps_models_from_other_providers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.api.jobs import list_models
+        from backend.config import CPLConfig
+        from backend.di import CachedModelsBySdk
+
+        monkeypatch.setattr("backend.config.load_config", CPLConfig)
+        catalog = CachedModelsBySdk({"copilot": [{"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"}]})
+        response = await list_models(catalog, sdk="copilot")
+        assert [model.id for model in response.items] == ["claude-haiku-4.5"]
