@@ -105,3 +105,95 @@ class TestPreviewProxy:
         forwarded = call_args.kwargs.get("headers", {})
         assert "x-forwarded-for" not in forwarded
         assert "x-real-ip" not in forwarded
+
+
+class TestRuntimeContract:
+    @pytest.mark.anyio()
+    async def test_credentials_and_response_cookies_never_cross_preview_boundary(self) -> None:
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        seen: list[httpx.Request] = []
+
+        async def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(201, content=b"preview", headers={"set-cookie": "other=secret; Path=/"})
+
+        request = Request({
+            "type": "http", "method": "POST", "path": "/api/preview/3000/",
+            "query_string": b"x=1",
+            "headers": [
+                (b"cookie", b"cpl_session=private"), (b"authorization", b"Bearer private"),
+                (b"cf-access-jwt-assertion", b"private"), (b"x-codeplane-internal-token", b"private"),
+                (b"x-ordinary", b"keep"),
+            ],
+        }, receive=AsyncMock(return_value={"type": "http.request", "body": b"payload"}))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            response = await preview_proxy(3000, "", request, PreviewHttpClient(client))
+        assert not ({"cookie", "authorization", "cf-access-jwt-assertion", "x-codeplane-internal-token"}
+                    & set(seen[0].headers))
+        assert "set-cookie" not in response.headers
+        assert (seen[0].method, seen[0].content, seen[0].headers["x-ordinary"]) == ("POST", b"payload", "keep")
+        assert (response.status_code, response.body) == (201, b"preview")
+
+    @pytest.mark.anyio()
+    async def test_shared_jar_never_replays_cookies_between_preview_ports(self) -> None:
+        from starlette.requests import Request
+
+        from backend.api.preview import preview_proxy
+
+        seen: list[str | None] = []
+
+        async def upstream(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers.get("cookie"))
+            return httpx.Response(200, headers={"set-cookie": "preview_secret=private; Path=/"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            for port in (3000, 4000, 3000):
+                request = Request(
+                    {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+                    receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+                )
+                await preview_proxy(port, "", request, PreviewHttpClient(client))
+        assert seen == [None, None, None]
+
+    @pytest.mark.anyio()
+    @pytest.mark.parametrize("compressed", [False, True])
+    async def test_decoded_limit_stops_consumption_and_closes_upstream(self, monkeypatch, compressed) -> None:
+        import gzip
+
+        from starlette.requests import Request
+
+        from backend.api import preview
+
+        class CountingStream(httpx.AsyncByteStream):
+            consumed = 0
+            closed = False
+
+            async def __aiter__(self):
+                chunks = [b"a" * 8, b"b" * 8, b"c" * 8]
+                if compressed:
+                    packed = gzip.compress(b"".join(chunks))
+                    chunks = [packed[:-8], packed[-8:], b""]
+                for chunk in chunks:
+                    self.consumed += 1
+                    yield chunk
+
+            async def aclose(self):
+                self.closed = True
+
+        stream = CountingStream()
+        monkeypatch.setattr(preview, "_MAX_RESPONSE_BYTES", 10)
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": []},
+            receive=AsyncMock(return_value={"type": "http.request", "body": b""}),
+        )
+        headers = {"content-encoding": "gzip"} if compressed else {}
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, headers=headers, stream=stream))
+        ) as client:
+            response = await preview.preview_proxy(3000, "", request, PreviewHttpClient(client))
+        assert response.status_code == 502
+        assert stream.closed
+        assert stream.consumed < 3, "The cap must stop reads, not reject after full download"

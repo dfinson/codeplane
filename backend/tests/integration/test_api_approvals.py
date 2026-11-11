@@ -34,6 +34,24 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    async def test_native_message_uses_source_aware_runtime_command(self):
+        from unittest.mock import AsyncMock
+
+        from backend.api.approvals import send_message
+        from backend.models.api_schemas import SendMessageRequest
+        from backend.tests.unit.conftest import make_job
+
+        runtime = AsyncMock()
+        runtime.send_operator_message.return_value = True
+        ingest = AsyncMock()
+        jobs = AsyncMock()
+        jobs.get_job.return_value = make_job(source="copilot_cli", external_session_id="native-1")
+        await send_message("job-1", SendMessageRequest(content="fixture"), runtime, ingest, jobs)
+        assert runtime.send_operator_message.await_count == 1
+        ingest.send_operator_message.assert_not_awaited()
+
+
 class TestListApprovals:
     """GET /api/jobs/{job_id}/approvals"""
 

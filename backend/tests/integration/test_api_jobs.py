@@ -71,6 +71,22 @@ def _create_body(**overrides: object) -> dict[str, object]:
     return base
 
 
+class TestRuntimeContract:
+    async def test_cancel_routes_delivery_before_state_change(self):
+        from backend.api.jobs import cancel_job
+        from backend.tests.unit.conftest import make_job
+
+        jobs = AsyncMock()
+        runtime = AsyncMock()
+        ingest = AsyncMock()
+        job = make_job(state="canceled", source="copilot_cli", external_session_id="native-1")
+        jobs.cancel_job.return_value = job
+        runtime.cancel_job.return_value = job
+        await cancel_job("job-1", jobs, runtime, ingest)
+        assert runtime.cancel_job.await_count == 1
+        jobs.cancel_job.assert_not_awaited()
+
+
 @dataclass
 class FakeMergeResult:
     status: str = "merged"

@@ -26,6 +26,75 @@ def _mock_repo() -> AsyncMock:
     return repo
 
 
+class TestRuntimeContract:
+    @pytest.mark.asyncio
+    async def test_two_turn_chat_uses_discussion_system_context_through_real_pool(self):
+        from backend.services.adapters.agent_adapter import CompletionResult
+        from backend.services.sidecar.session import SidecarSessionManager
+
+        repo = _mock_repo()
+        persisted = []
+        repo.get.return_value = Chat(
+            id="chat-contract", project_id=None, title="Discussion", created_at=None, last_message_at=None
+        )
+        repo.add_message.side_effect = lambda message: (persisted.append(message), message)[1]
+        repo.list_messages.side_effect = lambda _chat_id: list(persisted)
+        adapter = AsyncMock()
+        adapter.complete.side_effect = [CompletionResult(text="First answer"), CompletionResult(text="Second answer")]
+        manager = SidecarSessionManager(adapter, model="utility-model")
+        service = ChatService(repo, completer=manager)
+        for content in ["First question", "Follow-up question"]:
+            user_message = await service.begin_turn("chat-contract", content=content)
+            assert user_message is not None
+            result = await service.complete_turn("chat-contract", user_message=user_message)
+            assert result.state == "assistant"
+        first, second = adapter.complete.call_args_list
+        assert first.kwargs["system_message"] == chat_service_module._CHAT_SYSTEM_PROMPT
+        assert chat_service_module._CHAT_SYSTEM_PROMPT not in first.args[0]
+        assert first.kwargs["excluded_tools"] == ["*"]
+        assert second.kwargs["system_message"] == chat_service_module._CHAT_SYSTEM_PROMPT
+        assert second.args[0] == (
+            "Conversation:\nuser: First question\nassistant: First answer\nuser: Follow-up question\nAssistant:"
+        )
+        assert [message.role for message in persisted] == ["user", "assistant", "user", "assistant"]
+
+    @pytest.mark.asyncio
+    async def test_provider_error_preserves_committed_user_message(self):
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from backend.models.db import Base
+        from backend.persistence.chat_repo import ChatRepository
+        from backend.services.sidecar.session import SidecarSessionManager
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        adapter = AsyncMock()
+        adapter.complete.side_effect = OSError("provider unavailable")
+        manager = SidecarSessionManager(adapter, model="utility-model")
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with factory() as session:
+                service = ChatService(ChatRepository(session), completer=manager)
+                chat = await service.create_chat(title="Saved discussion")
+                user_message = await service.begin_turn(chat.id, content="Keep my question")
+                assert user_message is not None
+                await session.commit()
+            async with factory() as session:
+                service = ChatService(ChatRepository(session), completer=manager)
+                result = await service.complete_turn(chat.id, user_message=user_message)
+                assert result.state == "error"
+                assert result.assistant_message is None
+                assert result.user_message.id == user_message.id
+                await session.commit()
+            async with factory() as session:
+                messages = await ChatRepository(session).list_messages(chat.id)
+                assert [(message.role, message.content) for message in messages] == [("user", "Keep my question")]
+            assert adapter.complete.call_args.kwargs["system_message"] == chat_service_module._CHAT_SYSTEM_PROMPT
+        finally:
+            await engine.dispose()
+
+
 class TestChatServiceCreateChat:
     @pytest.mark.asyncio
     async def test_default_project_id_is_null(self):

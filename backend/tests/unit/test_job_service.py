@@ -79,6 +79,22 @@ async def job_service(
 # --- State Machine Unit Tests ---
 
 
+class TestRuntimeContract:
+    async def test_cancel_during_setup_cannot_revive_job(self):
+        from backend.tests.unit.conftest import make_job
+
+        job = make_job(state=JobState.preparing, repo="fixture", worktree_name="fixture")
+        canceled = make_job(state=JobState.canceled, repo="fixture", worktree_name="fixture")
+        repo = AsyncMock()
+        repo.get.side_effect = [job, canceled, canceled]
+        git = AsyncMock()
+        git.create_worktree.return_value = ("fixture-worktree", "fixture-branch")
+        service = JobService(repo, git, CPLConfig())
+        result = await service.setup_workspace(job.id)
+        assert result.state == JobState.canceled
+        assert not any(call.args[1] == JobState.queued for call in repo.update_state.call_args_list)
+
+
 class TestStateMachine:
     def test_valid_initial_transitions(self) -> None:
         validate_state_transition(None, JobState.queued)

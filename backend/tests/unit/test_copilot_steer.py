@@ -15,6 +15,24 @@ def client():
     return CopilotSteerClient(github_token="test-token-123")
 
 
+class TestRuntimeContract:
+    async def test_rejected_send_is_not_success(self, client):
+        response = httpx.Response(403, request=httpx.Request("POST", "https://fixture.invalid"))
+        with patch.object(client._client, "post", new_callable=AsyncMock, return_value=response):
+            rejected = False
+            try:
+                await client.send_message("session-1", "fixture")
+            except RuntimeError:
+                rejected = True
+            assert rejected
+        await client.close()
+
+    async def test_unknown_liveness_does_not_confirm_live_execution(self, client):
+        with patch.object(client._client, "get", new_callable=AsyncMock, side_effect=httpx.ConnectError("fixture")):
+            assert await client.check_alive("session-1") is None
+        await client.close()
+
+
 class TestCopilotSteerClientInit:
     def test_client_created_with_auth_header(self, client: CopilotSteerClient):
         assert client._token == "test-token-123"

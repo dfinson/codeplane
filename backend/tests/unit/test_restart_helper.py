@@ -557,6 +557,23 @@ class TestStopOldProcess:
 # ---------------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    def test_replacement_replays_access_only_without_secret_arguments(self, tmp_path: Path) -> None:
+        data = _remote_profile(provider="cloudflare").to_dict()
+        data["passwordSource"] = {"kind": "not_required"}
+        data["authMode"] = "access_only"
+        profile = LaunchProfile.from_dict(data)
+        with (
+            patch.object(rh, "get_replacement_log_path", return_value=tmp_path / "replacement.log"),
+            patch.object(rh.subprocess, "Popen", return_value=MagicMock()) as spawn,
+        ):
+            rh._start_replacement(profile, tmp_path, nonce="n", request_id="access-mode")
+        args = spawn.call_args.args[0]
+        assert "--access-only" in args
+        assert "--password" not in args
+        assert "--no-password" not in args
+
+
 class TestStartReplacement:
     def test_builds_exact_local_argv_and_env_with_nonce(self, tmp_path: Path) -> None:
         """Exact argv reproducibility (verified against ``python -m backend.main up --help``,

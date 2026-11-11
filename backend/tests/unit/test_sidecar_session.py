@@ -62,6 +62,56 @@ class _FakeSidecarConfig:
 # ===================================================================
 
 
+class TestRuntimeContract:
+    @pytest.mark.asyncio
+    async def test_custom_context_is_system_only_and_not_pooled(self) -> None:
+        adapter = _mock_adapter("discussion")
+        manager = _make_manager(adapter, pool_size=1)
+        manager._fill_pool()
+        generic = manager._pool[0]
+        original_complete = adapter.complete
+
+        async def complete(prompt, **kwargs):
+            manager._pool.clear()
+            return await original_complete(prompt, **kwargs)
+
+        adapter.complete = complete
+        error = None
+        try:
+            result = await manager.complete("user: hello", system_prompt="Discussion only")
+        except TypeError as exc:
+            error = exc
+            result = None
+        assert error is None, "Manager must accept a per-call system_prompt"
+        assert result == "discussion"
+        call = original_complete.call_args
+        assert call.args == ("user: hello",)
+        assert call.kwargs["system_message"] == "Discussion only"
+        assert call.kwargs["excluded_tools"] == ["*"]
+        assert not manager._pool, "A custom wrapper cannot refill the generic pool"
+        adapter.complete = original_complete
+        await manager.complete("title please")
+        assert original_complete.call_args.kwargs["system_message"] == _DEFAULT_SYSTEM_PROMPT
+        assert generic._system_prompt == _DEFAULT_SYSTEM_PROMPT
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure", [OSError("provider unavailable"), RuntimeError("provider failed"), TimeoutError()]
+    )
+    async def test_provider_failure_propagates_as_typed_error(self, failure: Exception) -> None:
+        adapter = _mock_adapter()
+        adapter.complete.side_effect = failure
+        manager = _make_manager(adapter)
+        error = None
+        try:
+            await manager.complete("title please")
+        except Exception as exc:
+            error = exc
+        assert error is not None, "An empty string is not a successful provider response"
+        assert type(error).__name__ == "UtilityCompletionError"
+        assert manager.get_metrics()["global"]["totalCalls"] == 0
+
+
 class TestSidecarSession:
     @pytest.mark.asyncio
     async def test_first_call_prepends_system_prompt(self) -> None:

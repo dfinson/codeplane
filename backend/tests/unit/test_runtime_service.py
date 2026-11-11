@@ -52,6 +52,44 @@ from backend.services.runtime import (
 log = structlog.get_logger()
 
 
+class TestRuntimeContract:
+    async def test_cancel_stops_scout_start_task(self, runtime):
+        waiting = asyncio.create_task(asyncio.Event().wait())
+        runtime._starting_tasks = {"job-1": waiting}
+        try:
+            await runtime.cancel("job-1")
+            await asyncio.sleep(0)
+            assert waiting.cancelled(), "Cancellation must stop preflight before primary launch"
+        finally:
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
+
+    async def test_followup_is_the_controllable_live_session(self, monkeypatch):
+        from backend.services.runtime.verify import run_followup_turn
+
+        observed = []
+        host = SimpleNamespace(
+            _agent_sessions={},
+            _echo_suppress={},
+            _session_ids={},
+            _resolve_adapter=lambda sdk: object(),
+            _event_bus=EventBus(),
+            _event_processor=None,
+        )
+
+        async def execute(session, config, adapter):
+            yield new_event("job-1", EventKind.message_assistant, {"content": "verified"})
+
+        async def process(job_id, event, session, rejection):
+            observed.append(host._agent_sessions.get(job_id) is session)
+            return EventAction.skip, None
+
+        host._process_agent_event = process
+        monkeypatch.setattr(AgentSession, "execute", execute)
+        await run_followup_turn(host, "job-1", "verify", SessionConfig(".", "fixture"), None, None, None)
+        assert observed == [True]
+
+
 def _make_runtime(**kwargs: Any) -> RuntimeService:
     """Build a RuntimeService with a stub governance decider wired.
 

@@ -42,6 +42,35 @@ def _mock_subprocess(
 # ------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    async def test_creation_rejects_traversal_without_git(self, tmp_path):
+        service = GitService(CPLConfig())
+        service._run_git = AsyncMock(return_value="main")
+        rejected = False
+        try:
+            await service.create_worktree(str(tmp_path), "..\\escape", "main")
+        except GitError:
+            rejected = True
+        assert rejected
+        service._run_git.assert_not_awaited()
+
+    async def test_creation_preserves_existing_directory(self, tmp_path):
+        service = GitService(CPLConfig())
+        service._run_git = AsyncMock(return_value="main")
+        target = tmp_path / ".codeplane-worktrees" / "existing"
+        target.mkdir(parents=True)
+        marker = target / "keep.txt"
+        marker.write_text("valuable", encoding="utf-8")
+        rejected = False
+        try:
+            await service.create_worktree(str(tmp_path), "existing", "main", "existing-branch")
+        except GitError:
+            rejected = True
+        assert rejected
+        assert marker.read_text(encoding="utf-8") == "valuable"
+        assert not any(c.args[:2] == ("branch", "-D") for c in service._run_git.call_args_list)
+
+
 class TestIsRemoteUrl:
     def test_https_url(self) -> None:
         assert GitService.is_remote_url("https://github.com/org/repo.git") is True

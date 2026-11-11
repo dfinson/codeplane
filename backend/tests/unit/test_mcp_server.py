@@ -115,6 +115,17 @@ def mcp_server(mock_session_factory, mock_runtime, mock_approval, mock_merge_ser
 # ── Server creation ─────────────────────────────────────────────────
 
 
+class TestRuntimeContract:
+    async def test_message_uses_source_aware_command(self, mcp_server, mock_runtime):
+        mock_runtime.send_operator_message = AsyncMock(return_value=True)
+        result = await _tool(mcp_server, "codeplane_job")(
+            action="message", job_id="native-job", content="fixture"
+        )
+        assert mock_runtime.send_operator_message.await_count == 1
+        mock_runtime.send_message.assert_not_awaited()
+        assert "error" not in result
+
+
 class TestMCPServerCreation:
     def test_creates_server_with_tools(self, mcp_server) -> None:
         assert mcp_server is not None
