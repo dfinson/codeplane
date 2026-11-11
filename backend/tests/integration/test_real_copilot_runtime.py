@@ -387,6 +387,52 @@ def test_approval_recovery_and_mcp_cancellation(real_runtime):
     runtime.save()
 
 
+def _verify_native_round_trip(runtime, session_id):
+    path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
+
+    def records():
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def imported():
+        jobs = runtime.request("GET", "/api/jobs")["items"]
+        return next((job for job in jobs if job.get("externalSessionId") == session_id), None)
+
+    observed = _wait(imported, timeout=120, description="current supported native control discovery")
+    snapshot = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
+    assert any("NATIVE_ACCEPTANCE_READY" in str(item) for item in snapshot["transcript"])
+    runtime.request(
+        "POST",
+        f"/api/jobs/{observed['id']}/messages",
+        json={"content": "Reply exactly NATIVE_STEERING_RECEIVED. Do not use tools."},
+    )
+    _wait(
+        lambda: any(
+            "NATIVE_STEERING_RECEIVED" in str(e.get("data")) for e in records() if e["type"] == "assistant.message"
+        ),
+        timeout=180,
+        description="actual native steering execution",
+    )
+    runtime.mcp("message", job_id=observed["id"], content="Reply exactly NATIVE_MCP_RECEIVED. Use no tools.")
+    _wait(
+        lambda: any("NATIVE_MCP_RECEIVED" in str(e.get("data")) for e in records() if e["type"] == "assistant.message"),
+        timeout=180,
+        description="actual native MCP steering execution",
+    )
+    with sqlite3.connect(runtime.home / "data.db") as db:
+        ids = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
+    assert ids and len(ids) == len(set(ids))
+    runtime.stop()
+    runtime.start()
+    restored = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
+    assert restored["transcript"]
+    with sqlite3.connect(runtime.home / "data.db") as db:
+        after = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
+    assert set(ids) <= set(after)
+    assert len(after) == len(set(after))
+    runtime.request("POST", f"/api/jobs/{observed['id']}/cancel")
+    runtime.wait_state(observed["id"], {"canceled"})
+
+
 def test_native_capability_is_real_and_observed(real_runtime):
     runtime = real_runtime
     from winpty import Backend, PtyProcess
@@ -530,46 +576,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
         time.sleep(1)
         send_command("/remote on")
 
-        def imported():
-            jobs = runtime.request("GET", "/api/jobs")["items"]
-            return next((job for job in jobs if job.get("externalSessionId") == session_id), None)
-
-        observed = _wait(imported, timeout=120, description="current supported native control discovery")
-        snapshot = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
-        assert any("NATIVE_ACCEPTANCE_READY" in str(item) for item in snapshot["transcript"])
-        runtime.request(
-            "POST",
-            f"/api/jobs/{observed['id']}/messages",
-            json={"content": "Reply exactly NATIVE_STEERING_RECEIVED. Do not use tools."},
-        )
-        _wait(
-            lambda: any(
-                "NATIVE_STEERING_RECEIVED" in str(e.get("data")) for e in records() if e["type"] == "assistant.message"
-            ),
-            timeout=180,
-            description="actual native steering execution",
-        )
-        runtime.mcp("message", job_id=observed["id"], content="Reply exactly NATIVE_MCP_RECEIVED. Use no tools.")
-        _wait(
-            lambda: any(
-                "NATIVE_MCP_RECEIVED" in str(e.get("data")) for e in records() if e["type"] == "assistant.message"
-            ),
-            timeout=180,
-            description="actual native MCP steering execution",
-        )
-        with sqlite3.connect(runtime.home / "data.db") as db:
-            ids = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
-        assert ids and len(ids) == len(set(ids))
-        runtime.stop()
-        runtime.start()
-        restored = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
-        assert restored["transcript"]
-        with sqlite3.connect(runtime.home / "data.db") as db:
-            after = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
-        assert set(ids) <= set(after)
-        assert len(after) == len(set(after))
-        runtime.request("POST", f"/api/jobs/{observed['id']}/cancel")
-        runtime.wait_state(observed["id"], {"canceled"})
+        _verify_native_round_trip(runtime, session_id)
     finally:
         try:
             if incoming_changed:
