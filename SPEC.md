@@ -2545,7 +2545,31 @@ Retention cleanup removes:
 4. Worktree directories for jobs in terminal states older than the retention period
 
 Job records and events are never deleted. They serve as an audit log.
-```
+
+### 16.5 Recoverable Task Starts and Tracker Delivery
+
+`TaskExecutionService` is application-scoped and shared by REST, MCP, and completion subscribers. It performs read-only Job preflight before a short serialized transaction that revalidates eligibility, creates the `preparing` Job, and attaches it to its TaskLink. Git discovery and naming do not commit a jobless reservation. Cancellation before commit leaves a retryable task. After commit, the existing runtime recovers the linked Job and prepares its workspace.
+
+Completion projections use conditional state updates. Replayed completion events cannot overwrite a live start. A dependency is satisfied only by a persisted completed Job resolved as `merged` or `pr_created`. Chat gating remains chain-scoped. The task transaction commits and closes before requesting an approval through `ApprovalService`. Structured spawn actions retain the predecessor's Job attempt, and legacy `spawn_task:<id>` approvals remain readable. Startup reconciles abandoned legacy claims and approved starts before admitting new commands, without starting the same Job twice.
+
+Tracker approval and delivery are separate durable facts. Each `tracker_operations` row holds an immutable request identity, exact target and content, canonical approval association, dispatch phase, and outcome. Repeated recipe completion for the same Job attempt reuses the same source identity. The managed worker survives a canceled request caller and reconstructs approval associations after restart. Tracker output failure never changes a successfully completed task into a failed task.
+
+Operations progress through `awaiting_approval`, `approved`, and `dispatching`. An acknowledged write becomes `applied`, a denial becomes `rejected`, and a definite nondelivery becomes `failed`. A lost response or interrupted dispatch becomes `uncertain`. Neither restart nor retry automatically repeats an uncertain comment. The operator must record evidence of delivery or nondelivery. Confirmed nondelivery becomes `not_applied`; a subsequent retry is a distinct linked operation requiring fresh explicit approval. Reconciliation and retry use an expected-version compare-and-set.
+
+Live Job, Project, TaskLink, TrackerLink, and Approval correlations use nullable `ON DELETE SET NULL` foreign keys. Immutable references and approval/receipt/reconciliation evidence remain available for history. Missing live dependencies prohibit dispatch; snapshots do not authorize a write or silently bind a replacement target. Existing archive and artifact/worktree retention behavior remains unchanged. Legacy approved tracker requests without dispatch evidence are imported as uncertain, never assumed delivered or replayed.
+
+`tracker.operation_updated` is an allowlisted SSE event delivered after the operation commit. It reaches global connections and the associated Job connection. An operation with a deleted Job uses an unassociated global event rather than inserting an invalid Job-FK event. The frontend stores these records centrally, hydrates them after reconnect, and protects newer versions and deleted correlations from stale replay.
+
+GitHub tracker reads display Projects v2 **Project Status**. The existing GitHub `transition` command changes the underlying issue's **Issue state** (`open` or `closed`), including the existing `Done` alias for closing an issue. Approval and outcome labels name that operation explicitly. It does not mutate Project Status.
+
+Project-scoped history and operator commands are available at:
+
+- `GET /api/projects/{project_id}/tracker-links/operations`, optionally filtered by `job_ref` or `tracker_link_ref`.
+- `GET /api/projects/{project_id}/tracker-links/operations/{operation_id}`.
+- `POST .../{operation_id}/reconcile` with `expectedVersion`, `resolution`, and delivery `evidence`.
+- `POST .../{operation_id}/retry` with `expectedVersion` and a stable caller `requestId`.
+
+The existing tracker panel shows pending approval, precise targets, receipts, failures, and uncertain delivery. Evidence is retained after a recoverable error. An uncertain operation has no retry action until nondelivery is established.
 
 ---
 
@@ -3998,6 +4022,10 @@ Every REST API capability is exposed as an MCP tool. Related operations are coll
 |---|---|---|---|
 | `codeplane_workspace` | Browse Job Worktree | list, read | `GET /api/jobs/{id}/workspace`, `GET /api/jobs/{id}/workspace/file` |
 | `codeplane_artifact` | Access Job Artifacts | list, get | `GET /api/jobs/{id}/artifacts`, `GET /api/artifacts/{id}` |
+
+#### Tracker Delivery
+
+`codeplane_tracker` exposes `comment`, `transition`, `status`, and `list` for a Job's explicit tracker pairing. Writes require an explicit CodePlane approval and return an operation identity plus a truthful durable outcome. Supplying the same `request_id` deduplicates a retried MCP call. `status` and `list` recover results after disconnection. Approval alone is never reported as applied, and uncertain delivery must not be blindly repeated.
 
 #### Configuration
 
