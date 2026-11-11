@@ -34,6 +34,20 @@ passwords are preserved. Access-only mode requires an explicit selection and
 per-request verified JWT. Preview transport never forwards control-plane
 credentials or cookies and enforces the decoded response limit during reading.
 
+Access-only detached restart uses the operator's existing cached Cloudflare
+application JWT, privately retrieved before the adoption deadline begins.
+Missing or unusable credentials fail before mutation, without initiating login.
+A private inherited pipe carries a versioned, length-prefixed credential frame
+of at most 64 KiB bound to request ID, server PID/creation time and exact HTTPS
+origin. The helper verifies identity and authenticates a protected read on the
+old loopback listener before adoption. Only a separate matching parent commit
+permits pause/stop; parent death, EOF, invalid input or timeout before commit
+aborts. Committed helpers survive parent exit. Credentials are confined to
+memory and the pipe, restricted to old-listener job-list/pause requests, and
+dropped before stop/replacement. No credential is stored in argv, environment,
+files, logs or status. Replacement retains Access-only. This is single-use
+transport of an ordinary JWT, not a restart-scoped server credential.
+
 ## Table of Contents
 
 1. [Product Overview](#1-product-overview)
@@ -1571,7 +1585,7 @@ server:
 runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .codeplane-worktrees
-  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries
+  utility_model: claude-haiku-4.5   # default utility model for naming and summaries
   default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job
   suppressed_preflight_agent_prompts: []
 
@@ -1643,6 +1657,9 @@ tools:
       env:
         DATABASE_URL: "${DATABASE_URL}"
 ```
+
+Missing or blank `runtime.utility_model` uses `claude-haiku-4.5`. An explicit
+nonblank model choice is preserved. This default is not a claim of lower billing.
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 

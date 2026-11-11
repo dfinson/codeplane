@@ -359,13 +359,13 @@ class SidecarSessionManager:
         model: str | None = None,
         excluded_tools: list[str] | None = None,
     ) -> SidecarSession:
-        """Create a new SidecarSession wrapper (cheap — no I/O)."""
+        """Create a wrapper using the configured model unless explicitly overridden."""
         return SidecarSession(
             adapter=self._adapter,
             system_prompt=system_prompt,
             max_turns=max_turns,
             timeout_s=timeout_s,
-            model=model,
+            model=self._model if model is None else model,
             excluded_tools=excluded_tools,
         )
 

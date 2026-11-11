@@ -111,11 +111,14 @@ class ServerConfig:
     port: int = 8080
 
 
+_DEFAULT_COPILOT_UTILITY_MODEL = "claude-haiku-4.5"
+
+
 @dataclass
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".codeplane-worktrees"
-    utility_model: str = ""  # cheap/fast model for naming, summaries, etc. Auto-set from default_sdk if empty.
+    utility_model: str = ""  # Missing/blank uses the provider default; explicit identifiers remain unchanged.
     default_sdk: str = "copilot"  # copilot | claude
     copilot_only: bool = True
     suppressed_preflight_agent_prompts: list[str] = field(default_factory=list)
@@ -124,9 +127,11 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.copilot_only, bool):
             raise ValueError("runtime.copilot_only must be a boolean")
-        if not self.utility_model:
+        if not self.utility_model or not self.utility_model.strip():
             self.utility_model = (
-                "claude-haiku-4.5" if self.default_sdk == "claude" and not self.copilot_only else "gpt-5-mini"
+                "claude-haiku-4.5"
+                if self.default_sdk == "claude" and not self.copilot_only
+                else _DEFAULT_COPILOT_UTILITY_MODEL
             )
 
 

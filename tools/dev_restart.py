@@ -136,6 +136,29 @@ def ensure_secret_resolvable(source: SecretSource, target_source_root: Path, *, 
     raise DevRestartError(f"{label} has an unrecognized provider {source.provider!r}; restart refused")
 
 
+def get_cached_access_token(profile: LaunchProfile) -> str:
+    """Read an existing operator credential, without invoking login or logging output."""
+    from backend.services.dev_restart.launch_profile import validate_launch_profile
+    from backend.services.dev_restart.restart_protocol import validate_access_origin, validate_access_token
+
+    validate_launch_profile(profile, require_replayable_secrets=True)
+    origin = validate_access_origin(profile.tunnel_origin)
+    executable = shutil.which("cloudflared")
+    if not executable:
+        raise DevRestartError("access_token_executable_unavailable")
+    try:
+        result = subprocess.run(
+            [executable, "access", "token", "--app", origin],
+            capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        raise DevRestartError("access_token_retrieval_failed") from None
+    if result.returncode or not result.stdout.strip():
+        raise DevRestartError("access_token_cache_unavailable: operator login required before retry")
+    # Strip only the CLI's optional trailing line ending, not embedded whitespace.
+    return validate_access_token(result.stdout.rstrip("\r\n"))
+
+
 # ---------------------------------------------------------------------------
 # Backend compile/import preflight (AC 3)
 # ---------------------------------------------------------------------------
@@ -303,35 +326,62 @@ def run_parent(args: argparse.Namespace) -> int:
     detached helper (Story 1.3) and wait for adoption. Returns the process
     exit code.
     """
-    from backend.services.dev_restart.restart_helper import await_adoption, spawn_detached_helper
+    from backend.services.dev_restart.launch_profile import LaunchProfile, LaunchProfileError
+    from backend.services.dev_restart.restart_helper import HandoffProcess, await_adoption, spawn_detached_helper
     from backend.services.dev_restart.restart_protocol import (
         RestartProtocolError,
         get_restart_log_path,
+        read_json_file,
         rotate_restart_log_if_needed,
     )
 
     try:
         paths, request_id, timeouts = prepare_restart_request(args)
+        profile = LaunchProfile.from_dict(read_json_file(paths.pending).get("launchProfile"))
+        handoff = None
+        if profile.effective_auth_mode == "access_only":
+            handoff = {
+                "version": 1, "kind": "credential", "requestId": request_id,
+                "serverPid": profile.started_pid, "serverProcessTime": profile.started_process_time,
+                "origin": profile.tunnel_origin, "jwt": get_cached_access_token(profile),
+            }
         log_path = get_restart_log_path()
         rotate_restart_log_if_needed(log_path)
-    except (DevRestartError, RestartProtocolError) as exc:
+    except (DevRestartError, RestartProtocolError, LaunchProfileError) as exc:
         print(f"\n✗ Restart preparation failed: {exc}\n  The current server has NOT been restarted.\n", file=sys.stderr)
         return 1
     print(f"[4/4] Spawning detached restart helper (log: {log_path})…")
     try:
         with open(log_path, "a", encoding="utf-8") as log_handle:
-            helper_pid = spawn_detached_helper(
-                Path(sys.executable), Path(__file__).resolve(), paths.pending, log_handle
-            )
-    except OSError as exc:
+            if handoff is not None:
+                try:
+                    helper = spawn_detached_helper(
+                        Path(sys.executable), Path(__file__).resolve(), paths.pending, log_handle,
+                        handoff=handoff, adoption_seconds=timeouts.adoption_seconds,
+                    )
+                finally:
+                    handoff.clear()
+            else:
+                helper = spawn_detached_helper(
+                    Path(sys.executable), Path(__file__).resolve(), paths.pending, log_handle
+                )
+    except (OSError, RestartProtocolError):
         print(
-            f"\n✗ Could not spawn the detached restart helper: {exc}\n  The current server has NOT been restarted.\n",
+            "\nRestart handoff failed before commit. The current server has NOT been restarted.",
             file=sys.stderr,
         )
         return 1
 
+    helper_pid = helper.pid if isinstance(helper, HandoffProcess) else helper
     print(f"  Helper spawned (PID {helper_pid}); waiting up to {timeouts.adoption_seconds:.0f}s for adoption…")
-    if not await_adoption(paths, request_id, timeouts.adoption_seconds):
+    try:
+        adopted = (
+            helper.commit(paths) if isinstance(helper, HandoffProcess)
+            else await_adoption(paths, request_id, timeouts.adoption_seconds)
+        )
+    except (OSError, RestartProtocolError):
+        adopted = False
+    if not adopted:
         print(
             f"\n✗ Helper did not adopt request {request_id} within {timeouts.adoption_seconds:.0f}s.\n"
             f"  The current server has NOT been restarted. Check the log: {log_path}\n",

@@ -206,10 +206,26 @@ password source are refused rather than silently interpreted as Access-only.
 Generated or command-line-only passwords remain unreplayable.
 
 The detached restart helper can authenticate using a resolvable `CPL_PASSWORD`
-and keeps its resulting session only in memory. An Access-only helper has no
-approved authenticated handoff; it fails before pausing or stopping the server
-rather than bypassing the application gate. Adding such a handoff requires a
-separate reviewed contract.
+and keeps its resulting session only in memory. For Access-only, the initiating
+process privately captures the operator's existing cached JWT with
+`cloudflared access token --app <recorded-origin>`. CodePlane never initiates
+login. Missing, empty, expired or invalid credentials fail before mutation.
+
+The initiating process validates the recorded process/listener and HTTPS origin,
+then passes the JWT through an inherited anonymous pipe using a versioned,
+length-prefixed frame capped at 64 KiB. No credential enters argv, environment,
+request/profile files, status receipts or logs. Credential retrieval precedes
+the adoption timer. The helper validates the bound request/server identity and
+authenticates a protected read on the exact old listener before acknowledging
+adoption. A distinct parent commit frame is required before pause/stop.
+EOF, malformed input, deadline expiry or parent death before commit aborts.
+
+After commit the helper can survive parent exit. It authenticates every allowed
+job-list/pause request with the JWT, without redirects or environment proxies.
+It closes the channel and drops token references before stopping the old process
+or starting the replacement. Replacement retains Access-only. The transfer is
+single-use; the JWT remains an ordinary application credential until its existing
+expiry, not a server-enforced restart-scoped token.
 
 ### Push Notification Security
 

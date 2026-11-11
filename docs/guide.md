@@ -32,6 +32,22 @@ Verification results distinguish completed, failed and interrupted agent
 verification turns. A completed turn is not evidence that tests passed.
 Review remains the operator's decision state.
 
+## Restarting an Access-only development server
+
+Run `uv run --no-sync python tools\dev_restart.py` from the intended checkout.
+The existing Cloudflare operator login must already have cached an application
+JWT for the recorded tunnel origin. CodePlane retrieves that cached token
+privately; it does not launch a login flow. If the cache is missing or invalid,
+complete operator login separately and retry. Never place the JWT in command
+arguments, environment variables, configuration or request files.
+
+Preparation finishes before the adoption timer starts. The helper authenticates
+against the old server before reporting adoption, and waits for a separate
+parent commit before pausing jobs. Parent death or a closed/invalid channel
+before commit leaves the server untouched. Once committed, restart continues
+in the detached helper even if the initiating process exits. The replacement
+retains `--access-only`; local and password restart modes are unchanged.
+
 ## Creating Jobs
 
 Jobs are the core unit of work. Each job runs an agent against a repository in an isolated Git worktree.
