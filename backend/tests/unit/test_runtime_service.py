@@ -297,6 +297,222 @@ async def _wait_until(
         await asyncio.sleep(interval)
 
 
+async def _prepare_scout_job(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+) -> Job:
+    from pathlib import Path
+
+    job = _make_job(repo=config.repos[0])
+    job.worktree_path = str(Path(config.repos[0]) / "job-worktree")
+    job.model = "primary-heavy-model"
+    await _create_db_job(session_factory, job)
+    runtime._setup_action_policy = AsyncMock()  # type: ignore[method-assign]
+    # Capture the configuration at the primary execution boundary; leave Scout
+    # orchestration, terminal-state checks and persistence on their real paths.
+    runtime._run_job_guarded = AsyncMock()  # type: ignore[method-assign]
+    return job
+
+
+@pytest.mark.asyncio
+async def test_scout_brief_reaches_primary_without_structural_service(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+    event_bus: EventBus,
+) -> None:
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+    from backend.services.tools.preflight_curator import PreflightReport, PreflightToolCall
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    brief = "  src.py: target() uses the shared parser.\nRisk: callers expect None.\n"
+    tool_call = PreflightToolCall(
+        tool_name="view", tool_args='{"path":"src.py"}', result_text="def target(): pass", duration_ms=12.0
+    )
+    curator = MagicMock()
+
+    async def curate(**kwargs: Any) -> PreflightReport:
+        await kwargs["on_reasoning"]("Inspecting the task's entry point")
+        await kwargs["on_tool_call"](tool_call)
+        return PreflightReport(brief=brief, tool_calls=[tool_call])
+
+    curator.curate = AsyncMock(side_effect=curate)
+    runtime.set_preflight_curator(curator)
+    published: list[SessionEvent] = []
+
+    async def capture(event: SessionEvent) -> None:
+        published.append(event)
+
+    event_bus.subscribe(capture)
+    await runtime._start_job(job)
+    await runtime._tasks[job.id]
+
+    primary = runtime._run_job_guarded.call_args.args[2]
+    assert primary.memory_context == brief, "An absent structural service must not suppress the Scout handoff"
+    assert primary.model == job.model
+    assert primary.workspace_path == job.worktree_path
+    curator.curate.assert_awaited_once()
+    assert curator.curate.call_args.kwargs["repo"] == job.repo
+    assert curator.curate.call_args.kwargs["worktree"] == job.worktree_path
+    handoffs = [e for e in published if e.kind == EventKind.context_handoff]
+    assert len(handoffs) == 1
+    assert handoffs[0].payload["content"] == brief
+    assert handoffs[0].payload["source"] == "preflight"
+    assert any(e.kind == EventKind.secondary_session_started for e in published)
+    assert any(e.kind == EventKind.job_setup_progress and e.payload["step"] == "exploring_codebase" for e in published)
+
+    repository = SecondarySessionRepository(session_factory)
+    sessions = await repository.get_by_job(job.id)
+    assert len(sessions) == 1
+    assert sessions[0].kind == "preflight"
+    assert sessions[0].status == "completed"
+    assert sessions[0].output == brief
+    assert handoffs[0].payload["source_session_id"] == sessions[0].id
+    entries = await repository.get_entries(sessions[0].id)
+    assert [entry.seq for entry in entries] == [1, 2]
+    assert entries[0].content == "Inspecting the task's entry point"
+    assert entries[1].tool_name == "view"
+    assert entries[1].tool_args == tool_call.tool_args
+    assert entries[1].content == tool_call.result_text
+    assert entries[1].duration_ms == 12.0
+    assert entries[1].tool_success is True
+    streamed_entries = [e.payload["entry"] for e in published if e.kind == EventKind.secondary_session_entry]
+    assert [entry["seq"] for entry in streamed_entries] == [1, 2]
+    assert streamed_entries[1]["tool_name"] == entries[1].tool_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RuntimeError("Scout failed"), TimeoutError("Scout timed out")])
+async def test_scout_failure_remains_visible_without_fabricated_handoff(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+    event_bus: EventBus,
+    error: Exception,
+) -> None:
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    curator = MagicMock()
+    curator.curate = AsyncMock(side_effect=error)
+    runtime.set_preflight_curator(curator)
+    published: list[SessionEvent] = []
+
+    async def capture(event: SessionEvent) -> None:
+        published.append(event)
+
+    event_bus.subscribe(capture)
+    await runtime._start_job(job)
+    await runtime._tasks[job.id]
+
+    primary = runtime._run_job_guarded.call_args.args[2]
+    assert not primary.memory_context
+    assert primary.model == job.model
+    assert not any(e.kind == EventKind.context_handoff for e in published)
+    sessions = await SecondarySessionRepository(session_factory).get_by_job(job.id)
+    assert len(sessions) == 1
+    assert sessions[0].status in {"failed", "timeout"}
+    assert sessions[0].output is None
+    completed = [e for e in published if e.kind == EventKind.secondary_session_completed]
+    assert len(completed) == 1
+    assert completed[0].payload["status"] == sessions[0].status
+
+
+@pytest.mark.asyncio
+async def test_empty_scout_result_does_not_emit_handoff(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+    event_bus: EventBus,
+) -> None:
+    from backend.persistence.secondary_session_repo import SecondarySessionRepository
+    from backend.services.tools.preflight_curator import PreflightReport
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    curator = MagicMock()
+    curator.curate = AsyncMock(return_value=PreflightReport())
+    runtime.set_preflight_curator(curator)
+    published: list[SessionEvent] = []
+
+    async def capture(event: SessionEvent) -> None:
+        published.append(event)
+
+    event_bus.subscribe(capture)
+    await runtime._start_job(job)
+    await runtime._tasks[job.id]
+
+    assert not runtime._run_job_guarded.call_args.args[2].memory_context
+    assert not any(e.kind == EventKind.context_handoff for e in published)
+    sessions = await SecondarySessionRepository(session_factory).get_by_job(job.id)
+    assert len(sessions) == 1
+    assert sessions[0].status == "completed"
+    assert sessions[0].output is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_scout_stops_scout_and_never_launches_primary(
+    runtime: RuntimeService,
+    session_factory: async_sessionmaker[AsyncSession],
+    config: CPLConfig,
+    event_bus: EventBus,
+) -> None:
+    from backend.persistence.job_repo import JobRepository
+    from backend.services.tools.preflight_curator import PreflightReport
+
+    job = await _prepare_scout_job(runtime, session_factory, config)
+    # Let the old implementation reach its cancellation path as well, without
+    # importing or starting a structural service.
+    runtime._coderecon_service = SimpleNamespace(
+        available=True,
+        ensure_repo_indexed=AsyncMock(return_value="unused"),
+        register_worktree=AsyncMock(return_value=True),
+    )
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+    curator = MagicMock()
+
+    async def curate(**kwargs: Any) -> PreflightReport:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+        return PreflightReport()
+
+    curator.curate = AsyncMock(side_effect=curate)
+    runtime.set_preflight_curator(curator)
+    published: list[SessionEvent] = []
+
+    async def capture(event: SessionEvent) -> None:
+        published.append(event)
+
+    event_bus.subscribe(capture)
+    start = asyncio.create_task(runtime._start_job(job))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        async with session_factory() as session:
+            await JobRepository(session).update_state(job.id, JobState.canceled, datetime.now(UTC))
+            await session.commit()
+        await runtime.cancel(job.id)
+        # A bounded yield distinguishes a real interruption from merely waiting
+        # for the Scout's normal (potentially two-minute) deadline.
+        for _ in range(20):
+            if stopped.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert stopped.is_set(), "Canceling a job must interrupt its active Scout"
+        await asyncio.gather(start, return_exceptions=True)
+        runtime._run_job_guarded.assert_not_awaited()
+        assert not any(e.kind == EventKind.context_handoff for e in published)
+        assert not any(
+            e.kind == EventKind.job_setup_progress and e.payload["step"] == "starting_agent" for e in published
+        )
+    finally:
+        start.cancel()
+        await asyncio.gather(start, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_create_followup_job_uses_parent_handoff_context(runtime: RuntimeService) -> None:
     parent = _make_job(job_id="parent", state=JobState.review)
