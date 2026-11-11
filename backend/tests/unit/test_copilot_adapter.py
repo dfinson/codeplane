@@ -1719,6 +1719,30 @@ class TestScoutAccounting:
 
 class TestScoutPermissions:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("content", ["Let me create a temporary script.", ""])
+    async def test_scout_preserves_tool_request_intent_before_execution(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str], content: str
+    ) -> None:
+        scout_id, _ = accounting_sessions
+        queue = adapter._queues[scout_id]
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent(
+                "assistant.message",
+                _FakeEventData(content=content, tool_requests=[{"name": "create", "arguments": "{}"}]),
+            ),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [False],
+            queue,
+        )
+        assert not queue.empty(), "A tool-only message must invalidate earlier brief candidates"
+        event = queue.get_nowait()
+        assert event is not None
+        assert event.payload.get("has_tool_requests") is True
+        assert event.payload["content"] == content
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_fields",
         [

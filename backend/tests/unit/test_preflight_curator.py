@@ -315,3 +315,19 @@ async def test_scout_accepts_final_brief_after_tools_without_explicit_result(sco
     assert report.brief == brief
     assert report.input_tokens == 10
     assert report.output_tokens == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["Let me create a temporary script before I finish.", ""])
+async def test_scout_rejects_pending_tool_request_without_execution_events(
+    scout: SimpleNamespace, content: str
+) -> None:
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Earlier partial context."})
+        yield new_event(
+            session_id, EventKind.message_assistant, {"content": content, "has_tool_requests": True}
+        )
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="final context brief"):
+        await _curate(scout)

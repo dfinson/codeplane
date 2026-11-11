@@ -340,7 +340,10 @@ class ClaudeAdapter(BaseAgentAdapter):
                 text = block.text or ""
                 if not text.strip():
                     continue
-                self._emit_tf(session_id, job_id, EventKind.message_assistant, {"content": text})
+                payload: dict[str, Any] = {"content": text}
+                if self.get_session_kind(session_id) == "preflight":
+                    payload["has_tool_requests"] = any(isinstance(item, ToolUseBlock) for item in content_blocks)
+                self._emit_tf(session_id, job_id, EventKind.message_assistant, payload)
 
             elif isinstance(block, ToolUseBlock):
                 await self._process_tool_use_block(session_id, block, job_id)

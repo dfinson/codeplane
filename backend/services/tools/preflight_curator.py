@@ -218,11 +218,14 @@ class PreflightCurator:
                     payload = event.payload
                     if event.kind == EventKind.message_assistant:
                         content = str(payload.get("content", ""))
-                        if content.strip():
+                        if payload.get("has_tool_requests"):
+                            brief_candidate = ""
+                            awaiting_brief = True
+                        elif content.strip():
                             brief_candidate = content
                             awaiting_brief = False
-                            if on_reasoning is not None:
-                                await on_reasoning(content)
+                        if content.strip() and on_reasoning is not None:
+                            await on_reasoning(content)
                     elif event.kind == EventKind.tool_call_started:
                         brief_candidate = ""
                         awaiting_brief = True

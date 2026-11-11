@@ -572,6 +572,24 @@ class TestScoutPermissions:
 
 class TestProcessAssistantMessage:
     @pytest.mark.asyncio
+    async def test_scout_text_after_tool_request_is_not_a_final_response(self, adapter: ClaudeAdapter) -> None:
+        sid = "scout-tool-request"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, "preflight")
+        message = _FakeAssistantMessage(
+            content=[_FakeToolUseBlock(name="Read"), _FakeTextBlock("Let me inspect the implementation.")]
+        )
+        await adapter._process_assistant_message(sid, message)
+        messages = []
+        while not adapter._queues[sid].empty():
+            event = adapter._queues[sid].get_nowait()
+            if event is not None and event.kind == EventKind.message_assistant:
+                messages.append(event)
+        assert len(messages) == 1
+        assert messages[0].payload.get("has_tool_requests") is True
+
+    @pytest.mark.asyncio
     async def test_text_block_emits_transcript(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
