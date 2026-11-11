@@ -105,6 +105,27 @@ beforeEach(() => {
 });
 
 describe("RepoBoard", () => {
+  it("removes source ingestion while preserving saved task start", async () => {
+    const saved = makeTaskLink({ storyNodeId: "historical-task" });
+    vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
+    vi.mocked(fetchProjectTaskLinks).mockResolvedValue({ items: [saved] } as any);
+    vi.mocked(startTaskLink).mockResolvedValueOnce({ ...saved, state: "running", jobId: "started-job" } as any);
+    renderBoard();
+
+    const start = await screen.findByRole("button", { name: "Start task" });
+    expect(screen.queryByRole("button", { name: "Ingest tasks" })).toBeNull();
+    fireEvent.click(start);
+    await waitFor(() => expect(startTaskLink).toHaveBeenCalledWith("proj-1", "tl-1"));
+    expect(await screen.findByText("started-job")).toBeInTheDocument();
+  });
+
+  it("removes source ingestion guidance from an empty board", async () => {
+    vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
+    renderBoard();
+    await screen.findByRole("link", { name: "New Job" });
+    expect(screen.queryByText("Click Ingest tasks.")).toBeNull();
+  });
+
   it("shows the skeleton immediately on a cold load before jobs arrive", () => {
     vi.mocked(fetchJobs).mockReturnValueOnce(new Promise(() => {}) as any);
     renderBoard();

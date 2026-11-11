@@ -116,6 +116,16 @@ def mcp_server(mock_session_factory, mock_runtime, mock_approval, mock_merge_ser
 
 
 class TestMCPServerCreation:
+    @pytest.mark.asyncio
+    async def test_project_tool_rejects_source_ingestion(self, mcp_server) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        tool = next(item for item in await mcp_server.list_tools() if item.name == "codeplane_project")
+        assert "ingest_tasks" not in tool.inputSchema["properties"]["action"]["enum"]
+        assert "ingest_tasks" not in (tool.description or "")
+        with pytest.raises(ToolError, match="ingest_tasks"):
+            await mcp_server.call_tool("codeplane_project", {"action": "ingest_tasks", "project_id": "project"})
+
     def test_creates_server_with_tools(self, mcp_server) -> None:
         assert mcp_server is not None
 

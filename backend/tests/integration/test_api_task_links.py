@@ -49,6 +49,51 @@ def _write_spec_task(repo_root: Path, filename: str, dependency: str = "") -> No
     with tasks_file.open("a", encoding="utf-8") as handle:
         handle.write(f"- [ ] {task_id} Fixture task{suffix}\n")
 
+class TestTaskSourceRetirement:
+    @pytest.mark.asyncio
+    async def test_source_ingestion_is_absent_and_preserves_saved_tasks(
+        self, client: AsyncClient, tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from backend.persistence.task_link_repo import TaskLinkRepository
+
+        repo = tmp_path / "historical-tasks"
+        repo.mkdir()
+        source = repo / "tasks.md"
+        source.write_text("- [ ] T001 Do not import this file\n", encoding="utf-8")
+        original_source = source.read_bytes()
+        project = await client.post(
+            "/api/settings/projects", json={"name": "Preserved tasks", "repoPaths": [str(repo)]}
+        )
+        project_id = project.json()["id"]
+        async with session_factory() as session:
+            await TaskLinkRepository(session).upsert_many(
+                project_id,
+                [
+                    {"repo_path": str(repo), "story_node_id": "historic-root", "depends_on": []},
+                    {
+                        "repo_path": str(repo),
+                        "story_node_id": "historic-child",
+                        "depends_on": [f"{repo}::historic-root"],
+                    },
+                ],
+            )
+            await session.commit()
+        endpoint = f"/api/settings/projects/{project_id}/task-links"
+        before = (await client.get(endpoint)).json()
+        assert len(before["items"]) == 2
+        response = await client.post(f"/api/settings/projects/{project_id}/ingest-tasks")
+        assert response.status_code == 404
+        assert (await client.get(endpoint)).json() == before
+        assert source.read_bytes() == original_source
+
+    def test_openapi_omits_source_ingestion_contract(self) -> None:
+        from backend.app_factory import create_app
+
+        schema = create_app().openapi()
+        assert "/api/settings/projects/{project_id}/ingest-tasks" not in schema["paths"]
+        assert "IngestTaskGraphResponse" not in schema["components"]["schemas"]
+
+
 class TestIngestTasks:
     @pytest.mark.asyncio
     async def test_ingest_creates_task_links_for_member_repos(self, client: AsyncClient, tmp_path: Path) -> None:
