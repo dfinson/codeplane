@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -76,7 +78,15 @@ class _Runtime:
         self.profile = None
         self.client = None
         self.logs = []
-        self.manifest = {"product_head": self._product_head(), "fixture_base": self.base, "runs": [], "jobs": []}
+        self.manifest = {
+            "product_head": self._product_head(),
+            "working_diff_sha256": hashlib.sha256(
+                subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=ROOT)
+            ).hexdigest(),
+            "fixture_base": self.base,
+            "runs": [],
+            "jobs": [],
+        }
 
     @staticmethod
     def _product_head():
@@ -373,7 +383,11 @@ def test_approval_recovery_and_mcp_cancellation(real_runtime):
 
 def test_native_capability_is_real_and_observed(real_runtime):
     runtime = real_runtime
-    from winpty import PtyProcess
+    from winpty import Backend, PtyProcess
+
+    assert os.environ.get("CODEPLANE_ENABLE_INCOMING_FOR_TEST") == "1", (
+        "Temporary Incoming connections activation requires separate explicit operator authorization"
+    )
 
     session_id = str(uuid.uuid4())
     executable = shutil.which("copilot")
@@ -396,12 +410,15 @@ def test_native_capability_is_real_and_observed(real_runtime):
             "--no-auto-update",
             "--available-tools=",
             "--no-ask-user",
+            "--screen-reader",
+            "--no-color",
             "-i",
             "Reply exactly NATIVE_ACCEPTANCE_READY. Use no tools.",
         ],
         cwd=str(runtime.repository),
         env=runtime.env,
         dimensions=(40, 120),
+        backend=Backend.WinPTY,
     )
     output = []
 
@@ -414,6 +431,32 @@ def test_native_capability_is_real_and_observed(real_runtime):
 
     reader = threading.Thread(target=drain, daemon=True)
     reader.start()
+    incoming_changed = False
+
+    def send_command(command):
+        process.write(command)
+        time.sleep(0.5)
+        process.write("\r")
+
+    def screen_since(index):
+        return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", "".join(output[index:]))
+
+    def incoming_status():
+        # Escape closes this CLI's environment screen, never a global setting.
+        process.write("\x1b")
+        time.sleep(1)
+        begin = len(output)
+        send_command("/environments")
+        _wait(lambda: "Environments tabs" in screen_since(begin), timeout=45,
+              description="supported environments menu")
+        time.sleep(2)
+        process.write("\x1b[C")
+        found = _wait(
+            lambda: re.search(r"Accept remote connections\s+(Off|On)", screen_since(begin)),
+            timeout=30, description="explicit incoming connection state",
+        )
+        return found.group(1)
+
     try:
         _wait(lambda: "trust" in "".join(output).lower(), timeout=30, description="native fixture trust prompt")
         process.write("\r")
@@ -427,10 +470,18 @@ def test_native_capability_is_real_and_observed(real_runtime):
             timeout=180,
             description="actual native Copilot model response",
         )
-        time.sleep(3)
-        process.write("/remote on")
-        time.sleep(1)
+        _wait(lambda: "Interactive" in screen_since(0), timeout=45, description="native command input ready")
+        assert incoming_status() == "Off", "Do not replace an independently changed incoming-connection setting"
+        runtime.manifest["incoming_before"] = "Off"
+        incoming_changed = True
         process.write("\r")
+        time.sleep(3)
+        assert incoming_status() == "On"
+        runtime.manifest["incoming_enabled"] = "On"
+        runtime.save()
+        process.write("\x1b")
+        time.sleep(1)
+        send_command("/remote on")
 
         def imported():
             jobs = runtime.request("GET", "/api/jobs")["items"]
@@ -473,11 +524,21 @@ def test_native_capability_is_real_and_observed(real_runtime):
         runtime.request("POST", f"/api/jobs/{observed['id']}/cancel")
         runtime.wait_state(observed["id"], {"canceled"})
     finally:
-        if process.isalive():
-            process.write("/exit")
-            time.sleep(1)
-            process.write("\r")
-            time.sleep(2)
-        if process.isalive():
-            process.terminate(force=True)
-        reader.join(timeout=3)
+        try:
+            if incoming_changed:
+                status = incoming_status()
+                if status == "On":
+                    process.write("\r")
+                    time.sleep(3)
+                assert incoming_status() == "Off", "Incoming connections must be restored before this test exits"
+                runtime.manifest["incoming_restored"] = "Off"
+                runtime.save()
+        finally:
+            if process.isalive():
+                process.write("\x03")
+                time.sleep(0.5)
+                process.write("\x03")
+                time.sleep(2)
+            if process.isalive():
+                process.terminate(force=True)
+            reader.join(timeout=3)
