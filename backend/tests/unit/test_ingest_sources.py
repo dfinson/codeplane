@@ -144,6 +144,11 @@ async def native_control_stack(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.services.events.ingest_service.load_config", CPLConfig)
     factory = MagicMock()
     factory.return_value.__aenter__.return_value = AsyncMock()
+    session = factory.return_value.__aenter__.return_value
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    session.execute.return_value = result
+    session.add = MagicMock()
     runtime = RuntimeService(
         session_factory=factory, event_bus=EventBus(), adapter_registry=MagicMock(), config=CPLConfig()
     )
