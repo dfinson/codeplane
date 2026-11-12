@@ -308,19 +308,19 @@ describe("RepoBoard", () => {
     renderBoard();
 
     await screen.findByText("task-waiting");
-    const taskSection = screen.queryByRole("region", { name: "Tasks", exact: true });
+    const taskSection = screen.queryByRole("region", { name: "Tasks" });
     expect(taskSection).not.toBeNull();
     expect(within(taskSection!).getByLabelText("6 tasks")).toHaveTextContent("6");
     const cards = states.map((state) => within(taskSection!).getByLabelText(`Task recipe: task-${state} — ${state}`));
     expect(Array.from(taskSection!.querySelectorAll('[id^="task-link-card-"]'))).toEqual(cards);
-    const jobSection = screen.getByRole("region", { name: "Jobs", exact: true });
+    const jobSection = screen.getByRole("region", { name: "Jobs" });
     expect(taskSection!.compareDocumentPosition(jobSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     for (const [title, jobTitle] of [
       ["In Progress", "Active job"],
       ["Awaiting Input", "Approval job"],
       ["Failed", "Failed job"],
-    ]) {
-      const column = within(jobSection).getByRole("region", { name: title, exact: true });
+    ] as const) {
+      const column = within(jobSection).getByRole("region", { name: title });
       expect(within(column).getByText(jobTitle)).toBeInTheDocument();
       expect(within(column).getByText("1", { exact: true })).toBeInTheDocument();
       for (const card of cards) expect(column).not.toContainElement(card);
@@ -336,10 +336,10 @@ describe("RepoBoard", () => {
     renderBoard();
 
     expect(await screen.findByLabelText("Task recipe: failed-task — failed")).toBeInTheDocument();
-    const failedJobs = screen.getByRole("region", { name: "Failed", exact: true });
+    const failedJobs = screen.getByRole("region", { name: "Failed" });
     expect(within(failedJobs).getByText("0", { exact: true })).toBeInTheDocument();
     expect(within(failedJobs).queryByText("No failed jobs")).not.toBeNull();
-    expect(within(screen.getByRole("region", { name: "Awaiting Input", exact: true }))
+    expect(within(screen.getByRole("region", { name: "Awaiting Input" }))
       .queryByText("No jobs awaiting input")).not.toBeNull();
     expect(screen.queryByText("All clear")).not.toBeInTheDocument();
     expect(screen.queryByText("No failures or issues")).not.toBeInTheDocument();
@@ -354,7 +354,7 @@ describe("RepoBoard", () => {
     renderBoard("proj-1", "/projects/id/proj-1/board/task/linked-task");
 
     await screen.findByText("Viewing task");
-    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    const tasks = screen.queryByRole("region", { name: "Tasks" });
     expect(tasks).not.toBeNull();
     const card = within(tasks!).getByRole("link", { name: "Task recipe: linked-task — completed" });
     expect(card).toHaveClass("ring-2");
@@ -370,7 +370,7 @@ describe("RepoBoard", () => {
     } as any);
     renderBoard("proj-1");
     await waitFor(() => expect(screen.getByText("add-sca")).toBeInTheDocument());
-    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    const tasks = screen.queryByRole("region", { name: "Tasks" });
     expect(tasks).not.toBeNull();
     expect(within(tasks!).getByText("ready")).toBeInTheDocument();
   });
@@ -489,7 +489,7 @@ describe("RepoBoard", () => {
     renderBoard();
 
     await screen.findByRole("button", { name: "Start task" });
-    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    const tasks = screen.queryByRole("region", { name: "Tasks" });
     expect(tasks).not.toBeNull();
     fireEvent.click(within(tasks!).getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(startTaskLink).toHaveBeenCalledWith("proj-1", "tl-ready"));

@@ -52,8 +52,7 @@ export const KanbanColumn = memo(function KanbanColumn({
                     <CheckCircle2 className="h-6 w-6 text-emerald-500" aria-hidden="true" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-muted-foreground">All caught up</p>
-                    <p className="text-xs text-muted-foreground/70 mt-1">Nothing is waiting for your input</p>
+                    <p className="text-sm font-medium text-muted-foreground">No jobs awaiting input</p>
                   </div>
                 </div>
               );
@@ -65,8 +64,7 @@ export const KanbanColumn = memo(function KanbanColumn({
                     <CheckCircle2 className="h-6 w-6 text-emerald-500" aria-hidden="true" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-muted-foreground">All clear</p>
-                    <p className="text-xs text-muted-foreground/70 mt-1">No failures or issues</p>
+                    <p className="text-sm font-medium text-muted-foreground">No failed jobs</p>
                   </div>
                 </div>
               );
