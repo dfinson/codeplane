@@ -18,8 +18,8 @@ from backend.models.domain import (
     SessionConfig,
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
-from backend.services.adapters.agent_adapter import UtilityCompletionError
-from backend.services.completers.copilot_steer import NativeDeliveryError
+from backend.services.adapters import agent_adapter
+from backend.services.completers import copilot_steer
 
 # ---------------------------------------------------------------------------
 # Fake copilot SDK types — injected into sys.modules before adapter import
@@ -600,7 +600,7 @@ class TestSendMessage:
 
     @pytest.mark.asyncio
     async def test_send_to_missing_session(self, adapter: CopilotAdapter) -> None:
-        with pytest.raises(NativeDeliveryError, match="no longer live") as failure:
+        with pytest.raises(copilot_steer.NativeDeliveryError, match="no longer live") as failure:
             await adapter.send_message("nonexistent", "hello")
 
         assert failure.value.uncertain is False
@@ -1529,7 +1529,7 @@ class TestComplete:
 
         with (
             patch("copilot.CopilotClient", return_value=_FailingClient()),
-            pytest.raises(UtilityCompletionError) as failure,
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
             await adapter.complete("test")
 
@@ -1550,7 +1550,7 @@ class TestComplete:
         with (
             patch("copilot.CopilotClient", return_value=_TimeoutClient()),
             patch("backend.services.copilot_adapter._adapter.COMPLETION_TIMEOUT_S", 0.01),
-            pytest.raises(UtilityCompletionError) as failure,
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
             await adapter.complete("test prompt")
 

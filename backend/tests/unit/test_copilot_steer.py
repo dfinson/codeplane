@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from backend.services.completers.copilot_steer import CopilotSteerClient, NativeDeliveryError
+from backend.services.completers import copilot_steer
+from backend.services.completers.copilot_steer import CopilotSteerClient
 
 
 @pytest.fixture()
@@ -60,14 +61,14 @@ class TestSendMessage:
     async def test_send_message_http_error(self, client: CopilotSteerClient):
         mock_resp = httpx.Response(500, request=httpx.Request("POST", "https://x"))
         with patch.object(client._client, "post", new_callable=AsyncMock, return_value=mock_resp):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 await client.send_message("task-2", "hello")
             assert error.value.uncertain is False
 
     @pytest.mark.asyncio()
     async def test_send_message_network_error(self, client: CopilotSteerClient):
         with patch.object(client._client, "post", new_callable=AsyncMock, side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 await client.send_message("task-3", "hello")
             assert error.value.uncertain is False
 
@@ -85,14 +86,14 @@ class TestAbort:
     async def test_abort_http_error(self, client: CopilotSteerClient):
         mock_resp = httpx.Response(403, request=httpx.Request("POST", "https://x"))
         with patch.object(client._client, "post", new_callable=AsyncMock, return_value=mock_resp):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 await client.abort("task-2")
             assert error.value.uncertain is False
 
     @pytest.mark.asyncio()
     async def test_abort_network_error(self, client: CopilotSteerClient):
         with patch.object(client._client, "post", new_callable=AsyncMock, side_effect=httpx.ConnectError("refused")):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 await client.abort("task-3")
             assert error.value.uncertain is False
 
@@ -128,7 +129,7 @@ class TestNativeBindingTransport:
             patch.object(client._client, "post", new_callable=AsyncMock, return_value=response) as post,
             patch("backend.services.completers.copilot_steer.log") as logger,
         ):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 if operation == "message":
                     await client.send_message("published-task", "PRIVATE-PROMPT")
                 else:
@@ -151,7 +152,7 @@ class TestNativeBindingTransport:
             ) as post,
             patch("backend.services.completers.copilot_steer.log") as logger,
         ):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 if operation == "message":
                     await client.send_message("published-task", "fixture")
                 else:
