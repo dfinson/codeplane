@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -55,7 +56,27 @@ class TestSendMessage:
             await client.send_message("task-1", "hello")
             mock_post.assert_awaited_once()
             body = mock_post.call_args[1]["json"]
-            assert body == {"content": "hello", "type": "user"}
+            assert body == {"content": "hello", "type": "user_message"}
+
+    async def test_published_sender_protocol_with_mock_transport(self, client: CopilotSteerClient):
+        requests = []
+        content = "Preserve the original instruction.\nIncluding this line."
+
+        def respond(request):
+            body = json.loads(request.content)
+            requests.append((request.method, str(request.url), body))
+            expected = ({"content": content, "type": "user_message"}, {"type": "abort"})
+            return httpx.Response(204 if body in expected else 400)
+
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(respond), trust_env=False)
+        await client.send_message("published-task", content)
+        await client.abort("published-task")
+        endpoint = "https://api.enterprise.githubcopilot.com/agents/tasks/published-task/steer"
+        assert requests == [
+            ("POST", endpoint, {"content": content, "type": "user_message"}),
+            ("POST", endpoint, {"type": "abort"}),
+        ]
 
     @pytest.mark.asyncio()
     async def test_send_message_http_error(self, client: CopilotSteerClient):

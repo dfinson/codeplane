@@ -113,7 +113,7 @@ class TestNativeOperatorAdmission:
         assert await stack.runtime.send_operator_message(stack.job.id, "Inspect the fixture") is True
         stack.post.assert_awaited_once_with(
             f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
-            json={"content": "Inspect the fixture", "type": "user"},
+            json={"content": "Inspect the fixture", "type": "user_message"},
         )
         await stack.factory.kw["bind"].dispose()
         engine = create_async_engine(stack.factory.kw["bind"].url)

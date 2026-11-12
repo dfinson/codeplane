@@ -370,7 +370,7 @@ class TestNativeBinding:
             f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer"
         ] * 2
         assert [call.kwargs["json"] for call in stack.post.await_args_list] == [
-            {"content": "fixture", "type": "user"},
+            {"content": "fixture", "type": "user_message"},
             {"type": "abort"},
         ]
         assert stack.job.external_session_id == _LOCAL_ID

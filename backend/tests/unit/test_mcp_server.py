@@ -190,7 +190,7 @@ class TestNativeBindingMCP:
         else:
             stack.post.assert_awaited_once_with(
                 f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
-                json={"content": "fixture", "type": "user"} if action == "message" else {"type": "abort"},
+                json={"content": "fixture", "type": "user_message"} if action == "message" else {"type": "abort"},
             )
         stack.runtime.send_message.assert_not_awaited()
         stack.runtime._resume_orphaned.assert_not_awaited()
