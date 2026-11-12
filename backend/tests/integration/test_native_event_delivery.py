@@ -158,8 +158,9 @@ class TestNativeOperatorAdmission:
         assert len(frames) == 2
         for frame, event in zip(frames, events, strict=True):
             payload = json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
-            assert payload["eventId"] == event.id
-            assert payload["content"] == event.payload["content"]
+            assert payload["id"] == event.id
+            assert payload["kind"] == "message.user"
+            assert payload["payload"]["content"] == event.payload["content"]
 
     @pytest.mark.parametrize("outcome", ["rejected", "uncertain"])
     async def test_failed_or_uncertain_relay_never_creates_accepted_receipt(self, native_admission_stack, outcome):

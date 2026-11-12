@@ -2241,6 +2241,43 @@ class RuntimeService:
             if self._ingest_service is None:
                 raise NativeDeliveryError("Native steering is unavailable")
             await self._ingest_service.send_operator_message(job_id, content)
+            receipt_id = str(uuid.uuid4())
+            receipt = new_event(
+                job_id,
+                EventKind.message_user,
+                {
+                    "content": (
+                        f"Native operator admission receipt {receipt_id}\n"
+                        "Instruction admitted to the message channel. Execution unconfirmed.\n\n"
+                        f"{content}"
+                    ),
+                    "operator_content": content,
+                    "admission_status": "accepted",
+                    "execution_status": "unconfirmed",
+                    "source": str(job.source),
+                    "external_session_id": job.external_session_id,
+                },
+                event_id=receipt_id,
+            )
+            from backend.persistence.database import serialized_write
+            from backend.persistence.event_repo import EventRepository
+
+            # Event fan-out can queue persistence retries, so commit before publishing.
+            try:
+                async with serialized_write(self._session_factory) as session:
+                    await EventRepository(session).append(receipt)
+            except DBAPIError as exc:
+                log.error(
+                    "native_operator_receipt_persist_failed",
+                    job_id=job_id,
+                    receipt_id=receipt_id,
+                    error_type=type(exc).__name__,
+                )
+                raise NativeDeliveryError(
+                    "Native admission succeeded but its durable receipt could not be stored",
+                    uncertain=True,
+                ) from None
+        await self._event_bus.publish(receipt)
         return True
 
     async def cancel_job(self, job_id: str) -> Job:
