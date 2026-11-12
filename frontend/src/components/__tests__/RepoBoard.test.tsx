@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { useStore } from "../../store";
 import type { JobSummary } from "../../store";
@@ -82,6 +82,7 @@ function renderBoard(projectId = "proj-1", route?: string) {
         <Route path="/projects/id/:projectId/board" element={<RepoBoard />} />
         <Route path="/projects/id/:projectId/board/task/:taskLinkId" element={<RepoBoard />} />
         <Route path="/jobs/new" element={<div>New job screen</div>} />
+        <Route path="/jobs/:jobId" element={<div>Linked job screen</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -286,14 +287,92 @@ describe("RepoBoard", () => {
     expect(screen.getByRole("region", { name: "Failed" })).toBeInTheDocument();
   });
 
-  it("renders TaskLink cards for the Project in the In Progress column", async () => {
+  it("keeps every Task state and returned order separate from Job columns and counts", async () => {
+    const states = ["waiting", "ready", "starting", "running", "completed", "failed"] as const;
+    const tasks = states.map((state) => makeTaskLink({
+      id: `task-${state}`,
+      storyNodeId: `task-${state}`,
+      state,
+      jobId: state === "running" ? "active" : null,
+    }));
+    vi.mocked(fetchJobs).mockResolvedValueOnce({
+      items: [
+        makeJob({ id: "active", title: "Active job", state: "running" }),
+        makeJob({ id: "approval", title: "Approval job", state: "waiting_for_approval" }),
+        makeJob({ id: "failed", title: "Failed job", state: "failed" }),
+      ],
+      cursor: null,
+    } as any);
+    vi.mocked(fetchProjectTaskLinks).mockResolvedValue({ items: tasks } as any);
+
+    renderBoard();
+
+    await screen.findByText("task-waiting");
+    const taskSection = screen.queryByRole("region", { name: "Tasks", exact: true });
+    expect(taskSection).not.toBeNull();
+    expect(within(taskSection!).getByLabelText("6 tasks")).toHaveTextContent("6");
+    const cards = states.map((state) => within(taskSection!).getByLabelText(`Task recipe: task-${state} — ${state}`));
+    expect(Array.from(taskSection!.querySelectorAll('[id^="task-link-card-"]'))).toEqual(cards);
+    const jobSection = screen.getByRole("region", { name: "Jobs", exact: true });
+    expect(taskSection!.compareDocumentPosition(jobSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const [title, jobTitle] of [
+      ["In Progress", "Active job"],
+      ["Awaiting Input", "Approval job"],
+      ["Failed", "Failed job"],
+    ]) {
+      const column = within(jobSection).getByRole("region", { name: title, exact: true });
+      expect(within(column).getByText(jobTitle)).toBeInTheDocument();
+      expect(within(column).getByText("1", { exact: true })).toBeInTheDocument();
+      for (const card of cards) expect(column).not.toContainElement(card);
+    }
+  });
+
+  it("scopes empty Job messages to Jobs when a saved Task has failed", async () => {
+    vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
+    vi.mocked(fetchProjectTaskLinks).mockResolvedValue({
+      items: [makeTaskLink({ id: "failed-task", storyNodeId: "failed-task", state: "failed" })],
+    } as any);
+
+    renderBoard();
+
+    expect(await screen.findByLabelText("Task recipe: failed-task — failed")).toBeInTheDocument();
+    const failedJobs = screen.getByRole("region", { name: "Failed", exact: true });
+    expect(within(failedJobs).getByText("0", { exact: true })).toBeInTheDocument();
+    expect(within(failedJobs).queryByText("No failed jobs")).not.toBeNull();
+    expect(within(screen.getByRole("region", { name: "Awaiting Input", exact: true }))
+      .queryByText("No jobs awaiting input")).not.toBeNull();
+    expect(screen.queryByText("All clear")).not.toBeInTheDocument();
+    expect(screen.queryByText("No failures or issues")).not.toBeInTheDocument();
+  });
+
+  it("preserves highlighted Task deep links and keyboard navigation in the Tasks section", async () => {
+    vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
+    vi.mocked(fetchProjectTaskLinks).mockResolvedValue({
+      items: [makeTaskLink({ id: "linked-task", storyNodeId: "linked-task", state: "completed", jobId: "job-done" })],
+    } as any);
+
+    renderBoard("proj-1", "/projects/id/proj-1/board/task/linked-task");
+
+    await screen.findByText("Viewing task");
+    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    expect(tasks).not.toBeNull();
+    const card = within(tasks!).getByRole("link", { name: "Task recipe: linked-task — completed" });
+    expect(card).toHaveClass("ring-2");
+    expect(card).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(card, { key: "Enter" });
+    expect(await screen.findByText("Linked job screen")).toBeInTheDocument();
+  });
+
+  it("renders TaskLink cards for the Project in the Tasks section", async () => {
     vi.mocked(fetchJobs).mockResolvedValueOnce({ items: [], cursor: null } as any);
     vi.mocked(fetchProjectTaskLinks).mockResolvedValue({
       items: [makeTaskLink({ id: "tl-1", storyNodeId: "add-sca" })],
     } as any);
     renderBoard("proj-1");
     await waitFor(() => expect(screen.getByText("add-sca")).toBeInTheDocument());
-    expect(screen.getByText("ready")).toBeInTheDocument();
+    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    expect(tasks).not.toBeNull();
+    expect(within(tasks!).getByText("ready")).toBeInTheDocument();
   });
 
   it("greys out a TaskLink card whose dependency's linked job has not completed", async () => {
@@ -409,7 +488,10 @@ describe("RepoBoard", () => {
     vi.mocked(startTaskLink).mockResolvedValueOnce({ ...ready, state: "running", jobId: "job-new" } as any);
     renderBoard();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Start task" }));
+    await screen.findByRole("button", { name: "Start task" });
+    const tasks = screen.queryByRole("region", { name: "Tasks", exact: true });
+    expect(tasks).not.toBeNull();
+    fireEvent.click(within(tasks!).getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(startTaskLink).toHaveBeenCalledWith("proj-1", "tl-ready"));
     expect(await screen.findByText("job-new")).toBeInTheDocument();
   });
