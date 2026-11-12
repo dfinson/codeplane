@@ -60,16 +60,17 @@ def _tool(mcp_server, name: str):
 
 @pytest.fixture(autouse=True)
 def internal_transport():
-    from backend.services.auth.middleware import (
-        _reset_for_testing,
-        configure_auth,
-        configure_internal_endpoint,
-    )
+    from backend.services.auth import middleware
 
-    configure_auth(remote=False, access_only=False, password=None)
-    configure_internal_endpoint(host="127.0.0.1", port=8080)
+    # Routing regressions also run on the revision before internal transport authentication existed.
+    configure_auth = getattr(middleware, "configure_auth", None)
+    configure_internal_endpoint = getattr(middleware, "configure_internal_endpoint", None)
+    if configure_auth is not None:
+        configure_auth(remote=False, access_only=False, password=None)
+    if configure_internal_endpoint is not None:
+        configure_internal_endpoint(host="127.0.0.1", port=8080)
     yield
-    _reset_for_testing()
+    middleware._reset_for_testing()
 
 
 @pytest.fixture

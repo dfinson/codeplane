@@ -93,6 +93,7 @@ class TestRuntimeContract:
         bus = AsyncMock()
         service = JobService(repo, git, CPLConfig(), naming_service=naming, event_bus=bus)
         event = await service.enrich_naming_async("job-1", JobSpec(repo="fixture", prompt="fixture"), "fixture")
+        assert event is not None, "Naming must return an event for post-commit publication"
         assert event.kind == "job.title_updated"
         repo.update_title_and_branch.assert_awaited_once()
         bus.publish.assert_not_awaited()
