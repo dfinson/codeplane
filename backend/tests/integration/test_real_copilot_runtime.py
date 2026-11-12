@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -403,17 +404,264 @@ def test_approval_recovery_and_mcp_cancellation(real_runtime):
     runtime.save()
 
 
+def _native_records(path, *, raw=None):
+    """Read completed physical records; an unterminated append remains pending."""
+    if raw is None:
+        raw = path.read_bytes() if path.exists() else b""
+    records = []
+    for ordinal, line in enumerate(raw.split(b"\n")[:-1], 1):
+        try:
+            record = json.loads(line.decode("utf-8"))
+            assert isinstance(record, dict) and isinstance(record.get("type"), str)
+        except (UnicodeError, ValueError, AssertionError):
+            raise AssertionError(f"Malformed completed native source record at physical line {ordinal}") from None
+        records.append(record)
+    return records
+
+
+def _native_cancel_state(records, baseline, cancel_ordinal=None, issued_at=None):
+    """Only explicit interruption inside one new, still-active turn can prove a stop."""
+    result = {"status": "pending", "reason": "no_new_turn"}
+    for ordinal, record in enumerate(records[baseline:], baseline + 1):
+        kind = record["type"]
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        if kind == "assistant.turn_start":
+            turn_id = data.get("turnId")
+            if "turn_id" in result or not isinstance(turn_id, str) or not turn_id:
+                return result | {"status": "unverified", "reason": "ambiguous_turn_identity"}
+            result = {"status": "active", "turn_id": turn_id, "start_ordinal": ordinal}
+            continue
+        if "turn_id" not in result:
+            continue
+        if data.get("turnId") is not None and data["turnId"] != result["turn_id"]:
+            continue
+        explicit_abort = kind == "abort" or (
+            kind in {"session.idle", "assistant.turn_end"} and data.get("aborted") is True
+        )
+        if explicit_abort:
+            if cancel_ordinal is None or ordinal <= cancel_ordinal:
+                return result | {"status": "unverified", "reason": "interrupted_before_cancel"}
+            try:
+                timestamp = datetime.fromisoformat(record["timestamp"])
+                assert timestamp.tzinfo is not None and issued_at is not None
+            except (KeyError, TypeError, ValueError, AssertionError):
+                return result | {"status": "unverified", "reason": "abort_time_unverified"}
+            if timestamp < issued_at:
+                return result | {"status": "unverified", "reason": "abort_predates_cancel"}
+            return result | {"status": "aborted", "evidence_ordinal": ordinal, "signal": kind}
+        if kind == "assistant.turn_end" and data.get("turnId") == result["turn_id"]:
+            return result | {"status": "normal_completion", "evidence_ordinal": ordinal}
+        if kind == "assistant.turn_end":
+            return result | {"status": "unverified", "reason": "end_without_turn_identity"}
+        if kind in {"session.idle", "session.shutdown"}:
+            return result | {"status": "unverified", "reason": "termination_without_explicit_abort"}
+    return result
+
+
+def _native_identity(runtime, job_id):
+    with sqlite3.connect(f"file:{runtime.home / 'data.db'}?mode=ro", uri=True) as db:
+        row = db.execute(
+            "SELECT source, external_session_id, sdk_session_id, session_id, session_count FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+        managed = sorted(row[0] for row in db.execute("SELECT id FROM jobs WHERE source='managed'"))
+    assert row is not None, "Native job identity disappeared"
+    return dict(
+        zip(("source", "external_session_id", "sdk_session_id", "session_id", "session_count"), row, strict=True)
+    ) | {"managed_job_ids": managed}
+
+
+def _verify_native_active_cancel(runtime, session_id, job_id, identity):
+    path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
+    evidence_path = runtime.root / "native-cancel-evidence.json"
+    screen_path = runtime.root / "native-cancel-screen.png"
+    evidence = {
+        "session_id": session_id,
+        "job_id": job_id,
+        "status": "pending",
+        "cancel_attempts": 0,
+        "actual_abort_observed": False,
+        "identity_before": identity,
+        "source_path": str(path),
+        "screen_path": str(screen_path),
+        "screen_verified": False,
+    }
+    baseline = None
+    issued_at = None
+    try:
+        baseline_raw = path.read_bytes()
+        baseline = len(_native_records(path, raw=baseline_raw))
+        evidence["baseline_complete_ordinal"] = baseline
+        evidence["baseline_prefix_sha256"] = hashlib.sha256(
+            b"\n".join(baseline_raw.split(b"\n")[:baseline]) + (b"\n" if baseline else b"")
+        ).hexdigest()
+
+        def current_records():
+            raw = path.read_bytes()
+            prefix = b"\n".join(raw.split(b"\n")[:baseline]) + (b"\n" if baseline else b"")
+            assert hashlib.sha256(prefix).hexdigest() == evidence["baseline_prefix_sha256"], (
+                "Active cancellation unverified: native source prefix changed"
+            )
+            return _native_records(path, raw=raw)
+
+        assert _native_identity(runtime, job_id) == identity, "Native execution was replaced before cancellation"
+        prompt_issued_at = datetime.now(UTC)
+        evidence["prompt_issued_at"] = prompt_issued_at.isoformat()
+        runtime.request(
+            "POST",
+            f"/api/jobs/{job_id}/messages",
+            json={
+                "content": "Output the integers 1 through 800, one per line, then stop. "
+                "Use no tools. Ask no questions. Output only those 800 lines."
+            },
+            timeout=30,
+        )
+
+        def new_turn():
+            records = current_records()
+            state = _native_cancel_state(records, baseline)
+            evidence["turn"] = state
+            assert state["status"] in {"pending", "active"}, f"Active cancellation unverified: {state}"
+            if state["status"] == "active":
+                try:
+                    started_at = datetime.fromisoformat(records[state["start_ordinal"] - 1]["timestamp"])
+                    assert started_at.tzinfo is not None and started_at >= prompt_issued_at
+                except (KeyError, TypeError, ValueError, AssertionError):
+                    raise AssertionError(
+                        "Active cancellation unverified: start predates prompt or lacks timestamp"
+                    ) from None
+            return state if state["status"] == "active" else None
+
+        selected = _wait(new_turn, timeout=60, description="new actual native assistant.turn_start for cancellation")
+        current = current_records()
+        active = _native_cancel_state(current, baseline)
+        assert active == selected, "Active cancellation unverified: turn changed before cancel"
+        evidence["cancel_source_ordinal"] = len(current)
+        issued_at = datetime.now(UTC)
+        evidence["cancel_issued_at"] = issued_at.isoformat()
+        evidence["cancel_attempts"] = 1
+        try:
+            response = runtime.client.post(f"/api/jobs/{job_id}/cancel", timeout=30)
+            evidence["cancel_http_status"] = response.status_code
+            evidence["relay_admission"] = "reported_by_codeplane" if response.is_success else "not_confirmed"
+            response.raise_for_status()
+        finally:
+            evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+            print(f"NATIVE_CAPTURE_CANCEL_SCREEN {screen_path}", flush=True)
+
+        def interrupted():
+            state = _native_cancel_state(current_records(), baseline, evidence["cancel_source_ordinal"], issued_at)
+            evidence["turn"] = state
+            evidence["actual_abort_observed"] = state["status"] == "aborted"
+            assert state["status"] in {"active", "aborted"}, f"Active cancellation unverified: {state}"
+            return state if state["status"] == "aborted" else None
+
+        _wait(
+            interrupted,
+            timeout=30,
+            description="explicit native abort of the selected active turn, otherwise unverified",
+        )
+
+        def canceled():
+            evidence["cp_state"] = runtime.request("GET", f"/api/jobs/{job_id}", timeout=10)["state"]
+            return evidence["cp_state"] == "canceled"
+
+        _wait(canceled, timeout=30, description="CodePlane cancellation state, separate from native abort proof")
+        evidence["status"] = "active_abort_observed"
+    except Exception as exc:
+        evidence["status"] = "unverified"
+        evidence["error_type"] = type(exc).__name__
+        if isinstance(exc, AssertionError):
+            evidence["unverified_reason"] = str(exc)
+        raise
+    finally:
+        raw = path.read_bytes() if path.exists() else b""
+        lines = raw.split(b"\n")
+        complete = len(lines) - 1
+        selected_lines = lines[baseline if baseline is not None else 0 : complete]
+        interval = b"\n".join(selected_lines) + (b"\n" if selected_lines else b"")
+        evidence["source_interval"] = {
+            "first_line": (baseline or 0) + 1,
+            "last_complete_line": complete,
+            "source_bytes": len(raw),
+            "source_hash_scope": "first source_bytes bytes at capture; source may append later",
+            "source_sha256": hashlib.sha256(raw).hexdigest(),
+            "interval_sha256": hashlib.sha256(interval).hexdigest(),
+            "pending_final_bytes": len(lines[-1]),
+        }
+        source_error = None
+        try:
+            if baseline is not None:
+                prefix = b"\n".join(lines[:baseline]) + (b"\n" if baseline else b"")
+                assert hashlib.sha256(prefix).hexdigest() == evidence["baseline_prefix_sha256"], (
+                    "Native source prefix changed before evidence capture"
+                )
+            records = _native_records(path, raw=raw)
+            if baseline is not None:
+                evidence["turn"] = _native_cancel_state(
+                    records, baseline, evidence.get("cancel_source_ordinal"), issued_at
+                )
+                evidence["actual_abort_observed"] = evidence["turn"]["status"] == "aborted"
+            selected_events = []
+            for ordinal, record in enumerate(records[baseline or 0 :], (baseline or 0) + 1):
+                if record["type"] not in {
+                    "assistant.turn_start",
+                    "assistant.turn_end",
+                    "abort",
+                    "session.idle",
+                    "session.shutdown",
+                }:
+                    continue
+                data = record.get("data") if isinstance(record.get("data"), dict) else {}
+                selected_events.append(
+                    {
+                        "ordinal": ordinal,
+                        "kind": record["type"],
+                        **{key: record[key] for key in ("id", "timestamp") if isinstance(record.get(key), str)},
+                        **({"turnId": data["turnId"]} if isinstance(data.get("turnId"), str) else {}),
+                        **({"aborted": data["aborted"]} if isinstance(data.get("aborted"), bool) else {}),
+                        **({"reason": "user initiated"} if data.get("reason") == "user initiated" else {}),
+                    }
+                )
+            evidence["events"] = selected_events
+        except AssertionError as exc:
+            source_error = evidence["source_error"] = str(exc)
+            evidence["status"] = "unverified"
+        try:
+            evidence["identity_after"] = _native_identity(runtime, job_id)
+            with sqlite3.connect(f"file:{runtime.home / 'data.db'}?mode=ro", uri=True) as db:
+                evidence["cp_state"] = db.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+            if evidence["identity_after"] != identity:
+                evidence["status"] = "unverified"
+                evidence["unverified_reason"] = "Native job or managed-job set changed during cancellation"
+                raise AssertionError(evidence["unverified_reason"])
+        finally:
+            evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+            runtime.manifest["native_cancellation"] = {
+                "evidence_path": str(evidence_path),
+                "status": evidence["status"],
+            }
+            runtime.save()
+        if source_error:
+            raise AssertionError(source_error)
+
+
 def _verify_native_round_trip(runtime, session_id):
     path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
 
     def records():
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+        return _native_records(path)
 
     def imported():
         jobs = runtime.request("GET", "/api/jobs")["items"]
         return next((job for job in jobs if job.get("externalSessionId") == session_id), None)
 
     observed = _wait(imported, timeout=120, description="current supported native control discovery")
+    identity = _native_identity(runtime, observed["id"])
+    assert identity["source"] == "copilot_cli" and identity["external_session_id"] == session_id
+    assert identity["sdk_session_id"] is None and identity["session_id"] is None
+    runtime.manifest["native_job_id"] = observed["id"]
+    runtime.save()
 
     def persisted_responses(*markers):
         snapshot = runtime.request("GET", f"/api/jobs/{observed['id']}/snapshot")
@@ -461,14 +709,106 @@ def _verify_native_round_trip(runtime, session_id):
         after = [row[0] for row in db.execute("SELECT event_id FROM events WHERE job_id=?", (observed["id"],))]
     assert set(ids) <= set(after)
     assert len(after) == len(set(after))
-    runtime.request("POST", f"/api/jobs/{observed['id']}/cancel")
-    runtime.wait_state(observed["id"], {"canceled"})
+    _verify_native_active_cancel(runtime, session_id, observed["id"], identity)
+
+
+class TestNativeCancellationEvidence:
+    """Synthetic harness checks only. These do not execute or establish real acceptance."""
+
+    @staticmethod
+    def event(kind, **data):
+        return {"type": kind, "timestamp": "2026-11-12T06:00:02+00:00", "data": data}
+
+    @pytest.mark.parametrize(
+        ("events", "baseline", "cancel_ordinal", "status"),
+        [
+            ([("abort", {}), ("assistant.turn_start", {"turnId": "new"})], 1, 2, "active"),
+            (
+                [("assistant.turn_start", {"turnId": "new"}), ("assistant.turn_end", {"turnId": "new"}), ("abort", {})],
+                0,
+                1,
+                "normal_completion",
+            ),
+            (
+                [("assistant.turn_start", {"turnId": "new"}), ("abort", {"turnId": "other"})],
+                0,
+                1,
+                "active",
+            ),
+            ([("assistant.turn_start", {"turnId": "new"}), ("abort", {})], 0, 2, "unverified"),
+            ([("assistant.turn_start", {"turnId": "new"}), ("session.shutdown", {})], 0, 1, "unverified"),
+            (
+                [("assistant.turn_start", {"turnId": "new"}), ("session.idle", {"aborted": False})],
+                0,
+                1,
+                "unverified",
+            ),
+            (
+                [
+                    ("assistant.turn_start", {"turnId": "new"}),
+                    ("assistant.turn_start", {"turnId": "other"}),
+                    ("abort", {}),
+                ],
+                0,
+                2,
+                "unverified",
+            ),
+        ],
+    )
+    def test_stale_normal_unrelated_or_ambiguous_evidence_is_not_active_stop(
+        self, events, baseline, cancel_ordinal, status
+    ):
+        records = [self.event(kind, **data) for kind, data in events]
+        result = _native_cancel_state(records, baseline, cancel_ordinal, datetime(2026, 11, 12, 6, 0, 1, tzinfo=UTC))
+        assert result["status"] == status
+        assert result["status"] != "aborted"
+
+    @pytest.mark.parametrize(
+        ("kind", "data"),
+        [
+            ("abort", {"reason": "user initiated"}),
+            ("session.idle", {"aborted": True}),
+            ("assistant.turn_end", {"turnId": "new", "aborted": True}),
+        ],
+    )
+    def test_new_explicit_abort_inside_selected_active_interval(self, kind, data):
+        records = [
+            self.event("abort", reason="user initiated"),
+            self.event("assistant.turn_start", turnId="new"),
+            self.event(kind, **data),
+            self.event("assistant.turn_end", turnId="new"),
+        ]
+        result = _native_cancel_state(records, 1, 2, datetime(2026, 11, 12, 6, 0, 1, tzinfo=UTC))
+        assert result == {
+            "status": "aborted",
+            "turn_id": "new",
+            "start_ordinal": 2,
+            "evidence_ordinal": 3,
+            "signal": kind,
+        }
+
+    @pytest.mark.parametrize("timestamp", ["2026-11-12T06:00:02+00:00", None, "2026-11-12T06:00:04"])
+    def test_source_time_before_cancel_or_unverified_does_not_prove_interruption(self, timestamp):
+        records = [self.event("assistant.turn_start", turnId="new"), self.event("abort")]
+        records[-1]["timestamp"] = timestamp
+        result = _native_cancel_state(records, 0, 1, datetime(2026, 11, 12, 6, 0, 3, tzinfo=UTC))
+        assert result["status"] == "unverified"
+        assert result["reason"] == (
+            "abort_predates_cancel" if timestamp and "+" in timestamp else "abort_time_unverified"
+        )
+
+    def test_reader_ignores_only_unterminated_append(self, tmp_path):
+        path = tmp_path / "events.jsonl"
+        start = self.event("assistant.turn_start", turnId="new")
+        path.write_bytes(json.dumps(start).encode() + b'\n{"type":"abort","data":')
+        assert _native_records(path) == [start]
+        path.write_bytes(path.read_bytes() + b"\n")
+        with pytest.raises(AssertionError, match="Malformed completed native source record at physical line 2"):
+            _native_records(path)
 
 
 def test_native_capability_is_real_and_observed(real_runtime):
     """The visible terminal operator owns CLI creation, control changes and restoration."""
-    from datetime import UTC, datetime
-
     runtime = real_runtime
     session_id = str(uuid.uuid4())
     events_path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
@@ -496,6 +836,8 @@ def test_native_capability_is_real_and_observed(real_runtime):
         "backend_port": runtime.profile["port"],
         "working_directory": str(runtime.repository),
         "copilot_home": str(runtime.copilot_home),
+        "active_cancel_screen_path": str(runtime.root / "native-cancel-screen.png"),
+        "restoration_requires_native_exit": True,
         "argv": [
             *launcher,
             "-C",
@@ -525,7 +867,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
         assert published["steering_enabled"] is True
         assert published["control_before_text"] and published["control_after_text"]
         assert published["account_setting_observation"] in {"unchanged", "unknown", "temporarily_changed"}
-        first = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
+        first = _native_records(events_path)[0]
         assert first["type"] == "session.start" and first["data"]["sessionId"] == session_id
         assert datetime.fromisoformat(first["data"]["startTime"]) >= ready_at
         assert first["data"]["copilotVersion"] == published["native_cli_version"]
@@ -547,5 +889,32 @@ def test_native_capability_is_real_and_observed(real_runtime):
             assert restored["session_id"] == session_id
             assert restored["steering_enabled"] is False
             assert restored["control_after_text"]
+            assert restored["native_exited"] is True, "Parent must exit the owned CLI before reporting restoration"
             runtime.manifest["native_restoration"] = restored
             runtime.save()
+    screen = runtime.root / "native-cancel-screen.png"
+    assert screen.resolve().is_relative_to(runtime.root.resolve()) and screen.is_file() and screen.stat().st_size > 0, (
+        "Actual parent-captured CLI screen is required for independent cancellation adjudication"
+    )
+    runtime.manifest["native_cancel_screen"] = {
+        "path": str(screen),
+        "sha256": hashlib.sha256(screen.read_bytes()).hexdigest(),
+        "content_adjudication": "parent_owned",
+    }
+    job_id = runtime.manifest["native_job_id"]
+
+    def finalized_artifacts():
+        with sqlite3.connect(f"file:{runtime.home / 'data.db'}?mode=ro", uri=True) as db:
+            status, collected, current = db.execute(
+                "SELECT artifact_collection_status, artifact_collection_session_count, session_count "
+                "FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            count = db.execute("SELECT count(*) FROM artifacts WHERE job_id=?", (job_id,)).fetchone()[0]
+        assert status != "failed", "Native artifact collection failed after parent exit"
+        return status == "completed" and collected == current and count > 0
+
+    _wait(finalized_artifacts, timeout=120, description="nonempty native artifacts after exit and backend finalization")
+    runtime.assert_artifact_isolation()
+    evidence = json.loads((runtime.root / "native-cancel-evidence.json").read_text(encoding="utf-8"))
+    assert _native_identity(runtime, job_id) == evidence["identity_before"], "Native replacement detected after exit"
