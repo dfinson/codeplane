@@ -471,10 +471,41 @@ def _native_identity(runtime, job_id):
     ) | {"managed_job_ids": managed}
 
 
+def _validate_native_screen_receipt(path, session_id, *, not_before):
+    """Validate a parent-observed text receipt, not the meaning of its CLI display."""
+    raw = path.read_bytes()
+    receipt = json.loads(raw.decode("utf-8"))
+    assert isinstance(receipt, dict), "Native screen receipt must be a JSON object"
+    assert receipt.get("session_id") == session_id, "Native screen receipt names the wrong session"
+    assert receipt.get("tool") == "read_terminal_output" and receipt.get("mode") == "screen", (
+        "Native screen receipt must identify read_terminal_output(mode=screen)"
+    )
+    text = receipt.get("screen_text")
+    assert isinstance(text, str) and text.strip(), "Native screen receipt has empty rendered output"
+    content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert receipt.get("content_sha256") == content_hash, "Native screen receipt content hash mismatch"
+    try:
+        captured_at = datetime.fromisoformat(receipt["captured_at"])
+        assert captured_at.tzinfo is not None
+    except (KeyError, TypeError, ValueError, AssertionError):
+        raise AssertionError("Native screen receipt needs a timezone-aware capture time") from None
+    assert captured_at >= not_before, "Native screen receipt predates the cancel attempt"
+    return {
+        "path": str(path),
+        "receipt_sha256": hashlib.sha256(raw).hexdigest(),
+        "session_id": session_id,
+        "captured_at": receipt["captured_at"],
+        "tool": receipt["tool"],
+        "mode": receipt["mode"],
+        "content_sha256": content_hash,
+        "content_adjudication": "parent_owned",
+    }
+
+
 def _verify_native_active_cancel(runtime, session_id, job_id, identity):
     path = runtime.copilot_home / "session-state" / session_id / "events.jsonl"
     evidence_path = runtime.root / "native-cancel-evidence.json"
-    screen_path = runtime.root / "native-cancel-screen.png"
+    screen_path = runtime.root / "native-cancel-screen.json"
     evidence = {
         "session_id": session_id,
         "job_id": job_id,
@@ -484,7 +515,7 @@ def _verify_native_active_cancel(runtime, session_id, job_id, identity):
         "identity_before": identity,
         "source_path": str(path),
         "screen_path": str(screen_path),
-        "screen_verified": False,
+        "screen_receipt_validation": "pending",
     }
     baseline = None
     issued_at = None
@@ -806,6 +837,56 @@ class TestNativeCancellationEvidence:
         with pytest.raises(AssertionError, match="Malformed completed native source record at physical line 2"):
             _native_records(path)
 
+    @staticmethod
+    def screen_receipt():
+        text = "Synthetic rendered CLI display\r\nInterrupted ✓\n"
+        return {
+            "session_id": "native-fixture",
+            "captured_at": "2026-11-12T06:00:02Z",
+            "tool": "read_terminal_output",
+            "mode": "screen",
+            "screen_text": text,
+            "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+
+    def test_rendered_screen_receipt_preserves_exact_utf8_content(self, tmp_path):
+        path = tmp_path / "native-cancel-screen.json"
+        receipt = self.screen_receipt()
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        metadata = _validate_native_screen_receipt(
+            path, "native-fixture", not_before=datetime(2026, 11, 12, 6, 0, 1, tzinfo=UTC)
+        )
+        assert metadata["content_sha256"] == receipt["content_sha256"]
+        assert metadata["receipt_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert metadata["session_id"] == receipt["session_id"]
+        assert metadata["captured_at"] == receipt["captured_at"]
+        assert metadata["content_adjudication"] == "parent_owned"
+        assert "screen_text" not in metadata
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("session_id", "unrelated-session", "wrong session"),
+            ("content_sha256", "0" * 64, "content hash mismatch"),
+            ("screen_text", "", "empty rendered output"),
+            ("screen_text", " \r\n\t", "empty rendered output"),
+            ("screen_text", "Changed rendered output", "content hash mismatch"),
+            ("tool", "reconstructed-display", "read_terminal_output"),
+            ("mode", "transcript", "mode=screen"),
+            ("captured_at", None, "timezone-aware capture time"),
+            ("captured_at", "2026-11-12T06:00:02", "timezone-aware capture time"),
+            ("captured_at", "2026-11-12T06:00:00Z", "predates the cancel attempt"),
+        ],
+    )
+    def test_invalid_rendered_screen_receipt_is_rejected(self, tmp_path, field, value, message):
+        path = tmp_path / "native-cancel-screen.json"
+        receipt = self.screen_receipt() | {field: value}
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+        with pytest.raises(AssertionError, match=message):
+            _validate_native_screen_receipt(
+                path, "native-fixture", not_before=datetime(2026, 11, 12, 6, 0, 1, tzinfo=UTC)
+            )
+
 
 def test_native_capability_is_real_and_observed(real_runtime):
     """The visible terminal operator owns CLI creation, control changes and restoration."""
@@ -836,7 +917,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
         "backend_port": runtime.profile["port"],
         "working_directory": str(runtime.repository),
         "copilot_home": str(runtime.copilot_home),
-        "active_cancel_screen_path": str(runtime.root / "native-cancel-screen.png"),
+        "active_cancel_screen_path": str(runtime.root / "native-cancel-screen.json"),
         "restoration_requires_native_exit": True,
         "argv": [
             *launcher,
@@ -892,15 +973,17 @@ def test_native_capability_is_real_and_observed(real_runtime):
             assert restored["native_exited"] is True, "Parent must exit the owned CLI before reporting restoration"
             runtime.manifest["native_restoration"] = restored
             runtime.save()
-    screen = runtime.root / "native-cancel-screen.png"
-    assert screen.resolve().is_relative_to(runtime.root.resolve()) and screen.is_file() and screen.stat().st_size > 0, (
-        "Actual parent-captured CLI screen is required for independent cancellation adjudication"
+    screen = runtime.root / "native-cancel-screen.json"
+    assert screen.resolve().is_relative_to(runtime.root.resolve()) and screen.is_file(), (
+        "Parent-observed rendered CLI text receipt is required for independent cancellation adjudication"
     )
-    runtime.manifest["native_cancel_screen"] = {
-        "path": str(screen),
-        "sha256": hashlib.sha256(screen.read_bytes()).hexdigest(),
-        "content_adjudication": "parent_owned",
-    }
+    evidence_path = runtime.root / "native-cancel-evidence.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    runtime.manifest["native_cancel_screen"] = _validate_native_screen_receipt(
+        screen, session_id, not_before=datetime.fromisoformat(evidence["cancel_issued_at"])
+    )
+    evidence["screen_receipt_validation"] = "passed"
+    evidence_path.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     job_id = runtime.manifest["native_job_id"]
 
     def finalized_artifacts():
@@ -916,5 +999,4 @@ def test_native_capability_is_real_and_observed(real_runtime):
 
     _wait(finalized_artifacts, timeout=120, description="nonempty native artifacts after exit and backend finalization")
     runtime.assert_artifact_isolation()
-    evidence = json.loads((runtime.root / "native-cancel-evidence.json").read_text(encoding="utf-8"))
     assert _native_identity(runtime, job_id) == evidence["identity_before"], "Native replacement detected after exit"
