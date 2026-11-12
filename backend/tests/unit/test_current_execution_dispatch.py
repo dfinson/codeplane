@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from backend.config import CPLConfig
-from backend.services.completers.copilot_steer import NativeDeliveryError
+from backend.services.completers import copilot_steer
 from backend.services.events.event_bus import EventBus
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
@@ -78,7 +78,7 @@ async def test_pending_permission_prevents_dispatch_without_unpausing(session_fa
 async def test_dispatch_reports_uncertainty_without_retry(session_factory):
     runtime, _, handle = _live_runtime(session_factory)
     preview = await runtime.get_current_execution_context("job-1")
-    handle.send_message.side_effect = NativeDeliveryError("fixture lost receipt", uncertain=True)
+    handle.send_message.side_effect = copilot_steer.NativeDeliveryError("fixture lost receipt", uncertain=True)
     receipt = await runtime.dispatch_current_execution("job-1", preview.execution_token, "fixture")
     assert receipt.status == "uncertain" and receipt.reason == "delivery_unknown"
     handle.send_message.assert_awaited_once()

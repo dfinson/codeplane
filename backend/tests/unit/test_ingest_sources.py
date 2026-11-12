@@ -23,7 +23,8 @@ from backend.models.events import EventKind
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
-from backend.services.completers.copilot_steer import CopilotSteerClient, NativeDeliveryError
+from backend.services.completers import copilot_steer
+from backend.services.completers.copilot_steer import CopilotSteerClient
 from backend.services.events.event_bus import EventBus
 from backend.services.events.ingest_service import IngestService
 from backend.services.ingest.claude_source import (
@@ -431,7 +432,7 @@ class TestNativeBinding:
             stack.runtime.send_operator_message(stack.job.id, "fixture"),
             stack.ingest.abort_session(stack.job.id),
         ):
-            with pytest.raises(NativeDeliveryError) as error:
+            with pytest.raises(copilot_steer.NativeDeliveryError) as error:
                 await operation
             assert error.value.uncertain is False
         assert await stack.ingest.confirms_live(stack.job) is False
@@ -442,7 +443,7 @@ class TestNativeBinding:
     @pytest.mark.parametrize("local_id", ["../escape", "..\\escape", "C:\\elsewhere", "", "not-a-uuid"])
     async def test_invalid_local_path_is_not_a_control_target(self, native_control_stack, local_id):
         stack = native_control_stack
-        with pytest.raises(NativeDeliveryError):
+        with pytest.raises(copilot_steer.NativeDeliveryError):
             await stack.watcher.send_message(local_id, "fixture")
         stack.post.assert_not_awaited()
 
@@ -459,7 +460,7 @@ class TestNativeBinding:
             return original_resolve(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, "resolve", redirected)
-        with pytest.raises(NativeDeliveryError):
+        with pytest.raises(copilot_steer.NativeDeliveryError):
             await stack.runtime.send_operator_message(stack.job.id, "fixture")
         stack.post.assert_not_awaited()
 
@@ -470,7 +471,7 @@ class TestNativeBinding:
             stack.ingest.send_operator_message(stack.job.id, "fixture"),
             stack.ingest.abort_session(stack.job.id),
         ):
-            with pytest.raises(NativeDeliveryError):
+            with pytest.raises(copilot_steer.NativeDeliveryError):
                 await operation
         assert await stack.ingest.confirms_live(stack.job) is False
         stack.post.assert_not_awaited()
@@ -479,9 +480,9 @@ class TestNativeBinding:
     async def test_no_client_is_typed_unavailable(self, native_control_stack):
         stack = native_control_stack
         stack.watcher._steer = None
-        with pytest.raises(NativeDeliveryError, match="unavailable"):
+        with pytest.raises(copilot_steer.NativeDeliveryError, match="unavailable"):
             await stack.runtime.send_operator_message(stack.job.id, "fixture")
-        with pytest.raises(NativeDeliveryError, match="unavailable"):
+        with pytest.raises(copilot_steer.NativeDeliveryError, match="unavailable"):
             await stack.ingest.abort_session(stack.job.id)
         assert await stack.ingest.confirms_live(stack.job) is False
         stack.post.assert_not_awaited()
