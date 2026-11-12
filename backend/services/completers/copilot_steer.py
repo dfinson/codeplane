@@ -45,10 +45,10 @@ class CopilotSteerClient:
         )
 
     async def send_message(self, task_id: str, message: str) -> None:
-        """POST /agents/tasks/{task_id}/steer with type=user."""
+        """POST /agents/tasks/{task_id}/steer with type=user_message."""
         url = f"{_STEER_BASE}/{task_id}/steer"
         try:
-            resp = await self._client.post(url, json={"content": message, "type": "user"})
+            resp = await self._client.post(url, json={"content": message, "type": "user_message"})
             resp.raise_for_status()
             log.info("copilot_steer_message_admitted", task_id=task_id)
         except httpx.HTTPStatusError as exc:
