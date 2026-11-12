@@ -11,6 +11,7 @@ import { matchesNameFilter } from "../lib/nameFilter";
 import { ProjectsOverview } from "./ProjectsOverview";
 import { ViewTabBar, type ViewTabBarItem } from "./ViewTabBar";
 import { pathBasename } from "../lib/paths";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 export interface RepoLayoutOutletContext {
   onProjectUpdated: (project: ProjectResponse) => void;
@@ -23,11 +24,16 @@ export function RepoLayout() {
   const location = useLocation();
   const [projects, setProjects] = useState<ProjectResponse[]>([]);
   const [loading, setLoading] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
+  const isNarrow = useIsMobile(640);
+  const [collapsed, setCollapsed] = useState(isNarrow);
   const [filterQuery, setFilterQuery] = useState("");
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedRepoPath, setSelectedRepoPath] = useState<string | undefined>(undefined);
   const [expandedProjectRepoListId, setExpandedProjectRepoListId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isNarrow) setCollapsed(true);
+  }, [isNarrow]);
 
   const loadProjects = useCallback(async () => {
     try {
