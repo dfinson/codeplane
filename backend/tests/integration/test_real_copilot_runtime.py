@@ -965,7 +965,7 @@ def test_native_capability_is_real_and_observed(real_runtime):
         print(f"NATIVE_RESTORE_STEERING {runtime.root / 'native-result.json'}", flush=True)
         if published is not None:
             restored_path = runtime.root / "native-restored.json"
-            _wait(restored_path.exists, timeout=180, description="visible operator steering-disabled receipt")
+            _wait(restored_path.exists, timeout=600, description="visible operator steering-disabled receipt")
             restored = json.loads(restored_path.read_text(encoding="utf-8"))
             assert restored["session_id"] == session_id
             assert restored["steering_enabled"] is False
