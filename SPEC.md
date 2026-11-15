@@ -57,6 +57,13 @@ Coordinated dispatch uses an exact live-execution token and refuses stale,
 non-running or gated targets. It never implicitly resumes or unpauses a job.
 Admission is distinct from execution, and uncertain delivery is not retried.
 
+Project creation and Chat responses are fenced by their exact target and
+operation generation. A completed request for an old form or conversation
+cannot clear a new draft, change the selected Chat, or navigate a newer view.
+Late clone/init results retain repository files and report registration
+cleanup separately. Chat drafts remain scoped to their conversation, and
+retrying a failed conversation read never resends a Chat or Job command.
+
 Verification results describe completed, failed or interrupted verification
 agent turns. Completion is not proof of test success or operator acceptance.
 The existing review/completed distinction remains.

@@ -89,6 +89,78 @@ beforeEach(() => {
 });
 
 describe("ProjectChats", () => {
+  it("does not let a delayed attachment replace the newly selected Chat", async () => {
+    const other = { ...chat, id: "chat-2", title: "Other conversation" };
+    vi.mocked(fetchChats).mockResolvedValue({ items: [chat, other] });
+    let finish!: (value: Awaited<ReturnType<typeof attachChatToChain>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof attachChatToChain>>>((resolve) => { finish = resolve; });
+    vi.mocked(attachChatToChain).mockReturnValueOnce(pending);
+    renderChats();
+    await screen.findByRole("button", { name: /Attach chain/i });
+    fireEvent.change(screen.getByLabelText("Task Recipe chain"), { target: { value: "task-1" } });
+    fireEvent.click(screen.getByRole("button", { name: /Attach chain/i }));
+    fireEvent.click(screen.getByRole("link", { name: /Other conversation/i }));
+    await screen.findByRole("heading", { name: "Other conversation" });
+    await act(async () => { finish({ ...chat, taskLinkId: "task-1" }); await pending; });
+    expect(screen.getByRole("heading", { name: "Other conversation" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Detach chain/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Task Recipe chain")).toHaveValue("");
+  });
+
+  it("does not apply a failed send's delayed history recovery to another Chat", async () => {
+    const other = { ...chat, id: "chat-2", title: "Other conversation" };
+    vi.mocked(fetchChats).mockResolvedValue({ items: [chat, other] });
+    let finish!: (value: Awaited<ReturnType<typeof fetchChatMessages>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof fetchChatMessages>>>((resolve) => { finish = resolve; });
+    let reads = 0;
+    vi.mocked(fetchChatMessages).mockImplementation(async (id) => {
+      if (id === "chat-1" && ++reads > 1) return pending;
+      return [];
+    });
+    vi.mocked(sendChatTurn).mockRejectedValueOnce(new Error("Old request failed"));
+    renderChats();
+    const input = await screen.findByPlaceholderText("Write a message…");
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "For the first Chat" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(reads).toBe(2));
+    fireEvent.click(screen.getByRole("link", { name: /Other conversation/i }));
+    await screen.findByRole("heading", { name: "Other conversation" });
+    await act(async () => { finish([]); await pending; });
+    expect(screen.queryByText("Old request failed")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Write a message…")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+  });
+
+  it("keeps unsent drafts scoped to their exact Chat", async () => {
+    const other = { ...chat, id: "chat-2", title: "Other conversation" };
+    vi.mocked(fetchChats).mockResolvedValue({ items: [chat, other] });
+    renderChats();
+    const first = await screen.findByPlaceholderText("Write a message…");
+    await waitFor(() => expect(first).toBeEnabled());
+    fireEvent.change(first, { target: { value: "First draft" } });
+    fireEvent.click(screen.getByRole("link", { name: /Other conversation/i }));
+    await screen.findByRole("heading", { name: "Other conversation" });
+    const second = screen.getByPlaceholderText("Write a message…");
+    await waitFor(() => expect(second).toBeEnabled());
+    expect(second).toHaveValue("");
+    fireEvent.change(second, { target: { value: "Second draft" } });
+    fireEvent.click(screen.getByRole("link", { name: /Architecture/i }));
+    await screen.findByRole("heading", { name: "Architecture" });
+    expect(screen.getByPlaceholderText("Write a message…")).toHaveValue("First draft");
+  });
+
+  it("retries a failed read without sending another conversation command", async () => {
+    vi.mocked(fetchChatMessages).mockRejectedValueOnce(new Error("Messages unavailable"));
+    renderChats();
+    expect(await screen.findByText("Messages unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No messages yet.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading messages" }));
+    expect(await screen.findByText("No messages yet.")).toBeInTheDocument();
+    expect(sendChatTurn).not.toHaveBeenCalled();
+    expect(launchJobFromChat).not.toHaveBeenCalled();
+  });
+
   it("loads a deep-linked Chat within its owning Project", async () => {
     renderChats();
 

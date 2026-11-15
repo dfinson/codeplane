@@ -33,6 +33,10 @@ export function ProjectChats() {
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
   const [sendState, setSendState] = useState<SendState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);
   const [launchRepo, setLaunchRepo] = useState("");
@@ -43,39 +47,61 @@ export function ProjectChats() {
   const selectionRequest = useRef(0);
   const listRequest = useRef(0);
   const taskLinksRequest = useRef(0);
+  const actionRequest = useRef(0);
+  const sendRequest = useRef(0);
+  const messageReadRequest = useRef(0);
+  const createRequest = useRef(0);
+  const drafts = useRef(new Map<string, { text: string; version: number }>());
+  const draftGeneration = useRef(0);
   const invalidateSelection = useCallback(() => {
     selectionRequest.current += 1;
+    actionRequest.current += 1;
+    sendRequest.current += 1;
+    messageReadRequest.current += 1;
+    createRequest.current += 1;
   }, []);
 
   useEffect(() => setNewChatProjectId(projectId ?? ""), [projectId]);
 
+  const loadMessages = useCallback(async (chat: Chat, request: number) => {
+    const readRequest = ++messageReadRequest.current;
+    const isCurrent = () => selectionRequest.current === request && messageReadRequest.current === readRequest;
+    setMessagesLoading(true);
+    setMessagesError(null);
+    try {
+      const nextMessages = await fetchChatMessages(chat.id);
+      if (nextMessages.some((item) => item.chatId !== chat.id)) throw new Error("Response belongs to another Chat.");
+      if (isCurrent()) setMessages(nextMessages);
+    } catch (error) {
+      if (isCurrent()) setMessagesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isCurrent()) setMessagesLoading(false);
+    }
+  }, []);
+
   const selectChat = useCallback(async (chat: Chat) => {
     const request = ++selectionRequest.current;
+    actionRequest.current += 1;
+    sendRequest.current += 1;
     setSelected(chat);
     setMessages([]);
+    setMessage(drafts.current.get(chat.id)?.text ?? "");
     setSendState("idle");
     setSendError(null);
     setLaunchRepo("");
     setActionProjectId(chat.projectId ?? "");
     setChainTaskLinkId(chat.taskLinkId ?? "");
     setActionError(null);
-    try {
-      const nextMessages = await fetchChatMessages(chat.id);
-      if (selectionRequest.current === request) setMessages(nextMessages);
-    } catch (error) {
-      if (selectionRequest.current === request) {
-        setSelected(null);
-        setMessages([]);
-        toast.error(String(error));
-      }
-    }
-  }, []);
+    setChatAction("idle");
+    await loadMessages(chat, request);
+  }, [loadMessages]);
 
   useEffect(() => {
     let cancelled = false;
     const request = ++listRequest.current;
     invalidateSelection();
     setLoading(true);
+    setListError(null);
     setChats([]);
     setProjects([]);
     setSelected(null);
@@ -98,6 +124,7 @@ export function ProjectChats() {
           setProjects([]);
           setSelected(null);
           setMessages([]);
+          setListError("Failed to load chats.");
           toast.error("Failed to load chats");
         }
       })
@@ -108,7 +135,7 @@ export function ProjectChats() {
       cancelled = true;
       invalidateSelection();
     };
-  }, [chatId, invalidateSelection, projectId, selectChat]);
+  }, [chatId, invalidateSelection, projectId, selectChat, reload]);
 
   useEffect(() => {
     const request = ++taskLinksRequest.current;
@@ -139,18 +166,23 @@ export function ProjectChats() {
 
   async function startChat() {
     if (!title.trim()) return;
+    const request = ++createRequest.current;
+    const selection = selectionRequest.current;
+    const targetProject = newChatProjectId;
     try {
       const chat = await createChat({
         title: title.trim(),
-        projectId: newChatProjectId || null,
+        projectId: targetProject || null,
       });
-      const scopedChat = newChatProjectId
-        ? { ...chat, projectId: newChatProjectId }
-        : chat;
-      setChats((items) => [scopedChat, ...items]);
+      if (createRequest.current !== request || selectionRequest.current !== selection) {
+        toast.success(`Chat "${chat.title}" created. Your current selection was not changed.`);
+        return;
+      }
+      if (chat.projectId !== (targetProject || null)) throw new Error("Chat response belongs to another Project.");
+      setChats((items) => [chat, ...items]);
       setTitle("");
-      navigate(chatUrl(scopedChat));
-      await selectChat(scopedChat);
+      navigate(chatUrl(chat));
+      await selectChat(chat);
     } catch (error) {
       toast.error(String(error));
     }
@@ -158,11 +190,15 @@ export function ProjectChats() {
 
   async function sendMessage() {
     const content = message.trim();
-    if (!selected || !content || sendState === "sending" || sendState === "awaiting-assistant") return;
+    if (!selected || !content || messagesLoading || messagesError || sendState === "sending" || sendState === "awaiting-assistant") return;
 
     const optimisticId = `sending-${Date.now()}`;
     const request = selectionRequest.current;
+    const operation = ++sendRequest.current;
+    messageReadRequest.current += 1;
     const selectedChatId = selected.id;
+    const draftVersion = drafts.current.get(selectedChatId)?.version;
+    const isCurrent = () => selectionRequest.current === request && sendRequest.current === operation;
     const optimistic: ChatMessage = {
       id: optimisticId,
       chatId: selected.id,
@@ -174,11 +210,18 @@ export function ProjectChats() {
     setSendState("sending");
     setSendError(null);
     await Promise.resolve();
+    if (!isCurrent()) return;
     setSendState("awaiting-assistant");
 
     try {
-      const turn = await sendChatTurn(selected.id, content);
-      if (selectionRequest.current !== request) return;
+      const turn = await sendChatTurn(selectedChatId, content);
+      if (turn.userMessage.chatId !== selectedChatId || (turn.assistantMessage && turn.assistantMessage.chatId !== selectedChatId)) {
+        throw new Error("The response belongs to another Chat. Reload this conversation.");
+      }
+      if (turn.state !== "error" && drafts.current.get(selectedChatId)?.version === draftVersion) {
+        drafts.current.delete(selectedChatId);
+      }
+      if (!isCurrent()) return;
       setMessages((items) => [
         ...items.filter((item) => item.id !== optimisticId),
         turn.userMessage,
@@ -190,18 +233,19 @@ export function ProjectChats() {
         return;
       }
 
-      setMessage("");
+      setMessage((draft) => draft.trim() === content ? "" : draft);
       setSendState("assistant");
     } catch (error) {
-      if (selectionRequest.current !== request) return;
+      if (!isCurrent()) return;
       try {
         const persisted = await fetchChatMessages(selectedChatId);
-        if (selectionRequest.current === request) setMessages(persisted);
+        if (isCurrent()) setMessages(persisted);
       } catch {
-        if (selectionRequest.current === request) {
+        if (isCurrent()) {
           setMessages((items) => items.filter((item) => item.id !== optimisticId));
         }
       }
+      if (!isCurrent()) return;
       setSendState("error");
       setSendError(error instanceof Error ? error.message : String(error));
     }
@@ -214,6 +258,12 @@ export function ProjectChats() {
     setActionProjectId(updated.projectId ?? "");
   }
 
+  function invalidateAction() {
+    actionRequest.current += 1;
+    setChatAction("idle");
+    setActionError(null);
+  }
+
   async function launchJob() {
     if (!selected || !launchRepo) {
       setActionError("Select a repository before launching a Job.");
@@ -221,14 +271,19 @@ export function ProjectChats() {
     }
     setChatAction("launching");
     setActionError(null);
+    const operation = ++actionRequest.current;
+    const selection = selectionRequest.current;
+    const targetChatId = selected.id;
+    const isCurrent = () => actionRequest.current === operation && selectionRequest.current === selection;
     try {
-      const job = await launchJobFromChat(selected.id, { repo: launchRepo });
+      const job = await launchJobFromChat(targetChatId, { repo: launchRepo });
       toast.success("Job launched from Chat");
-      navigate(`/jobs/${encodeURIComponent(job.id)}`);
+      if (isCurrent()) navigate(`/jobs/${encodeURIComponent(job.id)}`);
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      if (isCurrent()) setActionError(error instanceof Error ? error.message : String(error));
+      else toast.error(`Earlier Chat launch: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setChatAction("idle");
+      if (isCurrent()) setChatAction("idle");
     }
   }
 
@@ -239,13 +294,21 @@ export function ProjectChats() {
     }
     setChatAction("attaching");
     setActionError(null);
+    const operation = ++actionRequest.current;
+    const selection = selectionRequest.current;
+    const targetChatId = selected.id;
+    const isCurrent = () => actionRequest.current === operation && selectionRequest.current === selection;
     try {
-      updateSelectedChat(await attachChatToChain(selected.id, chainTaskLinkId));
+      const updated = await attachChatToChain(targetChatId, chainTaskLinkId);
+      if (!isCurrent()) return;
+      if (updated.id !== targetChatId) throw new Error("Attachment response belongs to another Chat.");
+      updateSelectedChat(updated);
       toast.success("Chat attached to chain");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      if (isCurrent()) setActionError(error instanceof Error ? error.message : String(error));
+      else toast.error(`Earlier Chat attachment: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setChatAction("idle");
+      if (isCurrent()) setChatAction("idle");
     }
   }
 
@@ -253,17 +316,31 @@ export function ProjectChats() {
     if (!selected) return;
     setChatAction("detaching");
     setActionError(null);
+    const operation = ++actionRequest.current;
+    const selection = selectionRequest.current;
+    const targetChatId = selected.id;
+    const isCurrent = () => actionRequest.current === operation && selectionRequest.current === selection;
     try {
-      updateSelectedChat(await detachChatFromChain(selected.id));
+      const updated = await detachChatFromChain(targetChatId);
+      if (!isCurrent()) return;
+      if (updated.id !== targetChatId) throw new Error("Detachment response belongs to another Chat.");
+      updateSelectedChat(updated);
       toast.success("Chat detached from chain");
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : String(error));
+      if (isCurrent()) setActionError(error instanceof Error ? error.message : String(error));
+      else toast.error(`Earlier Chat detachment: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setChatAction("idle");
+      if (isCurrent()) setChatAction("idle");
     }
   }
 
   if (loading) return <div className="flex justify-center py-20"><Spinner size="lg" /></div>;
+  if (listError) return (
+    <div role="alert" className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <p>{listError}</p>
+      <Button variant="secondary" onClick={() => setReload((value) => value + 1)}>Retry loading chats</Button>
+    </div>
+  );
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -274,13 +351,13 @@ export function ProjectChats() {
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,14rem)_auto]">
         <Input
           value={title}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => { createRequest.current += 1; setTitle(event.target.value); }}
           placeholder="New chat title"
           onKeyDown={(event) => event.key === "Enter" && void startChat()}
         />
         <select
           value={newChatProjectId}
-          onChange={(event) => setNewChatProjectId(event.target.value)}
+          onChange={(event) => { createRequest.current += 1; setNewChatProjectId(event.target.value); }}
           aria-label="Chat Project"
           className="h-9 rounded-md border border-border bg-background px-2 text-xs text-foreground"
         >
@@ -328,6 +405,7 @@ export function ProjectChats() {
                       aria-label="Project for Chat action"
                       value={actionProjectId}
                       onChange={(event) => {
+                        invalidateAction();
                         setActionProjectId(event.target.value);
                         setChainTaskLinkId("");
                         setActionError(null);
@@ -344,7 +422,7 @@ export function ProjectChats() {
                     <select
                       aria-label="Repository for launched Job"
                       value={launchRepo}
-                      onChange={(event) => setLaunchRepo(event.target.value)}
+                      onChange={(event) => { invalidateAction(); setLaunchRepo(event.target.value); }}
                       className="h-9 rounded-md border border-border bg-background px-2 text-xs"
                     >
                       <option value="">Select repository for Job…</option>
@@ -365,7 +443,7 @@ export function ProjectChats() {
                     <select
                       aria-label="Task Recipe chain"
                       value={chainTaskLinkId}
-                      onChange={(event) => setChainTaskLinkId(event.target.value)}
+                      onChange={(event) => { invalidateAction(); setChainTaskLinkId(event.target.value); }}
                       className="h-9 rounded-md border border-border bg-background px-2 text-xs"
                     >
                       <option value="">Select Task Recipe chain…</option>
@@ -402,7 +480,16 @@ export function ProjectChats() {
                   )}
                 </div>
               <div className="mt-4 space-y-2 max-h-80 overflow-y-auto" aria-live="polite">
-                {messages.length === 0 ? (
+                {messagesLoading ? (
+                  <p role="status" className="text-sm text-muted-foreground">Loading messages...</p>
+                ) : messagesError ? (
+                  <div role="alert" className="space-y-2">
+                    <p className="text-sm text-red-500">{messagesError}</p>
+                    <Button size="sm" variant="secondary" onClick={() => void loadMessages(selected, selectionRequest.current)}>
+                      Retry loading messages
+                    </Button>
+                  </div>
+                ) : messages.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No messages yet.</p>
                 ) : messages.map((item) => (
                   <div key={item.id} className={`rounded-md px-3 py-2 text-sm ${item.role === "user" ? "bg-primary/10 ml-6" : "bg-muted mr-6"}`}>
@@ -414,15 +501,18 @@ export function ProjectChats() {
               <div className="flex gap-2 mt-6">
                 <Input
                   value={message}
-                  onChange={(event) => setMessage(event.target.value)}
+                  onChange={(event) => {
+                    setMessage(event.target.value);
+                    drafts.current.set(selected.id, { text: event.target.value, version: ++draftGeneration.current });
+                  }}
                   placeholder="Write a message…"
-                  disabled={sendState === "sending" || sendState === "awaiting-assistant"}
+                  disabled={messagesLoading || Boolean(messagesError) || sendState === "sending" || sendState === "awaiting-assistant"}
                   onKeyDown={(event) => event.key === "Enter" && void sendMessage()}
                 />
                 <Button
                   size="sm"
                   onClick={() => void sendMessage()}
-                  disabled={sendState === "sending" || sendState === "awaiting-assistant"}
+                  disabled={messagesLoading || Boolean(messagesError) || sendState === "sending" || sendState === "awaiting-assistant"}
                   aria-label="Send message"
                 >
                   <Send size={14} />

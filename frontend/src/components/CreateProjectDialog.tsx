@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -55,6 +55,10 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
   const [addingRepo, setAddingRepo] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const formGeneration = useRef(0);
+  const repoOperation = useRef({ generation: 0, target: "", active: false });
+  const repoTarget = JSON.stringify([mode, cloneSource, cloneDestination, cloneFolderName, initPath, initName]);
+  const formTarget = JSON.stringify([name, repoPaths]);
 
   const resetState = useCallback(() => {
     setName("");
@@ -70,10 +74,34 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
     setError(null);
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    resetState();
+  useLayoutEffect(() => {
+    formGeneration.current += 1;
+    setCreating(false);
+    if (open) resetState();
+    return () => { formGeneration.current += 1; };
   }, [open, resetState]);
+
+  useLayoutEffect(() => {
+    formGeneration.current += 1;
+    setCreating(false);
+  }, [formTarget]);
+
+  useLayoutEffect(() => {
+    repoOperation.current = { generation: repoOperation.current.generation + 1, target: repoTarget, active: false };
+    setAddingRepo(false);
+    return () => { repoOperation.current.generation += 1; };
+  }, [open, repoTarget]);
+
+  const beginRepoOperation = useCallback(() => {
+    if (repoOperation.current.active) return null;
+    const operation = { generation: repoOperation.current.generation + 1, target: repoTarget, active: true };
+    repoOperation.current = operation;
+    return { ...operation };
+  }, [repoTarget]);
+
+  const currentRepoOperation = useCallback((operation: { generation: number; target: string }) => {
+    return repoOperation.current.generation === operation.generation && repoOperation.current.target === operation.target;
+  }, []);
 
   function addRepoPath(path: string) {
     const trimmed = path.trim();
@@ -124,11 +152,21 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       return;
     }
 
+    const operation = beginRepoOperation();
+    if (!operation) return;
     setAddingRepo(true);
     setError(null);
     try {
       const targetPath = joinPath(cloneDestination.trim(), folderName);
       const res = await registerRepo(cloneSource.trim(), targetPath, "clone");
+      if (!currentRepoOperation(operation)) {
+        if (res.registered) {
+          const failed = await compensateRegistrations([res.path]);
+          if (failed.length) toast.error(`Could not undo repository registration for ${res.path}.`);
+        }
+        toast.info(`Clone completed at ${res.path}. Files remain, but the changed Project form was not updated.`);
+        return;
+      }
       addRepoPath(res.path);
       if (res.registered) {
         setStagedRepoPaths((items) => (items.includes(res.path) ? items : [...items, res.path]));
@@ -137,33 +175,52 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       setCloneDestination("");
       setCloneFolderName("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to clone repository");
+      const reason = err instanceof Error ? err.message : "Failed to clone repository";
+      if (currentRepoOperation(operation)) setError(reason);
+      else toast.error(`Earlier clone request: ${reason}`);
     } finally {
-      setAddingRepo(false);
+      if (currentRepoOperation(operation)) {
+        repoOperation.current.active = false;
+        setAddingRepo(false);
+      }
     }
-  }, [cloneDestination, cloneFolderName, cloneSource]);
+  }, [cloneDestination, cloneFolderName, cloneSource, beginRepoOperation, currentRepoOperation]);
 
   const handleAddViaInit = useCallback(async () => {
     if (!initPath.trim()) {
       setError("Choose a parent directory for the new repository.");
       return;
     }
+    const operation = beginRepoOperation();
+    if (!operation) return;
     setAddingRepo(true);
     setError(null);
     try {
       const res = await createRepo(initPath.trim(), initName.trim() || undefined);
+      if (!currentRepoOperation(operation)) {
+        const failed = await compensateRegistrations([res.path]);
+        if (failed.length) toast.error(`Could not undo repository registration for ${res.path}.`);
+        toast.info(`Repository created at ${res.path}. Files remain, but the changed Project form was not updated.`);
+        return;
+      }
       addRepoPath(res.path);
       setStagedRepoPaths((items) => (items.includes(res.path) ? items : [...items, res.path]));
       setInitPath("");
       setInitName("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create repository");
+      const reason = err instanceof Error ? err.message : "Failed to create repository";
+      if (currentRepoOperation(operation)) setError(reason);
+      else toast.error(`Earlier repository creation request: ${reason}`);
     } finally {
-      setAddingRepo(false);
+      if (currentRepoOperation(operation)) {
+        repoOperation.current.active = false;
+        setAddingRepo(false);
+      }
     }
-  }, [initName, initPath]);
+  }, [initName, initPath, beginRepoOperation, currentRepoOperation]);
 
   const handleCreate = useCallback(async () => {
+    if (creating) return;
     const trimmedName = name.trim();
     if (!trimmedName) {
       setError("Project name is required.");
@@ -175,6 +232,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
     }
     setCreating(true);
     setError(null);
+    const generation = ++formGeneration.current;
     try {
       const project = await createProject({ name: trimmedName, repoPaths });
       const cleanupFailures = await compensateRegistrations(stagedRepoPaths);
@@ -183,12 +241,15 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
           `Project saved, but legacy registration remains for: ${cleanupFailures.join(", ")}`,
         );
       }
+      if (formGeneration.current !== generation) {
+        toast.info(`Project "${project.name}" was created. The current form was not changed.`);
+        return;
+      }
       setStagedRepoPaths([]);
       onCreated(project);
       onClose();
     } catch (err) {
       const failed = await compensateRegistrations(stagedRepoPaths);
-      setStagedRepoPaths([]);
       const reason = err instanceof Error ? err.message : "Failed to create Project";
       const retained = stagedRepoPaths.length > 0
         ? ` Repository files and any completed index remain at: ${stagedRepoPaths.join(", ")}. Remove them manually if unwanted.`
@@ -196,13 +257,21 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       const rollback = failed.length > 0
         ? ` Registration rollback also failed for: ${failed.join(", ")}.`
         : "";
-      setError(`${reason}.${retained}${rollback}`);
+      if (formGeneration.current === generation) {
+        setStagedRepoPaths([]);
+        setError(`${reason}.${retained}${rollback}`);
+      } else {
+        toast.error(`Earlier Project creation request: ${reason}.${retained}${rollback}`);
+      }
     } finally {
-      setCreating(false);
+      if (formGeneration.current === generation) setCreating(false);
     }
-  }, [name, repoPaths, stagedRepoPaths, onCreated, onClose]);
+  }, [name, repoPaths, stagedRepoPaths, onCreated, onClose, creating]);
 
   const handleClose = useCallback(async () => {
+    const generation = ++formGeneration.current;
+    repoOperation.current.generation += 1;
+    setStagedRepoPaths([]);
     if (stagedRepoPaths.length > 0) {
       const failed = await compensateRegistrations(stagedRepoPaths);
       if (failed.length > 0) {
@@ -210,7 +279,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       }
       toast.info(`Repository files and any completed index remain at: ${stagedRepoPaths.join(", ")}`);
     }
-    onClose();
+    if (formGeneration.current === generation) onClose();
   }, [onClose, stagedRepoPaths]);
 
   return (
