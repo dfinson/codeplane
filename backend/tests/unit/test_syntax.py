@@ -53,7 +53,7 @@ def test_encoded_powershell_is_decoded_as_data_never_executed() -> None:
 def test_powershell_scriptblock_and_subexpression_are_not_skipped() -> None:
     facts = analyze_syntax("& { Get-Content file }; Write-Output $(Get-Date)", "powershell")
     assert {command.name for command in facts.commands} >= {"Get-Content", "Write-Output", "Get-Date"}
-    assert any(command.scope == "deferred" for command in facts.commands if command.name == "Get-Content")
+    assert any(command.scope == "immediate" for command in facts.commands if command.name == "Get-Content")
 
 
 @pytest.mark.parametrize(
@@ -80,3 +80,43 @@ def test_deep_syntax_stops_with_visible_limit() -> None:
     facts = analyze_syntax("echo " + "$(" * 40 + "pwd" + ")" * 40, "bash")
     assert not facts.complete
     assert "depth_limit" in facts.incomplete
+
+
+@pytest.mark.parametrize(
+    ("raw", "scope", "function"),
+    [
+        ("f() { bash -c 'printf deferred'; }; f", "deferred", "f"),
+        ("if true; then bash -c 'printf conditional'; fi", "conditional", None),
+    ],
+)
+def test_literal_nested_scripts_retain_outer_scope_and_grammar_provenance(raw, scope, function) -> None:
+    facts = analyze_syntax(raw, "bash")
+    assert facts.complete, facts.incomplete
+    nested = next(command for command in facts.commands if command.name == "printf")
+    assert nested.scope == scope
+    assert nested.function == function
+    assert facts.parser_version == "tree-sitter/0.25.2"
+    assert all(document.grammar_version == "tree-sitter-bash/0.25.1" for document in facts.documents)
+
+
+@pytest.mark.parametrize(
+    ("raw", "scope"),
+    [
+        ("$script = { Get-Content file }", "deferred"),
+        ("& { Get-Content file }", "immediate"),
+        (". { Get-Content file }", "immediate"),
+        ("if (1) { & { Get-Content file } }", "conditional"),
+    ],
+)
+def test_powershell_block_declaration_and_invocation_have_distinct_scopes(raw, scope) -> None:
+    facts = analyze_syntax(raw, "powershell")
+    command = next(command for command in facts.commands if command.name == "Get-Content")
+    assert command.scope == scope
+    if scope == "immediate":
+        assert facts.complete, facts.incomplete
+
+
+def test_powershell_variable_dispatch_is_explicitly_unresolved() -> None:
+    facts = analyze_syntax("$script = { Get-Content file }; & $script", "powershell")
+    assert not facts.complete
+    assert "unresolved_expansion" in facts.incomplete
