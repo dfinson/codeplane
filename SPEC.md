@@ -35,6 +35,30 @@ output-receipt, workspace-lease and review storage. Recipe gates reference
 existing approval records. Existing Jobs and transcript steps are not backfilled
 with invented recipe identities.
 
+### Standalone interoperability transition
+
+The standalone replacement is reviewed against product base
+`871fc81af41fec13de756338aab2715839357af5` (tree
+`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
+the compatibility transition until decoder, policy and integration qualification
+permits retirement. Existing history is never discarded to complete migration.
+
+`services/adapters/contracts.py` separates observation, execution, blocking
+permission interception and text-only completion. An observer does not acquire
+launch or cancellation authority. Recipe capability requests must be a subset
+of both Job policy and actual adapter support. An unsatisfied request fails
+before side effects rather than silently reducing or broadening its grant.
+The invocation boundary must enforce the resulting grant, not rely on prompts.
+Recipe run/revision/step-instance/attempt correlation is additive and never
+replaces transcript `step_id` or `turn_id`.
+
+`services/action_policy/syntax.py` provides bounded Tree-sitter evidence using
+the declared Bash/POSIX-shell or PowerShell dialect. It retains source bytes,
+grammar node spans, conditional/deferred scopes and nested interpreter origins.
+Unknown dialects, unresolved expansions, malformed syntax and resource limits
+are incomplete evidence, not a safe-command verdict. Syntax structure alone
+does not establish command semantics.
+
 ### Existing runtime guarantees
 
 `runtime.copilot_only` defaults to true. This restricts CodePlane-managed
