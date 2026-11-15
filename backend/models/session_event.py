@@ -103,6 +103,13 @@ class CanonicalSessionEvent(_FrozenModel):
     raw_event: dict[str, Any] | None = None
     metadata: EventMetadata = Field(default_factory=EventMetadata)
 
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _metadata_from_legacy_model(cls, value: Any) -> Any:
+        if isinstance(value, BaseModel) and not isinstance(value, EventMetadata):
+            return value.model_dump(mode="json")
+        return value
+
     @property
     def sequence(self) -> int | None:
         return self.metadata.sequence

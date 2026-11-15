@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from traceforge.types import EventMetadata, SessionEvent
+from backend.models.session_event import EventMetadata, SessionEvent
 
 if TYPE_CHECKING:
     from backend.models.api_schemas import ExecutionPhase

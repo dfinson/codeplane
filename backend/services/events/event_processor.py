@@ -33,16 +33,17 @@ from backend.models.events import (
     EventKind,
     SessionEvent,
 )
+from backend.models.session_event import EventMetadata
+from backend.services.events.activity_projection import ActivityProjection
+from backend.services.events.tool_pairing import ToolPairing
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from traceforge.enricher import Enricher as TFEnricher
-    from traceforge.pipeline import EventPipeline as TFEventPipeline
-
     from backend.services.artifacts.diff_service import DiffService
+    from backend.services.events.contracts import EventEnrichment, TitlePipeline
     from backend.services.events.event_bus import EventBus
-    from backend.services.steps.tracker import StepTracker
+    from backend.services.steps.tracker import StepTracker, _StepState
     from backend.services.trail import TrailService
 
 log = structlog.get_logger()
@@ -68,8 +69,8 @@ class EventProcessor:
         step_tracker: StepTracker | None = None,
         trail_service: TrailService | None = None,
         *,
-        enricher: TFEnricher | None = None,
-        title_pipeline: TFEventPipeline | None = None,
+        enricher: EventEnrichment | None = None,
+        title_pipeline: TitlePipeline | None = None,
         persisted: Callable[[SessionEvent], Awaitable[bool]] | None = None,
     ) -> None:
         self._event_bus = event_bus
@@ -82,6 +83,58 @@ class EventProcessor:
         # Synthesized turn_id per job for producers that don't provide one
         # (imported CLI sessions). Rotated on completed agent messages.
         self._turn_ids: dict[str, str] = {}
+        self._attempt_processors: dict[tuple[str, str, str], EventProcessor] = {}
+        self._attempt_workspaces: dict[tuple[str, str, str], tuple[str, str | None]] = {}
+        self._attempt_scope: tuple[str, str, str] | None = None
+        self._activity_projection: ActivityProjection | None = None
+
+    def register_attempt_worktree(
+        self,
+        job_id: str,
+        attempt_id: str,
+        execution_epoch: str,
+        worktree_path: str,
+        *,
+        managed: bool = False,
+        base_ref: str | None = None,
+    ) -> None:
+        if not attempt_id or not execution_epoch:
+            raise ValueError("Attempt registration requires explicit attempt and execution epoch")
+        key = (job_id, execution_epoch, attempt_id)
+        if key in self._attempt_processors:
+            if self._attempt_workspaces[key] != (worktree_path, base_ref):
+                raise ValueError("Attempt workspace cannot change during execution")
+            return
+        metadata = EventMetadata(attempt_id=attempt_id, execution_epoch=execution_epoch)
+        processor = EventProcessor(
+            self._event_bus,
+            self._diff_service.scoped(metadata, read_only=not managed) if self._diff_service is not None else None,
+            self._step_tracker,
+            enricher=ToolPairing(),
+            persisted=self._persisted,
+        )
+        processor._attempt_scope = key
+        processor._activity_projection = ActivityProjection(self._event_bus)
+        self._attempt_processors[key] = processor
+        self._attempt_workspaces[key] = (worktree_path, base_ref)
+        if self._step_tracker is not None:
+            self._step_tracker.register_worktree(
+                job_id,
+                worktree_path,
+                managed=managed,
+                attempt_id=attempt_id,
+                execution_epoch=execution_epoch,
+            )
+
+    def _current_step(self, job_id: str, event: SessionEvent) -> _StepState | None:
+        assert self._step_tracker is not None
+        if event.metadata.attempt_id is None:
+            return self._step_tracker.current_step(job_id)
+        return self._step_tracker.current_step(
+            job_id,
+            attempt_id=event.metadata.attempt_id,
+            execution_epoch=event.metadata.execution_epoch,
+        )
 
     def register_worktree(self, job_id: str, worktree_path: str) -> None:
         """Register worktree for step tracker SHA capture."""
@@ -107,6 +160,13 @@ class EventProcessor:
         Returns the published event, or ``None`` if the event was consumed
         internally (e.g. a ``file.edited`` diff trigger) and nothing was emitted.
         """
+        if self._attempt_scope is None and event.metadata.attempt_id is not None:
+            key = (job_id, event.metadata.execution_epoch or "", event.metadata.attempt_id)
+            processor = self._attempt_processors.get(key)
+            if processor is None:
+                raise ValueError("Attempt event has no registered execution workspace")
+            workspace, reference = self._attempt_workspaces[key]
+            return await processor.process_event(job_id, event, workspace, reference, replay=replay)
         kind = event.kind
         if replay:
             await self._reconstruct(event)
@@ -191,9 +251,11 @@ class EventProcessor:
         # boundaries. Streaming partials (deltas, tool output chunks) are skipped.
         if is_transcript and kind not in TRANSCRIPT_STREAMING_KINDS and self._step_tracker is not None:
             await self._step_tracker.on_transcript_event(job_id, event)
-            current = self._step_tracker.current_step(job_id)
+            current = self._current_step(job_id, event)
             if current:
                 event.payload["step_number"] = current.step_number
+                if self._attempt_scope is not None:
+                    event.payload["step_id"] = current.step_id
             # TrailService is the sole step_id authority (ps-* IDs)
             if self._trail_service is not None:
                 plan_step_id = self._trail_service.get_active_plan_step_id(job_id)
@@ -201,6 +263,8 @@ class EventProcessor:
                     event.payload["step_id"] = plan_step_id
 
         await self._event_bus.publish(event)
+        if self._activity_projection is not None:
+            await self._activity_projection.push(event)
 
         # Feed the title pipeline (boundary + title inference) for transcript
         # events.  TitleUpdate callbacks are converted to turn_summary events
@@ -264,15 +328,19 @@ class EventProcessor:
 
         if is_transcript and kind not in TRANSCRIPT_STREAMING_KINDS and self._step_tracker is not None:
             await self._step_tracker.on_transcript_event(job_id, event)
-            current = self._step_tracker.current_step(job_id)
+            current = self._current_step(job_id, event)
             if current:
                 event.payload["step_number"] = current.step_number
+                if self._attempt_scope is not None:
+                    event.payload["step_id"] = current.step_id
             if self._trail_service is not None:
                 plan_step_id = self._trail_service.get_active_plan_step_id(job_id)
                 if plan_step_id:
                     event.payload["step_id"] = plan_step_id
 
         await self._event_bus.publish(event)
+        if self._activity_projection is not None:
+            await self._activity_projection.push(event)
 
         if is_transcript and self._title_pipeline is not None:
             try:
@@ -291,6 +359,8 @@ class EventProcessor:
         if enriched is None:
             return
         for item in enriched if isinstance(enriched, list) else [enriched]:
+            if self._activity_projection is not None:
+                await self._activity_projection.push(item, replay=True)
             if self._title_pipeline is not None and item.kind in TRANSCRIPT_KINDS:
                 token = RECONSTRUCTING_EVENTS.set(True)
                 try:
@@ -307,12 +377,18 @@ class EventProcessor:
         - ``EventPipeline.finalize_session(session_id)`` — emits final activity
           titles for this session without affecting concurrent sessions.
         """
-        if self._step_tracker is not None:
-            await self._step_tracker.on_job_terminal(job_id, outcome)
-        # Flush orphan tool-starts buffered for this job's session only
+        # Flush before closing steps, otherwise an orphan start can reopen one.
         if self._enricher is not None:
             for orphan in self._enricher.flush_session(job_id):
                 await self._process_enriched(job_id, orphan, None, None, False)
+        if self._attempt_scope is not None and self._step_tracker is not None:
+            _, epoch, attempt = self._attempt_scope
+            await self._step_tracker.on_attempt_terminal(job_id, attempt, epoch, outcome)
+        elif self._step_tracker is not None:
+            await self._step_tracker.on_job_terminal(job_id, outcome)
+        for key, processor in tuple(self._attempt_processors.items()):
+            if key[0] == job_id:
+                await processor.on_job_terminal(job_id, outcome)
         # Finalize this session's title streams (per-session, not global)
         if self._title_pipeline is not None:
             try:
@@ -331,6 +407,8 @@ class EventProcessor:
         Drains the enricher's remaining buffered orphan tool-starts and closes
         the title pipeline (which flushes any sessions not yet finalized).
         """
+        for processor in tuple(self._attempt_processors.values()):
+            await processor.shutdown()
         if self._enricher is not None:
             for orphan in self._enricher.flush():
                 await self._event_bus.publish(orphan)
@@ -343,7 +421,25 @@ class EventProcessor:
     def cleanup(self, job_id: str) -> None:
         """Clean up per-job tracking state."""
         self._turn_ids.pop(job_id, None)
-        if self._step_tracker is not None:
+        for key in tuple(self._attempt_processors):
+            if key[0] == job_id:
+                self._attempt_processors.pop(key).cleanup(job_id)
+                self._attempt_workspaces.pop(key, None)
+        if self._activity_projection is not None:
+            self._activity_projection.cleanup(job_id)
+        if self._step_tracker is not None and self._attempt_scope is not None:
+            _, epoch, attempt = self._attempt_scope
+            self._step_tracker.cleanup_attempt(job_id, attempt, epoch)
+        elif self._step_tracker is not None:
             self._step_tracker.cleanup(job_id)
         if self._diff_service is not None:
             self._diff_service.cleanup(job_id)
+
+    async def on_attempt_terminal(self, job_id: str, attempt_id: str, execution_epoch: str, outcome: str) -> None:
+        key = (job_id, execution_epoch, attempt_id)
+        processor = self._attempt_processors.get(key)
+        if processor is not None:
+            await processor.on_job_terminal(job_id, outcome)
+            processor.cleanup(job_id)
+            self._attempt_processors.pop(key, None)
+            self._attempt_workspaces.pop(key, None)

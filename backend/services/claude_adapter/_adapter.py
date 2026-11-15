@@ -13,12 +13,14 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.models.events import EventKind
-from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult
+from backend.models.usage import UsageAmount
+from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult, UtilityCompletionError
 from backend.services.adapters.base_adapter import (
     COMPLETION_TIMEOUT_S,
     BaseAgentAdapter,
     PermissionDecision,
 )
+from backend.services.adapters.completion_context import current_completion_context, validate_completion_identity
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.claude_adapter._helpers import (
     _kill_sdk_subprocess,
@@ -27,6 +29,7 @@ from backend.services.claude_adapter._helpers import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from claude_code_sdk.types import HookContext, HookJSONOutput
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.models.domain import SessionConfig
@@ -143,6 +146,22 @@ class ClaudeAdapter(BaseAgentAdapter):
             tool_kind = _claude_tool_kind.get(tool_name, "custom-tool")
             full_cmd = str(input_data.get("command", "")) if tool_name == "Bash" else None
             file_name = str(input_data.get("file_path", "") or input_data.get("path", "")) or None
+            from backend.services.adapters.capability_guard import enforce_tool_capabilities
+            from backend.services.adapters.contracts import CapabilityDeniedError
+
+            try:
+                await enforce_tool_capabilities(
+                    config.execution_capabilities,
+                    workspace=config.workspace_path,
+                    kind=tool_kind,
+                    tool_name=tool_name,
+                    paths=[file_name] if file_name else (),
+                    command=full_cmd,
+                    dialect="bash" if tool_name == "Bash" else None,
+                )
+            except CapabilityDeniedError as exc:
+                log.warning("execution_capability_denied", job_id=job_id, reason=str(exc))
+                return PermissionResultDeny(message=str(exc))
             if config.session_kind == "preflight":
                 from backend.services.tools.preflight_curator import scout_read_allowed
 
@@ -546,6 +565,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
+        self.set_session_metadata(session_id, config)
 
         if config.job_id:
             self.set_job_id(session_id, config.job_id)
@@ -583,8 +603,45 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Session-level constraints
         if config.max_turns is not None:
             options.max_turns = config.max_turns
-        if config.disallowed_tools:
-            options.disallowed_tools = list(config.disallowed_tools)
+        from backend.services.adapters.capability_guard import excluded_tools_for_capabilities
+
+        excluded_tools = excluded_tools_for_capabilities(config.execution_capabilities, config.disallowed_tools)
+        if excluded_tools:
+            options.disallowed_tools = excluded_tools
+        if config.execution_capabilities is not None:
+            from claude_code_sdk import HookMatcher
+
+            async def _guard_invocation(
+                request: dict[str, Any], tool_use_id: str | None, context: HookContext
+            ) -> HookJSONOutput:
+                from backend.services.adapters.capability_guard import enforce_invocation_capabilities
+                from backend.services.adapters.contracts import CapabilityDeniedError
+
+                try:
+                    tool_name = request.get("tool_name")
+                    arguments = request.get("tool_input")
+                    if not isinstance(tool_name, str) or not isinstance(arguments, dict):
+                        raise CapabilityDeniedError("Tool invocation is unavailable for capability enforcement")
+                    assert config.execution_capabilities is not None
+                    await enforce_invocation_capabilities(
+                        config.execution_capabilities,
+                        workspace=config.workspace_path,
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        dialect="bash" if tool_name == "Bash" else None,
+                    )
+                except CapabilityDeniedError as exc:
+                    log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": str(exc),
+                        }
+                    }
+                return {}
+
+            options.hooks = {"PreToolUse": [HookMatcher(hooks=[_guard_invocation])]}
 
         # MCP servers from CodePlane config
         mcp_config: dict[str, Any] = {}
@@ -648,9 +705,8 @@ class ClaudeAdapter(BaseAgentAdapter):
         queue = self._queues.get(session_id)
         if queue is None:
             log.error("claude_stream_no_queue", session_id=session_id)
-            from traceforge.types import EventMetadata
-
             from backend.models.events import new_event
+            from backend.models.session_event import EventMetadata
 
             job_id = self._session_to_job.get(session_id, session_id)
             yield new_event(
@@ -736,57 +792,136 @@ class ClaudeAdapter(BaseAgentAdapter):
         from claude_code_sdk import (
             AssistantMessage,
             ClaudeCodeOptions,
+            PermissionResultDeny,
             ResultMessage,
             TextBlock,
+            ToolUseBlock,
             query,
         )
 
-        from backend.services.adapters.agent_adapter import CompletionResult
+        completion = current_completion_context()
+        tool_attempted = False
+
+        async def _deny_tool(tool_name: str, arguments: dict[str, Any], context: object) -> PermissionResultDeny:
+            nonlocal tool_attempted
+            tool_attempted = True
+            return PermissionResultDeny(message="Text-only utility sessions cannot invoke tools")
 
         options = ClaudeCodeOptions(
             max_turns=1,
             model=model or "claude-haiku-4-5",
-            permission_mode="bypassPermissions",
+            permission_mode="default",
             allowed_tools=[],
+            disallowed_tools=sorted(set(excluded_tools or ()) | {"*"}),
+            can_use_tool=_deny_tool,
+            system_prompt=system_message,
+            extra_args={"tools": ""},
         )
 
         collected: list[str] = []
-        result_meta: dict[str, object] = {}
+        usage: list[UsageAmount] = []
+        served_model = ""
+        collected_bytes = 0
+        completed = False
+
+        def collect(text: str) -> None:
+            nonlocal collected_bytes
+            collected_bytes += len(text.encode("utf-8")) + (1 if collected else 0)
+            if collected_bytes > completion.max_output_bytes:
+                raise UtilityCompletionError("Text-only output exceeds its bound", reason="output_limit")
+            collected.append(text)
+
+        responses = query(prompt=_prompt_to_stream(prompt), options=options)
         try:
 
-            async def _run_query() -> None:
-                async for message in query(prompt=prompt, options=options):
+            async def _consume_query() -> None:
+                nonlocal completed, served_model
+                async for message in responses:
                     if isinstance(message, AssistantMessage):
+                        actual_model = getattr(message, "model", None)
+                        if isinstance(actual_model, str) and actual_model:
+                            if served_model and served_model != actual_model:
+                                raise UtilityCompletionError("Utility served multiple models", reason="model_mismatch")
+                            served_model = actual_model
                         for block in getattr(message, "content", []) or []:
+                            if isinstance(block, ToolUseBlock):
+                                raise UtilityCompletionError(
+                                    "Text-only completion requested tools", reason="tool_request"
+                                )
                             if isinstance(block, TextBlock):
                                 text = block.text
                                 if text:
-                                    collected.append(text)
+                                    collect(text)
                     elif isinstance(message, ResultMessage):
+                        if message.is_error:
+                            raise UtilityCompletionError("Claude completion failed", reason="sdk_error")
                         result = getattr(message, "result", "")
-                        if result:
-                            collected.append(result)
+                        if result and result not in collected:
+                            collect(result)
                         # Capture usage/cost from the result message
-                        usage = getattr(message, "usage", {}) or {}
-                        if isinstance(usage, dict):
-                            result_meta["input_tokens"] = usage.get("input_tokens", 0)
-                            result_meta["output_tokens"] = usage.get("output_tokens", 0)
-                        result_meta["cost_usd"] = getattr(message, "total_cost_usd", 0.0) or 0.0
-                        result_meta["model"] = getattr(message, "model", "") or ""
+                        raw_usage = getattr(message, "usage", {}) or {}
+                        values = (
+                            {
+                                "input_tokens": raw_usage.get("input_tokens"),
+                                "output_tokens": raw_usage.get("output_tokens"),
+                                "cache_read_tokens": raw_usage.get("cache_read_input_tokens"),
+                                "cache_write_tokens": raw_usage.get("cache_creation_input_tokens"),
+                                "USD": getattr(message, "total_cost_usd", None),
+                            }
+                            if isinstance(raw_usage, dict)
+                            else {}
+                        )
+                        for unit, value in values.items():
+                            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                                usage.append(
+                                    UsageAmount.model_validate(
+                                        {
+                                            "amount": value,
+                                            "unit": unit,
+                                            "producer": "claude",
+                                            "model": served_model or None,
+                                            "job_id": completion.job_id,
+                                            "execution_epoch": completion.execution_epoch,
+                                            "role": completion.role,
+                                            "source": "ResultMessage",
+                                            "verified": unit == "USD",
+                                            "currency": "USD" if unit == "USD" else None,
+                                        }
+                                    )
+                                )
+                        completed = True
                         break
 
+            async def _run_query() -> None:
+                try:
+                    await _consume_query()
+                finally:
+                    close = getattr(responses, "aclose", None)
+                    if not callable(close):
+                        raise UtilityCompletionError(
+                            "Claude utility stream cannot be closed", reason="cleanup_unavailable"
+                        )
+                    await close()
+
             await asyncio.wait_for(_run_query(), timeout=COMPLETION_TIMEOUT_S)
-        except TimeoutError:
-            log.warning("claude_complete_timeout", prompt_len=len(prompt))
-        except (OSError, RuntimeError):
-            log.error("claude_complete_failed", prompt_len=len(prompt), exc_info=True)
-            return CompletionResult()
+        except UtilityCompletionError:
+            raise
+        except TimeoutError as exc:
+            raise UtilityCompletionError("Claude completion timed out", reason="timeout") from exc
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise UtilityCompletionError("Claude completion failed", reason="sdk_error") from exc
+        if tool_attempted:
+            raise UtilityCompletionError("Text-only completion requested tools", reason="tool_request")
+        if not completed or not "\n".join(collected).strip():
+            raise UtilityCompletionError("Claude completion returned no complete text", reason="empty_response")
+        validate_completion_identity(model, served_model, completion)
         return CompletionResult(
             text="\n".join(collected),
-            input_tokens=int(result_meta.get("input_tokens", 0) or 0),  # type: ignore[call-overload]
-            output_tokens=int(result_meta.get("output_tokens", 0) or 0),  # type: ignore[call-overload]
-            cost_usd=float(result_meta.get("cost_usd", 0.0) or 0.0),  # type: ignore[arg-type]
-            model=str(result_meta.get("model", "") or ""),
+            input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
+            output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
+            cost_usd=sum(float(item.amount) for item in usage if item.unit == "USD"),
+            model=served_model,
+            usage=tuple(usage),
         )
 
 

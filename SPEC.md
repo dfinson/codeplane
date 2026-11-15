@@ -28,6 +28,29 @@ Unknown dialects, unresolved expansions, malformed syntax and resource limits
 are incomplete evidence, not a safe-command verdict. Syntax structure alone
 does not establish command semantics.
 
+Managed events now use application-owned canonical models. Executions still
+pinned to TraceForge cross an explicit serialization bridge rather than importing
+its title/model runtime through the event type. SessionConfig's optional
+`execution_capabilities` is enforced at provider pre-tool hooks and permission
+callbacks. `None` retains the existing unrestricted-by-recipe behavior. Shell
+capability alone does not authorize mutation or external access, and an
+unproven arbitrary executable is not treated as a read.
+
+Recipe attempts register their actual adapter/session with RuntimeService and
+retain the returned exact execution token. Attempt controls never fall back to
+the primary Job session. Their events carry explicit execution epoch and attempt
+metadata. EventProcessor requires a separately registered attempt workspace and
+partitions turn, pairing, activity, StepTracker and diff state. Closing an
+attempt cannot close or auto-commit another attempt. Read-only observation
+does not mutate the Git index while calculating a diff.
+
+Text-only completion rejects tool attempts and reports provider errors, empty
+responses and output-limit failures explicitly. Returned typed usage distinguishes
+Copilot native cost units from verified USD and retains present zero values.
+Legacy numeric completion fields remain available during migration. The strict
+`cp-action-v1` evidence schema and deterministic credential filters are local
+primitives, not themselves permission authority or a claim of PII detection.
+
 ### Recipe definitions and publication
 
 Recipes describe configurable intra-Job work. They are distinct from the legacy

@@ -687,6 +687,12 @@ class SessionConfig:
     # Telemetry dimension — classifies this session for cost tracking.
     # "job" for main agent sessions, or "preflight", "narrator", "sidecar" for sidecar sessions.
     session_kind: SessionKind = "job"
+    execution_capabilities: frozenset[str] | None = None
+    recipe_run_id: str | None = None
+    recipe_revision: int | None = None
+    step_instance_id: str | None = None
+    attempt_id: str | None = None
+    execution_epoch: str | None = None
 
 
 @dataclass(frozen=True)

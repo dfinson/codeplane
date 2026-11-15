@@ -437,6 +437,17 @@ class TestBuildCanUseTool:
 
 
 class TestScoutPermissions:
+    async def test_recipe_capability_cannot_be_waived_by_general_permission_allow(self, adapter, tmp_path) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(tmp_path), execution_capabilities=frozenset({"read", "shell"}))
+        callback = adapter._build_can_use_tool(config, "session")
+        result = await callback("Bash", {"command": "echo changed > file"}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+        result = await callback("Read", {"file_path": "file"}, None)
+        assert isinstance(result, _FakePermissionResultAllow)
+        adapter._evaluate_permission.assert_awaited_once()
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("tool_name", "input_data"),
@@ -1170,10 +1181,39 @@ class TestComplete:
             raise RuntimeError("boom")
             yield  # noqa: E501
 
-        with patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": _exploding_query}):
-            result = await adapter.complete("test")
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
 
-        assert result.text is None
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": _exploding_query}),
+            pytest.raises(UtilityCompletionError, match="failed"),
+        ):
+            await adapter.complete("test")
+
+    async def test_empty_timeout_and_tool_output_fail_explicitly(self, adapter) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        async def oversized(**kwargs):
+            yield _FakeAssistantMessage(content=[_FakeTextBlock("too many bytes")])
+            yield _FakeResultMessage(result="")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": oversized}),
+            completion_context(CompletionContext(max_output_bytes=4)),
+            pytest.raises(UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
+        assert failure.value.reason == "output_limit"
+
+        async def empty(**kwargs):
+            yield _FakeResultMessage(result="")
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": empty}),
+            pytest.raises(UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
+        assert failure.value.reason == "empty_response"
 
 
 # ---------------------------------------------------------------------------

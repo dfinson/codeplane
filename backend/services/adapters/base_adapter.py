@@ -23,6 +23,7 @@ from backend.models.domain import (
     ApprovalResolution,
 )
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata
 from backend.services.adapters.agent_adapter import AgentAdapterInterface, normalize_model_name
 from backend.services.auth.permission_policy import (
     PermissionRequest,
@@ -33,9 +34,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-    from traceforge.types import ToolMotivation
 
     from backend.models.api_schemas import ExecutionPhase
+    from backend.models.domain import SessionConfig
+    from backend.models.session_event import ToolMotivation
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
@@ -89,6 +91,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._clients: dict[str, Any] = {}  # SDK client type varies by adapter subclass
         self._session_to_job: dict[str, str] = {}
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
+        self._session_metadata: dict[str, EventMetadata] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
         self._event_bus = event_bus
@@ -129,13 +132,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
         dotted CodePlane ``EventKind`` and *payload*/*metadata* carry TF-native
         fields consumed by ``EventProcessor`` and downstream consumers.
         """
-        from traceforge.types import EventMetadata
-
-        metadata = EventMetadata(
-            source_framework=self._source_framework,
-            duration_ms=duration_ms,
-            motivation=motivation,
-            partial=partial,
+        metadata = self._session_metadata.get(session_id, EventMetadata()).model_copy(
+            update={
+                "source_framework": self._source_framework,
+                "duration_ms": duration_ms,
+                "motivation": motivation,
+                "partial": partial,
+            }
         )
         self._enqueue(session_id, new_event(session_id=job_id, kind=kind, payload=payload, metadata=metadata))
 
@@ -162,6 +165,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
     def set_session_kind(self, session_id: str, kind: str) -> None:
         """Tag a session with its kind for telemetry dimension tracking."""
         self._session_kinds[session_id] = kind
+
+    def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        self._session_metadata[session_id] = EventMetadata(
+            recipe_run_id=config.recipe_run_id, recipe_revision=config.recipe_revision,
+            step_instance_id=config.step_instance_id, attempt_id=config.attempt_id,
+            execution_epoch=config.execution_epoch,
+        )
 
     def get_session_kind(self, session_id: str) -> str:
         """Return the session_kind for a session (defaults to 'job')."""
@@ -197,10 +207,11 @@ class BaseAgentAdapter(AgentAdapterInterface):
         """
         self._paused_sessions.discard(session_id)
         self._session_kinds.pop(session_id, None)
+        self._session_metadata.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
-        if job_id:
+        if job_id and job_id not in self._session_to_job.values():
             for attr in self._JOB_TRACKING_DICTS:
                 getattr(self, attr).pop(job_id, None)
 
