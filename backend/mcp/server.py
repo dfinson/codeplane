@@ -46,9 +46,12 @@ from backend.models.domain import (
     SDKModelMismatchError,
     StateConflictError,
 )
+from backend.persistence.tracker_operation_repo import TrackerOperationNotFoundError
 from backend.services.artifacts.artifact_service import ArtifactService
 from backend.services.git.git_service import GitError, GitService
 from backend.services.job.job_service import JobService
+from backend.services.task_execution_service import TaskExecutionService, parse_spawn_action
+from backend.services.tracker_adapter import TrackerAdapterError
 from backend.services.tracker_resolution import TrackerResolutionError, resolve_tracker_for_job
 from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest, TrackerWriteService
 
@@ -96,6 +99,8 @@ class MCPState:
     approval_service: ApprovalService
     merge_service: MergeService
     sidecar_sessions: SidecarSessionManager | None = None
+    tracker_write_service: TrackerWriteService | None = None
+    task_execution_service: TaskExecutionService | None = None
 
 
 # Strong refs to fire-and-forget tasks to prevent GC before completion.
@@ -149,6 +154,8 @@ def create_mcp_server(
     approval_service: ApprovalService,
     merge_service: MergeService,
     sidecar_sessions: SidecarSessionManager | None = None,
+    tracker_write_service: TrackerWriteService | None = None,
+    task_execution_service: TaskExecutionService | None = None,
 ) -> FastMCP:
     """Create and configure the MCP server with all CodePlane tools."""
     state = MCPState(
@@ -157,6 +164,12 @@ def create_mcp_server(
         approval_service=approval_service,
         merge_service=merge_service,
         sidecar_sessions=sidecar_sessions,
+        tracker_write_service=tracker_write_service
+        or TrackerWriteService(
+            approval_service,
+            session_factory=session_factory,
+        ),
+        task_execution_service=task_execution_service,
     )
 
     mcp = FastMCP(
@@ -296,16 +309,13 @@ def _register_job_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
         if action == "cancel":
             if not job_id:
                 return {"error": "job_id is required for cancel"}
-            from backend.persistence.database import serialized_write
-
-            async with serialized_write(sf) as session:
-                svc = _make_job_service(mcp_state, session, config)
-                try:
-                    job = await svc.cancel_job(job_id)
-                except (JobNotFoundError, StateConflictError) as exc:
-                    return {"error": str(exc)}
             runtime = mcp_state.runtime_service
-            await runtime.cancel(job_id)
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            try:
+                job = await runtime.cancel_job(job_id)
+            except (JobNotFoundError, StateConflictError, NativeDeliveryError, SDKModelMismatchError) as exc:
+                return {"error": str(exc)}
             return _job_to_response(job)
 
         if action == "rerun":
@@ -350,7 +360,12 @@ def _register_job_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
             if len(content) > 10000:
                 return {"error": "Content must be at most 10,000 characters"}
             runtime = mcp_state.runtime_service
-            sent = await runtime.send_message(job_id, content)
+            from backend.services.completers.copilot_steer import NativeDeliveryError
+
+            try:
+                sent = await runtime.send_operator_message(job_id, content)
+            except (JobNotFoundError, StateConflictError, NativeDeliveryError, SDKModelMismatchError) as exc:
+                return {"error": str(exc)}
             if not sent:
                 return {"error": "Job is not currently running"}
             from datetime import UTC, datetime
@@ -413,61 +428,70 @@ def _register_pr_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
 def _register_tracker_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
     @mcp.tool(
         name="codeplane_tracker",
-        title="Comment or Transition Tracker Ticket",
-        annotations=ToolAnnotations(
-            title="Comment or Transition Tracker Ticket", destructiveHint=True, openWorldHint=True
-        ),
+        title="Tracker operations",
+        annotations=ToolAnnotations(title="Tracker operations", destructiveHint=True, openWorldHint=True),
         description=(
-            "Comment on or transition the external tracker ticket paired with the calling "
-            "Job's Project, while the Job is still running — instead of waiting for a "
-            "recipe's completion-time tracker_write output route."
-            "\n\n"
-            "- comment: job_id (required), value (required, the comment text)"
-            "\n- transition: job_id (required), value (required, the target status)"
-            "\n\n"
-            "CodePlane resolves the Job's Project and TrackerLink server-side and creates a "
-            "codeplane_approval entry via the exact same gate CAP-11's recipe-driven "
-            "tracker_write route already uses — nothing is written to the external tracker "
-            "until that approval is granted. The agent never receives or handles the "
-            "Credential's decrypted PAT at any point; CodePlane resolves and uses it "
-            "server-side on the agent's behalf."
+            "Propose an explicitly approved comment or transition for the calling Job's paired ticket. "
+            "comment/transition require job_id and value. Optional request_id deduplicates a retried call. "
+            "status requires job_id and operation_id. list requires job_id. "
+            "Approval is not delivery. An uncertain operation must not be blindly repeated. "
+            "GitHub transition changes issue open/closed state, not Projects Status."
         ),
     )
     async def codeplane_tracker(
-        action: Literal["comment", "transition"],
+        action: Literal["comment", "transition", "status", "list"],
         job_id: str | None = None,
         value: str | None = None,
+        operation_id: str | None = None,
+        request_id: str | None = None,
     ) -> McpToolResult:
         if not job_id:
             return {"error": "job_id is required"}
+        service = mcp_state.tracker_write_service
+        assert service is not None
+        if action == "status":
+            if not operation_id:
+                return {"error": "operation_id is required"}
+            try:
+                operation = await service.get_operation(operation_id)
+            except TrackerOperationNotFoundError:
+                return {"error": "Tracker operation not found for this Job"}
+            if operation.job_ref != job_id:
+                return {"error": "Tracker operation not found for this Job"}
+            return operation.model_dump(mode="json", by_alias=True)
+        if action == "list":
+            operations = await service.list_operations_for_job(job_id)
+            return {"items": [item.model_dump(mode="json", by_alias=True) for item in operations]}
         if not value:
             return {"error": "value is required"}
-
-        sf = mcp_state.session_factory
-        async with sf() as session:
+        async with mcp_state.session_factory() as session:
             try:
                 resolved = await resolve_tracker_for_job(session, job_id)
             except TrackerResolutionError as exc:
                 return {"error": str(exc)}
-
-        tracker_action = TrackerWriteAction.comment if action == "comment" else TrackerWriteAction.transition
+        tracker_action = TrackerWriteAction(action)
         request = TrackerWriteRequest(
             tracker_link_id=resolved.tracker_link_id,
             ticket_ref=resolved.ticket_ref,
             action=tracker_action,
             value=value,
         )
-
-        service = TrackerWriteService(
-            mcp_state.approval_service,
-            session_factory=sf,
-        )
-        outcome = await service.execute(job_id, request)
-
+        try:
+            outcome = await service.execute(
+                job_id,
+                request,
+                source_key=f"mcp:{job_id}:{request_id}" if request_id else None,
+                task_link_id=resolved.task_link_id,
+            )
+        except (StateConflictError, TrackerResolutionError, TrackerAdapterError) as exc:
+            return {"error": str(exc)}
         return {
             "applied": outcome.applied,
             "state": outcome.state.value,
             "error": outcome.error,
+            "operationId": outcome.operation_id,
+            "targetKind": outcome.target_kind,
+            "normalizedValue": outcome.normalized_target,
             "ticketRef": resolved.ticket_ref,
             "trackerLinkId": resolved.tracker_link_id,
             "action": tracker_action.value,
@@ -535,6 +559,28 @@ def _register_approval_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
                 return {"error": str(exc)}
             except ApprovalAlreadyResolvedError as exc:
                 return {"error": str(exc)}
+            if mcp_state.tracker_write_service is not None:
+                mcp_state.tracker_write_service.notify_approval_resolved(a)
+            spawn_action = parse_spawn_action(a.proposed_action)
+            if a.resolution == ApprovalResolution.approved and spawn_action is not None:
+                execution = mcp_state.task_execution_service
+                if execution is None:
+                    return {"error": "Task execution service is not configured"}
+                job = await execution.spawn_approved_task_link(
+                    spawn_action["taskLinkId"],
+                    parent_job_id=a.job_id,
+                )
+                if job is not None:
+
+                    async def _start() -> None:
+                        try:
+                            await mcp_state.runtime_service.setup_and_start(job)
+                        except Exception:
+                            log.exception("mcp_task_spawn_failed", job_id=job.id)
+
+                    task = asyncio.create_task(_start(), name=f"mcp-task-spawn-{job.id}")
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
             return ApprovalResponse(
                 id=a.id,
                 job_id=a.job_id,
@@ -833,10 +879,12 @@ def _register_repo_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
 
         import httpx
 
-        config = load_config()
-        base_url = f"http://{config.server.host}:{config.server.port}/api"
+        from backend.services.auth.middleware import internal_api_url, internal_request_headers
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        base_url = internal_api_url()
+        async with httpx.AsyncClient(
+            timeout=120, headers=internal_request_headers(base_url), follow_redirects=False, trust_env=False
+        ) as client:
             if action == "list":
                 resp = await client.get(f"{base_url}/settings/repos")
                 resp.raise_for_status()
@@ -876,20 +924,18 @@ def _register_project_tool(mcp: FastMCP) -> None:
         annotations=ToolAnnotations(title="Manage Projects", destructiveHint=True, openWorldHint=True),
         description=(
             "Manage Projects — the sole entity that owns repo-path membership. Actions: "
-            "list, get, create, update, ingest_tasks, list_task_links."
+            "list, get, create, update, list_task_links."
             "\n\n"
             "- list: no extra params"
             "\n- get: project_id (required)"
             "\n- create: name (required), repo_paths (required, list of one or more repo paths)"
             "\n- update: project_id (required); name and/or repo_paths (optional, repo_paths replaces "
             "the full membership list); confirm_repo_removal confirms destructive membership removal"
-            "\n- ingest_tasks: project_id (required) — parses BMAD stories/spec-kit tasks.md across "
-            "every member repo (read-only, stateless) and upserts the Project's TaskLink set"
             "\n- list_task_links: project_id (required) — lists the Project's currently persisted TaskLinks"
         ),
     )
     async def codeplane_project(
-        action: Literal["list", "get", "create", "update", "ingest_tasks", "list_task_links"],
+        action: Literal["list", "get", "create", "update", "list_task_links"],
         project_id: str | None = None,
         name: str | None = None,
         repo_paths: list[str] | None = None,
@@ -897,10 +943,12 @@ def _register_project_tool(mcp: FastMCP) -> None:
     ) -> McpToolResult:
         import httpx
 
-        config = load_config()
-        base_url = f"http://{config.server.host}:{config.server.port}/api"
+        from backend.services.auth.middleware import internal_api_url, internal_request_headers
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        base_url = internal_api_url()
+        async with httpx.AsyncClient(
+            timeout=120, headers=internal_request_headers(base_url), follow_redirects=False, trust_env=False
+        ) as client:
             if action == "list":
                 resp = await client.get(f"{base_url}/settings/projects")
                 resp.raise_for_status()
@@ -941,18 +989,6 @@ def _register_project_tool(mcp: FastMCP) -> None:
                 if confirm_repo_removal:
                     body["confirmRepoRemoval"] = True
                 resp = await client.patch(f"{base_url}/settings/projects/{project_id}", json=body)
-                if resp.status_code == 404:
-                    return {"error": f"Project '{project_id}' does not exist."}
-                if resp.status_code >= 400:
-                    detail = resp.json().get("detail", resp.text)
-                    return {"error": str(detail)}
-                result = resp.json()
-                return result
-
-            if action == "ingest_tasks":
-                if not project_id:
-                    return {"error": "project_id is required for ingest_tasks"}
-                resp = await client.post(f"{base_url}/settings/projects/{project_id}/ingest-tasks")
                 if resp.status_code == 404:
                     return {"error": f"Project '{project_id}' does not exist."}
                 if resp.status_code >= 400:

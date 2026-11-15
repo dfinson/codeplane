@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from backend.config import CPLConfig, RuntimeConfig
 from backend.models.domain import (
     AgentSDK,
+    SDKModelMismatchError,
     SessionConfig,
 )
 from backend.services.adapters.adapter_registry import AdapterRegistry
@@ -38,7 +40,7 @@ class TestAdapterRegistry:
             mock_adapter = MagicMock(spec=AgentAdapterInterface)
             mock_claude.return_value = mock_adapter
 
-            registry = AdapterRegistry()
+            registry = AdapterRegistry(config=CPLConfig(runtime=RuntimeConfig(copilot_only=False)))
             adapter = registry.get_adapter(AgentSDK.claude)
             assert adapter is mock_adapter
             mock_claude.assert_called_once()
@@ -57,9 +59,9 @@ class TestAdapterRegistry:
             mock_copilot.assert_called_once()
 
     def test_get_adapter_unknown_raises(self) -> None:
-        """Unknown SDK raises ValueError."""
+        """Unknown SDK raises the service-level validation error."""
         registry = AdapterRegistry()
-        with pytest.raises(ValueError):
+        with pytest.raises(SDKModelMismatchError):
             registry.get_adapter("unknown_sdk")
 
     def test_get_adapter_passes_services(self) -> None:
@@ -70,7 +72,12 @@ class TestAdapterRegistry:
 
         with patch("backend.services.claude_adapter.ClaudeAdapter") as mock_claude:
             mock_claude.return_value = MagicMock()
-            registry = AdapterRegistry(approval_service=approval, event_bus=bus, session_factory=sf)
+            registry = AdapterRegistry(
+                approval_service=approval,
+                event_bus=bus,
+                session_factory=sf,
+                config=CPLConfig(runtime=RuntimeConfig(copilot_only=False)),
+            )
             registry.get_adapter(AgentSDK.claude)
 
             mock_claude.assert_called_once_with(

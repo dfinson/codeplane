@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - SQLAlchemy needs this at runtime for annotation eval
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # All DateTime columns use timezone=True so timestamps are stored
@@ -59,15 +59,9 @@ class JobRow(Base):
     source: Mapped[str] = mapped_column(String, nullable=False, default="managed", server_default="managed")
     external_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     tail_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    ingest_checkpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="standard", server_default="standard")
     story_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    review_story_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    review_story_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    structural_coupling_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
-    structural_cycle_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    structural_changes_touch_tests: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    structural_change_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    structural_merge_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)
     trail_state_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     artifact_collection_status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -468,7 +462,6 @@ class TrailNodeRow(Base):
     error_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
     write_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     edit_motivations: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
-    semantic_targets: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of structural changes
     tool_display: Mapped[str | None] = mapped_column(String(200), nullable=True)
     tool_intent: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -563,22 +556,14 @@ class TrackerLinkRow(Base):
 
 
 class TaskLinkRow(Base):
-    """A thin, Project-scoped correlation row for an ingested/assigned task node (Story 4.2, AD-9).
+    """Project-scoped correlation for saved task nodes and tracker assignments.
 
-    Populated by two independent creation paths (only ingestion is implemented
-    in this story): (1) ingestion — parsed from BMAD stories or spec-kit
-    ``tasks.md`` in a Project's member repos, setting ``story_node_id``; or
-    (2) manual assignment (Story 4.3, not yet implemented) — targeting an
-    existing tracker ticket, setting ``tracker_ticket_ref``/``prompt_override``
-    with ``story_node_id`` left null. Exactly one of ``story_node_id`` /
-    ``tracker_ticket_ref`` is guaranteed non-null at creation, never neither.
-
-    ``story_node_id`` is only unique within one repo, so uniqueness/upsert
-    matching is on ``(project_id, repo_path, story_node_id)`` — never a bare
-    ``story_node_id``. ``depends_on`` is stored as a JSON list of composite
-    ``"{repo_path}::{story_node_id}"`` strings so a dependency edge always
-    unambiguously names its target, whether same-repo or a sibling member
-    repo of the same Project.
+    Historical source-backed nodes retain their story identifiers and dependency
+    graph. New manual assignments identify an existing tracker ticket and carry
+    a prompt override, with story_node_id left null. Source identifiers are
+    unique within a repository, so persisted dependency keys include both the
+    repository path and identifier. Retirement of source discovery does not
+    rewrite these identities, chain roots, or historical job links.
     """
 
     __tablename__ = "task_links"
@@ -612,6 +597,76 @@ class TaskLinkRow(Base):
     output_routes: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class TrackerOperationRow(Base):
+    """One explicit, at-most-once dispatch attempt with retained delivery evidence."""
+
+    __tablename__ = "tracker_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('awaiting_approval','approved','dispatching','applied',"
+            "'rejected','failed','uncertain','not_applied')",
+            name="ck_tracker_operations_state",
+        ),
+        CheckConstraint("action IN ('comment','transition')", name="ck_tracker_operations_action"),
+        CheckConstraint(
+            "target_kind IN ('comment','github_issue_state','jira_workflow_transition','azure_devops_work_item_state')",
+            name="ck_tracker_operations_target_kind",
+        ),
+        CheckConstraint("version >= 0", name="ck_tracker_operations_version"),
+        Index("ix_tracker_operations_project_created", "project_ref", "created_at"),
+        Index("ix_tracker_operations_job_created", "job_ref", "created_at"),
+        Index("ix_tracker_operations_state_claim", "state", "claim_expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    job_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    task_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("task_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    project_ref: Mapped[str] = mapped_column(String, nullable=False)
+    job_ref: Mapped[str] = mapped_column(String, nullable=False)
+    task_link_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    tracker_link_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_links.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    tracker_link_ref: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    base_url: Mapped[str] = mapped_column(String, nullable=False)
+    external_ref: Mapped[str] = mapped_column(String, nullable=False)
+    credential_id_ref: Mapped[str] = mapped_column(String, nullable=False)
+    ticket_ref: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    target_kind: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("approvals.id", ondelete="SET NULL"), nullable=True, unique=True, index=True
+    )
+    approval_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    approval_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    retry_of_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("tracker_operations.id"), nullable=True, index=True
+    )
+    provider_receipt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciliation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class TrackerSummaryRow(Base):

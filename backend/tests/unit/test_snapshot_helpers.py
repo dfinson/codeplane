@@ -2,19 +2,49 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
+import pytest
 from traceforge.types import EventMetadata, ToolMotivation
 
+from backend.models.domain import Approval, ApprovalResolution
 from backend.models.events import EventKind
 from backend.services.artifacts.snapshot_helpers import (
     _apply_reassignments,
+    _build_approvals,
     _build_logs,
     _build_timeline,
     _build_transcript,
     _build_turn_summaries,
 )
+
+
+@pytest.mark.parametrize("resolution", [None, ApprovalResolution.approved, ApprovalResolution.rejected])
+@pytest.mark.parametrize("explicit", [True, False])
+async def test_snapshot_preserves_explicit_approval_marker_and_notes(
+    resolution: ApprovalResolution | None, explicit: bool
+) -> None:
+    now = datetime.now(UTC)
+    approval = Approval(
+        id="hard-gate",
+        job_id="job-1",
+        description="Fixture hard gate",
+        proposed_action="fixture",
+        requested_at=now,
+        resolved_at=now if resolution else None,
+        resolution=resolution,
+        requires_explicit_approval=explicit,
+        notes="Recorded restart supersession" if resolution else None,
+    )
+    repository = AsyncMock()
+    repository.list_for_job.return_value = [approval]
+    snapshot = await _build_approvals(repository, "job-1")
+    wire = snapshot[0].model_dump(mode="json", by_alias=True)
+    assert wire["requiresExplicitApproval"] is explicit
+    assert wire["notes"] == approval.notes
 
 
 def _event(

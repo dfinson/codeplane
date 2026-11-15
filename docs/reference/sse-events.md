@@ -1,5 +1,23 @@
 # SSE Events Reference
 
+## Durable identity and verification
+
+SSE `id` is the storage-local cursor. It is not `metadata.sequence` and does
+not replace the canonical event `id`. Native events carry the owning CodePlane
+job in `session_id` and source session identity in `metadata.run_id`.
+Versioned source provenance is carried in `payload._codeplane_source`.
+Replaying the same accepted native record preserves its canonical identity.
+
+`turn.summary` activity/step label events retain `kind` and `version`.
+They are not native full-turn summaries. Snapshot label reduction keeps the
+highest version per segment/kind.
+
+`verification.started` records phase, attempt, session number and start time.
+`verification.result` adds `completed|failed|interrupted`, completion time,
+optional SDK session ID and error. The snapshot exposes `verificationResults`.
+These statuses describe agent turns, not command/test success. Missing legacy
+results are unrecorded, never assumed successful.
+
 CodePlane uses Server-Sent Events (SSE) to push real-time updates to the frontend. Connect to `/api/events` to receive the event stream.
 
 ## Connection

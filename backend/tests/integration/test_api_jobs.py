@@ -44,6 +44,20 @@ def _patch_for_job_creation(
 
 
 @pytest.fixture(autouse=True)
+def _source_aware_cancel(mock_runtime_service, session_factory, event_bus):
+    from backend.config import CPLConfig
+    from backend.services.runtime import RuntimeService
+
+    runtime = RuntimeService(
+        session_factory=session_factory,
+        event_bus=event_bus,
+        adapter_registry=MagicMock(),
+        config=CPLConfig(),
+    )
+    mock_runtime_service.cancel_job.side_effect = runtime.cancel_job
+
+
+@pytest.fixture(autouse=True)
 async def _seed_default_project(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -69,6 +83,22 @@ def _create_body(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {"repo": "/test/repo", "prompt": "Fix bug"}
     base.update(overrides)
     return base
+
+
+class TestRuntimeContract:
+    async def test_cancel_routes_delivery_before_state_change(self):
+        from backend.api.jobs import cancel_job
+        from backend.tests.unit.conftest import make_job
+
+        jobs = AsyncMock()
+        runtime = AsyncMock()
+        ingest = AsyncMock()
+        job = make_job(state="canceled", source="copilot_cli", external_session_id="native-1")
+        jobs.cancel_job.return_value = job
+        runtime.cancel_job.return_value = job
+        await cancel_job("job-1", jobs, runtime, ingest)
+        assert runtime.cancel_job.await_count == 1
+        jobs.cancel_job.assert_not_awaited()
 
 
 @dataclass
@@ -301,7 +331,7 @@ class TestJobsCrud:
         resp = await client.post(f"/api/jobs/{jid}/cancel")
         assert resp.status_code == 200
         assert resp.json()["state"] == "canceled"
-        mock_runtime_service.cancel.assert_called_once_with(jid)
+        mock_runtime_service.cancel_job.assert_called_once_with(jid)
 
     async def test_cancel_queued_job(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         jid = await seed_job(state="queued", job_id="cancel-q")
@@ -537,10 +567,10 @@ class TestJobControl:
     # ── Models ──
 
     async def test_list_models_empty(self, client: AsyncClient) -> None:
-        # Use sdk=claude to avoid the live CopilotClient fallback fetch
+        # Disabled integration catalogs fail before any provider discovery.
         resp = await client.get("/api/models", params={"sdk": "claude"})
-        assert resp.status_code == 200
-        assert resp.json() == {"items": []}
+        assert resp.status_code == 400
+        assert "disabled" in resp.json()["detail"]
 
 
 # ── Job Data ─────────────────────────────────────────────────────────

@@ -3,13 +3,60 @@
  */
 
 import type { JobSummary, ApprovalRequest, TranscriptEntry, ConnectionStatus, ContextHandoff } from "../types";
-import type { DiffFileModel } from "../../api/types";
+import type { DiffFileModel, TrackerOperationResponse } from "../../api/types";
 import type { SSEHandler, AppState } from "./types";
 import { enrichJob } from "./jobHandlers";
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+const trackerCorrelations = [
+  ["projectId", "projectRef"],
+  ["jobId", "jobRef"],
+  ["taskLinkId", "taskLinkRef"],
+  ["trackerLinkId", "trackerLinkRef"],
+  ["approvalId", "approvalRef"],
+] as const;
+
+/** FK deletion can null a live correlation without advancing operation version. */
+export function mergeTrackerOperations(
+  current: AppState["trackerOperations"],
+  incoming: TrackerOperationResponse[],
+): AppState["trackerOperations"] {
+  let next = current;
+  for (const operation of incoming) {
+    if (!operation || typeof operation.id !== "string" ||
+        typeof operation.projectRef !== "string" || typeof operation.version !== "number" ||
+        !Number.isSafeInteger(operation.version) || operation.version < 0) continue;
+    const previous = next[operation.id];
+    if (previous && (previous.projectRef !== operation.projectRef ||
+        (typeof previous.version === "number" && previous.version > operation.version))) continue;
+    let merged = previous && previous.version === operation.version ? previous : operation;
+    if (previous) {
+      for (const [liveKey, refKey] of trackerCorrelations) {
+        const reference = previous[refKey];
+        // A null approvalId without an approvalRef is not a deletion: the
+        // canonical approval can still be provisioned by a newer version.
+        if (reference == null || reference !== operation[refKey]) continue;
+        if ((previous[liveKey] === null || operation[liveKey] === null) && merged[liveKey] !== null) {
+          merged = { ...merged, [liveKey]: null };
+        }
+      }
+    }
+    if (merged === previous) continue;
+    if (next === current) next = { ...current };
+    next[operation.id] = merged;
+  }
+  return next;
+}
+
+export function handleTrackerOperationUpdated(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  const operation = payload.operation as TrackerOperationResponse | undefined;
+  if (!operation) return null;
+  const trackerOperations = mergeTrackerOperations(state.trackerOperations, [operation]);
+  return trackerOperations === state.trackerOperations ? null : { trackerOperations };
+}
 
 export function handleSnapshot(_state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
   const jobs = (payload.jobs as JobSummary[]) ?? [];
@@ -148,29 +195,6 @@ export function handlePolicySettingsChanged(_state: AppState): Partial<AppState>
   };
 }
 
-export function handleRepoIndexProgress(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
-  const repo = payload.repo as string;
-  return {
-    repoIndexState: {
-      ...state.repoIndexState,
-      [repo]: {
-        repo,
-        indexed: payload.indexed as number,
-        total: payload.total as number,
-        phase: payload.phase as string,
-      },
-    },
-  };
-}
-
-export function handleRepoIndexComplete(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
-  // Remove from active indexing state — the repo is now ready.
-  const repo = payload.repo as string;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { [repo]: _done, ...rest } = state.repoIndexState;
-  return { repoIndexState: rest };
-}
-
 export function handleContextHandoff(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
   const jobId = payload.jobId as string | undefined;
   if (!jobId) return null;
@@ -192,6 +216,7 @@ export function handleContextHandoff(state: AppState, payload: Record<string, un
 }
 
 export const miscHandlers: Record<string, SSEHandler> = {
+  "tracker.operation_updated": handleTrackerOperationUpdated,
   snapshot: handleSnapshot,
   "session.heartbeat": handleSessionHeartbeat,
   "diff.updated": handleDiffUpdate,
@@ -199,24 +224,5 @@ export const miscHandlers: Record<string, SSEHandler> = {
   "telemetry.updated": handleTelemetryUpdated,
   "artifacts.updated": handleArtifactsUpdated,
   "policy.settings_changed": handlePolicySettingsChanged,
-  "repo.index_progress": handleRepoIndexProgress,
-  "repo.index_complete": handleRepoIndexComplete,
   "context.handoff": handleContextHandoff,
-  "structural.warning": (state, payload) => {
-    const jobId = payload.jobId as string | undefined;
-    if (!jobId) return {};
-    const warning = {
-      warningType: (payload.warningType as string) || "",
-      detail: (payload.detail as string) || "",
-      repo: (payload.repo as string) || "",
-      timestamp: Date.now(),
-    };
-    const existing = state.structuralWarnings[jobId] ?? [];
-    return {
-      structuralWarnings: {
-        ...state.structuralWarnings,
-        [jobId]: [...existing, warning],
-      },
-    };
-  },
 };

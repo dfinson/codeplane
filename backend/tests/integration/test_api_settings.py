@@ -177,16 +177,26 @@ class TestListRepos:
         assert created.json()["repoPaths"][0] in resp.json()["items"]
 
 
+@pytest.fixture
+async def detail_repo_path(client: AsyncClient, tmp_path: Path) -> str:
+    response = await client.post(
+        "/api/settings/projects",
+        json={"name": "Repository detail", "repoPaths": [str(tmp_path)]},
+    )
+    assert response.status_code == 201
+    return str(response.json()["repoPaths"][0])
+
+
 class TestGetRepoDetail:
     """GET /api/settings/repos/{repo_path}"""
 
     @pytest.mark.asyncio
-    async def test_registered_repo(self, client: AsyncClient, app: FastAPI) -> None:
+    async def test_registered_repo(self, client: AsyncClient, app: FastAPI, detail_repo_path: str) -> None:
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["path"] == "/test/repo"
+        assert data["path"] == detail_repo_path
         assert data["originUrl"] is not None
         assert data["baseBranch"] == "main"
         assert data["currentBranch"] == "feature/my-branch"
@@ -238,22 +248,22 @@ class TestGetRepoDetail:
 
     @pytest.mark.asyncio
     async def test_detached_head_returns_head_string(
-        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock, detail_repo_path: str
     ) -> None:
         mock_git_service.get_current_branch.return_value = "HEAD"
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["currentBranch"] == "HEAD"
 
     @pytest.mark.asyncio
     async def test_current_branch_git_error_returns_none(
-        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock, detail_repo_path: str
     ) -> None:
         mock_git_service.get_current_branch.side_effect = GitError("detached HEAD")
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["currentBranch"] is None
@@ -497,6 +507,7 @@ class TestBrowseDirectories:
         (fake_home / "readme.txt").write_text("hi")  # not a dir — excluded
 
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get("/api/settings/browse", params={"path": str(fake_home)})
         assert resp.status_code == 200
@@ -516,6 +527,7 @@ class TestBrowseDirectories:
         fake_home = tmp_path / "fakehome"
         fake_home.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get(
             "/api/settings/browse",
@@ -535,6 +547,7 @@ class TestBrowseDirectories:
         outside = tmp_path / "outside"
         outside.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get("/api/settings/browse", params={"path": str(outside)})
         assert resp.status_code == 403
@@ -581,10 +594,19 @@ class TestListSDKs:
     """GET /api/sdks"""
 
     @pytest.mark.asyncio
-    async def test_returns_available_sdks(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("copilot_only", [True, False])
+    async def test_returns_available_sdks(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, copilot_only: bool
+    ) -> None:
+        from backend.config import CPLConfig, RuntimeConfig
         from backend.services.setup.checks import AgentAuthStatus, AgentCLIStatus
 
+        config = CPLConfig(runtime=RuntimeConfig(default_sdk="claude", copilot_only=copilot_only))
+        monkeypatch.setattr("backend.api.settings.load_config", lambda: config)
+        checked = []
+
         def _mock_check(sdk_id: str) -> AgentCLIStatus:
+            checked.append(sdk_id)
             return AgentCLIStatus(
                 sdk_id=sdk_id,
                 name=sdk_id,
@@ -609,11 +631,25 @@ class TestListSDKs:
         resp = await client.get("/api/sdks")
         assert resp.status_code == 200
         data = resp.json()
-        assert "default" in data
+        assert data["default"] == ("copilot" if copilot_only else "claude")
+        assert config.runtime.default_sdk == "claude"
         assert "sdks" in data
         assert len(data["sdks"]) >= 1
         sdk_ids = {s["id"] for s in data["sdks"]}
         assert "copilot" in sdk_ids
         for sdk in data["sdks"]:
-            assert sdk["enabled"] is True
-            assert sdk["status"] == "ready"
+            disabled = copilot_only and sdk["id"] == "claude"
+            assert sdk["enabled"] is not disabled
+            assert sdk["status"] == ("disabled_by_policy" if disabled else "ready")
+        assert ("claude" in checked) is not copilot_only
+
+    @pytest.mark.asyncio
+    async def test_copilot_keeps_models_from_other_providers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.api.jobs import list_models
+        from backend.config import CPLConfig
+        from backend.di import CachedModelsBySdk
+
+        monkeypatch.setattr("backend.config.load_config", CPLConfig)
+        catalog = CachedModelsBySdk({"copilot": [{"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"}]})
+        response = await list_models(catalog, sdk="copilot")
+        assert [model.id for model in response.items] == ["claude-haiku-4.5"]

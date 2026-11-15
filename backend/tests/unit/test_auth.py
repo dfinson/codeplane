@@ -28,6 +28,7 @@ def _make_request(
 ) -> MagicMock:
     """Build a minimal mock Starlette Request."""
     req = MagicMock()
+    req.method = "POST" if path in {"/api/auth/login", "/api/auth/logout"} else "GET"
     req.client = MagicMock()
     req.client.host = client_host
     req.url.path = path
@@ -381,6 +382,10 @@ class TestHandleLogin:
 
 
 class TestAuthMiddleware:
+    @pytest.fixture(autouse=True)
+    def enabled_auth_gate(self, monkeypatch):
+        monkeypatch.setattr(auth, "_auth_policy", auth.AuthPolicy(password_required=True))
+
     @pytest.mark.asyncio
     async def test_auth_endpoints_always_allowed(self) -> None:
         req = _make_request(path="/api/auth/login", client_host="203.0.113.1")

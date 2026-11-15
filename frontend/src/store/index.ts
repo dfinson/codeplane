@@ -11,8 +11,8 @@ import { create } from "zustand";
 // Types — re-exported from ./types for backward compatibility.
 // ---------------------------------------------------------------------------
 
-import { fetchSDKs, fetchModels, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
-import { sseHandlers, enrichJob } from "./sseHandlers";
+import { fetchSDKs, fetchModels, fetchTrackerOperations, createTerminalSession as apiCreateTerminalSession, deleteTerminalSession as apiDeleteTerminalSession } from "../api/client";
+import { sseHandlers, enrichJob, mergeTrackerOperations } from "./sseHandlers";
 export { enrichJob } from "./sseHandlers";
 import { deriveJobStateFrame } from "./sseNormalize";
 import { pathBasename } from "../lib/paths";
@@ -39,6 +39,9 @@ export type {
 
 // Re-export all selectors
 export {
+  selectTrackerOperations,
+  selectTrackerOperationsForProject,
+  selectTrackerOperationLoad,
   selectJobs,
   selectConnectionStatus,
   selectReconnectAttempt,
@@ -67,8 +70,6 @@ export {
   selectHoveredPlanItemId,
   selectSecondarySessions,
   selectContextHandoffs,
-  selectMultiSession,
-  selectReviewStory,
 } from "./selectors";
 
 import type {
@@ -206,7 +207,7 @@ function touchJob(jobId: string): string[] {
 
 /** Evict per-job data for stale jobs from a state snapshot. */
 function evictStaleJobs(
-  state: Pick<AppState, "logs" | "transcript" | "diffs" | "stories" | "plans" | "timelines" | "activityTimelines" | "secondarySessions" | "streamingMessages" | "streamingToolOutput" | "multiSessions" | "reviewStories" | "contextHandoffs">,
+  state: Pick<AppState, "logs" | "transcript" | "diffs" | "stories" | "plans" | "timelines" | "activityTimelines" | "secondarySessions" | "streamingMessages" | "streamingToolOutput" | "contextHandoffs">,
   evictIds: string[],
 ): Partial<AppState> | null {
   if (evictIds.length === 0) return null;
@@ -218,8 +219,6 @@ function evictStaleJobs(
   const timelines = { ...state.timelines };
   const activityTimelines = { ...state.activityTimelines };
   const secondarySessions = { ...state.secondarySessions };
-  const multiSessions = { ...state.multiSessions };
-  const reviewStories = { ...state.reviewStories };
   const contextHandoffs = { ...state.contextHandoffs };
   let streamingMessages = state.streamingMessages;
   let streamingToolOutput = state.streamingToolOutput;
@@ -234,8 +233,6 @@ function evictStaleJobs(
     delete timelines[id];
     delete activityTimelines[id];
     delete secondarySessions[id];
-    delete multiSessions[id];
-    delete reviewStories[id];
     delete contextHandoffs[id];
     // Clean streaming messages for evicted jobs
     for (const key of Object.keys(streamingMessages)) {
@@ -251,7 +248,7 @@ function evictStaleJobs(
       }
     }
   }
-  return { logs, transcript, diffs, stories, plans, timelines, activityTimelines, secondarySessions, streamingMessages, streamingToolOutput, multiSessions, reviewStories, contextHandoffs };
+  return { logs, transcript, diffs, stories, plans, timelines, activityTimelines, secondarySessions, streamingMessages, streamingToolOutput, contextHandoffs };
 }
 
 /** Rebuild activity timeline state from a flat list of turn summary payloads (hydration). */
@@ -333,6 +330,8 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  trackerOperations: {},
+  trackerOperationLoads: {},
   jobs: {},
   approvals: {},
   batchApprovals: {},
@@ -349,10 +348,6 @@ export const useStore = create<AppState>((set, get) => ({
   streamingReasoning: {},
   telemetryVersions: {},
   artifactVersions: {},
-  repoIndexState: {},
-  multiSessions: {},
-  reviewStories: {},
-  structuralWarnings: {},
   contextHandoffs: {},
   connectionStatus: "reconnecting",
   reconnectAttempt: 0,
@@ -378,6 +373,54 @@ export const useStore = create<AppState>((set, get) => ({
     get().connectionStatus !== status && set({ connectionStatus: status }),
 
   setReconnectAttempt: (attempt) => set({ reconnectAttempt: attempt }),
+
+  hydrateTrackerOperations: (operations) => set((state) => {
+    const trackerOperations = mergeTrackerOperations(state.trackerOperations, operations);
+    return trackerOperations === state.trackerOperations ? state : { trackerOperations };
+  }),
+
+  loadTrackerOperations: async (projectId) => {
+    const previous = get().trackerOperationLoads[projectId];
+    const requestVersion = (previous?.requestVersion ?? 0) + 1;
+    set((state) => ({
+      trackerOperationLoads: {
+        ...state.trackerOperationLoads,
+        [projectId]: { loading: true, loaded: previous?.loaded ?? false, error: null, requestVersion },
+      },
+    }));
+    try {
+      const response = await fetchTrackerOperations(projectId);
+      // Do not remove absent rows: a list may predate an SSE event or a retry.
+      get().hydrateTrackerOperations(response.items.filter((operation) => operation.projectRef === projectId));
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: { loading: false, loaded: true, error: null, requestVersion },
+        },
+      }));
+    } catch (error) {
+      set((state) => state.trackerOperationLoads[projectId]?.requestVersion !== requestVersion ? state : ({
+        trackerOperationLoads: {
+          ...state.trackerOperationLoads,
+          [projectId]: {
+            loading: false,
+            loaded: state.trackerOperationLoads[projectId]?.loaded ?? false,
+            error: error instanceof Error ? error.message : String(error),
+            requestVersion,
+          },
+        },
+      }));
+    }
+  },
+
+  refreshTrackerOperations: async () => {
+    const state = get();
+    const projectRefs = new Set([
+      ...Object.keys(state.trackerOperationLoads),
+      ...Object.values(state.trackerOperations).map((operation) => operation.projectRef),
+    ]);
+    await Promise.all([...projectRefs].map((projectRef) => get().loadTrackerOperations(projectRef)));
+  },
 
   initSdksAndModels: async () => {
     // No-op if already done (success or failure)
@@ -579,11 +622,6 @@ export const useStore = create<AppState>((set, get) => ({
       if (update !== null) set(update);
     }
 
-    // Side-effect: prefetch structural review data when a job enters review.
-    if (eventType === "job.review") {
-      const jobId = (payload as { jobId?: string }).jobId;
-      if (jobId) get().prefetchReviewData(jobId);
-    }
   },
   // ------------------------------------------------------------------
   // Terminal actions
@@ -672,29 +710,7 @@ export const useStore = create<AppState>((set, get) => ({
   })),
 
   // Structural review cache actions
-  setMultiSession: (jobId, data) => {
-    const evictIds = touchJob(jobId);
-    set((state) => ({
-      ...evictStaleJobs(state, evictIds),
-      multiSessions: { ...state.multiSessions, [jobId]: data },
-    }));
-  },
 
-  setReviewStory: (jobId, data) => {
-    const evictIds = touchJob(jobId);
-    set((state) => ({
-      ...evictStaleJobs(state, evictIds),
-      reviewStories: { ...state.reviewStories, [jobId]: data },
-    }));
-  },
-
-  prefetchReviewData: (jobId) => {
-    // Fire-and-forget — fetch review data into cache
-    import("../api/client").then(({ fetchMultiSession, fetchReviewStory }) => {
-      fetchMultiSession(jobId).then((d) => get().setMultiSession(jobId, d)).catch(() => {});
-      fetchReviewStory(jobId).then((d) => get().setReviewStory(jobId, d)).catch(() => {});
-    });
-  },
 }));
 
 // Expose the store on window so Playwright capture scripts can inject

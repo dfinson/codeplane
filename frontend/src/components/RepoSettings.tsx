@@ -13,7 +13,6 @@ import {
 } from "../api/client";
 import type { Credential } from "../api/client";
 import type { ProjectResponse, RepoDetailResponse, TrackerLinkResponse } from "../api/types";
-import { RepoIndexIndicator } from "./RepoIndexIndicator";
 import { Spinner } from "./ui/spinner";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -397,9 +396,8 @@ export function RepoSettings() {
 
           {detail && repoPath && (
             <div className="rounded-lg border border-border bg-card p-5 space-y-3">
-              <h3 className="text-sm font-semibold">Index Status</h3>
+              <h3 className="text-sm font-semibold">Repository Activity</h3>
               <div className="flex items-center gap-3">
-                <RepoIndexIndicator repo={repoPath} />
                 <span className="text-sm text-muted-foreground">
                   {detail?.activeJobCount ?? 0} active jobs using this repository
                 </span>

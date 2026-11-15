@@ -15,7 +15,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-# Prevent libraries (e.g. coderecon) from fork-bombing the server process.
+# Prevent libraries from duplicating the server process.
 # The default "fork" start method duplicates the entire parent address space
 # for each worker — on a 20-core host this creates 16× copies of a ~1 GB
 # process.  "spawn" starts fresh interpreters that only load what they need.
@@ -259,6 +259,7 @@ def _neutralize_fatal_termination_signals() -> None:
     help="Remote access provider (requires --remote)",
 )
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
+@click.option("--access-only", is_flag=True, help="Require Cloudflare Access JWT instead of a password")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--tunnel-name", default=None, help="Dev Tunnel name (default: random, reused across restarts)")
 @click.option(
@@ -280,6 +281,7 @@ def up(
     remote: bool,
     provider: str,
     password: str | None,
+    access_only: bool,
     no_password: bool,
     tunnel_name: str | None,
     tunnel_ownership: str | None,
@@ -376,6 +378,37 @@ def up(
 
     remote_provider = RemoteProvider(provider) if remote else RemoteProvider.local
 
+    if access_only and (
+        not remote
+        or remote_provider is not RemoteProvider.cloudflare
+        or not cf_access_team
+        or not cf_access_aud
+        or password is not None
+        or _env("CPL_PASSWORD")
+    ):
+        click.secho(
+            "ERROR: --access-only requires --remote --provider cloudflare, CPL_CF_ACCESS_TEAM and "
+            "CPL_CF_ACCESS_AUD, and conflicts with an explicit password (including CPL_PASSWORD).",
+            fg="red",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    from backend.services.auth import cf_access
+
+    cf_access.reset()
+    if cf_access_team and cf_access_aud:
+        try:
+            cf_access.configure(team=cf_access_team, aud=cf_access_aud, eager=False)
+        except cf_access.CfAccessConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+    elif cf_access_team or cf_access_aud:
+        click.secho(
+            "WARNING: Both CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD are required for Access JWT verification.",
+            fg="yellow",
+            err=True,
+        )
+
     # Password logic: block unsafe combos before checking provider availability
     if remote and no_password:
         click.secho(
@@ -409,13 +442,13 @@ def up(
         # Literal --password value has no durable reference to replay.
         password_source = SecretSource.unreplayable()
 
-    if not effective_password and not no_password:
+    if not effective_password and not no_password and not access_only:
         env_pw = _env("CPL_PASSWORD")
         if env_pw:
             effective_password = env_pw
             password_source = SecretSource.resolvable("environment", "CPL_PASSWORD")
 
-    if not effective_password and not no_password and remote:
+    if not effective_password and not no_password and remote and not access_only:
         from backend.services.auth.middleware import generate_password
 
         effective_password = generate_password()
@@ -453,7 +486,7 @@ def up(
     run_migrations()
 
     # Auto-generate password when binding to all interfaces without one set
-    if host == "0.0.0.0" and not effective_password:  # noqa: S104
+    if host == "0.0.0.0" and not effective_password and not access_only:  # noqa: S104
         from backend.services.auth.middleware import generate_password as _gen_pw
 
         effective_password = _gen_pw()
@@ -501,37 +534,10 @@ def up(
         elif remote_provider is RemoteProvider.cloudflare:
             tunnel_credential_source = SecretSource.resolvable("environment", "CPL_CLOUDFLARE_TUNNEL_TOKEN")
 
-        if remote_provider is RemoteProvider.cloudflare and tunnel_origin:  # noqa: SIM102
-            # Cloudflare Access check deferred to lifespan — requires the backend
-            # to be listening first since the probe goes through the tunnel.
-            # Disable password auth preemptively (Access will be verified once live).
-            if effective_password:
-                log.info(
-                    "cloudflare_access_expected",
-                    msg="Disabling local password auth — Cloudflare Access will be verified after startup",
-                )
-                effective_password = None
-                password_source = SecretSource.not_required()
-
-    # --- Cloudflare Access JWT verification ---
-    # When CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD are set, CodePlane will
-    # verify the Cf-Access-Jwt-Assertion header on every request.  JWKS keys
-    # are fetched lazily on the first verification request so that transient
-    # DNS failures at startup don't prevent the server from starting.
-    if cf_access_team and cf_access_aud:
-        from backend.services.auth.cf_access import configure as configure_cf_access
-
-        configure_cf_access(team=cf_access_team, aud=cf_access_aud, eager=False)
-    elif cf_access_team or cf_access_aud:
-        click.secho(
-            "WARNING: Both CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD must be set to "
-            "enable Cloudflare Access JWT verification.  The Cf-Access-Jwt-Assertion "
-            "header will be ignored.",
-            fg="yellow",
-            err=True,
-        )
-
-    app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
+    auth_mode = "access_only" if access_only else ("password" if effective_password else "local")
+    app = create_app(
+        dev=dev, tunnel_origin=tunnel_origin, password=effective_password, remote=remote, access_only=access_only
+    )
 
     # Stash banner info so lifespan can print it after services are ready.
     # Also stash the dashboard so lifespan can subscribe it to the EventBus
@@ -556,7 +562,7 @@ def up(
         host=host,
         port=port,
         log_level="warning" if dashboard else "info",
-        timeout_graceful_shutdown=5,
+        timeout_graceful_shutdown=45,
     )
 
     def _publish_active_launch_profile() -> None:
@@ -623,6 +629,7 @@ def up(
             tunnel_origin=resolved_tunnel_origin,
             tunnel_origin_reusable=resolved_tunnel_origin_reusable,
             password_source=password_source,
+            auth_mode=auth_mode,
             tunnel_credential_source=tunnel_credential_source,
             started_pid=pid,
             started_process_time=created_time,
@@ -1202,6 +1209,7 @@ def down(host: str | None, port: int | None, force: bool) -> None:
     help="Remote access provider (requires --remote)",
 )
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
+@click.option("--access-only", is_flag=True, help="Require Cloudflare Access JWT instead of a password")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--tunnel-name", default=None, help="Dev Tunnel name (default: random, reused across restarts)")
 @click.option("--skip-preflight", is_flag=True, help="Skip preflight checks")
@@ -1213,6 +1221,7 @@ def restart(
     remote: bool,
     provider: str,
     password: str | None,
+    access_only: bool,
     no_password: bool,
     tunnel_name: str | None,
     skip_preflight: bool,
@@ -1270,6 +1279,8 @@ def restart(
             args.extend(["--provider", provider])
     if password:
         args.extend(["--password", password])
+    if access_only:
+        args.append("--access-only")
     if no_password:
         args.append("--no-password")
     if tunnel_name:
@@ -1304,6 +1315,10 @@ def hook(port: int | None) -> None:
     import urllib.request
 
     config = load_config()
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    if not IntegrationPolicy(config).enabled("claude"):
+        raise click.ClickException("Claude hook is disabled by runtime.copilot_only")
     target_port = port or config.server.port
 
     raw = sys.stdin.read()

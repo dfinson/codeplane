@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -23,7 +25,6 @@ from backend.services.events.event_bus import EventBus
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -238,3 +239,80 @@ async def test_completed_zero_artifact_job_is_not_recovered_repeatedly(
     assert job.artifact_collection_session_count == job.session_count
     assert artifacts == []
     assert [event.kind for event in published] == [EventKind.artifacts_updated]
+
+
+class TestArtifactHomeIsolation:
+    @pytest.mark.parametrize("existing_location", ["legacy", "active", "default"])
+    async def test_finalization_persists_same_id_path_and_size_across_sessions(
+        self, existing_location, session_factory, tmp_path, monkeypatch
+    ):
+        import backend.config as config
+        import backend.services.artifacts.artifact_service as mod
+
+        home = tmp_path / "home"
+        legacy = home / ".codeplane" / "artifacts"
+        active = tmp_path / "configured" / "artifacts"
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        monkeypatch.setattr(config, "_codeplane_dir", None)
+        monkeypatch.setattr(mod, "_ARTIFACTS_BASE", legacy, raising=False)
+        if existing_location == "default":
+            monkeypatch.delenv("CODEPLANE_HOME", raising=False)
+            active = legacy
+        else:
+            monkeypatch.setenv("CODEPLANE_HOME", str(active.parent))
+        root = legacy if existing_location == "legacy" else active
+        original = root / "job-1" / "art-log-history.json"
+        original.parent.mkdir(parents=True)
+        original.write_text(
+            '{"original_task":"original","sessions":[{"session_number":1,"changed_files":["old.py"]}]}',
+            encoding="utf-8",
+        )
+        before = original.read_bytes()
+        await _create_job(session_factory)
+        async with serialized_write(session_factory) as session:
+            await ArtifactRepository(session).create(
+                Artifact(
+                    id="art-log",
+                    job_id="job-1",
+                    name="history.json",
+                    type=ArtifactType.session_log,
+                    mime_type="application/json",
+                    size_bytes=len(before),
+                    disk_path=str(original),
+                    phase=ExecutionPhase.post_completion,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        service, summarization, telemetry, published = _make_service(session_factory, tmp_path)
+
+        async def collect(job_id):
+            async with serialized_write(session_factory) as session:
+                await mod.ArtifactService.from_session(session).upsert_session_log(
+                    job_id, {"session_number": 2, "changed_files": ["new.py"]}
+                )
+
+        summarization.save_snapshot_to_disk.side_effect = collect
+        assert await service.finalize("job-1") == "completed"
+        assert await service.finalize("job-1") == "completed"
+        async with session_factory() as session:
+            rows = await ArtifactRepository(session).list_for_job("job-1")
+            job = await JobRepository(session).get("job-1")
+        assert len(rows) == 1
+        persisted = rows[0]
+        assert persisted.id == "art-log"
+        assert Path(persisted.disk_path).resolve().is_relative_to(active.resolve())
+        assert persisted.size_bytes == Path(persisted.disk_path).stat().st_size
+        assert persisted.size_bytes != len(before)
+        if existing_location == "legacy":
+            assert original.read_bytes() == before
+            assert Path(persisted.disk_path) != original
+        else:
+            assert Path(persisted.disk_path) == original
+        content = json.loads(Path(persisted.disk_path).read_text(encoding="utf-8"))
+        assert [s["session_number"] for s in content["sessions"]] == [1, 2]
+        assert content["all_changed_files"] == ["new.py", "old.py"]
+        assert content["original_task"] == "original"
+        assert job is not None and job.artifact_collection_status == "completed"
+        summarization.save_snapshot_to_disk.assert_awaited_once()
+        telemetry.store_post_completion_artifacts.assert_awaited_once()
+        assert [event.kind for event in published] == [EventKind.artifacts_updated]

@@ -230,8 +230,10 @@ async def create_job(
                         bg_svc = JobService.from_session(
                             bg_session, config, naming_service=naming_service, event_bus=event_bus
                         )
-                        await bg_svc.enrich_naming_async(job.id, spec, resolved_repo)
+                        event = await bg_svc.enrich_naming_async(job.id, spec, resolved_repo)
                         await bg_session.commit()
+                    if event is not None:
+                        await event_bus.publish(event)
                 except Exception:
                     log.error("background_naming_enrichment_failed", job_id=job.id, exc_info=True)
 
@@ -315,14 +317,15 @@ async def cancel_job(
     ingest: FromDishka[IngestService],
 ) -> JobResponse:
     """Cancel a running or queued job."""
-    job = await svc.cancel_job(job_id)
+    from backend.services.completers.copilot_steer import NativeDeliveryError
 
-    # Delegate abort to IngestService for imported sessions
-    if job.source != "managed":
-        await ingest.abort_session(job_id)
-    else:
-        # Also cancel the runtime task if running
-        await runtime_service.cancel(job_id)
+    try:
+        job = await runtime_service.cancel_job(job_id)
+    except NativeDeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "delivery_unknown" if exc.uncertain else "delivery_failed", "message": str(exc)},
+        ) from exc
 
     return job_to_response(job)
 
@@ -420,7 +423,11 @@ async def list_models(
     If the cache is empty for the copilot SDK (e.g. auth wasn't ready at
     startup), attempt a live fetch so the user doesn't have to restart.
     """
-    resolved_sdk = sdk if sdk is not None else "copilot"
+    from backend.config import load_config
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    policy = IntegrationPolicy(load_config())
+    resolved_sdk = policy.require_enabled(sdk or policy.default_sdk).value
     models = cached_models_by_sdk.get(resolved_sdk, [])
     if not models and resolved_sdk == "copilot":
         try:

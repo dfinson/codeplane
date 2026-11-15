@@ -63,12 +63,14 @@ class ArtifactRepository(BaseRepository):
             return None
         return self._to_domain(row)
 
-    async def update_size_bytes(self, artifact_id: str, size_bytes: int) -> None:
-        """Update the stored file size after appending to a unified log."""
+    async def update_size_bytes(self, artifact_id: str, size_bytes: int, *, disk_path: str | None = None) -> None:
+        """Update file size and, for an explicit legacy upsert, its new path."""
         result = await self._session.execute(select(ArtifactRow).where(ArtifactRow.id == artifact_id))
         row = result.scalar_one_or_none()
         if row is not None:
             row.size_bytes = size_bytes
+            if disk_path is not None:
+                row.disk_path = disk_path
             await self._session.flush()
 
     async def delete_expired(self, cutoff: datetime) -> list[Artifact]:

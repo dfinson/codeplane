@@ -1,6 +1,6 @@
 """Add semantic_targets column to trail_nodes.
 
-Stores CodeRecon structural change data (symbols, kinds, impact) as
+Stores Structural change data (symbols, kinds, impact) as
 JSON on write sub-nodes.  Populated by the trail enricher using
 semantic_diff between parent modify node SHAs.
 
@@ -10,8 +10,9 @@ Create Date: 2026-05-17
 
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0049"
 down_revision = "0048"

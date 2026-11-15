@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Download, LayoutGrid, Plus } from "lucide-react";
+import { ArrowLeft, LayoutGrid, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -11,7 +11,7 @@ import {
   selectAttentionJobsForProject,
 } from "../store";
 import type { JobSummary } from "../store";
-import { fetchJobs, fetchProject, fetchProjectTaskLinks, ingestProjectTasks, startTaskLink } from "../api/client";
+import { fetchJobs, fetchProject, fetchProjectTaskLinks, startTaskLink } from "../api/client";
 import type { ProjectResponse, TaskLinkResponse } from "../api/types";
 import { KanbanColumn } from "./KanbanColumn";
 import { KanbanSkeleton } from "./KanbanSkeleton";
@@ -78,8 +78,7 @@ function buildNewJobUrl(projectId: string | undefined, project: ProjectResponse 
  *
  * Story 4.4 / CAP-10: also fetches the owning Project's TaskLinks (a second,
  * independent call — `GET /settings/projects/:id/task-links`, AD-11) and renders
- * them as chained-recipe cards in the "In Progress" column, alongside job cards,
- * in this same rendering pass.
+ * them in a separate Tasks section before the Job-only columns.
  */
 export function RepoBoard() {
   const { projectId, taskLinkId } = useParams<{ projectId: string; taskLinkId?: string }>();
@@ -88,7 +87,6 @@ export function RepoBoard() {
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<ProjectResponse | null>(null);
   const [taskLinks, setTaskLinks] = useState<TaskLinkResponse[]>([]);
-  const [ingesting, setIngesting] = useState(false);
   const [startingId, setStartingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const currentProject = project?.id === projectId ? project : null;
@@ -215,20 +213,6 @@ export function RepoBoard() {
     );
   }
 
-  const handleIngest = async () => {
-    if (!projectId) return;
-    setIngesting(true);
-    try {
-      const result = await ingestProjectTasks(projectId);
-      setTaskLinks(result.items);
-      toast.success(`Ingested ${result.items.length} tasks.`);
-    } catch (error) {
-      toast.error(String(error));
-    } finally {
-      setIngesting(false);
-    }
-  };
-
   const handleStart = async (taskLink: TaskLinkResponse) => {
     if (!projectId) return;
     setStartingId(taskLink.id);
@@ -267,10 +251,6 @@ export function RepoBoard() {
               New Job
             </Link>
           </Button>
-          <Button variant="outline" size="sm" disabled={ingesting} onClick={() => void handleIngest()}>
-            <Download size={14} className={ingesting ? "animate-pulse" : ""} />
-            {ingesting ? "Ingesting…" : "Ingest tasks"}
-          </Button>
         </div>
       </div>
 
@@ -296,52 +276,51 @@ export function RepoBoard() {
         </div>
       )}
 
-      {taskLinks.length === 0 && (
-        <div className="mb-4 rounded-lg border border-border bg-card px-4 py-4">
-          <h2 className="text-sm font-semibold">No tracker tasks yet.</h2>
-          <p className="mt-1 text-sm text-muted-foreground">To see tasks here:</p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-            <li>Connect a tracker credential.</li>
-            <li>Add a tracker link in Project settings.</li>
-            <li>Click Ingest tasks.</li>
-          </ol>
-          <Button asChild variant="outline" size="sm" className="mt-3">
-            <Link to={`/projects/id/${encodeURIComponent(projectId ?? "")}/settings`}>Open Project settings</Link>
-          </Button>
+      <section aria-labelledby="project-tasks-heading" className="mb-6 space-y-3">
+        <div className="flex items-center gap-2">
+          <h2 id="project-tasks-heading" className="text-sm font-semibold">Tasks</h2>
+          <span aria-label={`${taskLinks.length} tasks`} className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
+            {taskLinks.length}
+          </span>
         </div>
-      )}
+        {taskLinks.length === 0 && (
+          <div className="mb-4 rounded-lg border border-border bg-card px-4 py-4">
+            <h2 className="text-sm font-semibold">No tracker tasks yet.</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Saved task assignments appear here. Use New Job to start work directly.
+            </p>
+            <Button asChild variant="outline" size="sm" className="mt-3">
+              <Link to={`/projects/id/${encodeURIComponent(projectId ?? "")}/settings`}>Open Project settings</Link>
+            </Button>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {taskLinks.map((taskLink) => (
+            <TaskLinkCard
+              key={taskLink.id}
+              taskLink={taskLink}
+              dependencies={taskLink.dependsOn.map((dependency) => {
+                const matchedTask = dependencyIndex.get(dependency);
+                return matchedTask
+                  ? { id: dependency, label: formatTaskDependency(matchedTask), resolved: true } satisfies TaskLinkDependencyView
+                  : { id: dependency, label: dependency, resolved: false } satisfies TaskLinkDependencyView;
+              })}
+              highlighted={taskLink.id === highlightedTask?.id}
+              starting={startingId === taskLink.id}
+              onStart={(link) => void handleStart(link)}
+            />
+          ))}
+        </div>
+      </section>
 
-      <div className="grid grid-cols-3 gap-3 h-[calc(100dvh-200px)] max-lg:grid-cols-2 max-sm:grid-cols-1">
-        <KanbanColumn
-          title={KANBAN_COLUMNS.IN_PROGRESS}
-          jobs={activeJobs}
-          extraCards={
-            taskLinks.length > 0 ? (
-              <>
-                {taskLinks.map((taskLink) => {
-                  return (
-                    <TaskLinkCard
-                      key={taskLink.id}
-                      taskLink={taskLink}
-                      dependencies={taskLink.dependsOn.map((dependency) => {
-                        const matchedTask = dependencyIndex.get(dependency);
-                        return matchedTask
-                          ? { id: dependency, label: formatTaskDependency(matchedTask), resolved: true } satisfies TaskLinkDependencyView
-                          : { id: dependency, label: dependency, resolved: false } satisfies TaskLinkDependencyView;
-                      })}
-                      highlighted={taskLink.id === highlightedTask?.id}
-                      starting={startingId === taskLink.id}
-                      onStart={(link) => void handleStart(link)}
-                    />
-                  );
-                })}
-              </>
-            ) : undefined
-          }
-        />
-        <KanbanColumn title={KANBAN_COLUMNS.AWAITING_INPUT} jobs={signoffJobs} />
-        <KanbanColumn title={KANBAN_COLUMNS.FAILED} jobs={attentionJobs} />
-      </div>
+      <section aria-labelledby="project-jobs-heading" className="space-y-3">
+        <h2 id="project-jobs-heading" className="text-sm font-semibold">Jobs</h2>
+        <div className="grid grid-cols-3 gap-3 h-[calc(100dvh-200px)] max-lg:grid-cols-2 max-sm:grid-cols-1">
+          <KanbanColumn title={KANBAN_COLUMNS.IN_PROGRESS} jobs={activeJobs} />
+          <KanbanColumn title={KANBAN_COLUMNS.AWAITING_INPUT} jobs={signoffJobs} />
+          <KanbanColumn title={KANBAN_COLUMNS.FAILED} jobs={attentionJobs} />
+        </div>
+      </section>
     </div>
   );
 }

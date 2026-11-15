@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,8 +35,10 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qs, urlparse
 
 import psutil
 import structlog
@@ -46,6 +50,7 @@ from backend.services.dev_restart.launch_profile import (
     profile_owns_listener,
 )
 from backend.services.dev_restart.restart_protocol import (
+    NoRedirectHandler,
     RestartLock,
     RestartLockHeldError,
     RestartPhase,
@@ -57,8 +62,12 @@ from backend.services.dev_restart.restart_protocol import (
     get_request_paths,
     is_identity_alive,
     log_phase,
+    read_handoff_frame,
     read_json_file,
     release_restart_lock,
+    validate_commit_frame,
+    validate_handoff_frame,
+    write_handoff_frame,
     write_json_atomic,
 )
 from backend.services.dev_restart.restart_remote import (
@@ -77,6 +86,10 @@ log = structlog.get_logger()
 # turn — existing startup recovery (RuntimeService.recover_on_startup) owns
 # their fate, and the helper never sends /resume for anything (AD-7).
 _RUNNING_STATE = "running"
+_helper_auth_origin: str | None = None
+_helper_session: str | None = None
+_helper_access_token: str | None = None
+_helper_access_profile: LaunchProfile | None = None
 
 # Secret-free redaction keys: never let these substrings reach a log line or
 # a persisted diagnostic file (AD-12).
@@ -130,7 +143,71 @@ def _redact(fields: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def spawn_detached_helper(python_executable: Path, helper_script: Path, request_path: Path, log_handle: Any) -> int:
+@dataclass(slots=True)
+class HandoffProcess:
+    process: subprocess.Popen[bytes]
+    request_id: str
+    process_time: float
+    deadline: float
+    helper_script: str
+    request_path: str
+    adopted_pid: int | None = None
+
+    @property
+    def pid(self) -> int:
+        return self.adopted_pid or self.process.pid
+
+    def close(self) -> None:
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+
+    def wait_ready(self, paths: RestartRequestPaths) -> bool:
+        while time.monotonic() < self.deadline and self.process.poll() is None:
+            try:
+                marker = read_json_file(paths.started)
+            except (RestartProtocolError, OSError):
+                marker = {}
+            if marker.get("requestId") == self.request_id:
+                try:
+                    pid = marker.get("helperPid")
+                    if not isinstance(pid, int) or isinstance(pid, bool):
+                        raise ValueError
+                    candidate = psutil.Process(pid)
+                    created = candidate.create_time()
+                    direct = pid == self.process.pid and created == self.process_time
+                    # Windows venv python.exe is a redirector. Its one Python child,
+                    # not the redirector, executes the exact helper argv we spawned.
+                    redirected = (
+                        sys.platform == "win32" and candidate.ppid() == self.process.pid
+                        and candidate.cmdline()[1:] == [self.helper_script, "--helper", self.request_path]
+                    )
+                    if (direct or redirected) and marker.get("helperProcessTime") == created:
+                        self.adopted_pid = pid
+                        self.process_time = created
+                        return True
+                except (psutil.Error, ValueError):
+                    pass
+            time.sleep(0.01)
+        return False
+
+    def commit(self, paths: RestartRequestPaths) -> bool:
+        try:
+            if not self.wait_ready(paths) or self.process.stdin is None:
+                return False
+            write_handoff_frame(
+                self.process.stdin.fileno(),
+                {"version": 1, "kind": "commit", "requestId": self.request_id},
+                self.deadline,
+            )
+            return True
+        finally:
+            self.close()
+
+
+def spawn_detached_helper(
+    python_executable: Path, helper_script: Path, request_path: Path, log_handle: Any,
+    *, handoff: dict[str, Any] | None = None, adoption_seconds: float = 5.0,
+) -> int | HandoffProcess:
     """Start ``helper_script --helper <request_path>`` fully detached.
 
     POSIX: ``start_new_session=True`` puts the helper in a new session (and
@@ -140,17 +217,21 @@ def spawn_detached_helper(python_executable: Path, helper_script: Path, request_
     Windows: ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` detaches from
     the parent's console and process group for the same survival property.
 
-    stdin is always detached (``subprocess.DEVNULL``); stdout/stderr are
+    stdin is DEVNULL normally, or a private pipe for Access-only handoff. stdout/stderr are
     bound to the single already-open log handle the parent computed once
     (AD-1/AD-12) — the helper never recomputes or reopens the log path.
     Returns the spawned helper's PID.
     """
     popen_kwargs: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
+        "stdin": subprocess.PIPE if handoff is not None else subprocess.DEVNULL,
         "stdout": log_handle,
         "stderr": log_handle,
         "close_fds": True,
     }
+    if handoff is not None:
+        if not math.isfinite(adoption_seconds) or adoption_seconds <= 0:
+            raise RestartProtocolError("handoff_deadline_invalid")
+        popen_kwargs["bufsize"] = 0
 
     if sys.platform == "win32":
         detached_process = getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -159,11 +240,32 @@ def spawn_detached_helper(python_executable: Path, helper_script: Path, request_
     else:
         popen_kwargs["start_new_session"] = True
 
+    deadline = time.monotonic() + adoption_seconds
     proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, native executable
         [str(python_executable), str(helper_script), "--helper", str(request_path)],
         **popen_kwargs,
     )
-    return proc.pid
+    if handoff is None:
+        return proc.pid
+    try:
+        handle = HandoffProcess(
+            proc, handoff["requestId"], psutil.Process(proc.pid).create_time(), deadline,
+            str(helper_script), str(request_path),
+        )
+        assert proc.stdin is not None
+        write_handoff_frame(proc.stdin.fileno(), handoff, deadline)
+        return handle
+    except Exception:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        raise RestartProtocolError("handoff_spawn_failed") from None
 
 
 def _request_marker_matches(path: Path, request_id: str) -> bool:
@@ -268,7 +370,50 @@ def _now_iso() -> str:
 
 
 def _base_url(profile: LaunchProfile) -> str:
-    return f"http://{profile.host}:{profile.port}"
+    host = profile.host
+    if host in {"0.0.0.0", "127.0.0.1", "localhost"}:  # noqa: S104
+        host = "127.0.0.1"
+    elif host in {"::", "::1"}:
+        host = "[::1]"
+    else:
+        raise HelperAbort(RestartPhase.failed, "non_loopback_restart_endpoint")
+    return f"http://{host}:{profile.port}"
+
+
+def _authorize_helper(profile: LaunchProfile) -> None:
+    """Authenticate a detached helper without storing secrets in restart records."""
+    global _helper_auth_origin, _helper_session  # noqa: PLW0603
+    _helper_auth_origin = None
+    _helper_session = None
+    if not profile.remote:
+        return
+    source = profile.password_source
+    if profile.effective_auth_mode == "access_only":
+        raise HelperAbort(RestartPhase.failed, "access_only_helper_requires_authenticated_handoff")
+    if source.kind != "resolvable" or source.provider != "environment" or source.reference != "CPL_PASSWORD":
+        raise HelperAbort(RestartPhase.failed, "restart_password_unavailable")
+    password = os.environ.get("CPL_PASSWORD")
+    if not password:
+        raise HelperAbort(RestartPhase.failed, "restart_password_unavailable")
+    origin = _base_url(profile)
+    req = urllib.request.Request(
+        f"{origin}/api/auth/login",
+        data=json.dumps({"password": password}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+    try:
+        with opener.open(req, timeout=10.0) as response:
+            cookie = SimpleCookie()
+            cookie.load(response.headers.get("set-cookie", ""))
+            token = cookie.get("cpl_session")
+            if response.status != 200 or token is None:
+                raise HelperAbort(RestartPhase.failed, "restart_authentication_failed")
+            _helper_session = token.value
+            _helper_auth_origin = origin
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise HelperAbort(RestartPhase.failed, "restart_authentication_failed") from exc
 
 
 def _http_request(
@@ -276,16 +421,73 @@ def _http_request(
 ) -> tuple[int, dict[str, Any] | None]:
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
+    if _helper_access_token:
+        if _helper_access_profile is None or not profile_owns_listener(_helper_access_profile):
+            raise HelperAbort(RestartPhase.failed, "handoff_server_identity_changed")
+        target = urlparse(url)
+        query = parse_qs(target.query)
+        allowed = (
+            method == "GET" and target.path == "/api/jobs"
+            and query.get("state") == ["running"] and set(query) <= {"state", "limit", "cursor"}
+        ) or (method == "POST" and re.fullmatch(r"/api/jobs/[^/]+/pause", target.path) and not target.query)
+        if f"{target.scheme}://{target.netloc}" != _helper_auth_origin or not allowed or target.fragment:
+            raise HelperAbort(RestartPhase.failed, "restart_credential_destination_rejected")
+        headers["Cf-Access-Jwt-Assertion"] = _helper_access_token
+    if _helper_session:
+        target = urlparse(url)
+        if f"{target.scheme}://{target.netloc}" != _helper_auth_origin or not target.path.startswith("/api/jobs"):
+            raise HelperAbort(RestartPhase.failed, "restart_credential_destination_rejected")
+        headers["Cookie"] = f"cpl_session={_helper_session}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirectHandler())
+        with opener.open(req, timeout=timeout) as resp:
             raw = resp.read()
             try:
                 return resp.status, json.loads(raw) if raw else None
             except json.JSONDecodeError:
                 return resp.status, None
-    except urllib.error.URLError:
+    except (urllib.error.URLError, TimeoutError):
         return 0, None
+
+
+def _clear_helper_auth() -> None:
+    global _helper_auth_origin, _helper_session, _helper_access_token  # noqa: PLW0603
+    global _helper_access_profile  # noqa: PLW0603
+    _helper_auth_origin = None
+    _helper_session = None
+    _helper_access_token = None
+    _helper_access_profile = None
+
+
+def authenticate_access_handoff(request: RestartRequest, *, fd: int, deadline: float) -> None:
+    """Consume the private credential frame and prove old-listener authorization."""
+    global _helper_access_token, _helper_auth_origin  # noqa: PLW0603
+    global _helper_access_profile  # noqa: PLW0603
+    _clear_helper_auth()
+    frame = read_handoff_frame(fd, deadline)
+    profile = request.launch_profile
+    try:
+        token = validate_handoff_frame(
+            frame, request_id=request.request_id, server_pid=profile.started_pid,
+            server_process_time=profile.started_process_time, origin=profile.tunnel_origin or "",
+        )
+        if not profile_owns_listener(profile):
+            raise RestartProtocolError("handoff_server_identity_changed")
+        _helper_auth_origin = _base_url(profile)
+        _helper_access_token = token
+        _helper_access_profile = profile
+        status, _ = _http_request(
+            "GET", f"{_helper_auth_origin}/api/jobs?state=running&limit=1",
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
+        if status != 200 or time.monotonic() >= deadline:
+            raise RestartProtocolError("handoff_authentication_failed")
+    except Exception:
+        _clear_helper_auth()
+        raise
+    finally:
+        frame.clear()
 
 
 def _list_running_jobs(profile: LaunchProfile) -> list[dict[str, Any]]:
@@ -440,6 +642,8 @@ def _start_replacement(
     ]
     if profile.dev:
         args.append("--dev")
+    if profile.effective_auth_mode == "access_only":
+        args.append("--access-only")
     if profile.remote:
         args.append("--remote")
         # Always pass --provider explicitly instead of relying on the CLI's
@@ -571,17 +775,35 @@ def _run_claimed(
     helper_pid: int,
     helper_process_time: float,
 ) -> int:
+    access_only = False
     try:
         request = _claim_request(request_path, paths, request_id, helper_pid, helper_process_time)
-        _write_started_marker(paths, request_id, helper_pid, helper_process_time)
+        access_only = request.launch_profile.effective_auth_mode == "access_only"
+        if access_only:
+            deadline = time.monotonic() + request.timeouts.adoption_seconds
+            channel = sys.stdin
+            fd = channel.fileno()
+            try:
+                authenticate_access_handoff(request, fd=fd, deadline=deadline)
+                _write_started_marker(paths, request_id, helper_pid, helper_process_time)
+                validate_commit_frame(read_handoff_frame(fd, deadline), request_id)
+                if not profile_owns_listener(request.launch_profile):
+                    raise RestartProtocolError("handoff_server_identity_changed")
+            finally:
+                channel.close()
+        else:
+            _write_started_marker(paths, request_id, helper_pid, helper_process_time)
 
         time.sleep(request.timeouts.response_grace_seconds)
 
+        if not access_only:
+            _authorize_helper(request.launch_profile)
         log_phase(RestartPhase.pausing, request_id, phase_start=True)
         jobs = _list_running_jobs(request.launch_profile)
         failed_pauses = _pause_jobs(request.launch_profile, jobs, request_id)
         if failed_pauses:
             log_phase(RestartPhase.pausing, request_id, failed_job_ids=failed_pauses)
+        _clear_helper_auth()
         time.sleep(request.timeouts.pause_wait_seconds)
 
         log_phase(
@@ -622,10 +844,16 @@ def _run_claimed(
         log_phase(RestartPhase.succeeded, request_id, new_pid=new_pid)
         _cleanup_success(paths)
         return 0
+    except RestartProtocolError as exc:
+        log_phase(RestartPhase.failed, request_id, reason=str(exc))
+        return 1
     except HelperAbort as abort:
         log_phase(abort.phase, request_id, reason=abort.reason, **_redact(abort.fields))
         log_phase(RestartPhase.failed, request_id, reason=abort.reason)
         return 1
     except Exception as exc:  # noqa: BLE001 - top-level helper boundary must never propagate
-        log_phase(RestartPhase.failed, request_id, reason="unexpected_error", detail=str(exc)[:500])
+        fields: dict[str, Any] = {} if access_only else {"detail": str(exc)[:500]}
+        log_phase(RestartPhase.failed, request_id, reason="unexpected_error", **fields)
         return 1
+    finally:
+        _clear_helper_auth()

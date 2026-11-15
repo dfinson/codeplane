@@ -313,7 +313,7 @@ describe("JobDetailScreen", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
 
     await waitFor(() => {
-      expect(resolveJob).toHaveBeenCalledWith("job-1", "smart_merge", { confirmLowConfidence: undefined });
+      expect(resolveJob).toHaveBeenCalledWith("job-1", "smart_merge");
     });
 
     await waitFor(() => {

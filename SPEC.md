@@ -2,6 +2,52 @@
 
 ---
 
+## Runtime admission and evidence invariants
+
+`runtime.copilot_only` defaults to true. This restricts CodePlane-managed
+provider integrations, not model families served by Copilot or manually typed
+terminal commands. Disabled integrations retain their code, configuration and
+history. Explicit disabled execution fails before side effects, and disabled
+in-flight managed jobs fail explicitly during recovery rather than changing SDK.
+
+Native observation uses deterministic source identities and a validated source
+checkpoint. CodePlane job identity owns persistence and SSE routing. Replayed
+records do not repeat execution, permission decisions or durable projections.
+Observation failure does not imply the external agent stopped.
+
+Approval decisions remain durable across waiter races and server restart.
+Explicit approval markers cannot be waived by bulk trust. Superseded SDK
+permission invocations are retired with a reason, while independent tracker and
+task-spawn approvals are retained.
+
+Coordinated dispatch uses an exact live-execution token and refuses stale,
+non-running or gated targets. It never implicitly resumes or unpauses a job.
+Admission is distinct from execution, and uncertain delivery is not retried.
+
+Verification results describe completed, failed or interrupted verification
+agent turns. Completion is not proof of test success or operator acceptance.
+The existing review/completed distinction remains.
+
+Remote mode enforces credentials on HTTP, SSE and WebSockets throughout startup
+and steady state, including connector traffic arriving from loopback. Explicit
+passwords are preserved. Access-only mode requires an explicit selection and
+per-request verified JWT. Preview transport never forwards control-plane
+credentials or cookies and enforces the decoded response limit during reading.
+
+Access-only detached restart uses the operator's existing cached Cloudflare
+application JWT, privately retrieved before the adoption deadline begins.
+Missing or unusable credentials fail before mutation, without initiating login.
+A private inherited pipe carries a versioned, length-prefixed credential frame
+of at most 64 KiB bound to request ID, server PID/creation time and exact HTTPS
+origin. The helper verifies identity and authenticates a protected read on the
+old loopback listener before adoption. Only a separate matching parent commit
+permits pause/stop; parent death, EOF, invalid input or timeout before commit
+aborts. Committed helpers survive parent exit. Credentials are confined to
+memory and the pipe, restricted to old-listener job-list/pause requests, and
+dropped before stop/replacement. No credential is stored in argv, environment,
+files, logs or status. Replacement retains Access-only. This is single-use
+transport of an ordinary JWT, not a restart-scoped server credential.
+
 ## Table of Contents
 
 1. [Product Overview](#1-product-overview)
@@ -111,7 +157,6 @@ CodePlane is a two-tier application.
 | Toasts | Sonner |
 | Icons | Lucide React |
 | API type generation | openapi-typescript (from FastAPI OpenAPI spec) |
-| Structural analysis | CodeRecon (semantic diff, dependency graphs, merge confidence) |
 | Package management | uv (Python), npm (Frontend) |
 
 ### 2.1 Frontend Serving Model
@@ -174,12 +219,6 @@ State slices:
 | `streamingToolOutput` | In-flight streaming tool output |
 | `streamingReasoning` | In-flight streaming reasoning content |
 | `telemetryVersions` | Hydration version tracking for telemetry |
-| `repoIndexState` | Per-repo structural indexing progress |
-| `structuralDiffs` | Per-job structural coupling diff |
-| `multiSessions` | Per-job multi-session analysis |
-| `communities` | Per-job community detection results |
-| `reviewStories` | Per-job structural review story |
-| `structuralWarnings` | Per-job structural warnings |
 | `sdks` | Available SDK catalogue with models |
 | `terminalSessions` | Active terminal sessions and drawer state |
 | `connectionStatus` | SSE connection state (`connected`, `reconnecting`, `disconnected`) |
@@ -401,8 +440,6 @@ backend/
 │   ├── memory/                # Workspace memory extraction and compaction
 │   ├── tool_classifier.py     # Tool action classification (activity dimensions)
 │   ├── tool_formatters/       # Human-readable tool output formatting
-│   ├── coderecon_service.py   # CodeRecon structural analysis integration
-│   ├── coderecon_tools.py     # CodeRecon MCP tool bridge
 │   ├── auth.py                # Authentication helpers (password, session cookies)
 │   ├── cf_access.py           # Cloudflare Access JWT verification
 │   ├── share_service.py       # Share token management
@@ -414,7 +451,7 @@ backend/
 │   ├── retry_tracker.py       # Agent retry detection and tracking
 │   ├── snapshot_helpers.py    # Job state snapshot construction
 │   ├── copilot_steer.py       # Copilot session steering prompts
-│   ├── preflight_curator.py   # Preflight prompt curation
+│   ├── preflight_curator.py   # Read-only utility-model Scout
 │   ├── lightweight_completer.py # Single-turn LLM completions
 │   ├── narrator_completer.py  # Narrative generation LLM calls
 │   └── parsing_utils.py       # Shared parsing helpers
@@ -1539,7 +1576,7 @@ server:
 runtime:
   max_concurrent_jobs: 2
   worktrees_dirname: .codeplane-worktrees
-  utility_model: gpt-4o-mini        # cheap/fast model for naming, summaries
+  utility_model: claude-haiku-4.5   # default utility model for naming and summaries
   default_sdk: copilot              # copilot | claude — SDK used when not overridden per-job
   suppressed_preflight_agent_prompts: []
 
@@ -1611,6 +1648,9 @@ tools:
       env:
         DATABASE_URL: "${DATABASE_URL}"
 ```
+
+Missing or blank `runtime.utility_model` uses `claude-haiku-4.5`. An explicit
+nonblank model choice is preserved. This default is not a claim of lower billing.
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 
@@ -1777,10 +1817,6 @@ class EventKind(StrEnum):
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
     # Repo index
-    repo_index_progress = "repo.index_progress"
-    repo_index_complete = "repo.index_complete"
-    # Structural health
-    structural_warning = "structural.warning"
     stall_detected = "stall.detected"
     # Monitors
     monitor_approved = "monitor.approved"
@@ -1851,9 +1887,6 @@ currently emits, not a closed enumeration of permitted TraceForge kinds.
 | `turn.summary` | AI-generated turn summary | `turn_id`, `summary` |
 | `action.classified` | Action policy classification | `recommendedAction`, `reasonCode`, `riskScore`, `riskBand`, `effect` |
 | `policy.settings_changed` | Policy configuration changed | `preset` |
-| `repo.index_progress` | Repo structural indexing progress | `repo`, `progress` |
-| `repo.index_complete` | Repo structural indexing complete | `repo` |
-| `structural.warning` | Code structure warning detected | `warning` |
 | `stall.detected` | Agent stall detected by arbiter sidecar | |
 | `monitor.approved` | Monitor sidecar auto-approved action | `action` |
 | `monitor.rejected` | Monitor sidecar auto-rejected action | `action` |
@@ -2173,13 +2206,6 @@ CREATE TABLE jobs (
     external_session_id TEXT,
     tail_offset INTEGER NOT NULL DEFAULT 0,
     story_text TEXT,
-    review_story_json TEXT,
-    review_story_hash TEXT,
-    structural_coupling_delta REAL,
-    structural_cycle_count INTEGER,
-    structural_changes_touch_tests BOOLEAN,
-    structural_change_count INTEGER,
-    structural_merge_confidence TEXT,
     trail_state_snapshot TEXT,         -- JSON
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -2545,7 +2571,31 @@ Retention cleanup removes:
 4. Worktree directories for jobs in terminal states older than the retention period
 
 Job records and events are never deleted. They serve as an audit log.
-```
+
+### 16.5 Recoverable Task Starts and Tracker Delivery
+
+`TaskExecutionService` is application-scoped and shared by REST, MCP, and completion subscribers. It performs read-only Job preflight before a short serialized transaction that revalidates eligibility, creates the `preparing` Job, and attaches it to its TaskLink. Git discovery and naming do not commit a jobless reservation. Cancellation before commit leaves a retryable task. After commit, the existing runtime recovers the linked Job and prepares its workspace.
+
+Completion projections use conditional state updates. Replayed completion events cannot overwrite a live start. A dependency is satisfied only by a persisted completed Job resolved as `merged` or `pr_created`. Chat gating remains chain-scoped. The task transaction commits and closes before requesting an approval through `ApprovalService`. Structured spawn actions retain the predecessor's Job attempt, and legacy `spawn_task:<id>` approvals remain readable. Startup reconciles abandoned legacy claims and approved starts before admitting new commands, without starting the same Job twice.
+
+Tracker approval and delivery are separate durable facts. Each `tracker_operations` row holds an immutable request identity, exact target and content, canonical approval association, dispatch phase, and outcome. Repeated recipe completion for the same Job attempt reuses the same source identity. The managed worker survives a canceled request caller and reconstructs approval associations after restart. Tracker output failure never changes a successfully completed task into a failed task.
+
+Operations progress through `awaiting_approval`, `approved`, and `dispatching`. An acknowledged write becomes `applied`, a denial becomes `rejected`, and a definite nondelivery becomes `failed`. A lost response or interrupted dispatch becomes `uncertain`. Neither restart nor retry automatically repeats an uncertain comment. The operator must record evidence of delivery or nondelivery. Confirmed nondelivery becomes `not_applied`; a subsequent retry is a distinct linked operation requiring fresh explicit approval. Reconciliation and retry use an expected-version compare-and-set.
+
+Live Job, Project, TaskLink, TrackerLink, and Approval correlations use nullable `ON DELETE SET NULL` foreign keys. Immutable references and approval/receipt/reconciliation evidence remain available for history. Missing live dependencies prohibit dispatch; snapshots do not authorize a write or silently bind a replacement target. Existing archive and artifact/worktree retention behavior remains unchanged. Legacy approved tracker requests without dispatch evidence are imported as uncertain, never assumed delivered or replayed.
+
+`tracker.operation_updated` is an allowlisted SSE event delivered after the operation commit. It reaches global connections and the associated Job connection. An operation with a deleted Job uses an unassociated global event rather than inserting an invalid Job-FK event. The frontend stores these records centrally, hydrates them after reconnect, and protects newer versions and deleted correlations from stale replay.
+
+GitHub tracker reads display Projects v2 **Project Status**. The existing GitHub `transition` command changes the underlying issue's **Issue state** (`open` or `closed`), including the existing `Done` alias for closing an issue. Approval and outcome labels name that operation explicitly. It does not mutate Project Status.
+
+Project-scoped history and operator commands are available at:
+
+- `GET /api/projects/{project_id}/tracker-links/operations`, optionally filtered by `job_ref` or `tracker_link_ref`.
+- `GET /api/projects/{project_id}/tracker-links/operations/{operation_id}`.
+- `POST .../{operation_id}/reconcile` with `expectedVersion`, `resolution`, and delivery `evidence`.
+- `POST .../{operation_id}/retry` with `expectedVersion` and a stable caller `requestId`.
+
+The existing tracker panel shows pending approval, precise targets, receipts, failures, and uncertain delivery. Evidence is retained after a recoverable error. An uncertain operation has no retry action until nondelivery is established.
 
 ---
 
@@ -2606,11 +2656,6 @@ The health endpoint does **not** require authentication. It returns:
 | `GET` | `/api/jobs/{job_id}/snapshot` | Full state hydration (for reconnect/refresh) |
 | `GET` | `/api/jobs/{job_id}/telemetry` | Get job telemetry data |
 | `GET` | `/api/jobs/{job_id}/story` | Get narrative story of job execution |
-| `GET` | `/api/jobs/{job_id}/structural-diff` | Get structural coupling diff |
-| `GET` | `/api/jobs/{job_id}/multi-session` | Get multi-session analysis |
-| `GET` | `/api/jobs/{job_id}/impact-graph/{symbol}` | Get code impact graph |
-| `GET` | `/api/jobs/{job_id}/communities` | Get community detection results |
-| `GET` | `/api/jobs/{job_id}/review-story` | Get structural review story |
 | `GET` | `/api/jobs/{job_id}/trail` | Get structured intent graph (audit trail) |
 | `GET` | `/api/jobs/{job_id}/trail/summary` | Get lightweight trail summary |
 
@@ -2737,7 +2782,6 @@ POST /api/approvals/{approval_id}/resolve
 | `PUT` | `/api/settings` | Update settings (structured, partial) |
 | `GET` | `/api/settings/repos` | List registered repos |
 | `GET` | `/api/settings/repos/{repo_path}` | Get detailed repo config with resolved MCP servers |
-| `GET` | `/api/settings/repos/{repo_path}/health` | Get structural health status |
 | `GET` | `/api/settings/repos/{repo_path}/summary` | Get aggregated repo overview |
 | `GET` | `/api/settings/repos/{repo_path}/jobs` | List jobs for a repo |
 | `GET` | `/api/settings/repos/{repo_path}/memory` | Get repo workspace memory |
@@ -3998,6 +4042,10 @@ Every REST API capability is exposed as an MCP tool. Related operations are coll
 |---|---|---|---|
 | `codeplane_workspace` | Browse Job Worktree | list, read | `GET /api/jobs/{id}/workspace`, `GET /api/jobs/{id}/workspace/file` |
 | `codeplane_artifact` | Access Job Artifacts | list, get | `GET /api/jobs/{id}/artifacts`, `GET /api/artifacts/{id}` |
+
+#### Tracker Delivery
+
+`codeplane_tracker` exposes `comment`, `transition`, `status`, and `list` for a Job's explicit tracker pairing. Writes require an explicit CodePlane approval and return an operation identity plus a truthful durable outcome. Supplying the same `request_id` deduplicates a retried MCP call. `status` and `list` recover results after disconnection. Approval alone is never reported as applied, and uncertain delivery must not be blindly repeated.
 
 #### Configuration
 

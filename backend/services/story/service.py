@@ -26,7 +26,6 @@ import structlog
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.completers.naming_service import Completable
 
 log = structlog.get_logger()
@@ -1046,13 +1045,11 @@ class StoryService:
     def __init__(
         self,
         completer: Completable,
-        coderecon: CodeReconService | None = None,
         session_factory: Any | None = None,
         model_pricing: Any | None = None,
         git_service: Any | None = None,
     ) -> None:
         self._completer = completer
-        self._coderecon = coderecon
         self._session_factory = session_factory
         self._model_pricing = model_pricing
         self._git_service = git_service
@@ -1136,77 +1133,6 @@ class StoryService:
             finally:
                 self._gen_locks.pop(lock_key, None)
 
-    async def _fetch_structural_section(
-        self,
-        session: AsyncSession,
-        job_id: str,
-        *,
-        job_row: dict[str, Any] | None = None,
-    ) -> str | None:
-        """Fetch structural diff from CodeRecon and format as prompt section."""
-        if not self._coderecon or not self._coderecon.available:
-            return None
-
-        from sqlalchemy import text
-
-        if job_row is None:
-            row = await session.execute(
-                text("SELECT repo, worktree_path, base_ref FROM jobs WHERE id = :jid"),
-                {"jid": job_id},
-            )
-            job_row = row.mappings().first()  # type: ignore[assignment]
-        if not job_row or not job_row.get("repo") or not job_row.get("worktree_path"):
-            return None
-
-        try:
-            repo_name = await self._coderecon.ensure_repo_indexed(job_row["repo"])
-            await self._coderecon.register_worktree(repo_name, job_row["worktree_path"])
-            diff_result = await self._coderecon.semantic_diff(
-                repo_name,
-                base=job_row["base_ref"] or "HEAD",
-                worktree=job_row["worktree_path"],
-            )
-        except Exception:
-            log.debug("story_structural_diff_failed", job_id=job_id, exc_info=True)
-            return None
-
-        changes = diff_result.structural_changes or []
-        if not changes:
-            return None
-
-        lines = ["## STRUCTURAL ANALYSIS (semantic diff)"]
-        for ch in changes:
-            kind = ch.change
-            symbol = ch.qualified_name or ch.name
-            file = ch.path
-            preview = ch.change_preview or ""
-            impact = ch.impact
-            ref_count = impact.reference_count if impact and impact.reference_count else 0
-            sig_changed = ch.old_sig is not None and ch.new_sig is not None and ch.old_sig != ch.new_sig
-
-            # Determine category inline (mirrors endpoint logic)
-            if kind == "removed":
-                category = "BREAKING" if ref_count > 0 else "non-structural"
-            elif kind == "modified":
-                category = "BREAKING" if sig_changed else "body"
-            elif kind == "added":
-                category = "additive"
-            else:
-                category = "body" if kind == "moved" else "non-structural"
-
-            entry = f"  [{category.upper()}] {file}"
-            if symbol:
-                entry += f" :: {symbol}"
-            if ref_count > 0:
-                entry += f" ({ref_count} callers"
-                unknown = impact.ref_tiers.unknown if impact and impact.ref_tiers else 0
-                if unknown:
-                    entry += f", {unknown} UNVERIFIED"
-                entry += ")"
-            if preview:
-                entry += f" — {preview}"
-            lines.append(entry)
-        return "\n".join(lines)
 
     async def _ensure_diffs(
         self,
@@ -1348,12 +1274,6 @@ class StoryService:
         )
         pending_enrichment = unenriched.scalar() or 0
 
-        # Structural analysis enrichment from CodeRecon
-        structural_section = await self._fetch_structural_section(
-            session,
-            job_id,
-            job_row=job_row,
-        )
 
         system = _STORY_SYSTEM
 
@@ -1368,7 +1288,6 @@ class StoryService:
             refs=refs,
             ctx=ctx,
             system=system,
-            structural_section=structural_section,
             max_input_tokens=max_input_tokens,
             job_id=job_id,
         )
@@ -1469,7 +1388,6 @@ class StoryService:
         refs: list[StoryReference],
         ctx: StoryContext,
         system: str,
-        structural_section: str | None,
         max_input_tokens: int | None,
         job_id: str,
     ) -> list[StoryBlock]:
@@ -1482,8 +1400,6 @@ class StoryService:
         """
         # Try single-pass first — check if it fits
         user_prompt = _build_prompt(refs, ctx)
-        if structural_section:
-            user_prompt += "\n\n" + structural_section
 
         full_prompt = f"SYSTEM:\n{system}\n\nUSER:\n{user_prompt}"
         estimated_tokens = _estimate_tokens(full_prompt)
@@ -1518,8 +1434,6 @@ class StoryService:
         all_blocks: list[StoryBlock] = []
         for pass_num, chunk in enumerate(chunks, 1):
             chunk_prompt = _build_prompt_for_chunk(chunk, ctx, total_refs=len(refs))
-            if structural_section and pass_num == 1:
-                chunk_prompt += "\n\n" + structural_section
 
             chunk_system = system
             if pass_num > 1:

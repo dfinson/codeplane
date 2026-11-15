@@ -95,7 +95,7 @@ cd frontend
 npm run generate:api    # generates src/api/schema.d.ts
 ```
 
-The generated `schema.d.ts` is gitignored — import types via `src/api/types.ts` aliases instead.
+The generated `schema.d.ts` is tracked — import types via `src/api/types.ts` aliases instead.
 
 ## Developer Tools
 
@@ -188,7 +188,7 @@ codeplane/
 │       ├── api/                       # API client + generated types
 │       │   ├── client.ts              #   REST API client functions
 │       │   ├── types.ts               #   Friendly type aliases
-│       │   └── schema.d.ts            #   Generated from OpenAPI (gitignored)
+│       │   └── schema.d.ts            #   Generated from OpenAPI (tracked)
 │       ├── components/                # React components
 │       ├── hooks/                     # Custom React hooks (SSE, mobile, etc.)
 │       ├── lib/                       # Utilities

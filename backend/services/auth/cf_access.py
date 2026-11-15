@@ -23,6 +23,7 @@ through to normal password auth).
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -66,6 +67,9 @@ def configure(*, team: str, aud: str, eager: bool = True) -> None:
     """
     global _cf_team, _cf_aud, _certs_url  # noqa: PLW0603
 
+    if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?", team) or not aud.strip():
+        raise CfAccessConfigError("Cloudflare Access requires a valid team name and non-empty audience")
+    reset()
     _cf_team = team
     _cf_aud = aud
     _certs_url = f"https://{team}.cloudflareaccess.com/cdn-cgi/access/certs"
@@ -115,7 +119,8 @@ def verify_token(token: str) -> bool:
                 key=jwt.algorithms.RSAAlgorithm.from_jwk(key),  # type: ignore[arg-type]  # from_jwk returns a key object accepted by decode
                 algorithms=["RS256"],
                 audience=_cf_aud,
-                options={"require": ["exp", "iat", "iss"]},
+                issuer=f"https://{_cf_team}.cloudflareaccess.com",
+                options={"require": ["exp", "iat", "iss", "aud"]},
             )
             return True
         except jwt.ExpiredSignatureError:
@@ -169,8 +174,8 @@ def _refresh_jwks(*, force: bool = False) -> None:
     try:
         req = urllib.request.Request(_certs_url, method="GET")
         req.add_header("User-Agent", "cpl-cfaccess/1.0")
-        resp = urllib.request.urlopen(req, timeout=10)  # noqa: S310
-        jwks = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            jwks = json.loads(resp.read())
     except Exception as exc:
         if force:
             raise CfAccessConfigError(f"Failed to fetch Cloudflare Access JWKS from {_certs_url}: {exc}") from exc

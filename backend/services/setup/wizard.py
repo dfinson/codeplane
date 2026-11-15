@@ -215,6 +215,12 @@ def _setup_agent_clis() -> None:
     """Step 3: Agent CLI availability check and default selection."""
     _step_header(3, _SETUP_TOTAL_STEPS, "Agent CLIs")
 
+    config = load_config()
+    if config.runtime.copilot_only:
+        copilot = check_agent_cli("copilot")
+        _console.print(f"  GitHub Copilot: {copilot.detail}")
+        _console.print("  Copilot-only policy is enabled. Other integrations and stored defaults are preserved.")
+        return
     copilot = check_agent_cli("copilot")
     claude = check_agent_cli("claude")
 

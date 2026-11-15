@@ -6,10 +6,10 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import literal, select, update
 
-from backend.models.db import TaskLinkRow
-from backend.models.domain import TaskLink, TaskLinkState
+from backend.models.db import ApprovalRow, JobRow, TaskLinkRow
+from backend.models.domain import ApprovalResolution, TaskLink, TaskLinkState
 from backend.persistence.repository import BaseRepository
 
 
@@ -192,7 +192,7 @@ class TaskLinkRepository(BaseRepository):
 
     async def get(self, task_link_id: str) -> TaskLink | None:
         """Retrieve a single TaskLink by ID, or ``None`` if not found (Story 5.3)."""
-        stmt = select(TaskLinkRow).where(TaskLinkRow.id == task_link_id)
+        stmt = select(TaskLinkRow).where(TaskLinkRow.id == task_link_id).execution_options(populate_existing=True)
         result = await self._session.execute(stmt)
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row else None
@@ -204,32 +204,87 @@ class TaskLinkRepository(BaseRepository):
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row is not None else None
 
-    async def set_job_id(self, task_link_id: str, job_id: str) -> TaskLink | None:
-        """Set ``job_id`` on a TaskLink, guarded against double-spawn (Story 4.5, AC #3).
+    async def list_legacy_unlinked_starting(self) -> list[TaskLink]:
+        """Startup-only repair candidates; never release these during admission."""
+        result = await self._session.execute(
+            select(TaskLinkRow)
+            .where(
+                TaskLinkRow.job_id.is_(None),
+                TaskLinkRow.state == TaskLinkState.starting,
+            )
+            .order_by(TaskLinkRow.created_at, TaskLinkRow.id)
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]
 
-        Implemented as a conditional ``UPDATE ... WHERE job_id IS NULL`` (not a
-        read-then-write) so it is safe even if two sibling dependencies complete
-        near-simultaneously and both trigger a spawn attempt for the same
-        dependent TaskLink — only the first write wins, the second observes
-        zero rows affected and returns ``None``.
-        """
+    async def list_linked(self) -> list[TaskLink]:
+        """Startup recovery inputs, including historical completed predecessors."""
+        result = await self._session.execute(
+            select(TaskLinkRow)
+            .where(TaskLinkRow.job_id.is_not(None))
+            .order_by(
+                TaskLinkRow.created_at,
+                TaskLinkRow.id,
+            )
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def list_approved_legacy_starts(self) -> list[tuple[TaskLink, str]]:
+        """Find retained legacy start associations even when the owner Job has no task."""
+        result = await self._session.execute(
+            select(TaskLinkRow, ApprovalRow.job_id)
+            .join(ApprovalRow, ApprovalRow.proposed_action == literal("spawn_task:") + TaskLinkRow.id)
+            .join(
+                JobRow,
+                (JobRow.id == ApprovalRow.job_id) & (JobRow.project_id == TaskLinkRow.project_id),
+            )
+            .where(TaskLinkRow.job_id.is_(None), ApprovalRow.resolution == ApprovalResolution.approved)
+            .order_by(ApprovalRow.requested_at, ApprovalRow.id)
+        )
+        return [(self._to_domain(row), owner_job_id) for row, owner_job_id in result.all()]
+
+    async def compare_and_set_state(
+        self,
+        task_link_id: str,
+        state: TaskLinkState,
+        *,
+        expected_state: TaskLinkState,
+        expected_job_id: str | None,
+    ) -> TaskLink | None:
+        """Project only the state/link version read by the caller; never steal a start."""
         stmt = (
             update(TaskLinkRow)
-            .where(TaskLinkRow.id == task_link_id, TaskLinkRow.job_id.is_(None))
+            .where(
+                TaskLinkRow.id == task_link_id,
+                TaskLinkRow.state == expected_state,
+                TaskLinkRow.job_id == expected_job_id,
+            )
+            .values(state=state, updated_at=datetime.now(UTC))
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            return None
+        return await self.get(task_link_id)
+
+    async def set_job_id(self, task_link_id: str, job_id: str) -> TaskLink | None:
+        """Legacy link assignment, guarded against double-spawn and live claims."""
+        stmt = (
+            update(TaskLinkRow)
+            .where(
+                TaskLinkRow.id == task_link_id,
+                TaskLinkRow.job_id.is_(None),
+                TaskLinkRow.state != TaskLinkState.starting,
+            )
             .values(job_id=job_id, updated_at=datetime.now(UTC))
         )
         result = await self._session.execute(stmt)
         await self._session.flush()
-        if result.rowcount == 0:  # type: ignore[attr-defined]  # CursorResult.rowcount not in generic stub
+        if result.rowcount == 0:  # type: ignore[attr-defined]
             return None
-
-        fetch_stmt = select(TaskLinkRow).where(TaskLinkRow.id == task_link_id)
-        fetched = await self._session.execute(fetch_stmt)
-        row = fetched.scalar_one_or_none()
-        return self._to_domain(row) if row is not None else None
+        return await self.get(task_link_id)
 
     async def claim_ready(self, task_link_id: str) -> TaskLink | None:
-        """Atomically claim a ready, unlinked TaskLink before creating its Job."""
+        """Claim within the caller's Job/attachment transaction; do not commit alone."""
         stmt = (
             update(TaskLinkRow)
             .where(
@@ -246,13 +301,17 @@ class TaskLinkRepository(BaseRepository):
         return await self.get(task_link_id)
 
     async def claim_ready_and_commit(self, task_link_id: str) -> TaskLink | None:
-        """Persist a short atomic claim before any Git-backed Job preparation."""
+        """Legacy compatibility only; production starts must use TaskExecutionService.
+
+        Retained for old callers and recovery fixtures that reproduce an
+        abandoned pre-upgrade claim. New starts never commit a jobless claim.
+        """
         claimed = await self.claim_ready(task_link_id)
         await self._session.commit()
         return claimed
 
     async def recover_start_claim(self, task_link_id: str) -> TaskLink | None:
-        """Discard a failed Job insert and make this caller's start claim retryable."""
+        """Legacy failed-insert rollback; not used by application task execution."""
         await self._session.rollback()
         stmt = (
             update(TaskLinkRow)
@@ -274,7 +333,7 @@ class TaskLinkRepository(BaseRepository):
         *,
         state: TaskLinkState = TaskLinkState.running,
     ) -> TaskLink | None:
-        """Attach a Job only to the caller's already-claimed TaskLink."""
+        """Attach a Job inside the same transaction that claimed the TaskLink."""
         stmt = (
             update(TaskLinkRow)
             .where(
@@ -291,12 +350,15 @@ class TaskLinkRepository(BaseRepository):
         return await self.get(task_link_id)
 
     async def set_state(self, task_link_id: str, state: TaskLinkState) -> TaskLink | None:
-        """Persist one explicit TaskLink lifecycle transition."""
-        stmt = (
-            update(TaskLinkRow).where(TaskLinkRow.id == task_link_id).values(state=state, updated_at=datetime.now(UTC))
-        )
-        result = await self._session.execute(stmt)
-        await self._session.flush()
-        if result.rowcount == 0:  # type: ignore[attr-defined]
+        """Compatibility transition; protect an unlinked start from stale projections."""
+        current = await self.get(task_link_id)
+        if current is None or (current.job_id is None and current.state == TaskLinkState.starting):
             return None
-        return await self.get(task_link_id)
+        if state in {TaskLinkState.ready, TaskLinkState.waiting} and current.job_id is not None:
+            return None
+        return await self.compare_and_set_state(
+            task_link_id,
+            state,
+            expected_state=current.state,
+            expected_job_id=current.job_id,
+        )

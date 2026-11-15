@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.config import get_codeplane_dir
 from backend.models.api_schemas import ArtifactType, ExecutionPhase
 from backend.models.domain import Artifact
 
@@ -21,16 +23,53 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-# Default base directory for artifact files on disk
-_ARTIFACTS_BASE = Path.home() / ".codeplane" / "artifacts"
-
 # Maximum file size for workspace artifacts (50 MB)
 _MAX_WORKSPACE_ARTIFACT_BYTES = 50 * 1024 * 1024
 
 
 def get_artifacts_base() -> Path:
-    """Return the base directory for artifact files on disk."""
-    return _ARTIFACTS_BASE
+    """Return the configured artifact root, rejecting a root-level link escape."""
+    home = get_codeplane_dir().resolve()
+    base = (home / "artifacts").resolve()
+    if not base.is_relative_to(home):
+        raise ValueError("Artifact path outside allowed directory")
+    return base
+
+
+def resolve_artifact_path(artifact: Artifact, *, job_id: str | None = None) -> Path:
+    """Validate a persisted path for reading, including bounded historical storage.
+
+    The active root retains its existing read policy. A historical default-root
+    file additionally has to belong to the record's job and artifact ID.
+    """
+    if job_id is not None and artifact.job_id != job_id:
+        raise ValueError("Artifact belongs to another job")
+    disk_path = Path(artifact.disk_path).resolve()
+    if disk_path.is_relative_to(get_artifacts_base().resolve()):
+        return disk_path
+    legacy_home = (Path.home() / ".codeplane").resolve()
+    legacy_base = (legacy_home / "artifacts").resolve()
+    if legacy_base.is_relative_to(legacy_home) and disk_path.is_relative_to(legacy_base):
+        relative = disk_path.relative_to(legacy_base)
+        if (
+            len(relative.parts) == 2
+            and relative.parts[0] == artifact.job_id
+            and relative.name.startswith(f"{artifact.id}-")
+        ):
+            return disk_path
+    raise ValueError("Artifact path outside allowed directory")
+
+
+def _new_artifact_path(job_id: str, artifact_id: str, name: str) -> Path:
+    for component in (job_id, artifact_id, name):
+        if not component or component in {".", ".."} or Path(component).name != component:
+            raise ValueError("Invalid artifact path component")
+    base = get_artifacts_base().resolve()
+    path = (base / job_id / f"{artifact_id}-{name}").resolve()
+    if not path.is_relative_to(base):
+        raise ValueError("Artifact path outside allowed directory")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class ArtifactService:
@@ -46,6 +85,29 @@ class ArtifactService:
 
         return cls(ArtifactRepository(session))
 
+    async def _update_content(self, artifact: Artifact, job_id: str, content: str | bytes) -> Artifact:
+        source = resolve_artifact_path(artifact, job_id=job_id)
+        base = get_artifacts_base().resolve()
+        # An explicit legacy upsert writes the requested content under today's
+        # root; it never overwrites, deletes, or copies the historical original.
+        destination = (
+            source
+            if source.is_relative_to(base)
+            else _new_artifact_path(job_id, artifact.id, source.name[len(artifact.id) + 1 :])
+        )
+        if isinstance(content, bytes):
+            destination.write_bytes(content)
+        else:
+            destination.write_text(content, encoding="utf-8")
+        size = destination.stat().st_size
+        if destination != source:
+            await self._repo.update_size_bytes(artifact.id, size, disk_path=str(destination))
+            artifact.disk_path = str(destination)
+        else:
+            await self._repo.update_size_bytes(artifact.id, size)
+        artifact.size_bytes = size
+        return artifact
+
     async def store_diff_snapshot(
         self,
         job_id: str,
@@ -56,9 +118,7 @@ class ArtifactService:
         name = "diff-snapshot.json"
 
         # Serialize to disk
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         content = json.dumps(
             [f.model_dump(by_alias=True) for f in diff_files],
             indent=2,
@@ -106,17 +166,12 @@ class ArtifactService:
                 continue
             existing = existing_by_name.get(entry.name)
             if existing is not None:
-                dest = Path(existing.disk_path)
-                dest.write_bytes(entry.read_bytes())
-                await self._repo.update_size_bytes(existing.id, dest.stat().st_size)
-                collected.append(existing)
+                collected.append(await self._update_content(existing, job_id, entry.read_bytes()))
                 continue
 
             artifact_id = f"art-{uuid.uuid4().hex[:12]}"
             # Copy to central store
-            disk_dir = _ARTIFACTS_BASE / job_id
-            disk_dir.mkdir(parents=True, exist_ok=True)
-            dest = disk_dir / f"{artifact_id}-{entry.name}"
+            dest = _new_artifact_path(job_id, artifact_id, entry.name)
             dest.write_bytes(entry.read_bytes())
 
             mime = _guess_mime(entry.name)
@@ -150,10 +205,17 @@ class ArtifactService:
 
         On subsequent sessions, existing document artifacts with the same name are
         updated in-place rather than duplicated, so the artifacts panel shows one
-        entry per document across all handoffs.
+        entry per document across all handoffs. Explicit ``config_dir`` wins
+        over ``COPILOT_HOME``, followed by the default ``~/.copilot``.
         """
         collected: list[Artifact] = []
-        base = config_dir if config_dir is not None else (Path.home() / ".copilot")
+        base = (
+            config_dir
+            if config_dir is not None
+            else Path(os.environ["COPILOT_HOME"]).expanduser()
+            if os.environ.get("COPILOT_HOME")
+            else Path.home() / ".copilot"
+        )
         session_dir = base / "session-state" / sdk_session_id
         if not session_dir.is_dir():
             return collected
@@ -192,16 +254,11 @@ class ArtifactService:
                 # for this job with the same name, so sessions don't litter the panel.
                 existing_doc = existing_docs_by_name.get(relative_name)
                 if existing_doc is not None:
-                    dest = Path(existing_doc.disk_path)
-                    dest.write_bytes(entry.read_bytes())
-                    await self._repo.update_size_bytes(existing_doc.id, dest.stat().st_size)
-                    collected.append(existing_doc)
+                    collected.append(await self._update_content(existing_doc, job_id, entry.read_bytes()))
                     continue
 
                 artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-                disk_dir = _ARTIFACTS_BASE / job_id
-                disk_dir.mkdir(parents=True, exist_ok=True)
-                dest = disk_dir / f"{artifact_id}-{entry.name}"
+                dest = _new_artifact_path(job_id, artifact_id, entry.name)
                 dest.write_bytes(entry.read_bytes())
 
                 mime = _guess_mime(entry.name)
@@ -242,9 +299,7 @@ class ArtifactService:
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
         name = f"session-{session_number}-summary.json"
 
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(summary_json, encoding="utf-8")
         size_bytes = disk_path.stat().st_size
 
@@ -308,8 +363,9 @@ class ArtifactService:
 
         if existing_log is not None:
             # Append to existing unified log
+            source = resolve_artifact_path(existing_log, job_id=job_id)
             try:
-                log_contents = json.loads(Path(existing_log.disk_path).read_text(encoding="utf-8"))
+                log_contents = json.loads(source.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 log.error(
                     "session_log_read_failed",
@@ -341,9 +397,7 @@ class ArtifactService:
             if "original_task" not in log_contents and session_data.get("original_task"):
                 log_contents["original_task"] = session_data["original_task"]
 
-            disk_path = Path(existing_log.disk_path)
-            disk_path.write_text(json.dumps(log_contents, indent=2), encoding="utf-8")
-            await self._repo.update_size_bytes(existing_log.id, disk_path.stat().st_size)
+            await self._update_content(existing_log, job_id, json.dumps(log_contents, indent=2))
 
             log.info(
                 "session_log_updated",
@@ -365,8 +419,9 @@ class ArtifactService:
         merged_files: set[str] = set()
 
         for snap in old_snapshots:
+            source = resolve_artifact_path(snap, job_id=job_id)
             try:
-                snap_data = json.loads(Path(snap.disk_path).read_text(encoding="utf-8"))
+                snap_data = json.loads(source.read_text(encoding="utf-8"))
                 snap_num = snap_data.get("session_number", 0)
                 sessions.append(
                     {
@@ -410,9 +465,7 @@ class ArtifactService:
         name = f"{tag}-session-log.json"
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(json.dumps(log_contents, indent=2), encoding="utf-8")
 
         artifact = Artifact(
@@ -528,17 +581,12 @@ class ArtifactService:
         if existing is None:
             existing = await self._get_first_artifact_by_type(job_id, ArtifactType.document, name_suffix="agent.log")
         if existing is not None:
-            disk_path = Path(existing.disk_path)
-            disk_path.write_text(content, encoding="utf-8")
-            new_size = disk_path.stat().st_size
-            await self._repo.update_size_bytes(existing.id, new_size)
-            log.info("log_artifact_updated", job_id=job_id, name=existing.name, size=new_size)
+            await self._update_content(existing, job_id, content)
+            log.info("log_artifact_updated", job_id=job_id, name=existing.name, size=existing.size_bytes)
             return existing
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(content, encoding="utf-8")
 
         artifact = Artifact(
@@ -572,10 +620,7 @@ class ArtifactService:
 
         existing = await self._get_first_artifact_by_type(job_id, ArtifactType.telemetry_report)
         if existing is not None:
-            disk_path = Path(existing.disk_path)
-            disk_path.write_text(content, encoding="utf-8")
-            await self._repo.update_size_bytes(existing.id, disk_path.stat().st_size)
-            return existing
+            return await self._update_content(existing, job_id, content)
 
         import re as _re
 
@@ -585,9 +630,7 @@ class ArtifactService:
         name = f"{tag}-telemetry.json"
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(content, encoding="utf-8")
 
         artifact = Artifact(
@@ -624,10 +667,7 @@ class ArtifactService:
 
         existing = await self._get_first_artifact_by_type(job_id, ArtifactType.agent_plan)
         if existing is not None:
-            disk_path = Path(existing.disk_path)
-            disk_path.write_text(content, encoding="utf-8")
-            await self._repo.update_size_bytes(existing.id, disk_path.stat().st_size)
-            return existing
+            return await self._update_content(existing, job_id, content)
 
         import re as _re
 
@@ -637,9 +677,7 @@ class ArtifactService:
         name = f"{tag}-plan.json"
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(content, encoding="utf-8")
 
         artifact = Artifact(
@@ -676,10 +714,7 @@ class ArtifactService:
 
         existing = await self._get_first_artifact_by_type(job_id, ArtifactType.approval_history)
         if existing is not None:
-            disk_path = Path(existing.disk_path)
-            disk_path.write_text(content, encoding="utf-8")
-            await self._repo.update_size_bytes(existing.id, disk_path.stat().st_size)
-            return existing
+            return await self._update_content(existing, job_id, content)
 
         import re as _re
 
@@ -689,9 +724,7 @@ class ArtifactService:
         name = f"{tag}-approvals.json"
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        disk_dir = _ARTIFACTS_BASE / job_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        disk_path = disk_dir / f"{artifact_id}-{name}"
+        disk_path = _new_artifact_path(job_id, artifact_id, name)
         disk_path.write_text(content, encoding="utf-8")
 
         artifact = Artifact(

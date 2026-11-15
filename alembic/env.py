@@ -1,6 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import event, pool
 
 from alembic import context
 from backend.models.db import Base
@@ -50,11 +50,23 @@ def run_migrations_online() -> None:
     url = _resolve_url()
     connectable = sa_create_engine(url, poolclass=pool.NullPool)
 
+    if connectable.dialect.name == "sqlite":
+
+        @event.listens_for(connectable, "connect")
+        def _configure_sqlite(dbapi_connection, _record):
+            dbapi_connection.isolation_level = None
+            dbapi_connection.execute("PRAGMA busy_timeout=15000")
+
+        @event.listens_for(connectable, "begin")
+        def _begin_sqlite(connection):
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             render_as_batch=True,
+            transactional_ddl=True,
         )
 
         with context.begin_transaction():

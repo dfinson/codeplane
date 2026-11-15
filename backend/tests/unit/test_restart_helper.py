@@ -557,6 +557,50 @@ class TestStopOldProcess:
 # ---------------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    def test_replacement_replays_access_only_without_secret_arguments(self, tmp_path: Path) -> None:
+        data = _remote_profile(provider="cloudflare").to_dict()
+        data["passwordSource"] = {"kind": "not_required"}
+        data["authMode"] = "access_only"
+        profile = LaunchProfile.from_dict(data)
+        with (
+            patch.object(rh, "get_replacement_log_path", return_value=tmp_path / "replacement.log"),
+            patch.object(rh.subprocess, "Popen", return_value=MagicMock()) as spawn,
+        ):
+            rh._start_replacement(profile, tmp_path, nonce="n", request_id="access-mode")
+        args = spawn.call_args.args[0]
+        assert "--access-only" in args
+        assert "--password" not in args
+        assert "--no-password" not in args
+
+
+class TestRemoteHelperAuthentication:
+    def test_remote_password_login_stays_in_memory_and_uses_loopback(self, monkeypatch):
+        monkeypatch.setenv("CPL_PASSWORD", "test-password")
+        response = MagicMock(status=200, headers={"set-cookie": "cpl_session=test-session; HttpOnly; Path=/"})
+        response.__enter__.return_value = response
+        opener = MagicMock()
+        opener.open.return_value = response
+        try:
+            with patch.object(rh.urllib.request, "build_opener", return_value=opener):
+                rh._authorize_helper(_remote_profile())
+            request = opener.open.call_args.args[0]
+            assert request.full_url == "http://127.0.0.1:8080/api/auth/login"
+            assert rh._helper_session == "test-session"
+            with pytest.raises(rh.HelperAbort, match="destination_rejected"):
+                rh._http_request("GET", "http://127.0.0.1:3000/api/jobs")
+        finally:
+            rh._helper_session = None
+            rh._helper_auth_origin = None
+
+    def test_access_only_helper_refuses_missing_handoff_before_stopping(self):
+        data = _remote_profile(provider="cloudflare").to_dict()
+        data["authMode"] = "access_only"
+        data["passwordSource"] = {"kind": "not_required"}
+        with pytest.raises(rh.HelperAbort, match="authenticated_handoff"):
+            rh._authorize_helper(LaunchProfile.from_dict(data))
+
+
 class TestStartReplacement:
     def test_builds_exact_local_argv_and_env_with_nonce(self, tmp_path: Path) -> None:
         """Exact argv reproducibility (verified against ``python -m backend.main up --help``,
@@ -906,6 +950,7 @@ class TestCheckingRemotePhase:
 
         probe_mock = MagicMock()
         with (
+            patch.object(rh, "_authorize_helper"),
             patch.object(rh, "_list_running_jobs", return_value=[]),
             patch.object(rh, "_pause_jobs", return_value=[]),
             patch.object(rh, "_stop_old_process"),
@@ -983,6 +1028,7 @@ class TestCheckingRemotePhase:
             return fake_child
 
         with (
+            patch.object(rh, "_authorize_helper"),
             patch.object(rh, "_list_running_jobs", return_value=[]),
             patch.object(rh, "_pause_jobs", return_value=[]),
             patch.object(rh, "_stop_old_process"),
@@ -1005,3 +1051,124 @@ class TestCheckingRemotePhase:
         assert paths.started.exists()
         assert paths.ready.exists()
         assert not get_restart_lock_path().exists()
+class TestAccessOnlyHandoffHelper:
+    def test_redirect_never_receives_the_credential(self):
+        assert hasattr(rh, "authenticate_access_handoff"), "Introduce authenticate_access_handoff"
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen = []
+
+        class Redirect(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                seen.append((self.path, bool(self.headers.get("Cf-Access-Jwt-Assertion"))))
+                self.send_response(302)
+                self.send_header("Location", "/leak")
+                self.end_headers()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            rh._helper_access_token = "a.b.c"
+            rh._helper_access_profile = _remote_profile(port=server.server_port)
+            rh._helper_auth_origin = f"http://127.0.0.1:{server.server_port}"
+            with patch.object(rh, "profile_owns_listener", return_value=True):
+                status, _ = rh._http_request("GET", rh._helper_auth_origin + "/api/jobs?state=running")
+            assert status == 0
+            assert seen == [("/api/jobs?state=running", True)]
+        finally:
+            rh._clear_helper_auth()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    @pytest.mark.parametrize("credential", ["valid", "expired", "audience", "signature", "redirect", "identity"])
+    def test_authentication_precedes_adoption_and_mutation(self, tmp_path, monkeypatch, credential):
+        authenticate = getattr(rh, "authenticate_access_handoff", None)
+        assert callable(authenticate), "Introduce authenticate_access_handoff before Access-only adoption"
+        import json
+        import urllib.error
+        from types import SimpleNamespace
+
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        from backend.services.auth import cf_access
+        from backend.services.dev_restart import restart_protocol as protocol
+
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cf_access.configure(team="example", aud="audience", eager=False)
+        public_key = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+        monkeypatch.setattr(cf_access, "_jwks_keys", [public_key])
+        monkeypatch.setattr(cf_access, "_jwks_fetched_at", time.monotonic())
+        now = int(time.time())
+        payload = {"iss": "https://example.cloudflareaccess.com", "aud": "audience", "iat": now, "exp": now + 60}
+        if credential == "expired":
+            payload["exp"] = now - 1
+        elif credential == "audience":
+            payload["aud"] = "other"
+        elif credential == "signature":
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        token = jwt.encode(payload, key, algorithm="RS256")
+        profile = _remote_profile(
+            provider="cloudflare", password_source=SecretSource.not_required(),
+            tunnel_origin="https://access.example.test", auth_mode="access_only",
+        )
+        request = rh.RestartRequest("handoff", tmp_path, profile,
+                                    RestartTimeouts(response_grace_seconds=0, pause_wait_seconds=0), "nonce")
+        paths = get_request_paths("handoff")
+        frame = {
+            "version": 1, "kind": "credential", "requestId": "handoff",
+            "serverPid": profile.started_pid, "serverProcessTime": profile.started_process_time,
+            "origin": profile.tunnel_origin, "jwt": token,
+        }
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, protocol.encode_handoff_frame(frame))
+        os.write(write_fd, protocol.encode_handoff_frame({"version": 1, "kind": "commit", "requestId": "handoff"}))
+        os.close(write_fd)
+        seen = []
+
+        def verify(req, timeout):
+            seen.append(req.full_url)
+            assert req.full_url.startswith("http://127.0.0.1:8080/api/jobs")
+            if len(seen) == 1:
+                assert not paths.started.exists()
+            if credential == "redirect":
+                raise urllib.error.HTTPError(
+                    req.full_url, 302, "redirect", {"Location": "https://elsewhere.test"}, None
+                )
+            valid = cf_access.verify_token(req.get_header("Cf-access-jwt-assertion"))
+            response = MagicMock(status=200 if valid else 401)
+            response.read.return_value = json.dumps({"items": [], "hasMore": False}).encode()
+            response.__enter__.return_value = response
+            return response
+
+        try:
+            with (
+                patch.object(rh, "_claim_request", return_value=request),
+                patch.object(rh, "profile_owns_listener", return_value=credential != "identity"),
+                patch.object(rh.sys, "stdin", SimpleNamespace(fileno=lambda: read_fd, close=lambda: os.close(read_fd))),
+                patch.object(rh.urllib.request, "build_opener", return_value=SimpleNamespace(open=verify)),
+                patch.object(rh, "_stop_old_process") as stop,
+                patch.object(rh, "_start_replacement", return_value=SimpleNamespace(pid=999)),
+                patch.object(rh, "_wait_for_ready", return_value=999),
+                patch.object(rh, "load_active_profile", return_value=profile),
+                patch.object(rh, "probe_remote_origin"),
+            ):
+                result = rh._run_claimed(paths.pending, paths, "handoff", os.getpid(), 1.0)
+            assert result == (0 if credential == "valid" else 1)
+            assert stop.call_count == (1 if credential == "valid" else 0)
+            if credential != "valid":
+                assert not paths.started.exists()
+            assert rh._helper_access_token is None
+            assert token not in "".join(p.read_text() for p in tmp_path.rglob("*.json"))
+            if credential == "redirect":
+                assert len(seen) == 1
+        finally:
+            cf_access.reset()
+            with contextlib.suppress(OSError):
+                os.close(read_fd)

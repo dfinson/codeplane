@@ -161,6 +161,7 @@ async def terminal_ws(ws: WebSocket) -> None:
         client_host=client_host,
         cookies=ws.cookies,
         cf_access_jwt=ws.headers.get("cf-access-jwt-assertion"),
+        policy=getattr(ws.app.state, "auth_policy", None),
     ):
         await ws.close(code=1008, reason="Authentication required")
         return

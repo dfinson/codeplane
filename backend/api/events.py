@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.responses import StreamingResponse
 
@@ -34,6 +34,10 @@ async def stream_events(
     Optional ``job_id`` query param scopes the stream to a single job.
     ``Last-Event-ID`` (header or query) enables reconnection replay.
     """
+    from backend.services.auth.middleware import is_request_authenticated
+
+    if not is_request_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
     # Also check the standard SSE header
     header_last_id = request.headers.get("Last-Event-ID") or last_event_id
 

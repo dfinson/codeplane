@@ -67,108 +67,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .diff-line.hunk { background: #1e1e3e; color: #569cd6; font-style: italic; padding: 2px 0; }
 .diff-line.hunk .code { padding-left: 8px; }
 
-/* Gutter coverage dots */
-.cov-dot { position: absolute; left: 2px; top: 6px; width: 7px; height: 7px; border-radius: 50%; cursor: pointer; z-index: 5; }
-.cov-dot.covered { background: #4ec9b0; }
-.cov-dot.uncovered { background: #f14c4c; }
-.cov-dot.lint { background: #cca700; }
-.cov-dot.hidden { display: none; }
-
-/* Tooltip */
-.tip { position: fixed; background: #1e1e1e; border: 1px solid #569cd6; border-radius: 4px; padding: 5px 8px; font-size: 11px; color: #d4d4d4; pointer-events: none; z-index: 1000; max-width: 300px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
-
-/* Coverage popover */
-.popover { position: absolute; left: 16px; top: 18px; background: #252526; border: 1px solid #569cd6; border-radius: 5px; padding: 8px 10px; font-size: 11px; z-index: 100; min-width: 260px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.6); }
-.popover .pop-title { color: #569cd6; font-weight: 500; margin-bottom: 6px; }
-.popover .test-item { padding: 4px 0; border-bottom: 1px solid #2a2a3a; display: flex; align-items: center; gap: 6px; }
-.popover .test-item:last-child { border-bottom: none; }
-.popover .test-status { font-size: 11px; flex-shrink: 0; width: 14px; text-align: center; }
-.popover .test-status.pass { color: #4ec9b0; }
-.popover .test-status.fail { color: #f48771; }
-.popover .test-status.notrun { color: #808080; }
-.popover .test-info { flex: 1; overflow: hidden; }
-.popover .test-name { color: #4ec9b0; display: block; }
-.popover .test-name.fail { color: #f48771; }
-.popover .test-name.notrun { color: #808080; }
-.popover .test-file { color: #6a6a6a; font-size: 10px; display: block; }
-.popover .test-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.popover .act-btn { font-size: 9px; color: #569cd6; border: 1px solid #3a4a6a; border-radius: 3px; padding: 2px 5px; cursor: pointer; white-space: nowrap; }
-.popover .act-btn:hover { background: #2a3a5a; }
-
 /* Motivation — standalone view zone */
 .motivation-zone { padding: 5px 12px 5px 68px; background: rgba(156, 220, 254, 0.03); border-top: 1px solid #2a2a3a; border-bottom: 1px solid #2a2a3a; }
 .motivation-zone.hidden { display: none; }
 .motivation-zone .mot-label { font-size: 9px; color: #569cd6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
 .motivation-zone .mot-text { font-size: 11px; color: #9cdcfe; font-style: italic; line-height: 1.4; }
 
-/* Impact zone (blast radius) */
-.impact-zone { border-top: 1px solid #2a2a4a; border-bottom: 1px solid #2a2a4a; background: #1b1b28; margin: 0; }
-.impact-zone.hidden { display: none; }
-
-.impact-header { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 68px; cursor: pointer; user-select: none; }
-.impact-header:hover { background: rgba(86, 156, 214, 0.06); }
-.impact-header .chevron { color: #569cd6; font-size: 9px; transition: transform 0.15s; width: 10px; }
-.impact-header .chevron.open { transform: rotate(90deg); }
-.impact-header .impact-label { font-size: 9px; color: #569cd6; text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 5px; border: 1px solid #3a4a6a; border-radius: 3px; }
-.impact-header .impact-summary { font-size: 11px; color: #a0a0a0; }
-.impact-header .pills { display: flex; gap: 4px; margin-left: auto; }
-.impact-header .pill { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
-.pill.fail { background: #3d1515; color: #f48771; }
-.pill.new-sym { background: #12203a; color: #569cd6; }
-
-.impact-body { display: none; padding: 0; }
-.impact-body.open { display: block; }
-
-/* Caller card */
-.caller-card { border-top: 1px solid #252535; padding: 0; margin: 0; }
-.caller-card:first-child { border-top: none; }
-
-.caller-header { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 88px; cursor: pointer; }
-.caller-header:hover { background: rgba(255,255,255,0.02); }
-.caller-header .caller-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.caller-header .caller-dot.covered { background: #4ec9b0; }
-.caller-header .caller-dot.uncovered { background: #f14c4c; }
-.caller-header .caller-dot.fail { background: #f14c4c; box-shadow: 0 0 3px #f48771; }
-.caller-header .caller-dot.hidden, .source-block .src-dot.hidden { display: none; }
-.caller-header .caller-name { font-size: 12px; color: #dcdcaa; font-family: 'Cascadia Code', monospace; }
-.caller-header .caller-loc { font-size: 10px; color: #6a6a6a; }
-.caller-header .peek-btn { margin-left: auto; font-size: 10px; color: #569cd6; opacity: 0; padding: 2px 6px; border: 1px solid #3a4a6a; border-radius: 3px; cursor: pointer; transition: opacity 0.15s; }
-.caller-header:hover .peek-btn { opacity: 1; }
-.caller-header .expand-chevron { color: #555; font-size: 9px; transition: transform 0.15s; }
-.caller-header .expand-chevron.open { transform: rotate(90deg); color: #808080; }
-
-/* Caller inline source preview */
-.caller-source { display: none; margin: 0; padding: 2px 0 6px 88px; }
-.caller-source.open { display: block; }
-.source-block { background: #1a1a1a; border: 1px solid #2a2a3a; border-radius: 4px; overflow: visible; font-family: 'Cascadia Code', monospace; font-size: 11px; line-height: 17px; }
-.source-block .src-line { display: flex; padding: 0 8px; position: relative; }
-.source-block .src-line.highlight { background: rgba(86, 156, 214, 0.12); }
-.source-block .src-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; margin-right: 4px; cursor: pointer; z-index: 5; }
-.source-block .src-dot.covered { background: #4ec9b0; }
-.source-block .src-dot.uncovered { background: #f14c4c; }
-.source-block .src-ln { width: 32px; color: #5a5a5a; text-align: right; padding-right: 8px; user-select: none; flex-shrink: 0; }
-.source-block .src-code { color: #d4d4d4; white-space: pre; }
-
-/* Test failure inline */
-.test-failure { background: #1f0f0f; border-left: 3px solid #f48771; padding: 4px 8px; margin: 2px 12px 6px 88px; font-size: 10px; font-family: 'Cascadia Code', monospace; }
-.test-failure .tf-name { color: #f48771; }
-.test-failure .tf-error { color: #888; margin-top: 2px; }
-
-/* Peek modal */
-.peek-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 500; display: none; align-items: center; justify-content: center; }
-.peek-modal-overlay.open { display: flex; }
-.peek-modal { background: #1e1e1e; border: 1px solid #569cd6; border-radius: 6px; width: 700px; max-height: 500px; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.8); }
-.peek-modal-header { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #3c3c3c; gap: 8px; }
-.peek-modal-header .pm-file { font-size: 12px; color: #569cd6; }
-.peek-modal-header .pm-goto { font-size: 11px; color: #569cd6; border: 1px solid #3a4a6a; border-radius: 3px; padding: 3px 8px; cursor: pointer; text-decoration: none; transition: background 0.15s; }
-.peek-modal-header .pm-goto:hover { background: #2a3a5a; }
-.peek-modal-header .pm-close { margin-left: auto; color: #808080; cursor: pointer; font-size: 16px; padding: 2px 6px; }
-.peek-modal-header .pm-close:hover { color: #d4d4d4; }
-.peek-modal-body { flex: 1; overflow-y: auto; font-family: 'Cascadia Code', monospace; font-size: 12px; line-height: 19px; padding: 4px 0; }
-.peek-modal-body .src-line { display: flex; padding: 0 12px; }
-.peek-modal-body .src-line.highlight { background: rgba(86, 156, 214, 0.15); }
-.peek-modal-body .src-ln { width: 40px; color: #5a5a5a; text-align: right; padding-right: 12px; user-select: none; flex-shrink: 0; }
-.peek-modal-body .src-code { color: #d4d4d4; white-space: pre; }
 </style>
 </head>
 <body>
@@ -216,14 +120,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <div class="diff-panel">
       <!-- Toolbar -->
       <div class="toolbar">
-        <div class="toggle-group" onclick="toggleLayer('blast')">
-          <div class="toggle-switch on" id="sw-blast"></div>
-          <span>Impact</span>
-        </div>
-        <div class="toggle-group" onclick="toggleLayer('coverage')">
-          <div class="toggle-switch on" id="sw-coverage"></div>
-          <span>Coverage</span>
-        </div>
+
+
         <div class="toggle-group" onclick="toggleLayer('motivation')">
           <div class="toggle-switch on" id="sw-motivation"></div>
           <span>Motivation</span>
@@ -259,7 +157,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         </div>
 
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">42</span></div>
           <span class="prefix">+</span>
           <span class="code">    def validate_config(self, config: dict, *, schema: str | None = None, strict: bool = False) -> bool:</span>
@@ -283,26 +181,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         </div>
 
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">44</span></div>
           <span class="prefix">+</span>
           <span class="code">        if schema is not None:</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">45</span></div>
           <span class="prefix">+</span>
           <span class="code">            return self._validate_with_schema(config, schema, strict=strict)</span>
         </div>
 
         <div class="diff-line add">
-          <span class="cov-dot covered" data-vis="coverage" data-tip="Covered by 2 test(s)" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:23","status":"pass"},{"name":"test_validate_empty","file":"tests/test_config.py:31","status":"pass"}]'></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">46</span></div>
           <span class="prefix">+</span>
           <span class="code">        if not isinstance(config, dict):</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot covered" data-vis="coverage" data-tip="Covered by 1 test(s)" data-tests='[{"name":"test_validate_non_dict","file":"tests/test_config.py:45","status":"pass"}]'></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">47</span></div>
           <span class="prefix">+</span>
           <span class="code">            return False</span>
@@ -315,13 +213,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         </div>
 
         <div class="diff-line add">
-          <span class="cov-dot covered" data-vis="coverage" data-tip="Covered by 3 test(s)" data-tests='[{"name":"test_strict_rejects_unknown","file":"tests/test_config.py:52","status":"pass"},{"name":"test_strict_allows_known","file":"tests/test_config.py:60","status":"pass"},{"name":"test_strict_mode_edge","file":"tests/test_config.py:68","status":"fail"}]'></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">49</span></div>
           <span class="prefix">+</span>
           <span class="code">            if strict and key not in self._allowed_keys:</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot covered" data-vis="coverage" data-tip="Covered by 1 test(s)" data-tests='[{"name":"test_strict_rejects_unknown","file":"tests/test_config.py:52","status":"pass"}]'></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">50</span></div>
           <span class="prefix">+</span>
           <span class="code">                raise ConfigError(f"Unknown key: {key}")</span>
@@ -339,7 +237,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         </div>
 
         <div class="diff-line add">
-          <span class="cov-dot covered" data-vis="coverage" data-tip="Covered by 2 test(s)" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:23","status":"pass"},{"name":"test_strict_allows_known","file":"tests/test_config.py:60","status":"notrun"}]'></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">53</span></div>
           <span class="prefix">+</span>
           <span class="code">        return True</span>
@@ -351,119 +249,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
           <div class="mot-text">The validate_config signature in backend/services/config_validator.py lacked a schema dispatch path, causing environment_service.py:34 to pass schema names that were silently ignored. Adding the keyword-only schema parameter and gating on it enables per-environment validation while preserving backward compatibility for callers that omit the argument.</div>
         </div>
 
-        <!-- Impact zone: validate_config -->
-        <div class="impact-zone" data-vis="blast">
-          <div class="impact-header" onclick="toggleImpact(this)">
-            <span class="chevron">▶</span>
-            <span class="impact-label">Impact</span>
-            <span class="impact-summary">5 callers affected by signature change</span>
-            <span class="pills">
-              <span class="pill fail">1 FAIL</span>
-            </span>
-          </div>
-          <div class="impact-body">
 
-            <!-- Caller 1: failing test -->
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot fail"></span>
-                <span class="caller-name">test_validate_strict_mode</span>
-                <span class="caller-loc">tests/test_config.py:72</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('tests/test_config.py', 70, 78, 72)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">70</span><span class="src-code">def test_validate_strict_mode(validator):</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">71</span><span class="src-code">    cfg = {"host": "localhost", "port": 8080}</span></div>
-                  <div class="src-line highlight"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">72</span><span class="src-code">    result = validator.validate_config(cfg, strict=True)</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">73</span><span class="src-code">    assert result is True</span></div>
-                </div>
-              </div>
-              <div class="test-failure">
-                <div class="tf-name">✗ test_validate_strict_mode</div>
-                <div class="tf-error">TypeError: validate_config() got unexpected keyword argument 'strict' as positional</div>
-              </div>
-            </div>
 
-            <!-- Caller 2: uncovered -->
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot uncovered"></span>
-                <span class="caller-name">load_environment</span>
-                <span class="caller-loc">services/environment_service.py:34</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('services/environment_service.py', 31, 39, 34)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">32</span><span class="src-code">    def load_environment(self, env_name: str) -> Config:</span></div>
-                  <div class="src-line"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">33</span><span class="src-code">        raw = self._read_env_file(env_name)</span></div>
-                  <div class="src-line highlight"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">34</span><span class="src-code">        self.validator.validate_config(raw, schema=env_name)</span></div>
-                  <div class="src-line"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">35</span><span class="src-code">        return Config.from_dict(raw)</span></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Caller 3: covered -->
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot covered"></span>
-                <span class="caller-name">apply_overrides</span>
-                <span class="caller-loc">services/config_loader.py:88</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('services/config_loader.py', 85, 93, 88)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 2 tests" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"},{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">86</span><span class="src-code">    def apply_overrides(self, base: dict, overrides: dict) -> dict:</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 2 tests" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"},{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">87</span><span class="src-code">        merged = {**base, **overrides}</span></div>
-                  <div class="src-line highlight"><span class="src-dot covered" data-tip="Covered by 2 tests" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"},{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">88</span><span class="src-code">        if not self._validator.validate_config(merged):</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 2 tests" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"},{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">89</span><span class="src-code">            raise ConfigError("Invalid merged config")</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 2 tests" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"},{"name":"test_validate_strict_mode","file":"tests/test_config.py:70","status":"fail"}]'></span><span class="src-ln">90</span><span class="src-code">        return merged</span></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Caller 4: covered -->
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot covered"></span>
-                <span class="caller-name">test_validate_basic</span>
-                <span class="caller-loc">tests/test_config.py:23</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('tests/test_config.py', 21, 27, 23)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"}]'></span><span class="src-ln">22</span><span class="src-code">def test_validate_basic(validator):</span></div>
-                  <div class="src-line highlight"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_validate_basic","file":"tests/test_config.py:22","status":"pass"}]'></span><span class="src-ln">23</span><span class="src-code">    assert validator.validate_config({"key": "val"})</span></div>
-                  <div class="src-line"><span class="src-ln">24</span><span class="src-code"></span></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Caller 5: covered -->
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot covered"></span>
-                <span class="caller-name">on_config_reload</span>
-                <span class="caller-loc">services/hot_reload.py:15</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('services/hot_reload.py', 13, 19, 15)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_hot_reload","file":"tests/test_hot_reload.py:8","status":"pass"}]'></span><span class="src-ln">13</span><span class="src-code">def on_config_reload(self, new_cfg: dict) -> None:</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_hot_reload","file":"tests/test_hot_reload.py:8","status":"pass"}]'></span><span class="src-ln">14</span><span class="src-code">    is_prod = self._env == "production"</span></div>
-                  <div class="src-line highlight"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_hot_reload","file":"tests/test_hot_reload.py:8","status":"pass"}]'></span><span class="src-ln">15</span><span class="src-code">    validator.validate_config(new_cfg, strict=is_prod)</span></div>
-                  <div class="src-line"><span class="src-dot covered" data-tip="Covered by 1 test" data-tests='[{"name":"test_hot_reload","file":"tests/test_hot_reload.py:8","status":"pass"}]'></span><span class="src-ln">16</span><span class="src-code">    self._cfg = new_cfg</span></div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
 
         <!-- Spacing between symbols -->
         <div class="diff-line ctx">
@@ -474,37 +261,37 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
         <!-- New function -->
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">55</span></div>
           <span class="prefix">+</span>
           <span class="code">    def _validate_with_schema(self, config: dict, schema: str, *, strict: bool = False) -> bool:</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot lint" data-vis="coverage" data-tip="Lint: D401 First line should not start with 'Schema'"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">56</span></div>
           <span class="prefix">+</span>
           <span class="code">        """Schema-based validation using registered schema definitions."""</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">57</span></div>
           <span class="prefix">+</span>
           <span class="code">        schema_def = self._schemas.get(schema)</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">58</span></div>
           <span class="prefix">+</span>
           <span class="code">        if schema_def is None:</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">59</span></div>
           <span class="prefix">+</span>
           <span class="code">            raise ConfigError(f"Unknown schema: {schema}")</span>
         </div>
         <div class="diff-line add">
-          <span class="cov-dot uncovered" data-vis="coverage" data-tip="Not covered by any test"></span>
+
           <div class="gutter"><span class="ln-old"></span><span class="ln-new">60</span></div>
           <span class="prefix">+</span>
           <span class="code">        return schema_def.validate(config, strict=strict)</span>
@@ -516,35 +303,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
           <div class="mot-text">The self._schemas dict was only accessible inside validate_config's loop body, preventing schema-based validation from being invoked before the isinstance check. Factoring the dispatch into a dedicated helper lets validate_config short-circuit early when schema is provided, keeping the existing non-schema path untouched.</div>
         </div>
 
-        <!-- Impact zone: _validate_with_schema -->
-        <div class="impact-zone" data-vis="blast">
-          <div class="impact-header" onclick="toggleImpact(this)">
-            <span class="chevron">▶</span>
-            <span class="impact-label">Impact</span>
-            <span class="impact-summary">new function · 1 caller</span>
-            <span class="pills">
-              <span class="pill new-sym">new</span>
-            </span>
-          </div>
-          <div class="impact-body">
-            <div class="caller-card">
-              <div class="caller-header" onclick="toggleCaller(this)">
-                <span class="expand-chevron">▶</span>
-                <span class="caller-dot uncovered"></span>
-                <span class="caller-name">validate_config</span>
-                <span class="caller-loc">config_validator.py:45</span>
-                <span class="peek-btn" onclick="event.stopPropagation(); openPeek('config_validator.py', 43, 47, 45)">Peek</span>
-              </div>
-              <div class="caller-source">
-                <div class="source-block">
-                  <div class="src-line"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">44</span><span class="src-code">        if schema is not None:</span></div>
-                  <div class="src-line highlight"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">45</span><span class="src-code">            return self._validate_with_schema(config, schema, strict=strict)</span></div>
-                  <div class="src-line"><span class="src-dot uncovered" data-tip="Not covered by tests"></span><span class="src-ln">46</span><span class="src-code">        if not isinstance(config, dict):</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+
+
 
         <!-- Trailing context -->
         <div class="diff-line ctx">
@@ -568,398 +328,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
 </div>
 
-<!-- Tooltip -->
-<div class="tip" id="tip"></div>
-
-<!-- Peek modal -->
-<div class="peek-modal-overlay" id="peek-overlay" onclick="closePeek()">
-  <div class="peek-modal" onclick="event.stopPropagation()">
-    <div class="peek-modal-header">
-      <span class="pm-file" id="peek-file"></span>
-      <span class="pm-goto" id="peek-goto" onclick="gotoSource()">Go to source ↗</span>
-      <span class="pm-close" onclick="closePeek()">×</span>
-    </div>
-    <div class="peek-modal-body" id="peek-body"></div>
-  </div>
-</div>
 
 <script>
-(function() {
-  const tip = document.getElementById('tip');
-  let activePopover = null;
-
-  // --- Toggle switches ---
-  window.toggleLayer = function(layer) {
-    const sw = document.getElementById('sw-' + layer);
-    const isOn = sw.classList.toggle('on');
-    document.querySelectorAll('[data-vis="' + layer + '"]').forEach(el => {
-      el.classList.toggle('hidden', !isOn);
-    });
-    if (layer === 'coverage') {
-      document.querySelectorAll('.caller-dot, .src-dot').forEach(el => {
-        el.classList.toggle('hidden', !isOn);
-      });
-    }
-  };
-
-  // --- Impact zone expand/collapse ---
-  window.toggleImpact = function(header) {
-    const body = header.nextElementSibling;
-    const chevron = header.querySelector('.chevron');
-    const isOpen = body.classList.toggle('open');
-    chevron.classList.toggle('open', isOpen);
-  };
-
-  // --- Caller card expand/collapse ---
-  window.toggleCaller = function(header) {
-    const source = header.nextElementSibling;
-    const chevron = header.querySelector('.expand-chevron');
-    if (source && source.classList.contains('caller-source')) {
-      const isOpen = source.classList.toggle('open');
-      chevron.classList.toggle('open', isOpen);
-    }
-  };
-
-  // --- Peek modal ---
-  // Simulated source data (in real app, fetched from backend)
-  const fakeSources = {
-    'tests/test_config.py': [
-      'import pytest',
-      'from backend.services.config_validator import ConfigValidator, ConfigError',
-      '',
-      '',
-      '@pytest.fixture',
-      'def validator():',
-      '    return ConfigValidator()',
-      '',
-      '',
-      '# ... earlier tests ...',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      'def test_validate_basic(validator):',
-      '    assert validator.validate_config({"key": "val"})',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      'def test_validate_strict_mode(validator):',
-      '    cfg = {"host": "localhost", "port": 8080}',
-      '    result = validator.validate_config(cfg, strict=True)',
-      '    assert result is True',
-      '',
-      '',
-      'def test_strict_allows_extra_when_not_strict(validator):',
-      '    cfg = {"host": "localhost", "unknown_key": True}',
-      '    assert validator.validate_config(cfg) is True',
-    ],
-    'services/environment_service.py': [
-      'from typing import Optional',
-      'from .config_validator import ConfigValidator',
-      'from ..models import Config',
-      '',
-      '',
-      'class EnvironmentService:',
-      '    def __init__(self, validator: ConfigValidator):',
-      '        self.validator = validator',
-      '',
-      '    def _read_env_file(self, env_name: str) -> dict:',
-      '        """Read env config from disk."""',
-      '        ...',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '    def load_environment(self, env_name: str) -> Config:',
-      '        raw = self._read_env_file(env_name)',
-      '        self.validator.validate_config(raw, schema=env_name)',
-      '        return Config.from_dict(raw)',
-      '',
-      '    def reload(self) -> None:',
-      '        ...',
-    ],
-    'services/config_loader.py': [
-      '# ... earlier code ...',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '    def apply_overrides(self, base: dict, overrides: dict) -> dict:',
-      '        """Merge base config with overrides, then validate."""',
-      '        merged = {**base, **overrides}',
-      '        if not self._validator.validate_config(merged):',
-      '            raise ConfigError("Invalid merged config")',
-      '        return merged',
-    ],
-    'services/hot_reload.py': [
-      '# ... earlier code ...',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '    def on_config_reload(self, new_cfg: dict) -> None:',
-      '        is_prod = self._env == "production"',
-      '        validator.validate_config(new_cfg, strict=is_prod)',
-      '        self._cfg = new_cfg',
-      '        self._notify_listeners()',
-    ],
-    'config_validator.py': [
-      '    """Validates configuration dictionaries against schema."""',
-      '',
-      '    def validate_config(self, config: dict, *, schema: str | None = None, strict: bool = False) -> bool:',
-      '        """Validate config dict, optionally with strict mode."""',
-      '        if schema is not None:',
-      '            return self._validate_with_schema(config, schema, strict=strict)',
-      '        if not isinstance(config, dict):',
-      '            return False',
-      '        for key, value in config.items():',
-      '            if strict and key not in self._allowed_keys:',
-      '                raise ConfigError(f"Unknown key: {key}")',
-      '            if not self._validate_value(key, value):',
-      '                return False',
-      '        return True',
-    ],
-  };
-
-  window.openPeek = function(file, startLine, endLine, highlightLine) {
-    const overlay = document.getElementById('peek-overlay');
-    const body = document.getElementById('peek-body');
-    const fileLabel = document.getElementById('peek-file');
-
-    fileLabel.textContent = file + ':' + highlightLine;
-
-    const lines = fakeSources[file] || ['// source not available'];
-    const contextBefore = 5;
-    const contextAfter = 8;
-    const from = Math.max(0, highlightLine - 1 - contextBefore);
-    const to = Math.min(lines.length, highlightLine - 1 + contextAfter);
-
-    let html = '';
-    for (let i = from; i < to; i++) {
-      const cls = (i === highlightLine - 1) ? ' highlight' : '';
-      html += '<div class="src-line' + cls + '"><span class="src-ln">' + (i + 1) + '</span><span class="src-code">' + escapeHtml(lines[i]) + '</span></div>';
-    }
-    body.innerHTML = html;
-    overlay.classList.add('open');
-  };
-
-  window.closePeek = function() {
-    document.getElementById('peek-overlay').classList.remove('open');
-  };
-
-  window.gotoSource = function() {
-    // In real app: opens the file at that line in the editor
-    const file = document.getElementById('peek-file').textContent;
-    alert('Navigate to: ' + file + '\n\n(In the real UI this opens the file in the editor at the highlighted line)');
-    closePeek();
-  };
-
-  function escapeHtml(str) {
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  // --- Gutter dot tooltip (cov-dot AND src-dot) ---
-  document.addEventListener('mouseover', (e) => {
-    const dot = e.target.closest('.cov-dot, .src-dot');
-    if (!dot || dot.classList.contains('hidden')) return;
-    const tipText = dot.dataset.tip;
-    if (!tipText) return;
-    tip.textContent = tipText;
-    tip.style.display = 'block';
-    const r = dot.getBoundingClientRect();
-    tip.style.left = (r.right + 8) + 'px';
-    tip.style.top = (r.top - 2) + 'px';
+function toggleLayer(layer) {
+  const enabled = document.getElementById('sw-' + layer).classList.toggle('on');
+  document.querySelectorAll('[data-vis="' + layer + '"]').forEach(element => {
+    element.classList.toggle('hidden', !enabled);
   });
-
-  document.addEventListener('mouseout', (e) => {
-    if (e.target.closest('.cov-dot, .src-dot')) tip.style.display = 'none';
-  });
-
-  // --- Covered dot click → popover ---
-  document.addEventListener('click', (e) => {
-    // Handle popover action buttons
-    const actBtn = e.target.closest('.act-btn');
-    if (actBtn) {
-      e.stopPropagation();
-      const file = actBtn.dataset.file;
-      const line = parseInt(actBtn.dataset.line || '1');
-      if (actBtn.dataset.action === 'peek') {
-        openPeek(file, line - 3, line + 5, line);
-      } else if (actBtn.dataset.action === 'goto') {
-        alert('Navigate to: ' + file + ':' + line + '\n\n(Opens the test file in the editor)');
-      }
-      return;
-    }
-
-    if (activePopover) { activePopover.remove(); activePopover = null; }
-    const dot = e.target.closest('.cov-dot.covered, .src-dot.covered');
-    if (!dot || dot.classList.contains('hidden')) return;
-    const tests = JSON.parse(dot.dataset.tests || '[]');
-    if (!tests.length) return;
-    tip.style.display = 'none';
-    const pop = document.createElement('div');
-    pop.className = 'popover';
-    pop.style.display = 'block';
-    pop.innerHTML = '<div class="pop-title">Covering tests:</div>' +
-      tests.map(t => {
-        const parts = t.file.split(':');
-        const fileName = parts[0];
-        const lineNum = parts[1] || '1';
-        const status = t.status || 'pass';
-        const statusIcon = status === 'pass' ? '✓' : status === 'fail' ? '✗' : '○';
-        const statusTitle = status === 'pass' ? 'Passed' : status === 'fail' ? 'Failed' : 'Not run';
-        const nameClass = status === 'fail' ? ' fail' : status === 'notrun' ? ' notrun' : '';
-        return '<div class="test-item">' +
-          '<span class="test-status ' + status + '" title="' + statusTitle + '">' + statusIcon + '</span>' +
-          '<div class="test-info"><span class="test-name' + nameClass + '">' + t.name + '</span><span class="test-file">' + t.file + '</span></div>' +
-          '<div class="test-actions">' +
-          '<span class="act-btn" data-action="peek" data-file="' + fileName + '" data-line="' + lineNum + '">Peek</span>' +
-          '<span class="act-btn" title="Open in editor" data-action="goto" data-file="' + fileName + '" data-line="' + lineNum + '">↗</span>' +
-          '</div></div>';
-      }).join('');
-    const line = dot.closest('.diff-line') || dot.closest('.src-line');
-    line.appendChild(pop);
-    activePopover = pop;
-    e.stopPropagation();
-  });
-
-  // ESC to close peek
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePeek();
-  });
-})();
+}
 </script>
 </body>
 </html>

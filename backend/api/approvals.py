@@ -23,6 +23,8 @@ from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.recipe.recipe_service import RecipeService
 from backend.services.runtime import RuntimeService
+from backend.services.task_execution_service import parse_spawn_action
+from backend.services.tracker_write_service import TrackerWriteService
 
 if TYPE_CHECKING:
     from backend.models.domain import Approval
@@ -63,6 +65,7 @@ async def resolve_approval(
     recipe_service: FromDishka[RecipeService],
     runtime_service: FromDishka[RuntimeService],
     session: FromDishka[AsyncSession],
+    tracker_write_service: FromDishka[TrackerWriteService],
 ) -> ApprovalResponse:
     """Approve or reject a pending approval request.
 
@@ -75,8 +78,10 @@ async def resolve_approval(
     """
     approval = await approval_service.resolve(approval_id, body.resolution, notes=body.notes)
 
-    if approval.resolution == "approved" and (approval.proposed_action or "").startswith("spawn_task:"):
-        task_link_id = (approval.proposed_action or "").removeprefix("spawn_task:")
+    tracker_write_service.notify_approval_resolved(approval)
+    spawn_action = parse_spawn_action(approval.proposed_action)
+    if approval.resolution == "approved" and spawn_action is not None:
+        task_link_id = spawn_action["taskLinkId"]
         job = await recipe_service.spawn_approved_task_link(task_link_id, parent_job_id=approval.job_id)
         if job is not None:
             await session.commit()
@@ -109,12 +114,15 @@ async def send_message(
     from datetime import UTC, datetime
 
     # Delegate to IngestService for imported sessions
-    job = await job_service.get_job(job_id)
-    if job and job.source != "managed":
-        await ingest.send_operator_message(job_id, body.content)
-        return SendMessageResponse(seq=0, timestamp=datetime.now(UTC))
+    from backend.services.completers.copilot_steer import NativeDeliveryError
 
-    sent = await runtime_service.send_message(job_id, body.content)
+    try:
+        sent = await runtime_service.send_operator_message(job_id, body.content)
+    except NativeDeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "delivery_unknown" if exc.uncertain else "delivery_failed", "message": str(exc)},
+        ) from exc
     if not sent:
         raise HTTPException(
             status_code=409,

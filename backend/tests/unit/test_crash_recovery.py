@@ -61,6 +61,17 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
     await engine.dispose()
 
 
+class TestRuntimeContract:
+    async def test_recovered_hard_gate_is_not_bulk_trusted(self, session_factory):
+        initial = ApprovalService(session_factory)
+        approval = await initial.create_request("job-1", "Fixture hard gate", requires_explicit_approval=True)
+        recovered = ApprovalService(session_factory)
+        await recovered.recover_pending_approvals()
+        count = await recovered.trust_job("job-1")
+        assert count == 0
+        assert (await recovered.get(approval.id)).resolution is None
+
+
 class TestApprovalRecovery:
     """Tests that pending approvals are recovered after server restart."""
 

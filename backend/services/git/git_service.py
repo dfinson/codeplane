@@ -62,7 +62,7 @@ class GitService:
                 env=env,
             )
         except FileNotFoundError as exc:
-            missing_cwd = exc.filename == str(cwd_path)
+            missing_cwd = exc.filename is not None and Path(exc.filename) == cwd_path
             if not missing_cwd and exc.filename is None and not cwd_path.exists():
                 missing_cwd = True
             if missing_cwd:
@@ -334,8 +334,24 @@ class GitService:
         Raises:
             GitError: If git operations fail.
         """
+        self._validate_worktree_name(job_id)
         branch_name = branch or f"cpl/{job_id}"
         return await self._setup_secondary_worktree(repo_path, job_id, base_ref, branch_name)
+
+    @staticmethod
+    def _validate_worktree_name(name: str) -> None:
+        from pathlib import PureWindowsPath
+
+        if (
+            not name
+            or name in (".", "..")
+            or "/" in name
+            or "\\" in name
+            or PureWindowsPath(name).drive
+            or "\x00" in name
+            or name.rstrip(" .") != name
+        ):
+            raise GitError("Worktree name must be a single directory name", stderr="invalid worktree name")
 
     async def _is_worktree_dirty(self, repo_path: str | Path) -> bool:
         """Return True if the working tree has uncommitted changes."""
@@ -370,31 +386,18 @@ class GitService:
         branch_name: str,
     ) -> tuple[str, str]:
         """Create a secondary worktree and branch."""
+        self._validate_worktree_name(job_id)
         worktrees_dir = Path(repo_path) / self._worktrees_dirname
-        worktrees_dir.mkdir(parents=True, exist_ok=True)
         worktree_path = worktrees_dir / job_id
-
-        # Run stale-cleanup steps and ref resolution in parallel — these are
-        # independent I/O operations (separate git subprocesses).
-        async def _prune() -> None:
-            with contextlib.suppress(GitError):
-                await self._run_git("worktree", "prune", cwd=repo_path)
-
-        async def _remove_stale_worktree() -> None:
-            if worktree_path.exists():
-                with contextlib.suppress(GitError):
-                    await self._run_git("worktree", "remove", "--force", str(worktree_path), cwd=repo_path)
-                    log.info("stale_worktree_removed", repo=repo_path, path=str(worktree_path))
-
-        async def _resolve() -> str:
-            return await self._resolve_ref(repo_path, base_ref)
-
-        _, _, resolved_base_ref = await asyncio.gather(_prune(), _remove_stale_worktree(), _resolve())
-
-        # Now the branch should be detachable; delete it if it exists.
-        with contextlib.suppress(GitError):
-            await self._run_git("branch", "-D", branch_name, cwd=repo_path)
-            log.info("stale_branch_deleted", repo=repo_path, branch=branch_name)
+        if worktree_path.exists() or worktree_path.is_symlink():
+            raise GitError(
+                f"Worktree destination already exists: {worktree_path}",
+                stderr="existing workspace preserved",
+            )
+        if worktree_path.resolve().parent != worktrees_dir.resolve():
+            raise GitError("Worktree destination escapes configured root", stderr="invalid worktree destination")
+        resolved_base_ref = await self._resolve_ref(repo_path, base_ref)
+        worktrees_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             await self._run_git(
@@ -426,6 +429,7 @@ class GitService:
         Used when resuming a job whose worktree dir no longer exists but the branch is intact.
         Returns the worktree path string.
         """
+        self._validate_worktree_name(job_id)
         worktrees_dir = Path(repo_path) / self._worktrees_dirname
         worktrees_dir.mkdir(parents=True, exist_ok=True)
         worktree_path = worktrees_dir / job_id
@@ -497,7 +501,7 @@ class GitService:
 
         removed = 0
         for entry in worktrees_dir.iterdir():
-            if entry.is_symlink():
+            if entry.is_symlink() or entry.is_junction():
                 log.warning("worktree_symlink_skipped", path=str(entry))
                 continue
             if entry.is_dir():

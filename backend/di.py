@@ -8,6 +8,7 @@ Defines the DI container wiring that replaces the previous hand-rolled
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, NewType
 
 import httpx
@@ -36,7 +37,6 @@ from backend.services.analytics.telemetry_query_service import TelemetryQuerySer
 from backend.services.artifacts.artifact_service import ArtifactService
 from backend.services.artifacts.diff_service import DiffService
 from backend.services.chat.chat_service import ChatService
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.completers.naming_service import NamingService
 from backend.services.completers.narrator_completer import NarratorCompleter
 from backend.services.completers.voice_service import VoiceService
@@ -58,6 +58,7 @@ from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.sidecar.template_service import SidecarTemplateService
 from backend.services.steps.diff_service import StepDiffService
 from backend.services.story.service import StoryService
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
 from backend.services.tracker_sync_service import TrackerSyncService
 from backend.services.tracker_write_service import TrackerWriteService
@@ -67,6 +68,14 @@ from backend.services.trail import TrailService
 CachedModelsBySdk = NewType("CachedModelsBySdk", dict[str, Any])
 VoiceMaxBytes = NewType("VoiceMaxBytes", int)
 PreviewHttpClient = NewType("PreviewHttpClient", httpx.AsyncClient)
+
+
+class _RejectPreviewCookies(DefaultCookiePolicy):
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+    def return_ok(self, cookie: Any, request: Any) -> bool:
+        return False
 
 
 class AppProvider(Provider):
@@ -93,7 +102,6 @@ class AppProvider(Provider):
     share_service = from_context(provides=ShareService)
     trail_service = from_context(provides=TrailService)
     terminal_service = from_context(provides=TerminalService)
-    coderecon_service = from_context(provides=CodeReconService)
     narrator_completer = from_context(provides=NarratorCompleter)
     ingest_service = from_context(provides=IngestService)
     model_pricing = from_context(provides=ModelPricingService)
@@ -104,30 +112,23 @@ class AppProvider(Provider):
     def git_service(self, config: CPLConfig) -> GitService:
         return GitService(config)
 
-    @provide
-    def tracker_write_service(
-        self,
-        approval_service: ApprovalService,
-        sf: async_sessionmaker[AsyncSession],
-    ) -> TrackerWriteService:
-        return TrackerWriteService(approval_service, session_factory=sf)
+    tracker_write_service = from_context(provides=TrackerWriteService)
+    task_execution_service = from_context(provides=TaskExecutionService)
 
     @provide
-    def diff_service(self, git_service: GitService, event_bus: EventBus, coderecon: CodeReconService) -> DiffService:
-        return DiffService(git_service=git_service, event_bus=event_bus, coderecon=coderecon)
+    def diff_service(self, git_service: GitService, event_bus: EventBus) -> DiffService:
+        return DiffService(git_service=git_service, event_bus=event_bus)
 
     @provide
     def story_service(
         self,
         narrator: NarratorCompleter,
-        coderecon: CodeReconService,
         sf: async_sessionmaker[AsyncSession],
         model_pricing: ModelPricingService,
         git_service: GitService,
     ) -> StoryService:
         return StoryService(
             completer=narrator,
-            coderecon=coderecon,
             session_factory=sf,
             model_pricing=model_pricing,
             git_service=git_service,
@@ -141,6 +142,9 @@ class AppProvider(Provider):
     async def preview_http_client(self) -> AsyncIterator[PreviewHttpClient]:
         client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            cookies=CookieJar(policy=_RejectPreviewCookies()),
+            follow_redirects=False,
+            trust_env=False,
         )
         try:
             yield PreviewHttpClient(client)
@@ -297,6 +301,7 @@ class RequestProvider(Provider):
         chat_repo: ChatRepository,
         approval_service: ApprovalService,
         tracker_link_repo: TrackerLinkRepository,
+        execution_service: TaskExecutionService,
     ) -> RecipeService:
         return RecipeService(
             task_link_repo,
@@ -306,6 +311,7 @@ class RequestProvider(Provider):
             chat_repo=chat_repo,
             approval_service=approval_service,
             tracker_link_repo=tracker_link_repo,
+            execution_service=execution_service,
         )
 
     @provide
@@ -335,6 +341,5 @@ class RequestProvider(Provider):
         step_repo: StepRepository,
         git_service: GitService,
         spans_repo: TelemetrySpansRepository,
-        coderecon: CodeReconService,
     ) -> StepDiffService:
-        return StepDiffService(job_svc, step_repo, git_service, spans_repo, coderecon)
+        return StepDiffService(job_svc, step_repo, git_service, spans_repo)

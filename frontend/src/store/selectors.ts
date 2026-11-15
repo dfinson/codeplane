@@ -5,11 +5,7 @@
  * prevents unnecessary re-renders and makes state dependencies explicit.
  */
 
-import type { DiffFileModel, StoryResponse } from "../api/types";
-import type {
-  MultiSessionResponse,
-  ReviewStoryResponse as StructuralReviewStoryResponse,
-} from "../api/client";
+import type { DiffFileModel, StoryResponse, TrackerOperationResponse } from "../api/types";
 import type {
   AppState,
   JobSummary,
@@ -28,6 +24,23 @@ const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 const EMPTY_DIFFS: DiffFileModel[] = [];
 
 export const selectJobs = (state: AppState) => state.jobs;
+export const selectTrackerOperations = (state: AppState) => state.trackerOperations;
+export const selectTrackerOperationLoad = (projectRef: string) => (state: AppState) =>
+  state.trackerOperationLoads[projectRef];
+
+export const selectTrackerOperationsForProject = (projectRef: string) => {
+  let previous: AppState["trackerOperations"] | undefined;
+  let operations: TrackerOperationResponse[] = [];
+  return (state: AppState) => {
+    if (state.trackerOperations !== previous) {
+      previous = state.trackerOperations;
+      operations = Object.values(previous)
+        .filter((operation) => operation.projectRef === projectRef)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    }
+    return operations;
+  };
+};
 export const selectConnectionStatus = (state: AppState) =>
   state.connectionStatus;
 export const selectReconnectAttempt = (state: AppState) =>
@@ -47,10 +60,6 @@ export const selectJobStory = (jobId: string) => (state: AppState) =>
   state.stories[jobId] ?? EMPTY_STORY;
 
 // Structural analysis selectors
-export const selectMultiSession = (jobId: string) => (state: AppState): MultiSessionResponse | null =>
-  state.multiSessions[jobId] ?? null;
-export const selectReviewStory = (jobId: string) => (state: AppState): StructuralReviewStoryResponse | null =>
-  state.reviewStories[jobId] ?? null;
 
 /** Select accumulated streaming tool output for a job, keyed by toolCallId. */
 export const selectStreamingToolOutput = (jobId: string) => (state: AppState) => {

@@ -9,22 +9,28 @@ persistence, and validation in one focused internal helper surface") and
 generalized here so Stories 1.2-1.7 share one implementation.
 
 See:
-- ``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/ARCHITECTURE-SPINE.md``
-- ``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/SOLUTION-DESIGN.md``
+- ``internal-docs/design/developer-restart.md``
+- ``internal-docs/design/developer-restart.md``
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
+import re
+import stat
 import sys
 import tempfile
+import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit
 
 import psutil
 import structlog
@@ -48,9 +54,130 @@ class RestartProtocolError(CodePlaneError):
     """Base error for restart-protocol path, timeout, or JSON I/O failures."""
 
 
+MAX_HANDOFF_BYTES = 64 * 1024
+
+
+def validate_access_origin(origin: Any) -> str:
+    if not isinstance(origin, str) or any(c.isspace() for c in origin):
+        raise RestartProtocolError("access_origin_invalid")
+    try:
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+        ):
+            raise ValueError
+        _ = parsed.port
+    except ValueError:
+        raise RestartProtocolError("access_origin_invalid") from None
+    return origin
+
+
+def validate_access_token(token: Any) -> str:
+    if (
+        not isinstance(token, str) or len(token) > MAX_HANDOFF_BYTES
+        or re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", token) is None
+    ):
+        raise RestartProtocolError("access_token_invalid")
+    return token
+
+
+def encode_handoff_frame(frame: dict[str, Any]) -> bytes:
+    try:
+        data = json.dumps(frame, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError):
+        raise RestartProtocolError("handoff_frame_invalid") from None
+    if not 0 < len(data) <= MAX_HANDOFF_BYTES:
+        raise RestartProtocolError("handoff_frame_oversized")
+    return len(data).to_bytes(4, "big") + data
+
+
+def _read_handoff_bytes(fd: int, count: int, deadline: float) -> bytes:
+    data = bytearray()
+    while len(data) < count:
+        if not math.isfinite(deadline) or time.monotonic() >= deadline:
+            raise RestartProtocolError("handoff_deadline")
+        try:
+            chunk = os.read(fd, count - len(data))
+        except BlockingIOError:
+            time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+            continue
+        except OSError:
+            raise RestartProtocolError("handoff_channel_closed") from None
+        if not chunk:
+            raise RestartProtocolError("handoff_eof")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def read_handoff_frame(fd: int, deadline: float) -> dict[str, Any]:
+    try:
+        if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            raise RestartProtocolError("handoff_channel_invalid")
+        os.set_blocking(fd, False)
+    except OSError:
+        raise RestartProtocolError("handoff_channel_invalid") from None
+    length = int.from_bytes(_read_handoff_bytes(fd, 4, deadline), "big")
+    if not 0 < length <= MAX_HANDOFF_BYTES:
+        raise RestartProtocolError("handoff_frame_oversized")
+    try:
+        frame = json.loads(_read_handoff_bytes(fd, length, deadline))
+    except (UnicodeError, ValueError, RecursionError):
+        raise RestartProtocolError("handoff_frame_invalid") from None
+    if not isinstance(frame, dict):
+        raise RestartProtocolError("handoff_frame_invalid")
+    return frame
+
+
+def write_handoff_frame(fd: int, frame: dict[str, Any], deadline: float) -> None:
+    data = encode_handoff_frame(frame)
+    try:
+        os.set_blocking(fd, False)
+        while data:
+            if not math.isfinite(deadline) or time.monotonic() >= deadline:
+                raise RestartProtocolError("handoff_deadline")
+            try:
+                written = os.write(fd, data)
+            except BlockingIOError:
+                written = 0
+            if written:
+                data = data[written:]
+            else:
+                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+    except OSError:
+        raise RestartProtocolError("handoff_channel_closed") from None
+
+
+def validate_handoff_frame(
+    frame: dict[str, Any], *, request_id: str, server_pid: int, server_process_time: float, origin: str
+) -> str:
+    expected = {
+        "version": 1, "kind": "credential", "requestId": request_id,
+        "serverPid": server_pid, "serverProcessTime": server_process_time,
+        "origin": validate_access_origin(origin),
+    }
+    if set(frame) != {*expected, "jwt"} or any(
+        type(frame.get(key)) is not type(value) or frame[key] != value for key, value in expected.items()
+    ):
+        raise RestartProtocolError("handoff_identity_mismatch")
+    return validate_access_token(frame["jwt"])
+
+
+def validate_commit_frame(frame: dict[str, Any], request_id: str) -> None:
+    if frame != {"version": 1, "kind": "commit", "requestId": request_id} or type(frame.get("version")) is not int:
+        raise RestartProtocolError("handoff_commit_invalid")
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep local credentials and remote probes on their exact destination."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def get_dev_restart_dir() -> Path:

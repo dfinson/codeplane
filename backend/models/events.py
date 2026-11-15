@@ -105,6 +105,7 @@ class EventKind(StrEnum):
     execution_phase_changed = "execution.phase_changed"
     telemetry_updated = "telemetry.updated"
     artifacts_updated = "artifacts.updated"
+    tracker_operation_updated = "tracker.operation_updated"
     # --- Steps / plan ---
     step_started = "step.started"
     step_completed = "step.completed"
@@ -113,13 +114,12 @@ class EventKind(StrEnum):
     plan_step_updated = "plan.step_updated"
     step_entries_reassigned = "step.entries_reassigned"
     turn_summary = "turn.summary"
+    verification_started = "verification.started"
+    verification_result = "verification.result"
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
     # --- Repo index ---
-    repo_index_progress = "repo.index_progress"
-    repo_index_complete = "repo.index_complete"
     # --- Structural health ---
-    structural_warning = "structural.warning"
     stall_detected = "stall.detected"
     # --- Monitors ---
     monitor_approved = "monitor.approved"

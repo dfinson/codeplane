@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from backend.models.domain import Job
     from backend.services.adapters.platform_adapter import PlatformRegistry
     from backend.services.artifacts.diff_service import DiffService
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
 
@@ -51,7 +50,6 @@ class MergeService:
         config: CompletionConfig,
         platform_registry: PlatformRegistry | None = None,
         diff_service: DiffService | None = None,
-        coderecon: CodeReconService | None = None,
     ) -> None:
         self._git = git_service
         self._event_bus = event_bus
@@ -59,7 +57,6 @@ class MergeService:
         self._config = config
         self._platform_registry = platform_registry
         self._diff_service = diff_service
-        self._coderecon = coderecon
         # Per-repo lock to prevent concurrent merges from corrupting the
         # main worktree state (checkout / merge / stash interleaving).
         self._repo_locks: dict[str, asyncio.Lock] = {}
@@ -425,19 +422,6 @@ class MergeService:
         branch: str,
     ) -> None:
         """Clean up worktree and branch after a successful merge."""
-        # Reconcile structural index: adopt source worktree data into main,
-        # then drop the source.  Must happen before worktree removal.
-        if self._coderecon and self._coderecon.available and worktree_path:
-            try:
-                from pathlib import Path
-
-                wt_name = Path(worktree_path).name
-                repo_name = await self._coderecon.ensure_repo_indexed(repo_path)
-                await self._coderecon.merge_index(repo_name, wt_name)
-                log.info("coderecon_index_merged", job_id=job_id, worktree=wt_name)
-            except Exception:
-                log.debug("coderecon_merge_index_failed", job_id=job_id, exc_info=True)
-
         if self._config.cleanup_worktree and worktree_path:
             try:
                 await self._git.remove_worktree(repo_path, worktree_path)

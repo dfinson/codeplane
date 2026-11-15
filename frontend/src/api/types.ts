@@ -36,6 +36,10 @@ export type TrackerTicketResponse = components["schemas"]["TrackerTicketResponse
 export type TrackerSummaryResponse = components["schemas"]["TrackerSummaryResponse"];
 export type TrackerLinkResponse = components["schemas"]["TrackerLinkResponse"];
 export type TrackerLinkListResponse = components["schemas"]["TrackerLinkListResponse"];
+export type TrackerOperationResponse = components["schemas"]["TrackerOperationResponse"];
+export type TrackerOperationListResponse = components["schemas"]["TrackerOperationListResponse"];
+export type ReconcileTrackerOperationRequest = components["schemas"]["ReconcileTrackerOperationRequest"];
+export type RetryTrackerOperationRequest = components["schemas"]["RetryTrackerOperationRequest"];
 export type CredentialResponse = components["schemas"]["CredentialResponse"];
 export type CredentialListResponse = components["schemas"]["CredentialListResponse"];
 export type CompletionStrategy = "auto_merge" | "pr_only" | "manual";
@@ -145,15 +149,6 @@ export interface DiffHunkModel {
   lines: DiffLineModel[];
 }
 
-export interface DiffFileSymbolImpact {
-  symbol: string;
-  kind: string;  // added | removed | modified | moved
-  category: string;  // breaking | body | additive | non-structural
-  lineRange: number[] | null;  // [start, end]
-  refCount: number;
-  refTiers: Record<string, number>;  // verified | inferred | unverified → count
-  testFiles: string[];
-}
 
 export interface DiffFileModel {
   path: string;
@@ -165,7 +160,6 @@ export interface DiffFileModel {
   rawSize?: number | null;
   writeCount?: number | null;
   retryCount?: number | null;
-  symbols?: DiffFileSymbolImpact[];
 }
 
 // --- Motivation types for intent-annotated diff review ---
@@ -192,25 +186,9 @@ export interface StepDiffResponse {
   hunkMotivations?: Record<string, HunkMotivation>;
 }
 
-// --- Line Coverage types (layered diff V8) ---
 
-export interface LineCoverageTestInfo {
-  name: string;
-  file: string;
-  line: number;
-  status: "pass" | "fail" | "notrun";
-}
 
-export interface LineCoverageResponse {
-  jobId: string;
-  filePath: string;
-  available: boolean;
-  coveredLines: number[];
-  uncoveredLines: number[];
-  totalInstrumented: number;
-  lineRate: number;
-  testsByLine: Record<string, LineCoverageTestInfo[]>;
-}
+
 
 export interface JobMotivationsResponse {
   jobId: string;

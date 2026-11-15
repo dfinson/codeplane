@@ -22,7 +22,6 @@ import type { StepFilter } from "./DiffViewer";
 import type { ReviewSubView } from "./review/ReviewSubTabs";
 import { ActivityPanel } from "./ActivityPanel";
 import { ViewTabBar } from "./ViewTabBar";
-import { StructuralWarningBanner } from "./StructuralWarningBanner";
 import { mergeTranscriptEntries } from "../lib/transcriptIdentity";
 import type { ProjectResponse, TaskLinkResponse } from "../api/types";
 import { pathBasename } from "../lib/paths";
@@ -73,9 +72,6 @@ export function JobDetailScreen() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [markDoneOpen, setMarkDoneOpen] = useState(false);
-  const [lowConfidenceOpen, setLowConfidenceOpen] = useState(false);
-  const [lowConfidenceBlockers, setLowConfidenceBlockers] = useState<string[]>([]);
-  const [lowConfidenceAction, setLowConfidenceAction] = useState<"merge" | "smart_merge" | null>(null);
   const [tab, setTab] = useState("live");
   const [stepFilter, setStepFilter] = useState<StepFilter | null>(null);
   const [requestedReviewSubView, setRequestedReviewSubView] = useState<ReviewSubView | null>(null);
@@ -389,14 +385,6 @@ export function JobDetailScreen() {
     return () => { cancelled = true; };
   }, [jobId, jobState]);
 
-  // Eagerly prefetch review data when diffs exist so the review tab loads instantly
-  const prefetchReviewData = useStore((s) => s.prefetchReviewData);
-  useEffect(() => {
-    if (hasChanges && jobId) {
-      prefetchReviewData(jobId);
-    }
-  }, [hasChanges, jobId, prefetchReviewData]);
-
   const doCancelJob = useCallback(async () => {
     if (!jobId) return;
     try {
@@ -455,11 +443,11 @@ export function JobDetailScreen() {
     } catch (e) { toast.error(String(e)); }
   }, [jobId, navigate, projectBoardUrl]);
 
-  const handleResolve = useCallback(async (action: "merge" | "smart_merge" | "create_pr" | "agent_merge", opts?: { confirmLowConfidence?: boolean }) => {
+  const handleResolve = useCallback(async (action: "merge" | "smart_merge" | "create_pr" | "agent_merge") => {
     if (!jobId) return;
     setResolveLoading(action);
     try {
-      const res = await resolveJob(jobId, action, { confirmLowConfidence: opts?.confirmLowConfidence });
+      const res = await resolveJob(jobId, action);
       const refreshedJob = action === "agent_merge"
         ? null
         : await fetchJob(jobId).catch(() => null);
@@ -521,15 +509,7 @@ export function JobDetailScreen() {
         toast.error(res.error ?? "Merge did not complete");
       }
     } catch (e: unknown) {
-      // §7.4 — Low confidence gate: intercept 409 and show confirmation dialog
-      const apiErr = e as { status?: number; body?: { detail?: { reason?: string; blockers?: string[] } } };
-      if (apiErr.status === 409 && apiErr.body?.detail?.reason === "low_confidence") {
-        setLowConfidenceBlockers(apiErr.body.detail.blockers ?? []);
-        setLowConfidenceAction(action as "merge" | "smart_merge");
-        setLowConfidenceOpen(true);
-      } else {
-        toast.error(String(e));
-      }
+      toast.error(String(e));
     }
     finally { setResolveLoading(null); }
   }, [jobId]);
@@ -709,7 +689,6 @@ export function JobDetailScreen() {
           )}
           <div className="flex flex-col gap-4 flex-1 min-w-0">
             {/* §7.2 — Structural warnings accumulated during execution */}
-            <StructuralWarningBanner jobId={jobId} />
             <div className="h-[calc(100dvh-92px)] md:h-full min-h-[22rem]">
               <CuratedFeed
                 jobId={jobId}
@@ -832,25 +811,6 @@ export function JobDetailScreen() {
         confirmLabel="Mark Done & Archive"
       />
 
-      {/* §7.4 — Low confidence merge gate */}
-      <ConfirmDialog
-        open={lowConfidenceOpen}
-        onClose={() => { setLowConfidenceOpen(false); setLowConfidenceAction(null); }}
-        onConfirm={async () => {
-          setLowConfidenceOpen(false);
-          if (lowConfidenceAction) {
-            await handleResolve(lowConfidenceAction, { confirmLowConfidence: true });
-          }
-          setLowConfidenceAction(null);
-        }}
-        title="Low Structural Confidence"
-        description={
-          lowConfidenceBlockers.length > 0
-            ? `Structural analysis indicates LOW confidence. Blockers: ${lowConfidenceBlockers.join("; ")}. Proceed anyway?`
-            : "Structural analysis indicates LOW confidence. Are you sure you want to merge?"
-        }
-        confirmLabel="Merge Anyway"
-      />
 
     </div>
   );

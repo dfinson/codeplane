@@ -23,9 +23,7 @@ from backend.models.events import EventKind, new_event
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.persistence.task_link_repo import TaskLinkRepository
-from backend.services.job.job_service import JobService
-from backend.services.project.project_service import ProjectService
-from backend.services.recipe.recipe_service import RecipeService
+from backend.services.task_execution_service import TaskExecutionService
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -54,6 +52,65 @@ async def _seed_completed_job(session: AsyncSession, job_id: str, repo: str, pro
         )
     )
     await session.commit()
+
+
+async def test_recovery_emission_reaches_telemetry_with_ingestion_bound(session_factory, event_bus):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from backend.lifespan import _schedule_execution_recovery
+    from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+    from backend.services.adapters.adapter_registry import AdapterRegistry
+    from backend.services.events.ingest_service import IngestService
+    from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+    from backend.services.runtime import RuntimeService
+
+    async with session_factory() as session:
+        await ProjectRepository(session).create("recovery-project", "Recovery", ["/recovery"])
+        await _seed_completed_job(session, "recovery-job", "/recovery", "recovery-project")
+    writes = []
+    subscriber = TelemetrySubscriber(
+        session_factory=session_factory,
+        schedule_write=lambda coroutine: writes.append(asyncio.create_task(coroutine)),
+    )
+    subscriber.subscribe(event_bus)
+    ingest = IngestService(session_factory)
+    runtime = RuntimeService(session_factory, event_bus, AdapterRegistry(), CPLConfig())
+    order = []
+
+    async def resume_sdk_work():
+        assert runtime._telemetry_subscriber is subscriber
+        assert runtime._ingest_service is ingest
+        order.append("runtime")
+        await event_bus.publish(
+            new_event(
+                session_id="recovery-job",
+                kind=EventKind.message_assistant,
+                payload={"content": "Recovered SDK work"},
+            )
+        )
+
+    runtime.recover_on_startup = AsyncMock(side_effect=resume_sdk_work)
+    services = SimpleNamespace(
+        runtime_service=runtime,
+        approval_service=SimpleNamespace(
+            recover_pending_approvals=AsyncMock(side_effect=lambda: order.append("approvals")),
+        ),
+        task_execution_service=SimpleNamespace(
+            recover_on_startup=AsyncMock(side_effect=lambda: order.append("tasks")),
+        ),
+        tracker_write_service=SimpleNamespace(
+            recover_on_startup=AsyncMock(side_effect=lambda: order.append("tracker")),
+            wake=Mock(side_effect=lambda: order.append("worker")),
+        ),
+    )
+    await _schedule_execution_recovery(services, subscriber, ingest)
+    await asyncio.gather(*writes)
+    assert order == ["approvals", "tasks", "tracker", "runtime", "worker"]
+    async with session_factory() as session:
+        summary = await TelemetrySummaryRepository(session).get("recovery-job")
+    assert summary is not None and summary["agent_messages"] == 1
 
 
 class TestJobCompletionSpawnsTaskLinks:
@@ -98,21 +155,14 @@ class TestJobCompletionSpawnsTaskLinks:
             await task_link_repo.set_job_id(first_link.id, "job-first")
             await session.commit()
 
+        execution = TaskExecutionService(session_factory, config, git_service=mock_git_service)
+
         async def _spawn_dependent_task_links(event: object) -> None:
             if event.kind != EventKind.job_completed:  # type: ignore[union-attr]
                 return
             job_id = event.session_id  # type: ignore[union-attr]
             resolution = event.payload.get("resolution")  # type: ignore[union-attr]
-            async with session_factory() as session:
-                task_link_repo = TaskLinkRepository(session)
-                job_repo = JobRepository(session)
-                project_service = ProjectService(ProjectRepository(session), config)
-                job_service = JobService.from_session(session, config, git_service=mock_git_service)
-                recipe_service = RecipeService(
-                    task_link_repo, project_service, job_service=job_service, job_repo=job_repo
-                )
-                spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                await session.commit()
+            spawned_jobs = await execution.handle_job_completed(job_id, resolution=resolution)
             for job in spawned_jobs:
                 await mock_runtime_service.setup_and_start(job)
 
@@ -207,27 +257,19 @@ class TestJobCompletionSpawnsTaskLinks:
             await chat_repo.attach_to_chain(chat.id, first_link.id)
             await session.commit()
 
+        execution = TaskExecutionService(
+            session_factory,
+            config,
+            git_service=mock_git_service,
+            approval_service=approval_service,
+        )
+
         async def _spawn_dependent_task_links(event: object) -> None:
             if event.kind != EventKind.job_completed:  # type: ignore[union-attr]
                 return
             job_id = event.session_id  # type: ignore[union-attr]
             resolution = event.payload.get("resolution")  # type: ignore[union-attr]
-            async with session_factory() as session:
-                task_link_repo = TaskLinkRepository(session)
-                job_repo = JobRepository(session)
-                chat_repo = ChatRepository(session)
-                project_service = ProjectService(ProjectRepository(session), config)
-                job_service = JobService.from_session(session, config, git_service=mock_git_service)
-                recipe_service = RecipeService(
-                    task_link_repo,
-                    project_service,
-                    job_service=job_service,
-                    job_repo=job_repo,
-                    chat_repo=chat_repo,
-                    approval_service=approval_service,
-                )
-                spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                await session.commit()
+            spawned_jobs = await execution.handle_job_completed(job_id, resolution=resolution)
             for job in spawned_jobs:
                 await mock_runtime_service.setup_and_start(job)
 
@@ -252,5 +294,10 @@ class TestJobCompletionSpawnsTaskLinks:
         # Instead, a pending approval was created for the deferred spawn.
         pending = await approval_service.list_pending()
         assert len(pending) == 1
-        assert pending[0].proposed_action == f"spawn_task:{second_link.id}"
+        from backend.services.task_execution_service import parse_spawn_action
+
+        action = parse_spawn_action(pending[0].proposed_action)
+        assert action is not None
+        assert action["taskLinkId"] == second_link.id
+        assert action["predecessorJobId"] == "job-first-gated"
         assert pending[0].job_id == "job-first-gated"

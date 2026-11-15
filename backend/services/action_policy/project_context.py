@@ -1,8 +1,7 @@
 """Project context — cached project metadata for the action policy monitor.
 
 Built lazily on first gate-tier action.  Reads manifest files (package.json,
-pyproject.toml, etc.) and optionally calls CodeRecon ``understand()`` for a
-codebase narrative.  Cached for the job lifetime; invalidated when the trail
+pyproject.toml, etc.).  Cached for the job lifetime; invalidated when the trail
 shows the agent modified a manifest file.
 """
 
@@ -11,12 +10,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import structlog
-
-if TYPE_CHECKING:
-    from backend.services.coderecon.coderecon_service import CodeReconService
 
 log = structlog.get_logger()
 
@@ -81,8 +76,8 @@ class ProjectContext:
     def built(self) -> bool:
         return self._built
 
-    async def build(self, coderecon: CodeReconService | None = None) -> None:
-        """Scan manifest and config files, call recon_scout if available."""
+    async def build(self) -> None:
+        """Scan manifest and config files."""
         root = Path(self.worktree)
 
         # Read manifest files for dependencies
@@ -103,21 +98,6 @@ class ProjectContext:
                 except Exception:
                     log.debug("project_context_config_error", file=name, exc_info=True)
 
-        # CodeRecon scout for codebase narrative
-        if coderecon and coderecon.available and self.repo:
-            try:
-                result = await coderecon.scout(
-                    self.repo,
-                    worktree=self.worktree,
-                )
-                if hasattr(result, "summary"):
-                    self.narrative = str(result.summary)
-                elif isinstance(result, dict) and "summary" in result:
-                    self.narrative = str(result["summary"])
-                else:
-                    self.narrative = str(result)
-            except Exception:
-                log.debug("project_context_recon_error", exc_info=True)
 
         self._built = True
 

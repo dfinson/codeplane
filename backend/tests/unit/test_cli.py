@@ -666,6 +666,49 @@ def _invoke_up(args: list[str], *, owning_pids: list[int] | None = None) -> tupl
     return result, written
 
 
+class TestRemoteAuthOptions:
+    def test_explicit_access_only_is_recorded_without_password(self, tmp_path, monkeypatch):
+        from backend.services.sharing.tunnel_service import RemoteProvider, TunnelHandle
+
+        monkeypatch.delenv("CPL_PASSWORD", raising=False)
+        monkeypatch.setenv("CPL_CF_ACCESS_TEAM", "example")
+        monkeypatch.setenv("CPL_CF_ACCESS_AUD", "application")
+        handle = TunnelHandle(provider=RemoteProvider.cloudflare, origin="https://cpl.example.com")
+        with (
+            patch("backend.config.get_codeplane_dir", return_value=tmp_path),
+            patch("backend.services.sharing.tunnel_service.start_remote_access", return_value=handle),
+        ):
+            result, written = _invoke_up(["--remote", "--provider", "cloudflare", "--access-only"])
+        assert result.exit_code == 0, result.output
+        assert written["authMode"] == "access_only"
+        assert written["passwordSource"] == {"kind": "not_required"}
+
+    @pytest.mark.parametrize(
+        "args,missing",
+        [
+            (["--remote", "--provider", "cloudflare"], "CPL_CF_ACCESS_TEAM"),
+            (["--remote", "--provider", "cloudflare"], "CPL_CF_ACCESS_AUD"),
+            ([], None),
+            (["--remote", "--provider", "devtunnel"], None),
+            (["--remote", "--provider", "cloudflare", "--password", "chosen"], None),
+        ],
+    )
+    def test_invalid_access_only_rejected_before_tunnel(self, tmp_path, monkeypatch, args, missing):
+        monkeypatch.delenv("CPL_PASSWORD", raising=False)
+        monkeypatch.setenv("CPL_CF_ACCESS_TEAM", "example")
+        monkeypatch.setenv("CPL_CF_ACCESS_AUD", "application")
+        if missing:
+            monkeypatch.delenv(missing)
+        with (
+            patch("backend.config.get_codeplane_dir", return_value=tmp_path),
+            patch("backend.services.sharing.tunnel_service.start_remote_access") as start,
+        ):
+            result, _ = _invoke_up([*args, "--access-only"])
+        assert result.exit_code != 0
+        assert "--access-only requires" in result.output
+        start.assert_not_called()
+
+
 class TestUpLaunchProfilePublication:
     def test_local_mode_no_password(self, tmp_path: object) -> None:
         with patch("backend.config.get_codeplane_dir", return_value=tmp_path):
@@ -734,7 +777,7 @@ class TestUpLaunchProfilePublication:
             "reference": "devtunnel",
         }
 
-    def test_remote_cloudflare_access_disables_password_source(self, tmp_path: object) -> None:
+    def test_remote_cloudflare_retains_password_source(self, tmp_path: object) -> None:
         from backend.services.sharing.tunnel_service import RemoteProvider, TunnelHandle
 
         fake_handle = TunnelHandle(
@@ -760,7 +803,7 @@ class TestUpLaunchProfilePublication:
         assert written["remote"] is True
         assert written["provider"] == "cloudflare"
         assert written["tunnelOwnership"] == "managed"
-        assert written["passwordSource"] == {"kind": "not_required"}
+        assert written["passwordSource"] == {"kind": "unreplayable"}
         assert written["tunnelCredentialSource"] == {
             "kind": "resolvable",
             "provider": "environment",

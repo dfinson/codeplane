@@ -5,6 +5,71 @@ hide:
 
 # Usage Guide
 
+## Copilot-only operation
+
+`runtime.copilot_only` defaults to `true`. CodePlane admits GitHub Copilot
+execution, including models from other providers that Copilot serves. It keeps
+other adapters and their historical jobs. Set the flag to `false` in the
+CodePlane configuration to re-enable them. A stored non-Copilot default is
+preserved while the effective default is Copilot.
+
+Disabled integrations cannot create, resume or recover execution. History
+remains readable. Startup records a specific failure for an in-flight managed
+job whose integration is disabled. Normal operator terminals remain shells,
+not provider sandboxes.
+
+Scout remains a governed full-session context brief before primary execution.
+It is distinct from text-only naming, narration and Chat completion. Discussion
+Chats cannot use tools and do not create a workspace.
+
+Native discovery stays within registered repositories and sessions created after observation starts. It follows the latest valid steering marker, including later enable/disable changes. Already imported sessions recover from their saved checkpoints.
+
+Native history and checkpoints retain the local session ID. Ordinary steering uses the separate published task ID from that session's owned metadata. Missing, mismatched or disabled bindings deny control without guessing a target or changing the local identity.
+
+Native observation honors process-scoped `COPILOT_HOME`. If native source
+history or its mapping changed, observation stops with a recorded diagnostic
+instead of silently reinterpreting accepted progress. A steering receipt means
+admission, not proof the agent executed the instruction. An uncertain delivery
+must not be retried automatically.
+
+Cloud task existence, cached flags and HTTP errors prove neither a live CLI execution nor its termination. The current native integration has no authoritative live-identity signal, so strict coordinated dispatch withholds a token and fails closed. Ordinary operator-requested relay admission remains separate from that stricter guarantee.
+
+Verification results distinguish completed, failed and interrupted agent
+verification turns. A completed turn is not evidence that tests passed.
+Review remains the operator's decision state.
+
+## Runtime homes and generated artifacts
+
+Set `CODEPLANE_HOME` before starting an isolated runtime. Generated artifacts
+and subsequent updates use that home's `artifacts` directory, alongside its
+database, rather than the operator's ordinary artifact store.
+
+Existing records under the known default `~/.codeplane/artifacts` store remain
+downloadable. An explicitly requested update writes the new content into the
+active store and updates the same record's location and size. It leaves the
+old file untouched. CodePlane does not bulk-migrate historical files or trust
+arbitrary persisted paths.
+
+Session-document collection honors an explicit collector directory first,
+then `COPILOT_HOME`, then the ordinary `~/.copilot` default. For an isolated
+Copilot journey, set both home variables to owned fixture directories.
+
+## Restarting an Access-only development server
+
+Run `uv run --no-sync python tools\dev_restart.py` from the intended checkout.
+The existing Cloudflare operator login must already have cached an application
+JWT for the recorded tunnel origin. CodePlane retrieves that cached token
+privately; it does not launch a login flow. If the cache is missing or invalid,
+complete operator login separately and retry. Never place the JWT in command
+arguments, environment variables, configuration or request files.
+
+Preparation finishes before the adoption timer starts. The helper authenticates
+against the old server before reporting adoption, and waits for a separate
+parent commit before pausing jobs. Parent death or a closed/invalid channel
+before commit leaves the server untouched. Once committed, restart continues
+in the detached helper even if the initiating process exits. The replacement
+retains `--access-only`; local and password restart modes are unchanged.
+
 ## Creating Jobs
 
 Jobs are the core unit of work. Each job runs an agent against a repository in an isolated Git worktree.
@@ -119,7 +184,7 @@ Some commands **always** require approval regardless of preset: `git merge`, `gi
 
 ## Code Review
 
-When a job finishes, the review experience has three layers: the narrative story, structural analysis, and the raw diff.
+When a job finishes, the review experience has two complementary views: the narrative story and the actual Git diff.
 
 ### Review Story
 
@@ -127,25 +192,8 @@ The **Review** tab opens with a narrative that explains what the agent changed a
 
 - **What changed** — a structured walkthrough of the modifications with verified file references
 - **Why it changed** — motivation provenance traced from the agent's reasoning through trail enrichment
-- **Attention items** — structural concerns, unverified callers, and risk areas flagged for human review
-- **Merge confidence verdict** — HIGH / MEDIUM / LOW based on structural risk scoring, dependency cycles, and caller verification
 
 This is designed so you can decide whether to merge *before* reading a single line of code.
-
-### Structural Analysis
-
-CodeRecon provides graph-based structural analysis that goes beyond text diffs:
-
-- **Semantic diff** — changes classified as added, removed, modified, or moved symbols (not just lines)
-- **Risk scoring** — each change gets a composite risk score based on category severity, unverified caller ratio, and test coverage gaps
-- **Reference tiers** — callers of modified symbols are classified by confidence:
-    - *Proven* — direct static references
-    - *Strong / Anchored / Semantic* — inferred via type or semantic analysis
-    - *Unknown* — found but not verified
-- **Communities** — related changes grouped by module/feature for holistic review
-- **Dependency cycles** — new cycles introduced by the change are flagged
-
-Use the triage bar to filter changes by risk category and focus on what matters.
 
 ### Diff & Workspace
 

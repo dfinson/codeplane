@@ -1,56 +1,333 @@
-"""Tests for backend.services.tools.preflight_curator — constants and PreflightCurator."""
+"""Scout session, utility-model wiring, and failure regressions."""
 
 from __future__ import annotations
 
-from backend.services.tools.preflight_curator import (
-    _DISALLOWED_BUILTIN_TOOLS,
-    _MAX_TURNS,
-    _PREFLIGHT_SYSTEM_PROMPT,
-    _SESSION_TIMEOUT_S,
-    PreflightCurator,
-)
+import asyncio
+import builtins
+import inspect
+import sys
+from types import ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from backend.config import CPLConfig
+from backend.models.events import EventKind, new_event
+from backend.services.tools import preflight_curator
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-class TestConstants:
-    def test_max_turns(self):
-        assert _MAX_TURNS == 15
+@pytest.fixture
+async def scout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+    """Use startup's constructor, without starting services or requiring CodeRecon.
 
-    def test_session_timeout(self):
-        assert _SESSION_TIMEOUT_S == 120
+    The legacy argument/tool builder is stubbed only to let the baseline reach
+    the session assertions. Neither supplies context or tools to the Scout.
+    """
+    import backend.lifespan as lifespan
 
-    def test_disallowed_tools(self):
-        assert "Bash" in _DISALLOWED_BUILTIN_TOOLS
-        assert "Edit" in _DISALLOWED_BUILTIN_TOOLS
-        assert "Write" in _DISALLOWED_BUILTIN_TOOLS
-        assert "Read" in _DISALLOWED_BUILTIN_TOOLS
-        assert "Grep" in _DISALLOWED_BUILTIN_TOOLS
-        assert "WebFetch" in _DISALLOWED_BUILTIN_TOOLS
-        assert "WebSearch" in _DISALLOWED_BUILTIN_TOOLS
-        # Ensure security-critical tools are blocked
-        assert "MultiEdit" in _DISALLOWED_BUILTIN_TOOLS
-        assert "Glob" in _DISALLOWED_BUILTIN_TOOLS
-        # Copilot SDK equivalents (lowercase/snake_case)
-        assert "bash" in _DISALLOWED_BUILTIN_TOOLS
-        assert "str_replace_editor" in _DISALLOWED_BUILTIN_TOOLS
-        assert "run_in_terminal" in _DISALLOWED_BUILTIN_TOOLS
+    config = CPLConfig(repos=[str(tmp_path / "checkout")])
+    config.runtime.utility_model = "gpt-4o-mini"
+    adapter = AsyncMock()
+    adapter.create_session.return_value = "scout-sdk"
 
-    def test_system_prompt_mentions_tools(self):
-        assert "recon_scout" in _PREFLIGHT_SYSTEM_PROMPT
-        assert "recon" in _PREFLIGHT_SYSTEM_PROMPT
-        assert "scaffold" in _PREFLIGHT_SYSTEM_PROMPT
-        assert "recon_impact" in _PREFLIGHT_SYSTEM_PROMPT
+    async def events(session_id: str):
+        yield new_event(
+            session_id,
+            EventKind.tool_call_completed,
+            {"tool_name": "view", "arguments": {"path": "src.py"}, "result": "def target(): pass", "success": True},
+        )
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Found the target implementation."})
+        yield new_event(session_id, EventKind.session_ended, {"result": "src.py contains target(); tests cover it."})
 
-    def test_system_prompt_output_rules(self):
-        assert "INCLUSION" in _PREFLIGHT_SYSTEM_PROMPT
-        assert "SCOUT, not a planner" in _PREFLIGHT_SYSTEM_PROMPT
+    adapter.stream_events = MagicMock(side_effect=events)
+    registry = MagicMock()
+    registry.get_adapter.return_value = adapter
+    monkeypatch.setattr(lifespan, "AdapterRegistry", MagicMock(return_value=registry))
+    for name in (
+        "ApprovalService",
+        "GitService",
+        "DiffService",
+        "PlatformRegistry",
+        "MergeService",
+        "SidecarSessionManager",
+        "SidecarDispatcher",
+        "NarratorCompleter",
+        "SummarizationService",
+        "StepTracker",
+        "RuntimeService",
+    ):
+        instance = MagicMock()
+        instance.start = AsyncMock()
+        monkeypatch.setattr(lifespan, name, MagicMock(return_value=instance))
+
+    legacy_tools = ModuleType("backend.services.coderecon.coderecon_tools")
+    legacy_tools.build_coderecon_tools = MagicMock(return_value=None)
+    monkeypatch.setitem(sys.modules, legacy_tools.__name__, legacy_tools)
+    kwargs: dict[str, Any] = {
+        "session_factory": MagicMock(),
+        "event_bus": MagicMock(),
+        "config": config,
+    }
+    if "coderecon_service" in inspect.signature(lifespan._wire_core_services).parameters:
+        kwargs["coderecon_service"] = SimpleNamespace(available=False)
+    services = await lifespan._wire_core_services(**kwargs)
+    curator = services.runtime_service.set_preflight_curator.call_args.args[0]
+    return SimpleNamespace(
+        curator=curator,
+        adapter=adapter,
+        config=config,
+        repo=str(tmp_path / "checkout"),
+        worktree=str(tmp_path / "job-worktree"),
+    )
 
 
-class TestPreflightCuratorInit:
-    def test_init(self):
-        from unittest.mock import AsyncMock
+async def _curate(scout: SimpleNamespace, **callbacks: Any):
+    return await scout.curator.curate(
+        "Find the target implementation",
+        repo=scout.repo,
+        worktree=scout.worktree,
+        job_id="job-scout",
+        **callbacks,
+    )
 
-        adapter = AsyncMock()
-        coderecon = AsyncMock()
-        curator = PreflightCurator(adapter, coderecon=coderecon)
-        assert curator._adapter is adapter
-        assert curator._coderecon is coderecon
+
+@pytest.mark.asyncio
+async def test_scout_uses_utility_model_and_repository_tools(scout: SimpleNamespace) -> None:
+    on_tool_call = AsyncMock()
+    on_reasoning = AsyncMock()
+    report = await _curate(scout, on_tool_call=on_tool_call, on_reasoning=on_reasoning)
+
+    scout.adapter.create_session.assert_awaited_once()
+    session = scout.adapter.create_session.call_args.args[0]
+    assert session.model == scout.config.runtime.utility_model, "Scout must request the configured cheaper model"
+    assert session.workspace_path == scout.worktree, "Scout must read the job worktree, not the main checkout"
+    assert session.session_kind == "preflight"
+    assert session.job_id == "job-scout"
+    denied = set(session.disallowed_tools)
+    assert not denied.intersection({"Read", "Glob", "Grep", "LS", "view", "read_file", "list_dir", "grep_search"})
+    assert {"Bash", "Write", "Edit", "MultiEdit", "Task", "WebFetch", "WebSearch", "run_in_terminal"} <= denied
+    assert not getattr(session, "coderecon_tools", None)
+    scout.adapter.stream_events.assert_called_once_with("scout-sdk")
+    scout.adapter.complete.assert_not_awaited()
+    assert report.brief == "src.py contains target(); tests cover it."
+    assert len(report.tool_calls) == 1
+    assert report.tool_calls[0].tool_name == "view"
+    assert report.tool_calls[0].result_text == "def target(): pass"
+    on_tool_call.assert_awaited_once_with(report.tool_calls[0])
+    on_reasoning.assert_awaited_once_with("Found the target implementation.")
+
+
+@pytest.mark.asyncio
+async def test_scout_report_accumulates_usage_and_observed_model(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        yield new_event(
+            session_id,
+            EventKind.telemetry_usage,
+            {"model": "utility-observed", "input_tokens": 120, "output_tokens": 30, "cost_usd": 0.0015},
+        )
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Inspecting one more caller"})
+        yield new_event(
+            session_id,
+            EventKind.telemetry_usage,
+            {"model": "utility-observed", "input_tokens": 80, "output_tokens": 20, "cost_usd": 0.0005},
+        )
+        yield new_event(session_id, EventKind.session_ended, {"result": "src.py contains the shared parser."})
+
+    scout.adapter.stream_events.side_effect = events
+    report = await _curate(scout)
+
+    assert getattr(report, "input_tokens", None) == 200
+    assert getattr(report, "output_tokens", None) == 50
+    assert getattr(report, "cost_usd", None) == pytest.approx(0.002)
+    assert getattr(report, "model", None) == "utility-observed"
+    assert report.brief == "src.py contains the shared parser."
+
+
+@pytest.mark.asyncio
+async def test_scout_error_does_not_promote_partial_reasoning_to_brief(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Still exploring; not a final brief"})
+        yield new_event(session_id, EventKind.session_error, {"message": "Scout transport failed"})
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="Scout transport failed"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_managed_sdk_error_does_not_become_a_successful_brief(scout: SimpleNamespace) -> None:
+    from backend.models.domain import SessionConfig
+    from backend.services.copilot_adapter._adapter import CopilotAdapter
+
+    translator = CopilotAdapter()
+    sdk_session = SimpleNamespace(session_id="scout-sdk", on=MagicMock(), send=AsyncMock(), abort=AsyncMock())
+    client = SimpleNamespace(
+        create_session=AsyncMock(return_value=sdk_session), stop=AsyncMock(), force_stop=AsyncMock()
+    )
+
+    async def events(session_id: str):
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            admitted = await translator.create_session(
+                SessionConfig(
+                    workspace_path=scout.worktree,
+                    prompt="Prepare a context brief",
+                    job_id="job-scout",
+                    model=scout.config.runtime.utility_model,
+                    session_kind="preflight",
+                )
+            )
+        assert admitted == session_id
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Still exploring; not a finished brief"})
+        queue = translator._queues[session_id]
+        sdk_error = SimpleNamespace(
+            type=SimpleNamespace(value="session.error"),
+            data=SimpleNamespace(to_dict=lambda: {"message": "SDK rejected Scout session"}),
+        )
+        await translator._process_sdk_event_inner(sdk_error, session_id, "job-scout", "", [False], queue)
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event is not None:
+                yield event
+
+    scout.adapter.stream_events.side_effect = events
+    try:
+        with pytest.raises(RuntimeError, match="SDK rejected Scout session"):
+            await _curate(scout)
+    finally:
+        await translator.abort_session(sdk_session.session_id)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_does_not_import_structural_tools(scout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    attempted: list[str] = []
+    original_import = builtins.__import__
+
+    def observe_import(name: str, *args: Any, **kwargs: Any):
+        if name.startswith(("coderecon", "backend.services.coderecon")):
+            attempted.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", observe_import)
+    await _curate(scout)
+    assert attempted == [], "Independent Scout execution must not import a retired structural toolkit"
+
+
+@pytest.mark.asyncio
+async def test_scout_timeout_aborts_instead_of_returning_partial_brief(
+    scout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(preflight_curator, "_SESSION_TIMEOUT_S", 0.01)
+
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Unfinished exploration"})
+        await asyncio.Event().wait()
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(TimeoutError):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_task_cancellation_aborts_its_sdk_session(scout: SimpleNamespace) -> None:
+    started = asyncio.Event()
+
+    async def events(session_id: str):
+        started.set()
+        await asyncio.Event().wait()
+        yield new_event(session_id, EventKind.session_ended, {"result": "must not be returned"})
+
+    scout.adapter.stream_events.side_effect = events
+    task = asyncio.create_task(_curate(scout))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_stream_failure_aborts_and_propagates(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Unfinished exploration"})
+        raise OSError("stream disconnected")
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(OSError, match="stream disconnected"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_empty_success_has_no_invented_brief(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.session_ended, {"result": ""})
+
+    scout.adapter.stream_events.side_effect = events
+    report = await _curate(scout)
+    assert report.brief == ""
+    assert report.tool_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success", [True, False])
+async def test_scout_does_not_promote_pre_tool_narration_at_stream_end(
+    scout: SimpleNamespace, success: bool
+) -> None:
+    async def events(session_id: str):
+        yield new_event(
+            session_id,
+            EventKind.message_assistant,
+            {"content": "Let me create a temporary script that modifies sum.py and execute it:"},
+        )
+        yield new_event(
+            session_id,
+            EventKind.tool_call_completed,
+            {"tool_name": "create", "arguments": {"path": "fix.py"}, "success": success},
+        )
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="final context brief"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+async def test_scout_accepts_final_brief_after_tools_without_explicit_result(scout: SimpleNamespace) -> None:
+    brief = "sum.py:add subtracts its arguments. check.py expects add(2, 3) == 5. Preserve the sentinel file."
+
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Reading the implementation."})
+        yield new_event(session_id, EventKind.tool_call_completed, {"tool_name": "view", "success": True})
+        yield new_event(session_id, EventKind.message_assistant, {"content": brief})
+        yield new_event(session_id, EventKind.telemetry_usage, {"input_tokens": 10, "output_tokens": 5})
+
+    scout.adapter.stream_events.side_effect = events
+    report = await _curate(scout)
+    assert report.brief == brief
+    assert report.input_tokens == 10
+    assert report.output_tokens == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["Let me create a temporary script before I finish.", ""])
+async def test_scout_rejects_pending_tool_request_without_execution_events(
+    scout: SimpleNamespace, content: str
+) -> None:
+    async def events(session_id: str):
+        yield new_event(session_id, EventKind.message_assistant, {"content": "Earlier partial context."})
+        yield new_event(
+            session_id, EventKind.message_assistant, {"content": content, "has_tool_requests": True}
+        )
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="final context brief"):
+        await _curate(scout)

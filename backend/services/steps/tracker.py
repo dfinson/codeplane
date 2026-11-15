@@ -98,15 +98,40 @@ class StepTracker:
         self._current: dict[str, _StepState] = {}
         self._counters: dict[str, int] = {}
         self._worktree_paths: dict[str, str] = {}  # job_id → worktree cwd
+        self._observed_jobs: set[str] = set()
         # Ring buffer of recent transcript entries per job — used to build
         # preceding_context snapshots at step close time.
         self._transcript_buffers: dict[str, list[dict[str, str]]] = {}
 
     _BUFFER_SIZE = 10
 
-    def register_worktree(self, job_id: str, worktree_path: str) -> None:
+    def register_worktree(self, job_id: str, worktree_path: str, *, managed: bool = True) -> None:
         """Set the worktree path for a job. Called from _execute_session_attempt."""
         self._worktree_paths[job_id] = worktree_path
+        if not managed:
+            self._observed_jobs.add(job_id)
+
+    def restore_event(self, job_id: str, event: SessionEvent) -> None:
+        payload = event.payload
+        if event.kind == EventKind.step_started:
+            number = int(payload["step_number"])
+            self._counters[job_id] = max(number, self._counters.get(job_id, 0))
+            self._current[job_id] = _StepState(
+                step_id=str(payload["step_id"]),
+                step_number=number,
+                turn_id=payload.get("turn_id"),
+                intent=str(payload.get("intent") or ""),
+                trigger=str(payload.get("trigger") or "recovered"),
+                started_at=event.timestamp.replace(tzinfo=UTC) if event.timestamp.tzinfo is None else event.timestamp,
+            )
+        elif event.kind == EventKind.step_completed:
+            current = self._current.get(job_id)
+            if current is not None and current.step_id == payload.get("step_id"):
+                self._current.pop(job_id, None)
+        elif event.kind in (EventKind.tool_call_completed, EventKind.message_assistant):
+            current = self._current.get(job_id)
+            if current is not None:
+                self._accumulate_step(job_id, current, event)
 
     def current_step(self, job_id: str) -> _StepState | None:
         return self._current.get(job_id)
@@ -202,34 +227,39 @@ class StepTracker:
             current = self._current[job_id]
 
         if current:
-            if turn_id and not current.turn_id:
-                current.turn_id = turn_id
-            if event.kind == EventKind.tool_call_completed:
-                current.tool_count += 1
-                tool_name = payload.get("tool_name", "")
-                if tool_name and tool_name not in current.tool_names:
-                    current.tool_names.append(tool_name)
-                tool_args = _tool_args_to_str(payload.get("arguments"))
-                path = _extract_file_path(tool_name, tool_args)
-                if path:
-                    # Strip worktree prefix to get repo-relative path
-                    wt = self._worktree_paths.get(job_id, "")
-                    if wt and path.startswith(wt):
-                        path = path[len(wt) :].lstrip("/")
-                    if (
-                        tool_name in _READ_TOOLS
-                        and path not in current.files_read
-                        and len(current.files_read) < _MAX_FILES_PER_STEP
-                    ):
-                        current.files_read.append(path)
-                    elif (
-                        tool_name in _WRITE_TOOLS
-                        and path not in current.files_written
-                        and len(current.files_written) < _MAX_FILES_PER_STEP
-                    ):
-                        current.files_written.append(path)
-            if event.kind == EventKind.message_assistant and content.strip():
-                current.last_agent_message = content
+            self._accumulate_step(job_id, current, event)
+
+    def _accumulate_step(self, job_id: str, current: _StepState, event: SessionEvent) -> None:
+        payload = event.payload
+        turn_id = payload.get("turn_id")
+        content = str(payload.get("content") or "")
+        if turn_id and not current.turn_id:
+            current.turn_id = turn_id
+        if event.kind == EventKind.tool_call_completed:
+            current.tool_count += 1
+            tool_name = payload.get("tool_name", "")
+            if tool_name and tool_name not in current.tool_names:
+                current.tool_names.append(tool_name)
+            tool_args = _tool_args_to_str(payload.get("arguments"))
+            path = _extract_file_path(tool_name, tool_args)
+            if path:
+                wt = self._worktree_paths.get(job_id, "")
+                if wt and path.startswith(wt):
+                    path = path[len(wt) :].lstrip("/\\")
+                if (
+                    tool_name in _READ_TOOLS
+                    and path not in current.files_read
+                    and len(current.files_read) < _MAX_FILES_PER_STEP
+                ):
+                    current.files_read.append(path)
+                elif (
+                    tool_name in _WRITE_TOOLS
+                    and path not in current.files_written
+                    and len(current.files_written) < _MAX_FILES_PER_STEP
+                ):
+                    current.files_written.append(path)
+        if event.kind == EventKind.message_assistant and content.strip():
+            current.last_agent_message = content
 
     async def on_job_terminal(self, job_id: str, outcome: str) -> None:
         """Close current step when job reaches terminal state."""
@@ -304,10 +334,11 @@ class StepTracker:
                     # Auto-commit any uncommitted work so the SHA boundary
                     # captures exactly this step's changes.  ~50 ms, no-op
                     # when the worktree is clean.
-                    await self._git_service.auto_commit(
-                        cwd=cwd,
-                        message=f"codeplane: step {state.step_number}",
-                    )
+                    if job_id not in self._observed_jobs:
+                        await self._git_service.auto_commit(
+                            cwd=cwd,
+                            message=f"codeplane: step {state.step_number}",
+                        )
                     end_sha = await self._git_service.rev_parse("HEAD", cwd=cwd)
                 except GitError:
                     log.debug("step_close_git_failed", job_id=job_id, exc_info=True)
@@ -363,6 +394,7 @@ class StepTracker:
         self._current.pop(job_id, None)
         self._counters.pop(job_id, None)
         self._worktree_paths.pop(job_id, None)
+        self._observed_jobs.discard(job_id)
         self._transcript_buffers.pop(job_id, None)
 
 

@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +21,9 @@ from backend.models.domain import (
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters.base_adapter import PermissionDecision
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fake claude_code_sdk types (injected before the adapter is imported)
@@ -433,12 +436,159 @@ class TestBuildCanUseTool:
         assert isinstance(result, _FakePermissionResultAllow)
 
 
+class TestScoutPermissions:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_name", "input_data"),
+        [
+            ("Read", {"file_path": "src.py"}),
+            ("Glob", {"pattern": "**/*.py", "path": "."}),
+            ("Grep", {"pattern": "target", "path": "."}),
+            ("Glob", {"pattern": "**/*.py"}),
+            ("Grep", {"pattern": "target"}),
+        ],
+    )
+    async def test_scout_read_search_reaches_policy_and_sdk_allow(
+        self, adapter: ClaudeAdapter, tmp_path: Path, tool_name: str, input_data: dict[str, Any]
+    ) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        callback = adapter._build_can_use_tool(
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"), "scout"
+        )
+        result = await callback(tool_name, input_data, None)
+        assert isinstance(result, _FakePermissionResultAllow)
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_name", "input_data"),
+        [
+            ("Write", {"file_path": "src.py", "content": "replacement"}),
+            ("Edit", {"file_path": "src.py", "old_string": "old", "new_string": "new"}),
+            ("MultiEdit", {"file_path": "src.py", "edits": []}),
+            ("Bash", {"command": "cat src.py", "read_only": True}),
+            ("PowerShell", {"command": "Get-Content src.py", "read_only": True}),
+            ("WebFetch", {"url": "https://example.test"}),
+            ("WebSearch", {"query": "repository source"}),
+            ("Task", {"prompt": "Read the repository", "read_only": True}),
+            ("Agent", {"prompt": "Read the repository", "read_only": True}),
+            ("mcp__repo__read", {"file_path": "src.py", "read_only": True}),
+            ("ToolSearch", {"query": "mcp repository"}),
+            ("FutureReader", {"file_path": "src.py", "read_only": True}),
+            ("Read", {}),
+            ("Read", {"file_path": "..\\outside.py"}),
+            ("Grep", {"path": "..", "pattern": "target"}),
+            ("Read", {"file_path": "src.py", "path": "..\\outside.py"}),
+            ("Read", {"file_path": "https://example.test/source.py"}),
+        ],
+    )
+    async def test_scout_denies_unsafe_requests_before_general_allow(
+        self, adapter: ClaudeAdapter, tmp_path: Path, tool_name: str, input_data: dict[str, Any]
+    ) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        callback = adapter._build_can_use_tool(
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"), "scout"
+        )
+        result = await callback(tool_name, input_data, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scout_denies_absolute_sibling_path(self, adapter: ClaudeAdapter, tmp_path: Path) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        callback = adapter._build_can_use_tool(
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"), "scout"
+        )
+        result = await callback("Read", {"file_path": str(tmp_path.parent / "other" / "src.py")}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scout_read_does_not_override_policy_denial(self, adapter: ClaudeAdapter, tmp_path: Path) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.deny)
+        callback = adapter._build_can_use_tool(
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"), "scout"
+        )
+        result = await callback("Read", {"file_path": "src.py"}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("session_kind", ["job", "sidecar"])
+    async def test_scout_guard_does_not_restrict_other_sessions(
+        self, adapter: ClaudeAdapter, tmp_path: Path, session_kind: str
+    ) -> None:
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        callback = adapter._build_can_use_tool(
+            _make_config(workspace_path=str(tmp_path), session_kind=session_kind), "ordinary"
+        )
+        result = await callback("Bash", {"command": "cat src.py"}, None)
+        assert isinstance(result, _FakePermissionResultAllow)
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_scout_sdk_configuration_keeps_reads_and_excludes_mutations(
+        self, adapter: ClaudeAdapter, tmp_path: Path
+    ) -> None:
+        from backend.services.tools.preflight_curator import _DISALLOWED_BUILTIN_TOOLS
+
+        clients: list[_FakeClaudeSDKClient] = []
+
+        def capture_client(options: Any) -> _FakeClaudeSDKClient:
+            client = _FakeClaudeSDKClient(options)
+            client._messages = [_FakeResultMessage(result="brief")]
+            clients.append(client)
+            return client
+
+        config = _make_config(
+            workspace_path=str(tmp_path),
+            model="utility-model",
+            session_kind="preflight",
+            disallowed_tools=_DISALLOWED_BUILTIN_TOOLS,
+        )
+        with patch.dict(sys.modules["claude_code_sdk"].__dict__, {"ClaudeSDKClient": capture_client}):
+            session_id = await adapter.create_session(config)
+        try:
+            assert adapter.get_session_kind(session_id) == "preflight"
+            assert adapter._session_to_job[session_id] == config.job_id
+            options = clients[0].options
+            assert options.model == "utility-model"
+            assert options.cwd == str(tmp_path)
+            excluded = set(options.disallowed_tools)
+            assert {"Bash", "Write", "Edit", "MultiEdit", "Task", "WebFetch", "WebSearch"} <= excluded
+            assert not excluded.intersection({"Read", "Glob", "Grep"})
+            assert callable(options.can_use_tool)
+        finally:
+            consumer = adapter._consumer_tasks.get(session_id)
+            if consumer is not None:
+                await consumer
+            adapter._cleanup_session(session_id)
+
+
 # ---------------------------------------------------------------------------
 # Tests: message processing
 # ---------------------------------------------------------------------------
 
 
 class TestProcessAssistantMessage:
+    @pytest.mark.asyncio
+    async def test_scout_text_after_tool_request_is_not_a_final_response(self, adapter: ClaudeAdapter) -> None:
+        sid = "scout-tool-request"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, "preflight")
+        message = _FakeAssistantMessage(
+            content=[_FakeToolUseBlock(name="Read"), _FakeTextBlock("Let me inspect the implementation.")]
+        )
+        await adapter._process_assistant_message(sid, message)
+        messages = []
+        while not adapter._queues[sid].empty():
+            event = adapter._queues[sid].get_nowait()
+            if event is not None and event.kind == EventKind.message_assistant:
+                messages.append(event)
+        assert len(messages) == 1
+        assert messages[0].payload.get("has_tool_requests") is True
+
     @pytest.mark.asyncio
     async def test_text_block_emits_transcript(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"

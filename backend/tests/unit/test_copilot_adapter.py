@@ -9,7 +9,7 @@ import asyncio
 import sys
 import uuid
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +18,12 @@ from backend.models.domain import (
     SessionConfig,
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.services.adapters import agent_adapter
+from backend.services.completers import copilot_steer
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fake copilot SDK types — injected into sys.modules before adapter import
@@ -236,6 +242,258 @@ def _install_auto_approve_router(adapter: Any, job_id: str = "job-1") -> None:
 # ---------------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    @staticmethod
+    def _client(session_id: str = "runtime-session") -> tuple[MagicMock, _FakeCopilotSession]:
+        session = _FakeCopilotSession(session_id)
+        client = MagicMock()
+        client.create_session = AsyncMock(return_value=session)
+        client.resume_session = AsyncMock(return_value=session)
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+        return client, session
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stage", ["create", "resume", "send", "cancel"])
+    async def test_failed_start_awaits_client_release(self, adapter: CopilotAdapter, stage: str) -> None:
+        client, session = self._client()
+        config = _make_config(workspace_path=".")
+        if stage == "resume":
+            config.resume_sdk_session_id = "previous"
+            client.resume_session.side_effect = RuntimeError("fixture failure")
+        elif stage == "send":
+            session.send = AsyncMock(side_effect=RuntimeError("fixture failure"))
+        else:
+            client.create_session.side_effect = (
+                asyncio.CancelledError() if stage == "cancel" else RuntimeError("fixture failure")
+            )
+        with (
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            pytest.raises((RuntimeError, asyncio.CancelledError)),
+        ):
+            await adapter.create_session(config)
+        released = client.stop.await_count + client.force_stop.await_count
+        await asyncio.sleep(0)
+        assert released > 0, "Startup must await release, including pre-registration failure/cancellation"
+        assert not adapter._clients
+
+    @pytest.mark.asyncio
+    async def test_resume_reapplies_full_session_constraints(self, adapter: CopilotAdapter) -> None:
+        client, _ = self._client()
+        config = _make_config(
+            workspace_path=".",
+            model="primary-model",
+            system_prompt_override="Read-only context brief",
+            disallowed_tools=["write", "shell"],
+            resume_sdk_session_id="previous",
+        )
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            sid = await adapter.create_session(config)
+        kwargs = client.resume_session.call_args.kwargs
+        adapter._cleanup_session(sid)
+        await asyncio.sleep(0)
+        assert kwargs.get("excluded_tools") == ["write", "shell"]
+        assert kwargs.get("system_message") == {"mode": "append", "content": "Read-only context brief"}
+        assert "tools" in kwargs and kwargs["tools"] is None
+        assert kwargs["model"] == "primary-model"
+
+    @pytest.mark.asyncio
+    async def test_late_callback_cannot_repopulate_finalized_session(self, adapter: CopilotAdapter) -> None:
+        client, session = self._client()
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            sid = await adapter.create_session(_make_config(workspace_path="."))
+        session.fire_event(
+            _FakeSdkSessionEvent(
+                "tool.execution_start",
+                _FakeEventData(
+                    tool_call_id="late", tool_name="read", arguments={}, mcp_tool_name=None, mcp_server_name=None
+                ),
+            )
+        )
+        adapter._cleanup_session(sid)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not adapter._tool_buf, "A queued callback must not restore state after finalization"
+
+    @pytest.mark.asyncio
+    async def test_tool_pairing_and_cleanup_are_session_qualified(self, adapter: CopilotAdapter) -> None:
+        first_client, first = self._client("first")
+        second_client, second = self._client("second")
+        with patch(
+            "backend.services.copilot_adapter._adapter.create_copilot_client",
+            side_effect=[first_client, second_client],
+        ):
+            first_id = await adapter.create_session(_make_config(workspace_path="."))
+            second_id = await adapter.create_session(_make_config(workspace_path="."))
+        for session, tool in [(first, "read"), (second, "grep")]:
+            session.fire_event(
+                _FakeSdkSessionEvent(
+                    "tool.execution_start",
+                    _FakeEventData(
+                        tool_call_id="shared-id",
+                        tool_name=tool,
+                        arguments={"tool": tool},
+                        mcp_tool_name=None,
+                        mcp_server_name=None,
+                    ),
+                )
+            )
+        await asyncio.sleep(0)
+        adapter._cleanup_session(first_id)
+        second.fire_event(
+            _FakeSdkSessionEvent(
+                "tool.execution_complete",
+                _FakeEventData(tool_call_id="shared-id", success=True, result=None),
+            )
+        )
+        await asyncio.sleep(0)
+        events = []
+        queue = adapter._queues[second_id]
+        while not queue.empty():
+            events.append(queue.get_nowait())
+        adapter._cleanup_session(second_id)
+        await asyncio.sleep(0)
+        completed = [event for event in events if event and event.kind == EventKind.tool_call_completed]
+        assert completed[0].payload["tool_name"] == "grep"
+        assert completed[0].payload["arguments"] == {"tool": "grep"}
+
+    @pytest.mark.asyncio
+    async def test_utility_denies_permissions_without_exclusion_help(self, adapter: CopilotAdapter) -> None:
+        client, session = self._client()
+        decisions = []
+
+        async def send(*args: Any, **kwargs: Any) -> None:
+            permission = client.create_session.call_args.kwargs["on_permission_request"]
+            decisions.append(await permission(_FakePermissionRequest(), {}))
+            session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="text only")))
+            session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
+
+        session.send = send
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+        ):
+            result = await adapter.complete("hello", excluded_tools=[])
+        assert result.text == "text only"
+        assert decisions[0].kind == "reject"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", ["session.error", "abort", "timeout", "create", "send", "empty"])
+    async def test_utility_failure_is_typed_not_success(self, adapter: CopilotAdapter, failure: str) -> None:
+        client, session = self._client()
+
+        async def send(*args: Any, **kwargs: Any) -> None:
+            if failure == "send":
+                raise ConnectionError("send failed")
+            if failure != "empty":
+                session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="partial")))
+            if failure in ("session.error", "abort"):
+                session.fire_event(_FakeSdkSessionEvent(failure, _FakeEventData(message="failure", reason="aborted")))
+            elif failure == "empty":
+                session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
+
+        session.send = send
+        if failure == "create":
+            client.create_session.side_effect = ConnectionError("create failed")
+        error = None
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            patch("backend.services.copilot_adapter._adapter.COMPLETION_TIMEOUT_S", 0.01),
+        ):
+            try:
+                await adapter.complete("hello")
+            except Exception as exc:
+                error = exc
+        assert error is not None, f"{failure} must not become a successful completion"
+        assert type(error).__name__ == "UtilityCompletionError"
+        assert getattr(error, "reason", None)
+        assert client.stop.await_count + client.force_stop.await_count > 0
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_pending_start_and_drains_ownership(self, adapter: CopilotAdapter) -> None:
+        client, _ = self._client()
+        entered = asyncio.Event()
+
+        async def create(**kwargs: Any) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        client.create_session.side_effect = create
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            pending = asyncio.create_task(adapter.create_session(_make_config(workspace_path=".")))
+            await entered.wait()
+            shutdown = getattr(adapter, "shutdown", None)
+            if shutdown is not None:
+                await asyncio.wait_for(shutdown(), timeout=1)
+            completed_by_shutdown = pending.done()
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        assert shutdown is not None, "Adapter needs an awaitable shutdown boundary"
+        assert completed_by_shutdown
+        assert client.stop.await_count + client.force_stop.await_count > 0
+        assert not adapter._clients
+
+    @pytest.mark.asyncio
+    async def test_force_stop_is_bounded(self, adapter: CopilotAdapter) -> None:
+        client, _ = self._client()
+        client.stop.side_effect = TimeoutError()
+
+        async def force_stop() -> None:
+            await asyncio.Event().wait()
+
+        client.force_stop.side_effect = force_stop
+        timed_out = False
+        with patch("backend.services.copilot_adapter._adapter.CLIENT_STOP_TIMEOUT_S", 0.01):
+            try:
+                await asyncio.wait_for(adapter._stop_client(client), timeout=0.1)
+            except TimeoutError:
+                timed_out = True
+        assert not timed_out, "force_stop must have its own bounded timeout"
+        client.force_stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stop_error",
+        [RuntimeError("stop failed"), ExceptionGroup("disconnect failures", [OSError("transport failed")])],
+    )
+    async def test_any_sdk_stop_failure_attempts_force_stop(self, adapter: CopilotAdapter, stop_error) -> None:
+        client, _ = self._client()
+        client.stop.side_effect = stop_error
+        escaped = None
+        try:
+            await adapter._stop_client(client)
+        except Exception as exc:
+            escaped = exc
+        assert escaped is None, "A stop failure must still run forced teardown"
+        client.force_stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_utility_awaits_client_release(self, adapter: CopilotAdapter) -> None:
+        client, _ = self._client()
+        client.create_session.side_effect = asyncio.CancelledError()
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await adapter.complete("hello")
+        released = client.stop.await_count + client.force_stop.await_count
+        await asyncio.sleep(0)
+        assert released > 0, "Cancelled utilities must await client release"
+
+    @pytest.mark.asyncio
+    async def test_late_telemetry_does_not_publish_after_finalize(self, adapter: CopilotAdapter) -> None:
+        client, _ = self._client()
+        adapter._event_bus = AsyncMock()
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            sid = await adapter.create_session(_make_config(workspace_path="."))
+        adapter._cleanup_session(sid)
+        await adapter._maybe_broadcast_telemetry("job-1")
+        await asyncio.sleep(0)
+        adapter._event_bus.publish.assert_not_awaited()
+
+
 class TestSetJobId:
     def test_set_and_retrieve(self, adapter: CopilotAdapter) -> None:
         adapter.set_job_id("sess-1", "job-42")
@@ -346,7 +604,10 @@ class TestSendMessage:
 
     @pytest.mark.asyncio
     async def test_send_to_missing_session(self, adapter: CopilotAdapter) -> None:
-        await adapter.send_message("nonexistent", "hello")  # should not raise
+        with pytest.raises(copilot_steer.NativeDeliveryError, match="no longer live") as failure:
+            await adapter.send_message("nonexistent", "hello")
+
+        assert failure.value.uncertain is False
 
 
 # ---------------------------------------------------------------------------
@@ -826,7 +1087,7 @@ class TestEventTelemetry:
 
         await self._fire(session, _FakeSdkSessionEvent("tool.execution_start", start_data))
 
-        buffered = adapter._tool_buf.get("tc-1", {})
+        buffered = adapter._tool_buf[sid, "tc-1"]
         assert buffered.get("tool_name") == "bash"
 
         result_obj = SimpleNamespace(content=[SimpleNamespace(text="file1.py")])
@@ -1221,7 +1482,7 @@ class TestTfEventEmission:
         assert len(started) == 1
         assert started[0].payload["tool_name"] == "github/search_code"
 
-        buffered = adapter._tool_buf.get("tc-mcp", {})
+        buffered = adapter._tool_buf[sid, "tc-mcp"]
         assert buffered.get("tool_name") == "github/search_code"
 
 
@@ -1270,10 +1531,14 @@ class TestComplete:
             async def stop(self) -> None:
                 pass
 
-        with patch("copilot.CopilotClient", return_value=_FailingClient()):
-            result = await adapter.complete("test")
+        with (
+            patch("copilot.CopilotClient", return_value=_FailingClient()),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("test")
 
-        assert result.text is None
+        assert failure.value.reason == "sdk_error"
+        assert isinstance(failure.value.__cause__, _FakeJsonRpcError)
 
     @pytest.mark.asyncio
     async def test_complete_timeout(self, adapter: CopilotAdapter) -> None:
@@ -1288,11 +1553,13 @@ class TestComplete:
 
         with (
             patch("copilot.CopilotClient", return_value=_TimeoutClient()),
-            patch("asyncio.wait_for", side_effect=TimeoutError),
+            patch("backend.services.copilot_adapter._adapter.COMPLETION_TIMEOUT_S", 0.01),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
-            result = await adapter.complete("test prompt")
+            await adapter.complete("test prompt")
 
-        assert result.text == ""
+        assert failure.value.reason == "timeout"
+        assert fake_session._aborted
 
 
 # ---------------------------------------------------------------------------
@@ -1327,7 +1594,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-desc", {})
+        buf = adapter._tool_buf[session_id, "tc-desc"]
         assert buf.get("intent") == "List files"
 
     @pytest.mark.asyncio
@@ -1356,7 +1623,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-str", {})
+        buf = adapter._tool_buf[session_id, "tc-str"]
         assert buf.get("arguments") == '{"path": "/tmp/foo"}'
         assert buf.get("intent") == "Read a file"
         assert buf.get("title") == "read_file"
@@ -1386,7 +1653,7 @@ class TestToolStartBuffering:
         session.fire_event(_FakeSdkSessionEvent("tool.execution_start", data))
         await asyncio.sleep(0)
 
-        buf = adapter._tool_buf.get("tc-none", {})
+        buf = adapter._tool_buf[session_id, "tc-none"]
         assert buf.get("arguments") is None
 
 
@@ -1607,6 +1874,294 @@ class TestHandlePermissionRequestGitResetHard:
         # In auto mode, non-git-reset-hard commands are approved without hitting approval service
         assert result.kind == "approve-once"
         approval_service.create_request.assert_not_called()
+
+
+@pytest.fixture()
+async def accounting_sessions(adapter: CopilotAdapter) -> AsyncIterator[tuple[str, str]]:
+    clients = [_FakeCopilotClient(), _FakeCopilotClient()]
+    for client in clients:
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+    with patch("copilot.CopilotClient", side_effect=clients):
+        scout_id = await adapter.create_session(
+            _make_config(job_id="job-accounting", session_kind="preflight", model="gpt-4o-mini")
+        )
+        primary_id = await adapter.create_session(
+            _make_config(job_id="job-accounting", model="primary-heavy-model")
+        )
+    try:
+        yield scout_id, primary_id
+    finally:
+        await adapter.abort_session(scout_id)
+        await adapter.abort_session(primary_id)
+
+
+class TestScoutAccounting:
+    @pytest.mark.asyncio
+    async def test_scout_usage_keeps_primary_model_unset_until_primary_usage(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str]
+    ) -> None:
+        scout_id, primary_id = accounting_sessions
+        adapter._db_write_set_model = AsyncMock()
+        adapter._schedule_db_write = lambda coro: coro.close()
+        usage = _FakeEventData(
+            model="gpt-4o-mini",
+            input_tokens=120,
+            output_tokens=30,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            cost=0.0015,
+            duration=15,
+            quota_snapshots=None,
+        )
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("assistant.usage", usage),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [False],
+            adapter._queues[scout_id],
+        )
+
+        assert "job-accounting" not in adapter._job_main_models, "Scout usage must not claim the primary model"
+        adapter._db_write_set_model.assert_not_called()
+        event = adapter._queues[scout_id].get_nowait()
+        assert event is not None
+        assert event.kind == EventKind.telemetry_usage
+        assert event.payload["model"] == "gpt-4o-mini"
+        assert event.payload["input_tokens"] == 120
+        assert event.payload["output_tokens"] == 30
+        assert event.payload["cost_usd"] == pytest.approx(0.0015)
+        assert adapter.get_session_kind(scout_id) == "preflight"
+
+        usage.model = "primary-heavy-model"
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("assistant.usage", usage),
+            primary_id,
+            "job-accounting",
+            "primary-heavy-model",
+            [False],
+            adapter._queues[primary_id],
+        )
+        assert adapter._job_main_models["job-accounting"] == "primary-heavy-model"
+        adapter._db_write_set_model.assert_called_once_with(job_id="job-accounting", model="primary-heavy-model")
+
+    @pytest.mark.asyncio
+    async def test_scout_model_change_does_not_overwrite_primary_model(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str]
+    ) -> None:
+        scout_id, primary_id = accounting_sessions
+        adapter._job_main_models["job-accounting"] = "primary-heavy-model"
+        adapter._db_write_set_model = AsyncMock()
+        adapter._schedule_db_write = lambda coro: coro.close()
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.model_change", _FakeEventData(new_model="utility-fallback")),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [True],
+            adapter._queues[scout_id],
+        )
+
+        assert adapter._job_main_models["job-accounting"] == "primary-heavy-model"
+        adapter._db_write_set_model.assert_not_called()
+
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent("session.model_change", _FakeEventData(new_model="primary-selected-next")),
+            primary_id,
+            "job-accounting",
+            "primary-heavy-model",
+            [True],
+            adapter._queues[primary_id],
+        )
+        assert adapter._job_main_models["job-accounting"] == "primary-selected-next"
+        adapter._db_write_set_model.assert_called_once_with(job_id="job-accounting", model="primary-selected-next")
+
+
+class TestScoutPermissions:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("content", ["Let me create a temporary script.", ""])
+    async def test_scout_preserves_tool_request_intent_before_execution(
+        self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str], content: str
+    ) -> None:
+        scout_id, _ = accounting_sessions
+        queue = adapter._queues[scout_id]
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent(
+                "assistant.message",
+                _FakeEventData(content=content, tool_requests=[{"name": "create", "arguments": "{}"}]),
+            ),
+            scout_id,
+            "job-accounting",
+            "gpt-4o-mini",
+            [False],
+            queue,
+        )
+        assert not queue.empty(), "A tool-only message must invalidate earlier brief candidates"
+        event = queue.get_nowait()
+        assert event is not None
+        assert event.payload.get("has_tool_requests") is True
+        assert event.payload["content"] == content
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_fields",
+        [
+            {"tool_name": "view", "path": "src.py"},
+            {"tool_name": "read_file", "file_name": "src.py"},
+            {"tool_name": "glob", "path": "."},
+            {"tool_name": "grep", "path": "."},
+            {"tool_name": "list_dir", "path": "."},
+            {"tool_name": "glob"},
+            {"tool_name": "grep"},
+        ],
+    )
+    async def test_scout_read_search_reaches_policy_and_sdk_allow(
+        self, adapter: CopilotAdapter, tmp_path: Path, request_fields: dict[str, Any]
+    ) -> None:
+        from backend.services.adapters.base_adapter import PermissionDecision
+
+        adapter.set_job_id("scout", "job-1")
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(tmp_path), session_kind="preflight")
+        result = await adapter._handle_permission_request(
+            _FakePermissionRequest(kind="read", **request_fields), {"session_id": "scout"}, config
+        )
+        assert result.kind == "approve-once"
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_fields",
+        [
+            {"kind": "write", "tool_name": "create_file", "path": "src.py"},
+            {"kind": "write", "tool_name": "view", "path": "src.py", "read_only": True},
+            {"kind": "shell", "tool_name": "bash", "full_command_text": "echo hello", "read_only": True},
+            {"kind": "shell", "tool_name": "powershell", "full_command_text": "Get-Content src.py"},
+            {"kind": "shell", "tool_name": "view", "path": "src.py", "read_only": True},
+            {"kind": "url", "tool_name": "web_fetch", "url": "https://example.test"},
+            {"kind": "mcp", "tool_name": "view", "path": "src.py", "read_only": True},
+            {"kind": "custom-tool", "tool_name": "mcp__repo__read", "path": "src.py", "read_only": True},
+            {"kind": "custom-tool", "tool_name": "task", "read_only": True},
+            {"kind": "read", "tool_name": "future_reader", "path": "src.py", "read_only": True},
+            {"kind": "unknown", "tool_name": "view", "path": "src.py"},
+            {"kind": "read", "tool_name": "view"},
+            {"kind": "read", "tool_name": "view", "path": "..\\outside.py"},
+            {"kind": "read", "tool_name": "grep", "path": ".."},
+            {"kind": "read", "tool_name": "view", "file_name": "src.py", "path": "..\\outside.py"},
+            {"kind": "read", "tool_name": "view", "possible_paths": ["src.py", "..\\outside.py"]},
+            {"kind": "read", "tool_name": "view", "path": "https://example.test/source.py"},
+        ],
+    )
+    async def test_scout_denies_unsafe_requests_before_general_allow(
+        self, adapter: CopilotAdapter, tmp_path: Path, request_fields: dict[str, Any]
+    ) -> None:
+        from backend.services.adapters.base_adapter import PermissionDecision
+
+        adapter.set_job_id("scout", "job-1")
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(tmp_path), session_kind="preflight")
+        result = await adapter._handle_permission_request(
+            _FakePermissionRequest(**request_fields), {"session_id": "scout"}, config
+        )
+        assert result.kind == "reject"
+        adapter._evaluate_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scout_denies_absolute_sibling_path(self, adapter: CopilotAdapter, tmp_path: Path) -> None:
+        from backend.services.adapters.base_adapter import PermissionDecision
+
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        result = await adapter._handle_permission_request(
+            _FakePermissionRequest(kind="read", tool_name="view", path=str(tmp_path.parent / "other" / "src.py")),
+            {"session_id": "scout"},
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"),
+        )
+        assert result.kind == "reject"
+        adapter._evaluate_permission.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scout_read_does_not_override_policy_denial(self, adapter: CopilotAdapter, tmp_path: Path) -> None:
+        from backend.services.adapters.base_adapter import PermissionDecision
+
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.deny)
+        result = await adapter._handle_permission_request(
+            _FakePermissionRequest(kind="read", tool_name="view", path="src.py"),
+            {"session_id": "scout"},
+            _make_config(workspace_path=str(tmp_path), session_kind="preflight"),
+        )
+        assert result.kind == "reject"
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("session_kind", ["job", "sidecar"])
+    async def test_scout_guard_does_not_restrict_other_sessions(
+        self, adapter: CopilotAdapter, tmp_path: Path, session_kind: str
+    ) -> None:
+        from backend.services.adapters.base_adapter import PermissionDecision
+
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        result = await adapter._handle_permission_request(
+            _FakePermissionRequest(kind="shell", tool_name="powershell", full_command_text="Get-Content src.py"),
+            {"session_id": "ordinary"},
+            _make_config(workspace_path=str(tmp_path), session_kind=session_kind),
+        )
+        assert result.kind == "approve-once"
+        adapter._evaluate_permission.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_scout_sdk_configuration_keeps_reads_and_excludes_mutations(
+        self, adapter: CopilotAdapter, tmp_path: Path
+    ) -> None:
+        from backend.services.tools.preflight_curator import _DISALLOWED_BUILTIN_TOOLS
+
+        fake_client = _FakeCopilotClient()
+        fake_client.create_session = AsyncMock(wraps=fake_client.create_session)
+        fake_client.stop = AsyncMock()
+        fake_client.force_stop = AsyncMock()
+        config = _make_config(
+            workspace_path=str(tmp_path),
+            model="gpt-4o-mini",
+            session_kind="preflight",
+            disallowed_tools=_DISALLOWED_BUILTIN_TOOLS,
+        )
+        with patch("copilot.CopilotClient", return_value=fake_client):
+            session_id = await adapter.create_session(config)
+        try:
+            assert adapter.get_session_kind(session_id) == "preflight"
+            assert adapter._session_to_job[session_id] == config.job_id
+            options = fake_client.create_session.call_args.kwargs
+            assert options["model"] == "gpt-4o-mini"
+            assert options["working_directory"] == str(tmp_path)
+            excluded = set(options["excluded_tools"])
+            assert {"bash", "powershell", "create_file", "str_replace_editor", "run_in_terminal"} <= excluded
+            assert not excluded.intersection({"view", "glob", "grep", "read_file", "list_dir", "grep_search"})
+            available = set(options.get("available_tools") or [])
+            assert {"view", "glob", "grep"} <= available
+            assert not available.intersection({"create", "write_powershell", "list_powershell", "task", "web_fetch"})
+            assert callable(options["on_permission_request"])
+        finally:
+            await adapter.abort_session(session_id)
+
+    @pytest.mark.asyncio
+    async def test_scout_resume_restricts_sdk_to_read_search_tools(self, adapter: CopilotAdapter) -> None:
+        fake_client = _FakeCopilotClient()
+        fake_client.resume_session = AsyncMock(wraps=fake_client.resume_session)
+        fake_client.stop = AsyncMock()
+        fake_client.force_stop = AsyncMock()
+        with patch("copilot.CopilotClient", return_value=fake_client):
+            session_id = await adapter.create_session(
+                _make_config(session_kind="preflight", resume_sdk_session_id="resumed-scout")
+            )
+        try:
+            options = fake_client.resume_session.call_args.kwargs
+            available = set(options.get("available_tools") or [])
+            assert {"view", "glob", "grep"} <= available
+            assert not available.intersection({"create", "write_powershell", "list_powershell", "task", "web_fetch"})
+        finally:
+            await adapter.abort_session(session_id)
 
 
 # ---------------------------------------------------------------------------

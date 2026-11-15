@@ -30,6 +30,8 @@ from backend.models.api_schemas import ExecutionPhase
 from backend.models.domain import (
     TERMINAL_STATES,
     ApprovalResolution,
+    CurrentExecutionContext,
+    CurrentExecutionDispatchResult,
     GitMergeOutcome,
     Job,
     JobMode,
@@ -47,7 +49,10 @@ from backend.models.events import (
     new_event,
 )
 from backend.persistence.job_repo import JobRepository
+from backend.services.adapters.integration_policy import IntegrationDisabledError, IntegrationPolicy
+from backend.services.completers.copilot_steer import NativeDeliveryError
 from backend.services.job.job_service import JobService
+from backend.services.runtime.execution_control import ExecutionControl
 from backend.services.runtime.handoff import (
     build_followup_handoff_prompt_for_job,
     build_resume_handoff_prompt_for_job,
@@ -87,7 +92,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from backend.services.action_policy.governance import GovernanceDecider
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
@@ -275,7 +279,6 @@ class RuntimeService:
         sidecar_sessions: SidecarSessionManager | None = None,
         step_tracker: StepTracker | None = None,
         trail_service: TrailService | None = None,
-        coderecon_service: CodeReconService | None = None,
         sidecar_dispatcher: SidecarDispatcher | None = None,
         event_processor: EventProcessor | None = None,
     ) -> None:
@@ -284,6 +287,10 @@ class RuntimeService:
         self._adapter_registry = adapter_registry
         self._config = config
         self._approval_service = approval_service
+        self._execution_control = approval_service.execution_control if approval_service else ExecutionControl()
+        self._execution_epoch = uuid.uuid4().hex
+        self._external_generations: dict[str, str] = {}
+        self._starting_tasks: dict[str, asyncio.Task[Any]] = {}
         self._diff_service = diff_service
         self._git_service = git_service
         self._merge_service = merge_service
@@ -291,7 +298,6 @@ class RuntimeService:
         self._platform_registry = platform_registry
         self._sidecar_sessions = sidecar_sessions
         self._step_tracker = step_tracker
-        self._coderecon_service = coderecon_service
         self._sidecar_dispatcher = sidecar_dispatcher
         # The one funnel — both managed (here) and imported (ingest sources)
         # producers route their TF-native events through this processor.
@@ -305,6 +311,7 @@ class RuntimeService:
         self._governance_decider: GovernanceDecider | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._scout_tasks: dict[str, asyncio.Task[SessionConfig]] = {}
         self._agent_sessions: dict[str, AgentSession] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, float] = {}
@@ -406,14 +413,13 @@ class RuntimeService:
             git_service=self._git_service,
             config=self._config,
             event_bus=self._event_bus,
-            coderecon=self._coderecon_service,
             project_repo=ProjectRepository(session),
         )
 
     async def _get_job(self, job_id: str) -> Job | None:
         """Load a job by id (convenience wrapper)."""
         async with self._session_factory() as db:
-            return await self._make_job_service(db).get_job(job_id)
+            return await JobRepository(db).get(job_id)
 
     async def _finalize_diff_safe(self, job_id: str, worktree_path: str | None, base_ref: str | None) -> None:
         """Finalize the diff snapshot, swallowing exceptions."""
@@ -561,6 +567,8 @@ class RuntimeService:
                 await self._emit_setup_progress(job.id, "failed")
                 await self._publish_state_event(job.id, JobState.preparing, JobState.failed)
                 return updated_job
+            if updated_job.state != JobState.queued:
+                return updated_job
 
             # Publish preparing → queued transition
             await self._emit_setup_progress(job.id, "workspace_ready")
@@ -584,6 +592,7 @@ class RuntimeService:
         session_token: str | None = None,
     ) -> None:
         """Start the job if capacity allows, otherwise keep it queued."""
+        IntegrationPolicy(self._config).require_enabled(job.sdk)
 
         # Open the built-in sidecar sessions for this job
         if self._sidecar_sessions is not None:
@@ -679,6 +688,7 @@ class RuntimeService:
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
     ) -> None:
         """Create an asyncio task to execute the job."""
+        IntegrationPolicy(self._config).require_enabled(job.sdk)
         if job.id in self._tasks:
             return  # Already running (in-memory guard)
 
@@ -693,7 +703,11 @@ class RuntimeService:
             return
 
         agent_session = AgentSession()
-        self._agent_sessions[job.id] = agent_session
+        starting_task = asyncio.current_task()
+        if starting_task is not None:
+            self._starting_tasks[job.id] = starting_task
+        async with self._execution_control.hold(job.id):
+            self._agent_sessions[job.id] = agent_session
 
         # The DB CAS already set the state to running; publish the event
         # if the domain object's state hasn't caught up yet.
@@ -731,31 +745,19 @@ class RuntimeService:
                 repo=job.repo,
             )
 
-            # Preflight context curation — explore repo via CodeRecon and produce a brief
             await self._emit_setup_progress(job.id, "exploring_codebase")
-            # Ensure the repo is indexed before preflight — the curator agent
-            # calls coderecon tools which require a populated index.
-            preflight_worktree_path = job.worktree_path
-            if self._coderecon_service is not None and self._coderecon_service.available:
+            if self._preflight_curator is not None:
+                async with self._session_factory() as session:
+                    before_scout = await JobRepository(session).get(job.id)
+                if before_scout and before_scout.state in TERMINAL_STATES:
+                    self._agent_sessions.pop(job.id, None)
+                    return
+                scout_task = asyncio.create_task(self._run_preflight_curator(job, session_config))
+                self._scout_tasks[job.id] = scout_task
                 try:
-                    repo_name = await self._coderecon_service.ensure_repo_indexed(job.repo)
-                    # Also register the job worktree — the kit only has "main"
-                    # after a fresh index (e.g. server restart). Without this,
-                    # preflight scout fails with "Worktree not found in index".
-                    if job.worktree_path and job.worktree_path != job.repo:
-                        registered = await self._coderecon_service.register_worktree(repo_name, job.worktree_path)
-                        if not registered:
-                            # Worktree doesn't exist or failed to index — fall
-                            # back to repo root so preflight uses "main".
-                            log.info("preflight_worktree_fallback", job_id=job.id, worktree=job.worktree_path)
-                            preflight_worktree_path = job.repo
-                except Exception:
-                    log.debug("preflight_index_failed", job_id=job.id, exc_info=True)
-            session_config = await self._run_preflight_curator(
-                job,
-                session_config,
-                worktree_override=preflight_worktree_path,
-            )
+                    session_config = await scout_task
+                finally:
+                    self._scout_tasks.pop(job.id, None)
 
             # If the job was canceled during preflight, don't start the main session.
             async with self._session_factory() as session:
@@ -763,6 +765,7 @@ class RuntimeService:
             if _job_check and _job_check.state in TERMINAL_STATES:
                 log.info("job_start_aborted_after_preflight", job_id=job.id, state=_job_check.state)
                 self._agent_sessions.pop(job.id, None)
+                self._starting_tasks.pop(job.id, None)
                 return
 
             await self._emit_setup_progress(job.id, "starting_agent")
@@ -771,17 +774,29 @@ class RuntimeService:
                 self._run_job_guarded(job.id, agent_session, session_config, session_number=job.session_count),
                 name=f"job-{job.id}",
             )
+        except asyncio.CancelledError:
+            self._agent_sessions.pop(job.id, None)
+            self._starting_tasks.pop(job.id, None)
+            if self._approval_service is not None:
+                await self._approval_service.cleanup_job(job.id, preserve_pending=self._shutting_down)
+            if self._sidecar_sessions is not None:
+                self._sidecar_sessions.close_job(job.id)
+            raise
         except Exception:
             # Task creation failed after the DB CAS set state to running.
             # Revert to the pre-claim state so the job isn't orphaned.
             self._agent_sessions.pop(job.id, None)
+            self._starting_tasks.pop(job.id, None)
             log.error("job_start_task_creation_failed", job_id=job.id, exc_info=True)
             async with self._session_factory() as session:
                 repo = JobRepository(session)
-                await repo.update_state(job.id, job.state, datetime.now(UTC))
+                current = await repo.get(job.id)
+                if current is not None and current.state == JobState.running:
+                    await repo.update_state(job.id, job.state, datetime.now(UTC))
                 await session.commit()
             raise
         self._tasks[job.id] = task
+        self._starting_tasks.pop(job.id, None)
         # Cache per-job behavior toggles
         if job.enable_stall_detection is False:
             self._stall_detection_disabled.add(job.id)
@@ -896,17 +911,8 @@ class RuntimeService:
         if worktree_path and self._step_tracker is not None:
             self._step_tracker.register_worktree(job_id, worktree_path)
 
-        # Register worktree with coderecon for structural indexing
-        if worktree_path and self._coderecon_service is not None and self._coderecon_service.available:
-            try:
-                repo_name = await self._coderecon_service.ensure_repo_indexed(job.repo)
-                await self._coderecon_service.register_worktree(repo_name, worktree_path)
-            except Exception:
-                log.debug("coderecon_review.worktree_register_failed", job_id=job_id, exc_info=True)
-
         session_id: str | None = None
         error_reason: str | None = None
-        final_state = JobState.review
         try:
             # Emit agent_reasoning phase before main session execution
             self._resolve_adapter(config.sdk).set_execution_phase(job_id, ExecutionPhase.agent_reasoning)
@@ -967,10 +973,9 @@ class RuntimeService:
                     session_number,
                 )
                 if plan_result is not None:
-                    final_state = plan_result
                     return  # plan mode handled the rest (implementation or re-plan)
 
-            final_state = await self._handle_successful_completion(
+            await self._handle_successful_completion(
                 job_id,
                 config,
                 session_id,
@@ -1001,7 +1006,8 @@ class RuntimeService:
             self._heartbeat_tasks.pop(job_id, None)
             if self._trail_service is not None:
                 self._trail_service.stop_tracking(job_id)
-                succeeded = final_state in (JobState.completed, JobState.review)
+                persisted = await self._get_job(job_id)
+                succeeded = persisted is not None and persisted.state in (JobState.completed, JobState.review)
                 await self._trail_service.finalize(job_id, succeeded=succeeded)
             await self._cleanup_job_state(job_id)
 
@@ -1234,7 +1240,6 @@ class RuntimeService:
                 repo=repo,
                 completer=completer,
                 trail_repo=trail_repo,
-                coderecon=self._coderecon_service,
             )
 
         router = PolicyRouter(
@@ -1342,7 +1347,6 @@ class RuntimeService:
         await self._ensure_terminal_state(job_id)
         await self._finalize_artifacts_safe(job_id)
 
-        # Close CodeRecon session for this job's worktree — no-op with ReviewKit
         # (in-process kits are shared and closed on shutdown, not per-job)
 
         if self._trail_service is not None:
@@ -1356,7 +1360,8 @@ class RuntimeService:
         if self._governance_subscriber is not None:
             self._governance_subscriber.cleanup(job_id)
         self._tasks.pop(job_id, None)
-        self._agent_sessions.pop(job_id, None)
+        async with self._execution_control.hold(job_id):
+            self._agent_sessions.pop(job_id, None)
         self._last_activity.pop(job_id, None)
         self._active_tool.pop(job_id, None)
         self._stall_check_pending.discard(job_id)
@@ -1399,7 +1404,7 @@ class RuntimeService:
             except (OSError, RuntimeError):
                 log.warning("sidecar_session_close_failed", job_id=job_id, exc_info=True)
         if self._approval_service is not None:
-            await self._approval_service.cleanup_job(job_id)
+            await self._approval_service.cleanup_job(job_id, preserve_pending=self._shutting_down)
         if self._diff_service is not None:
             self._diff_service.cleanup(job_id)
         await self._dequeue_next()
@@ -1581,6 +1586,7 @@ class RuntimeService:
         Called by watchers after job creation or re-attachment.
         """
         self._last_activity[job_id] = time.monotonic()
+        self._external_generations[job_id] = uuid.uuid4().hex
 
         # Open sidecar sessions — use configured list or fall back to built-in defaults.
         if self._sidecar_sessions is not None:
@@ -1597,7 +1603,7 @@ class RuntimeService:
 
         # Step tracker
         if worktree_path and self._step_tracker is not None:
-            self._step_tracker.register_worktree(job_id, worktree_path)
+            self._step_tracker.register_worktree(job_id, worktree_path, managed=False)
 
         # Diff service
         # (EventProcessor registered worktrees for diff triggers; we do the
@@ -1702,6 +1708,7 @@ class RuntimeService:
         self._stall_check_consecutive_failures.pop(job_id, None)
 
         log.debug("external_session_finalized", job_id=job_id, outcome=outcome)
+        self._external_generations.pop(job_id, None)
 
     # ------------------------------------------------------------------
     # Shared event processing
@@ -2125,6 +2132,145 @@ class RuntimeService:
         )
         await self.send_message(job_id, message)
 
+    async def get_current_execution_context(self, job_id: str) -> CurrentExecutionContext:
+        async with self._execution_control.hold(job_id):
+            job = await self._get_job(job_id)
+            return CurrentExecutionContext(job_id, await self._execution_token(job))
+
+    async def _execution_token(self, job: Job | None) -> str | None:
+        import hashlib
+
+        if job is None or job.state != JobState.running:
+            return None
+        if job.source == JobSource.managed:
+            handle = self._agent_sessions.get(job.id)
+            if handle is None or not handle.session_id:
+                return None
+            identity = f"{id(handle)}:{handle.session_id}"
+        elif job.source == JobSource.copilot_cli:
+            # Publication and permission markers do not identify a live CLI execution.
+            # Until a supported live identity signal exists, do not certify a target
+            # for strict preview/confirmation. Ordinary relay admission is separate.
+            return None
+        else:
+            generation = self._external_generations.get(job.id)
+            if not generation or self._ingest_service is None or not await self._ingest_service.confirms_live(job):
+                return None
+            identity = f"{generation}:{job.external_session_id}"
+        return hashlib.sha256(
+            f"{self._execution_epoch}:{job.id}:{job.source}:{job.session_count}:{identity}".encode()
+        ).hexdigest()
+
+    async def dispatch_current_execution(
+        self, job_id: str, expected_execution: str, content: str
+    ) -> CurrentExecutionDispatchResult:
+        async with self._execution_control.hold(job_id):
+            job = await self._get_job(job_id)
+            token = await self._execution_token(job)
+            reason = None
+            if job is None or job.state != JobState.running:
+                reason = "not_running"
+            elif token is None:
+                reason = "no_live_execution"
+            elif token != expected_execution:
+                reason = "stale_execution"
+            elif self._approval_service is not None and await self._approval_service.list_pending(job_id):
+                reason = "approval_pending"
+            elif self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
+                reason = "gate_active"
+            if reason:
+                return CurrentExecutionDispatchResult(job_id, token, "conflict", reason)
+            assert job is not None
+            try:
+                IntegrationPolicy(self._config).require_enabled(job.sdk)
+                async with asyncio.timeout(30):
+                    if job.source == JobSource.managed:
+                        await self._agent_sessions[job_id].send_message(content)
+                    else:
+                        assert self._ingest_service is not None
+                        await self._ingest_service.send_operator_message(job_id, content)
+            except IntegrationDisabledError:
+                return CurrentExecutionDispatchResult(job_id, token, "failed", "integration_disabled")
+            except NativeDeliveryError as exc:
+                return CurrentExecutionDispatchResult(
+                    job_id,
+                    token,
+                    "uncertain" if exc.uncertain else "failed",
+                    "delivery_unknown" if exc.uncertain else "delivery_failed",
+                )
+            except (TimeoutError, ConnectionError, OSError):
+                return CurrentExecutionDispatchResult(job_id, token, "uncertain", "delivery_unknown")
+            self._echo_suppress.setdefault(job_id, set()).add(content)
+        message = new_event(job_id, EventKind.message_user, {"content": content, "dispatch": "coordinated"})
+        await self._event_bus.publish(message)
+        return CurrentExecutionDispatchResult(job_id, token, "accepted", message_event_id=message.id)
+
+    async def send_operator_message(self, job_id: str, content: str) -> bool:
+        job = await self._get_job(job_id)
+        if job is None:
+            raise JobNotFoundError(f"Job {job_id} does not exist")
+        IntegrationPolicy(self._config).require_enabled(job.sdk)
+        if job.source == JobSource.managed:
+            return await self.send_message(job_id, content)
+        async with self._execution_control.hold(job_id):
+            if self._ingest_service is None:
+                raise NativeDeliveryError("Native steering is unavailable")
+            await self._ingest_service.send_operator_message(job_id, content)
+            receipt_id = str(uuid.uuid4())
+            receipt = new_event(
+                job_id,
+                EventKind.message_user,
+                {
+                    "content": (
+                        f"Native operator admission receipt {receipt_id}\n"
+                        "Instruction admitted to the message channel. Execution unconfirmed.\n\n"
+                        f"{content}"
+                    ),
+                    "operator_content": content,
+                    "admission_status": "accepted",
+                    "execution_status": "unconfirmed",
+                    "source": str(job.source),
+                    "external_session_id": job.external_session_id,
+                },
+                event_id=receipt_id,
+            )
+            from backend.persistence.database import serialized_write
+            from backend.persistence.event_repo import EventRepository
+
+            # Event fan-out can queue persistence retries, so commit before publishing.
+            try:
+                async with serialized_write(self._session_factory) as session:
+                    await EventRepository(session).append(receipt)
+            except DBAPIError as exc:
+                log.error(
+                    "native_operator_receipt_persist_failed",
+                    job_id=job_id,
+                    receipt_id=receipt_id,
+                    error_type=type(exc).__name__,
+                )
+                raise NativeDeliveryError(
+                    "Native admission succeeded but its durable receipt could not be stored",
+                    uncertain=True,
+                ) from None
+        await self._event_bus.publish(receipt)
+        return True
+
+    async def cancel_job(self, job_id: str) -> Job:
+        async with self._execution_control.hold(job_id):
+            job = await self._get_job(job_id)
+            if job is None:
+                raise JobNotFoundError(f"Job {job_id} does not exist")
+            if job.source != JobSource.managed:
+                if self._ingest_service is None:
+                    raise NativeDeliveryError("Native steering is unavailable")
+                await self._ingest_service.abort_session(job_id)
+            async with self._session_factory() as session:
+                canceled = await self._make_job_service(session).cancel_job(job_id)
+                await session.commit()
+        if job.source == JobSource.managed:
+            await self.cancel(job_id)
+        return canceled
+
     async def cancel(self, job_id: str) -> None:
         """Cancel a running job by cancelling its asyncio task.
 
@@ -2133,10 +2279,19 @@ class RuntimeService:
         interacts with in-memory runtime tasks.
         """
         task = self._tasks.get(job_id)
+        starting = self._starting_tasks.get(job_id)
+        if starting is not None and starting is not asyncio.current_task():
+            starting.cancel()
+            return
         if task is not None:
             task.cancel()
             log.info("job_cancel_requested", job_id=job_id)
         else:
+            scout_task = self._scout_tasks.get(job_id)
+            if scout_task is not None:
+                # The request still owns its canceled-state transaction.
+                # Finalization writes through a separate session after it commits.
+                scout_task.cancel()
             # No task yet — job may still be in preflight curation.
             # Abort the agent session so the preflight curator's stream ends.
             agent_session = self._agent_sessions.get(job_id)
@@ -2180,6 +2335,9 @@ class RuntimeService:
         """
         agent_session = self._agent_sessions.get(job_id)
         if agent_session is None:
+            job = await self._get_job(job_id)
+            if job is not None and job.source != JobSource.managed:
+                return await self.send_operator_message(job_id, message)
             return await self._resume_orphaned(job_id, message)
         # Lift any tool block from a previous pause before sending.
         agent_session.resume_tools()
@@ -2323,7 +2481,11 @@ class RuntimeService:
         log.info("job_pause_requested", job_id=job_id)
         return True
 
-    async def handle_sidecar_gate(
+    async def handle_sidecar_gate(self, job_id: str, sidecar_name: str, verdict: str, reason: str) -> None:
+        async with self._execution_control.hold(job_id):
+            await self._handle_sidecar_gate(job_id, sidecar_name, verdict, reason)
+
+    async def _handle_sidecar_gate(
         self,
         job_id: str,
         sidecar_name: str,
@@ -2379,7 +2541,11 @@ class RuntimeService:
             self._sidecar_dispatcher.set_gated(job_id, gated=True)
         log.info("sidecar_gate_paused", job_id=job_id, sidecar=sidecar_name, reason=reason)
 
-    async def resolve_sidecar_gate(
+    async def resolve_sidecar_gate(self, job_id: str, action: str, message: str | None = None) -> None:
+        async with self._execution_control.hold(job_id):
+            await self._resolve_sidecar_gate(job_id, action, message)
+
+    async def _resolve_sidecar_gate(
         self,
         job_id: str,
         action: str,
@@ -2650,42 +2816,15 @@ class RuntimeService:
             preparing_jobs.extend(preparing)
 
         for job in preparing_jobs:
+            try:
+                IntegrationPolicy(self._config).require_enabled(job.sdk)
+            except IntegrationDisabledError as exc:
+                await self._fail_job(job.id, str(exc))
+                continue
             log.info("recovering_preparing_job", job_id=job.id)
             asyncio.create_task(self.setup_and_start(job), name=f"recover-setup-{job.id}")
 
-        # Pre-filter orphaned jobs whose worktree directories no longer exist —
-        # fail them immediately instead of attempting a costly recovery that will
-        # always error out.
-        from pathlib import Path as _Path
-
-        unreachable: list[tuple[Job, JobState]] = []
-        recoverable: list[tuple[Job, JobState]] = []
-        for job, state in orphaned_jobs:
-            wt = job.worktree_path or job.repo
-            if wt and not _Path(wt).exists():
-                unreachable.append((job, state))
-            else:
-                recoverable.append((job, state))
-
-        if unreachable:
-            now = datetime.now(UTC)
-            from backend.persistence.database import serialized_write
-
-            async with serialized_write(self._session_factory) as session:
-                job_repo = JobRepository(session)
-                for job, _state in unreachable:
-                    await job_repo.update_state(
-                        job.id,
-                        new_state=JobState.failed,
-                        updated_at=now,
-                        completed_at=now,
-                        failure_reason="Worktree no longer exists — cannot recover after restart",
-                    )
-            log.debug(
-                "orphaned_jobs_marked_failed",
-                count=len(unreachable),
-                job_ids=[j.id for j, _ in unreachable],
-            )
+        recoverable = orphaned_jobs
 
         if recoverable:
             log.info("recovering_orphaned_jobs", count=len(recoverable))
@@ -2694,14 +2833,28 @@ class RuntimeService:
             for job, state in recoverable:
                 log.debug("recovering_orphaned_job", job_id=job.id, state=state)
                 try:
+                    from backend.services.runtime.verify import recover_interrupted_verification
+
+                    await recover_interrupted_verification(self, job.id)
+                    IntegrationPolicy(self._config).require_enabled(job.sdk)
+                    if self._approval_service is not None:
+                        await self._approval_service.retire_execution_requests(
+                            job.id, "Superseded by execution recovery after server restart"
+                        )
                     await self._recover_active_job(job.id)
-                except Exception:
-                    log.debug("orphaned_job_recovery_failed", job_id=job.id, exc_info=True)
+                except Exception as exc:
+                    log.error("orphaned_job_recovery_failed", job_id=job.id, exc_info=True)
+                    await self._fail_job(job.id, f"Recovery failed: {exc}")
 
         await self._artifact_finalizer.recover_eligible()
 
         for job in queued_jobs:
-            await self.start_or_enqueue(job)
+            if job.source != JobSource.managed:
+                continue
+            try:
+                await self.start_or_enqueue(job)
+            except IntegrationDisabledError as exc:
+                await self._fail_job(job.id, str(exc))
 
     async def shutdown(self) -> None:
         """Gracefully shut down all running jobs.
@@ -2711,13 +2864,19 @@ class RuntimeService:
         instead of marking them as canceled (which confused users).
         """
         self._shutting_down = True
+        for starting_task in tuple(self._starting_tasks.values()):
+            if starting_task is not asyncio.current_task():
+                starting_task.cancel()
         for job_id in list(self._tasks):
             task = self._tasks.get(job_id)
             if task is not None:
                 task.cancel()
                 log.info("shutdown_task_cancelled", job_id=job_id)
+        for job_id, scout_task in list(self._scout_tasks.items()):
+            scout_task.cancel()
+            log.info("shutdown_scout_cancelled", job_id=job_id)
         # Wait briefly for tasks to complete
-        tasks = list(self._tasks.values())
+        tasks = list(set(self._tasks.values()) | set(self._starting_tasks.values()) | set(self._scout_tasks.values()))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -3017,18 +3176,16 @@ class RuntimeService:
     ) -> SessionConfig:
         """Run the preflight curator agent to produce curated context.
 
-        The curator agent explores the repository structure via CodeRecon
+        The utility-model Scout explores the job worktree with read/search
         tools and produces a brief for the main agent's system prompt.
         Returns *session_config* with ``memory_context`` populated (or
         unchanged on failure).
         """
         from backend.models.secondary_session import EntryKind, SecondarySessionKind, SecondarySessionStatus
         from backend.persistence.secondary_session_repo import SecondarySessionRepository
+        from backend.services.tools.preflight_curator import PreflightReport
 
         worktree_path = worktree_override or job.worktree_path or job.repo
-
-        if self._coderecon_service is None or not self._coderecon_service.available:
-            return session_config
 
         if self._preflight_curator is None:
             log.debug("preflight_curator.not_configured", job_id=job.id)
@@ -3038,6 +3195,7 @@ class RuntimeService:
         started_at = datetime.now(UTC)
         repo = SecondarySessionRepository(self._session_factory)
         seq_counter = 0
+        usage_report = PreflightReport()
 
         try:
             # Persist + emit started
@@ -3144,6 +3302,10 @@ class RuntimeService:
                     )
                 )
 
+            async def _on_usage(observed: PreflightReport) -> None:
+                nonlocal usage_report
+                usage_report = observed
+
             report = await self._preflight_curator.curate(
                 task=session_config.prompt,
                 repo=str(job.repo),
@@ -3151,6 +3313,7 @@ class RuntimeService:
                 job_id=job.id,
                 on_tool_call=_on_tool_call,
                 on_reasoning=_on_reasoning,
+                on_usage=_on_usage,
             )
 
             # Emit completed
@@ -3160,6 +3323,10 @@ class RuntimeService:
                 status=SecondarySessionStatus.completed.value,
                 completed_at=completed_at,
                 output=report.brief or None,
+                input_tokens=report.input_tokens,
+                output_tokens=report.output_tokens,
+                cost_usd=report.cost_usd,
+                metadata={"model": report.model, "requested_model": self._config.runtime.utility_model},
             )
             await self._event_bus.publish(
                 new_event(
@@ -3170,6 +3337,9 @@ class RuntimeService:
                         "session_id": session_id,
                         "status": SecondarySessionStatus.completed.value,
                         "output": report.brief or None,
+                        "input_tokens": report.input_tokens,
+                        "output_tokens": report.output_tokens,
+                        "cost_usd": report.cost_usd,
                     },
                 )
             )
@@ -3197,14 +3367,26 @@ class RuntimeService:
                 )
                 return dataclass_replace(session_config, memory_context=report.brief)
             log.debug("preflight_curator.nothing_relevant", job_id=job.id)
-        except Exception:
-            log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+        except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                log.info("preflight_curator.curation_cancelled", job_id=job.id)
+            else:
+                log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+            failed_report = usage_report
             # Mark session failed if it was created
             try:
                 await repo.complete_session(
                     session_id,
-                    status=SecondarySessionStatus.failed.value,
+                    status=(
+                        SecondarySessionStatus.timeout.value
+                        if isinstance(exc, TimeoutError)
+                        else SecondarySessionStatus.failed.value
+                    ),
                     completed_at=datetime.now(UTC),
+                    input_tokens=failed_report.input_tokens,
+                    output_tokens=failed_report.output_tokens,
+                    cost_usd=failed_report.cost_usd,
+                    metadata={"model": failed_report.model, "requested_model": self._config.runtime.utility_model},
                 )
                 await self._event_bus.publish(
                     new_event(
@@ -3213,12 +3395,21 @@ class RuntimeService:
                         kind=EventKind.secondary_session_completed,
                         payload={
                             "session_id": session_id,
-                            "status": SecondarySessionStatus.failed.value,
+                            "status": (
+                                SecondarySessionStatus.timeout.value
+                                if isinstance(exc, TimeoutError)
+                                else SecondarySessionStatus.failed.value
+                            ),
+                            "input_tokens": failed_report.input_tokens,
+                            "output_tokens": failed_report.output_tokens,
+                            "cost_usd": failed_report.cost_usd,
                         },
                     )
                 )
             except Exception:
-                pass
+                log.warning("preflight_curator.failure_persist_failed", job_id=job.id, exc_info=True)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
 
         return session_config
 

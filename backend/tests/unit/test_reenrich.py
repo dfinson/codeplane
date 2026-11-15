@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,6 +38,25 @@ def mock_session_factory():
     factory = MagicMock()
     factory.return_value = ctx
     return factory
+
+
+class TestRuntimeContract:
+    async def test_partial_failure_does_not_mark_replay_complete(self, mock_session_factory):
+        with (
+            patch("backend.persistence.event_repo.EventRepository") as repo_cls,
+            patch("backend.services.events.reenrich.TFEnricher") as enricher_cls,
+            patch("backend.services.events.reenrich._append_marker", new_callable=AsyncMock) as marker,
+        ):
+            repo = repo_cls.return_value
+            repo.list_by_job = AsyncMock(return_value=[])
+            repo.list_all_events_by_job = AsyncMock(
+                return_value=[new_event("j1", EventKind.message_assistant, {"content": "fixture"})]
+            )
+            enricher_cls.return_value.process.side_effect = ValueError("fixture enrichment failure")
+            enricher_cls.return_value.flush.return_value = []
+            with contextlib.suppress(RuntimeError):
+                await reenrich_job_events("j1", mock_session_factory)
+            assert marker.await_count == 0
 
 
 class TestReenrichIdempotency:

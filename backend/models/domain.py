@@ -674,8 +674,6 @@ class SessionConfig:
     blocking_permission_handler: Callable[[str, str], Awaitable[str]] | None = None
     # Set when resuming a job to reconnect to an existing Copilot SDK session
     resume_sdk_session_id: str | None = None
-    # CodeRecon native tool kit (§8) — built by RuntimeService at job start
-    coderecon_tools: Any | None = None
     # Curated context injected via system_message (hidden from transcript)
     memory_context: str | None = None
     # When set, REPLACES the default CODEPLANE_SYSTEM_PROMPT entirely.
@@ -689,6 +687,21 @@ class SessionConfig:
     # Telemetry dimension — classifies this session for cost tracking.
     # "job" for main agent sessions, or "preflight", "narrator", "sidecar" for sidecar sessions.
     session_kind: SessionKind = "job"
+
+
+@dataclass(frozen=True)
+class CurrentExecutionContext:
+    job_id: str
+    execution_token: str | None
+
+
+@dataclass(frozen=True)
+class CurrentExecutionDispatchResult:
+    job_id: str
+    execution_token: str | None
+    status: str
+    reason: str | None = None
+    message_event_id: str | None = None
 
 
 @dataclass

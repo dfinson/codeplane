@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.api_schemas import (
     CreateManualTaskLinkRequest,
     CreateProjectRequest,
-    IngestTaskGraphResponse,
     ProjectListResponse,
     ProjectListSummaryResponse,
     ProjectResponse,
@@ -133,24 +132,6 @@ async def update_project(
         confirm_repo_removal=body.confirm_repo_removal,
     )
     return _to_response(project)
-
-
-@router.post(
-    "/settings/projects/{project_id}/ingest-tasks",
-    response_model=IngestTaskGraphResponse,
-    status_code=201,
-)
-async def ingest_project_tasks(
-    project_id: str,
-    recipe_service: FromDishka[RecipeService],
-) -> IngestTaskGraphResponse:
-    """Ingest BMAD stories / spec-kit tasks for every member repo of a Project (CAP-9).
-
-    Stateless, on-demand, read-only against every source repo; re-running
-    upserts existing TaskLinks rather than duplicating them.
-    """
-    task_links = await recipe_service.ingest_project(project_id)
-    return IngestTaskGraphResponse(items=[_task_link_to_response(t) for t in task_links])
 
 
 @router.get("/settings/projects/{project_id}/task-links", response_model=TaskLinkListResponse)

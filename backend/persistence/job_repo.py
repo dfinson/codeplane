@@ -49,6 +49,18 @@ class JobRepository(BaseRepository):
         result = await self._session.execute(select(JobRow.id))
         return set(result.scalars().all())
 
+    async def get_ingest_checkpoint(self, job_id: str) -> dict[str, Any] | None:
+        import json
+
+        result = await self._session.execute(select(JobRow.ingest_checkpoint).where(JobRow.id == job_id))
+        value = result.scalar_one_or_none()
+        return json.loads(value) if value else None
+
+    async def update_ingest_checkpoint(self, job_id: str, checkpoint: dict[str, Any], emitted: int) -> None:
+        import json
+
+        await self._update_row(job_id, ingest_checkpoint=json.dumps(checkpoint, sort_keys=True), tail_offset=emitted)
+
     @staticmethod
     def _to_domain(row: JobRow) -> Job:
         return Job(
@@ -391,6 +403,24 @@ class JobRepository(BaseRepository):
     async def update_worktree(self, job_id: str, worktree_path: str, branch: str) -> None:
         """Update the worktree path and branch after workspace setup."""
         await self._update_row(job_id, worktree_path=worktree_path, branch=branch)
+
+    async def finish_workspace_setup(self, job_id: str, worktree_path: str, branch: str, updated_at: datetime) -> bool:
+        from sqlalchemy import update
+
+        result = await self._session.execute(
+            update(JobRow)
+            .where(JobRow.id == job_id, JobRow.state == JobState.preparing)
+            .values(
+                worktree_path=worktree_path,
+                branch=branch,
+                state=JobState.queued,
+                updated_at=updated_at,
+                version=JobRow.version + 1,
+            )
+            .returning(JobRow.id)
+        )
+        await self._session.flush()
+        return result.scalar_one_or_none() is not None
 
     async def update_failure_reason(self, job_id: str, reason: str) -> None:
         """Set the failure reason on a job row."""

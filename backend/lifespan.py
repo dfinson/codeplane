@@ -25,14 +25,13 @@ from backend import config as backend_config
 from backend.config import MCP_PATH, VOICE_MAX_AUDIO_SIZE_MB, CPLConfig, load_config
 from backend.di import AppProvider, CachedModelsBySdk, RequestProvider, VoiceMaxBytes
 from backend.models.events import EventKind, SessionEvent, new_event
-from backend.persistence.database import create_engine, create_session_factory, serialized_write
+from backend.persistence.database import create_engine, create_session_factory, run_migrations, serialized_write
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.step_repo import StepRepository
 from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.platform_adapter import PlatformRegistry
 from backend.services.analytics.model_pricing import ModelPricingService
 from backend.services.artifacts.diff_service import DiffService
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.completers.narrator_completer import NarratorCompleter
 from backend.services.completers.summarization_service import SummarizationService
 from backend.services.completers.voice_service import VoiceService
@@ -50,21 +49,9 @@ from backend.services.sidecar.dispatcher import SidecarDispatcher
 from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.steps.persistence import StepPersistenceSubscriber
 from backend.services.steps.tracker import StepTracker
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
-
-
-class _JobLike:
-    """Lightweight adapter matching the fields _generate_review_story expects."""
-
-    __slots__ = ("repo", "worktree_path", "base_ref", "title", "prompt")
-
-    def __init__(self, row: tuple[Any, ...]) -> None:
-        self.repo = row[0]
-        self.worktree_path = row[1]
-        self.base_ref = row[2]
-        self.title = row[3] if len(row) > 3 else None
-        self.prompt = row[4] if len(row) > 4 else None
-
+from backend.services.tracker_write_service import TrackerWriteService
 
 # Tracks fire-and-forget background tasks so they can be awaited on shutdown.
 _ephemeral_tasks: set[asyncio.Task[Any]] = set()  # noqa: WPS407
@@ -86,6 +73,8 @@ if TYPE_CHECKING:
     from traceforge.types import TitleUpdate
 
     from backend.services.completers.copilot_steer import CopilotSteerClient
+    from backend.services.events.ingest_service import IngestService
+    from backend.services.events.telemetry_subscriber import TelemetrySubscriber
 
 
 log = structlog.get_logger()
@@ -408,6 +397,27 @@ class _CoreServices:
     git_service: GitService
     diff_service: DiffService
     step_tracker: StepTracker
+    task_execution_service: TaskExecutionService
+    tracker_write_service: TrackerWriteService
+
+
+def _schedule_execution_recovery(
+    services: _CoreServices,
+    telemetry_subscriber: TelemetrySubscriber,
+    ingest_service: IngestService,
+) -> asyncio.Task[None]:
+    """Bind constructed consumers before any recovered SDK can emit events."""
+    services.runtime_service.set_telemetry_subscriber(telemetry_subscriber)
+    services.runtime_service.set_ingest_service(ingest_service)
+
+    async def recover() -> None:
+        await services.approval_service.recover_pending_approvals()
+        await services.task_execution_service.recover_on_startup()
+        await services.tracker_write_service.recover_on_startup()
+        await services.runtime_service.recover_on_startup()
+        services.tracker_write_service.wake()
+
+    return asyncio.create_task(recover(), name="recover-on-startup")
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +459,11 @@ def _init_event_infrastructure(
                 session_factory=session_factory,
             )
         except OperationalError:
+            if "_codeplane_source" in event.payload or event.kind in (
+                EventKind.verification_started,
+                EventKind.verification_result,
+            ):
+                raise
             log.error(
                 "event_persist_failed_queued_for_retry",
                 event_id=event.id,
@@ -502,7 +517,7 @@ def _init_event_infrastructure(
                         kind=str(event.kind),
                     )
 
-    event_bus.subscribe(_persist_and_broadcast)
+    event_bus.subscribe(_persist_and_broadcast, required=True)
 
     # Step persistence subscriber — persists step_started/step_completed events
     step_repo = StepRepository(session_factory)
@@ -547,7 +562,6 @@ async def _wire_core_services(
     session_factory: async_sessionmaker[AsyncSession],
     event_bus: EventBus,
     config: CPLConfig,
-    coderecon_service: CodeReconService,
 ) -> _CoreServices:
     """Instantiate and wire together the core application services."""
     approval_service = ApprovalService(session_factory=session_factory)
@@ -555,6 +569,7 @@ async def _wire_core_services(
         approval_service=approval_service,
         event_bus=event_bus,
         session_factory=session_factory,
+        config=config,
     )
     git_service = GitService(config)
     diff_service = DiffService(git_service=git_service, event_bus=event_bus)
@@ -566,11 +581,10 @@ async def _wire_core_services(
         config=config.completion,
         platform_registry=platform_registry,
         diff_service=diff_service,
-        coderecon=coderecon_service,
     )
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
-    utility_adapter = adapter_registry.get_adapter(config.runtime.default_sdk)
+    utility_adapter = adapter_registry.get_adapter(adapter_registry.policy.default_sdk)
     sidecar_sessions = SidecarSessionManager(
         adapter=utility_adapter,
         model=config.runtime.utility_model,
@@ -591,7 +605,7 @@ async def _wire_core_services(
     # --- Preflight curator (pre-job context curation: memory + structural) ---
     from backend.services.tools.preflight_curator import PreflightCurator
 
-    preflight_curator = PreflightCurator(adapter=utility_adapter, coderecon=coderecon_service)
+    preflight_curator = PreflightCurator(adapter=utility_adapter, model=config.runtime.utility_model)
 
     # --- Narrator completer (dedicated long-form story generation) ---
     narrator_completer = NarratorCompleter(
@@ -627,8 +641,20 @@ async def _wire_core_services(
         platform_registry=platform_registry,
         sidecar_sessions=sidecar_sessions,
         step_tracker=step_tracker,
-        coderecon_service=coderecon_service,
         sidecar_dispatcher=sidecar_dispatcher,
+    )
+
+    tracker_write_service = TrackerWriteService(
+        approval_service,
+        session_factory=session_factory,
+        event_bus=event_bus,
+    )
+    task_execution_service = TaskExecutionService(
+        session_factory,
+        config,
+        git_service=git_service,
+        approval_service=approval_service,
+        tracker_write_service=tracker_write_service,
     )
 
     # Wire the preflight curator
@@ -662,6 +688,8 @@ async def _wire_core_services(
         git_service=git_service,
         diff_service=diff_service,
         step_tracker=step_tracker,
+        task_execution_service=task_execution_service,
+        tracker_write_service=tracker_write_service,
     )
 
 
@@ -776,6 +804,8 @@ async def _init_optional_services(
         approval_service=services.approval_service,
         merge_service=services.merge_service,
         sidecar_sessions=services.sidecar_sessions,
+        task_execution_service=services.task_execution_service,
+        tracker_write_service=services.tracker_write_service,
     )
     mcp_app = mcp_server.streamable_http_app()
 
@@ -836,6 +866,7 @@ async def _init_optional_services(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage engine lifecycle — create on startup, dispose on shutdown."""
+    await asyncio.to_thread(run_migrations)
     from backend.services.analytics.telemetry import init_telemetry
 
     init_telemetry()
@@ -873,11 +904,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     config = load_config()
 
-    # --- CodeRecon structural analysis service (always-on, in-process) ---
-    coderecon_service = CodeReconService()
-    coderecon_service.set_event_bus(event_bus)
+    from backend.services.auth.middleware import configure_internal_endpoint
 
-    services = await _wire_core_services(session_factory, event_bus, config, coderecon_service)
+    launch = getattr(app.state, "banner_args", None) or {}
+    configure_internal_endpoint(
+        host=launch.get("host", config.server.host),
+        port=launch.get("port", config.server.port),
+    )
+
+    services = await _wire_core_services(session_factory, event_bus, config)
 
     optional = await _init_optional_services(
         app,
@@ -973,7 +1008,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         event_bus=event_bus,
         sidecar_sessions=services.sidecar_sessions,
         config=config.trail,
-        coderecon=coderecon_service,
     )
     event_bus.subscribe(trail_service.handle_event)
     services.runtime_service.set_trail_service(trail_service)
@@ -990,7 +1024,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from traceforge.pipeline import EventPipeline as TFEventPipeline
     from traceforge.sinks.callback import CallbackSink as TFCallbackSink
 
-    from backend.services.events.event_processor import EventProcessor
+    from backend.services.events.event_processor import RECONSTRUCTING_EVENTS, EventProcessor
     from backend.services.events.turn_summary import build_turn_summary_payload
 
     tf_enricher = TFEnricher(
@@ -1003,17 +1037,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         Delegates the field mapping to ``build_turn_summary_payload`` (pure,
         unit-tested). Session-kind titles map to ``None`` and are skipped.
         """
+        if RECONSTRUCTING_EVENTS.get():
+            return
         payload = build_turn_summary_payload(update)
         if payload is None:
             return
-        await event_bus.publish(
-            new_event(
-                session_id=update.session_id,
-                timestamp=datetime.now(UTC),
-                kind=EventKind.turn_summary,
-                payload=payload,
-            )
+        import uuid
+
+        event = new_event(
+            session_id=update.session_id,
+            timestamp=datetime.now(UTC),
+            kind=EventKind.turn_summary,
+            payload=payload,
+            event_id=str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"codeplane-title-v1:{update.session_id}:{update.segment_id}:{update.kind}:{update.version}",
+                )
+            ),
         )
+        if not await _event_is_persisted(event):
+            await event_bus.publish(event)
+
+    async def _event_is_persisted(event: SessionEvent) -> bool:
+        from backend.persistence.event_repo import EventRepository
+
+        async with session_factory() as session:
+            return await EventRepository(session).contains(event)
 
     title_sink = TFCallbackSink(on_title_update=_on_title_update)
     title_pipeline = TFEventPipeline(
@@ -1031,6 +1081,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         trail_service=trail_service,
         enricher=tf_enricher,
         title_pipeline=title_pipeline,
+        persisted=_event_is_persisted,
     )
     services.runtime_service.set_event_processor(event_processor)
 
@@ -1061,15 +1112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     governance_subscriber.subscribe(event_bus)
     services.runtime_service.set_governance(governance_decider, governance_subscriber)
 
-    # Recover orphaned jobs from a previous crash (background — don't block startup).
-    # Must run AFTER the trail service is subscribed so it receives SessionResumed events,
-    # and AFTER governance is wired (see note above) since job start requires it.
-    # The task reference is kept (not fire-and-forget-discarded) so a restart-triggered
-    # startup can await its completion before publishing the readiness marker below.
-    recovery_task = asyncio.create_task(
-        services.runtime_service.recover_on_startup(),
-        name="recover-on-startup",
-    )
+    # Recovery follows completion subscriber registration below.
 
     # --- Sidecar context providers ---
     # Each provider is a closure over the owning service, matching the
@@ -1116,359 +1159,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     services.sidecar_dispatcher.register_context("recent_messages", _recent_messages_provider)
     services.sidecar_dispatcher.register_context("worktree_path", _worktree_path_provider)
 
-    # --- CodeRecon start (always-on, degrades gracefully if package missing) ---
-    # Propagate feature toggles as env vars before the SDK loads its config.
-    # Direct assignment (not setdefault) so CodePlane config is authoritative.
-    os.environ["CODERECON__FEATURES__SPLADE"] = str(config.coderecon.splade).lower()
-    os.environ["CODERECON__FEATURES__CROSS_ENCODER"] = str(config.coderecon.cross_encoder).lower()
-    await coderecon_service.start()
-
-    # Index all Project-owned and legacy repositories in the background.
-    async with session_factory() as session:
-        from backend.persistence.project_repo import ProjectRepository
-        from backend.services.project.repo_membership import list_managed_repo_paths
-
-        startup_repo_paths = await list_managed_repo_paths(config, ProjectRepository(session))
-    if startup_repo_paths and coderecon_service.available:
-        _fire_and_forget(
-            coderecon_service.index_repos(startup_repo_paths),
-            name="coderecon-startup-index",
-        )
-
-    # Structural health subscriber — emits warnings at step boundaries (§7.2)
-    async def _structural_health_on_step(event: SessionEvent) -> None:
-        if event.kind != EventKind.step_completed:
-            return
-        if not coderecon_service.available:
-            return
-        worktree_path = str(event.payload.get("worktree_path", ""))
-        if not worktree_path:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-        raw_files = event.payload.get("files_written", [])
-        changed_files: list[str] = [str(f) for f in raw_files] if isinstance(raw_files, list) else []
-
-        async def _run_check() -> None:
-            try:
-                # Look up repo path from the job record
-                from sqlalchemy import text
-
-                async with session_factory() as session:
-                    row = await session.execute(
-                        text("SELECT repo FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    repo_path = row.scalar_one_or_none()
-                if not repo_path:
-                    return
-
-                repo_name = await coderecon_service.ensure_repo_indexed(repo_path)
-                if changed_files:
-                    await coderecon_service.reindex(repo_name, changed_files, worktree=worktree_path)
-                else:
-                    await coderecon_service.sync_from_git(repo_name, worktree=worktree_path)
-                warnings = await coderecon_service.check_step_structural_health(repo_name, worktree=worktree_path)
-                for w in warnings:
-                    await event_bus.publish(
-                        new_event(
-                            session_id=job_id,
-                            timestamp=datetime.now(UTC),
-                            kind=EventKind.structural_warning,
-                            payload=w,
-                        )
-                    )
-            except Exception:
-                log.debug("structural_health_check_failed", job_id=job_id, exc_info=True)
-
-        # Fire-and-forget — don't block the event pipeline
-        _fire_and_forget(_run_check(), name=f"structural-health-{job_id[:8]}")
-
-    event_bus.subscribe(_structural_health_on_step)
-
-    # Review story prefetch subscriber — pre-generates and caches review story
-    # when a job enters review state so the frontend load is instant.
-    async def _prefetch_review_story(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_review:
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_prefetch() -> None:
-            try:
-                from backend.api.job_artifacts import _cache_put, _generate_review_story
-
-                async with session_factory() as session:
-                    from sqlalchemy import text
-
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref, title, prompt FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                job_like = _JobLike(tuple(job_row))
-                result = await _generate_review_story(job_id, job_like, coderecon_service)
-
-                # Cache the result using latest end_sha
-                step_repo_local = StepRepository(session_factory)
-                all_steps = await step_repo_local.get_by_job(job_id)
-                sha = None
-                for step in reversed(all_steps):
-                    if step.end_sha:
-                        sha = step.end_sha
-                        break
-                _cache_put(job_id, "review-story", sha, result)
-                log.debug("review_story_prefetched", job_id=job_id)
-            except Exception:
-                log.debug("review_story_prefetch_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_prefetch(), name=f"review-story-prefetch-{job_id[:8]}")
-
-    event_bus.subscribe(_prefetch_review_story)
-
-    # --- §11.11 Persist review story as approval artifact on merge ---
-    async def _persist_review_story_on_resolve(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_resolved:
-            return
-        resolution = event.payload.get("resolution")
-        if resolution not in ("merged", "pr_created", "smart_merged"):
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_persist() -> None:
-            try:
-                import hashlib
-
-                from backend.api.job_artifacts import _generate_review_story
-
-                async with session_factory() as session:
-                    from sqlalchemy import text
-
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref, title, prompt FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                job_like = _JobLike(tuple(job_row))
-                result = await _generate_review_story(job_id, job_like, coderecon_service)
-
-                story_json = result.model_dump_json()
-                story_hash = hashlib.sha256(story_json.encode()).hexdigest()
-
-                async with serialized_write(session_factory) as session:
-                    await session.execute(
-                        text("UPDATE jobs SET review_story_json = :story, review_story_hash = :hash WHERE id = :jid"),
-                        {"story": story_json, "hash": story_hash, "jid": job_id},
-                    )
-                log.debug("review_story_persisted", job_id=job_id)
-            except Exception:
-                log.debug("review_story_persist_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_persist(), name=f"review-story-persist-{job_id[:8]}")
-
-    event_bus.subscribe(_persist_review_story_on_resolve)
-
-    # --- §7.5 Post-resolution structural analytics ---
-    async def _persist_structural_analytics(event: SessionEvent) -> None:
-        if event.kind != EventKind.job_resolved:
-            return
-        resolution = event.payload.get("resolution")
-        if resolution not in ("merged", "pr_created", "smart_merged"):
-            return
-        if not coderecon_service.available:
-            return
-        job_id = event.session_id
-        if not job_id:
-            return
-
-        async def _run_analytics() -> None:
-            try:
-                from sqlalchemy import text
-
-                async with session_factory() as session:
-                    row = await session.execute(
-                        text("SELECT repo, worktree_path, base_ref FROM jobs WHERE id = :jid"),
-                        {"jid": job_id},
-                    )
-                    job_row = row.one_or_none()
-                if not job_row:
-                    return
-
-                repo_path, worktree_path, base_ref = job_row[0], job_row[1], job_row[2]
-                if not repo_path or not worktree_path:
-                    return
-
-                repo_name = await coderecon_service.ensure_repo_indexed(repo_path)
-
-                # Structural diff for change count and confidence
-                diff_result = await coderecon_service.semantic_diff(
-                    repo_name,
-                    base=base_ref or "HEAD",
-                    worktree=worktree_path,
-                )
-                change_count = len(diff_result.structural_changes)
-                merge_confidence = getattr(diff_result, "merge_confidence", None)
-
-                # Did any structural changes touch test files?
-                changes_touch_tests = any(
-                    c.path.startswith("test") or "/test" in c.path for c in diff_result.structural_changes
-                )
-
-                # Cycle count in worktree
-                cycle_count = 0
-                try:
-                    cycles = await coderecon_service.graph_cycles(repo_name, worktree=worktree_path)
-                    cycle_count = len(cycles.cycles) if cycles.cycles else 0
-                except Exception:
-                    pass
-
-                # Cross-community coupling delta
-                coupling_delta: float | None = None
-                try:
-                    communities = await coderecon_service.graph_communities(repo_name, worktree=worktree_path)
-                    touched: set[int] = set()
-                    for c in diff_result.structural_changes:
-                        for comm in communities.communities:
-                            if c.path in comm.members:
-                                touched.add(comm.community_id)
-                    # Coupling delta = communities touched / total communities (0-1 scale)
-                    total = len(communities.communities) if communities.communities else 1
-                    coupling_delta = len(touched) / total
-                except Exception:
-                    pass
-
-                async with serialized_write(session_factory) as session:
-                    await session.execute(
-                        text(
-                            "UPDATE jobs SET "
-                            "structural_change_count = :cc, "
-                            "structural_cycle_count = :cyc, "
-                            "structural_changes_touch_tests = :tc, "
-                            "structural_coupling_delta = :cd, "
-                            "structural_merge_confidence = :mc "
-                            "WHERE id = :jid"
-                        ),
-                        {
-                            "cc": change_count,
-                            "cyc": cycle_count,
-                            "tc": changes_touch_tests,
-                            "cd": coupling_delta,
-                            "mc": merge_confidence,
-                            "jid": job_id,
-                        },
-                    )
-                log.debug("structural_analytics_persisted", job_id=job_id, changes=change_count)
-            except Exception:
-                log.debug("structural_analytics_failed", job_id=job_id, exc_info=True)
-
-        _fire_and_forget(_run_analytics(), name=f"struct-analytics-{job_id[:8]}")
-
-    event_bus.subscribe(_persist_structural_analytics)
-
-    # --- Story 4.5/4.6: auto-spawn a dependent TaskLink's job on completion, and
-    # route the completed TaskLink's tracker write-back through the approval gate ---
-    # Fires only on EventKind.job_completed (a job reaching JobState.completed —
-    # merged/pr_created/discarded all land here, see backend/services/runtime/service.py).
-    # `resolution` is read from the payload so a "discarded" completion never
-    # satisfies a dependency (see RecipeService._SUCCESSFUL_RESOLUTIONS). All
-    # decision logic (satisfaction check, spawn, idempotency, tracker write
-    # routing) lives in RecipeService.handle_job_completed — this closure only
-    # wires the event, opens a session, and starts any newly-spawned job's
-    # agent, mirroring the `codeplane_job create` MCP handler's own
-    # setup/start pattern.
     async def _spawn_dependent_task_links(event: SessionEvent) -> None:
-        if event.kind not in {
-            EventKind.job_completed,
-            EventKind.job_failed,
-            EventKind.job_canceled,
-        }:
+        if event.kind not in {EventKind.job_completed, EventKind.job_failed, EventKind.job_canceled}:
             return
         job_id = event.session_id
         if not job_id:
             return
-        resolution = event.payload.get("resolution")
 
         async def _run_spawn() -> None:
             try:
-                from backend.persistence.chat_repo import ChatRepository
-                from backend.persistence.job_repo import JobRepository
-                from backend.persistence.project_repo import ProjectRepository
-                from backend.persistence.task_link_repo import TaskLinkRepository
-                from backend.persistence.tracker_link_repo import TrackerLinkRepository
-                from backend.services.job.job_service import JobService
-                from backend.services.project.project_service import ProjectService
-                from backend.services.recipe.recipe_service import RecipeService
-                from backend.services.tracker_write_service import TrackerWriteService
+                execution = services.task_execution_service
+                if event.kind == EventKind.job_completed:
+                    jobs = await execution.handle_job_completed(job_id, resolution=event.payload.get("resolution"))
+                else:
+                    await execution.handle_job_failed(job_id)
+                    jobs = []
+                for job in jobs:
 
-                async with serialized_write(session_factory) as session:
-                    task_link_repo = TaskLinkRepository(session)
-                    job_repo = JobRepository(session)
-                    chat_repo = ChatRepository(session)
-                    tracker_link_repo = TrackerLinkRepository(session)
-                    project_service = ProjectService(ProjectRepository(session), config)
-                    job_service = JobService.from_session(session, config)
-                    # Story 4.6: routes a completed TaskLink's `tracker_write` output
-                    # route through the same approval gate as any other tracker
-                    # write-back (Story 3.4) — see RecipeService._maybe_route_tracker_write.
-                    tracker_write_service = TrackerWriteService(
-                        services.approval_service,
-                        session_factory=session_factory,
-                    )
-                    recipe_service = RecipeService(
-                        task_link_repo,
-                        project_service,
-                        job_service=job_service,
-                        job_repo=job_repo,
-                        chat_repo=chat_repo,
-                        approval_service=services.approval_service,
-                        tracker_link_repo=tracker_link_repo,
-                        tracker_write_service=tracker_write_service,
-                    )
-                    if event.kind == EventKind.job_completed:
-                        spawned_jobs = await recipe_service.handle_job_completed(job_id, resolution=resolution)
-                    else:
-                        await recipe_service.handle_job_failed(job_id)
-                        spawned_jobs = []
-                    # Story 4.6: schedule any tracker-write coroutines built during
-                    # handle_job_completed through the module-level _fire_and_forget
-                    # helper (whose _ephemeral_tasks set has app-lifetime scope),
-                    # rather than as a task tracked only on `recipe_service` — that
-                    # local instance has no outer reference and would otherwise let
-                    # the task (and TrackerWriteService.execute's approval wait) be
-                    # garbage-collected once this function returns (same bug class
-                    # as Story 5.4/PR #70).
-                    pending_tracker_writes = list(recipe_service.pending_tracker_writes)
-
-                for index, tracker_write_coro in enumerate(pending_tracker_writes):
-                    _fire_and_forget(tracker_write_coro, name=f"tracker-write-{job_id[:8]}-{index}")
-
-                for spawned_job in spawned_jobs:
-
-                    async def _setup_and_start(job: Any = spawned_job) -> None:
+                    async def _setup_and_start(spawned: Any = job) -> None:
                         try:
-                            await services.runtime_service.setup_and_start(job)
+                            await services.runtime_service.setup_and_start(spawned)
                         except Exception:
-                            log.warning("task_link_spawn_setup_failed", job_id=job.id, exc_info=True)
+                            log.exception("task_link_spawn_setup_failed", job_id=spawned.id)
 
-                    _fire_and_forget(_setup_and_start(), name=f"task-link-spawn-{spawned_job.id[:8]}")
+                    _fire_and_forget(
+                        _setup_and_start(),
+                        name=f"task-link-spawn-{job.id[:8]}",
+                    )
             except Exception:
-                log.warning("task_link_spawn_handler_failed", job_id=job_id, exc_info=True)
+                log.exception("task_link_completion_failed", job_id=job_id)
 
-        _fire_and_forget(_run_spawn(), name=f"task-link-spawn-check-{job_id[:8]}")
+        _fire_and_forget(_run_spawn(), name=f"task-link-completion-{job_id[:8]}")
 
     event_bus.subscribe(_spawn_dependent_task_links)
 
@@ -1508,7 +1229,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     story_drain_service = _StoryServiceCls(
         completer=services.narrator_completer,
-        coderecon=coderecon_service,
         session_factory=session_factory,
         model_pricing=model_pricing_service,
         git_service=services.git_service,
@@ -1526,7 +1246,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config,
         git_service=services.git_service,
-        coderecon_service=coderecon_service,
         steer_client=steer_client,
     )
     await session_state_watcher.start()
@@ -1540,10 +1259,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_factory=session_factory,
         config=config,
         git_service=services.git_service,
-        coderecon_service=coderecon_service,
         model_pricing=model_pricing_service,
     )
-    await claude_session_watcher.start()
+    if services.adapter_registry.policy.enabled("claude"):
+        await claude_session_watcher.start()
 
     ingest_service = IngestService(
         session_factory=session_factory,
@@ -1551,7 +1270,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         claude_watcher=claude_session_watcher,
         session_state_watcher=session_state_watcher,
     )
-    services.runtime_service.set_ingest_service(ingest_service)
+    recovery_task = _schedule_execution_recovery(services, telemetry_subscriber, ingest_service)
+    await recovery_task
 
     # --- Share service ---
     share_service = ShareService()
@@ -1586,12 +1306,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             ShareService: share_service,
             TrailService: trail_service,
             TerminalService: optional.terminal_service,
-            CodeReconService: coderecon_service,
             IngestService: ingest_service,
             ModelPricingService: model_pricing_service,
             SessionStateWatcher: session_state_watcher,
             ClaudeSessionStateWatcher: claude_session_watcher,
             TrackerSyncService: tracker_sync_service,
+            TrackerWriteService: services.tracker_write_service,
+            TaskExecutionService: services.task_execution_service,
         },
     )
     app.state.dishka_container = container
@@ -1650,6 +1371,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async def _quiet_shutdown() -> None:
         """Run teardown steps, suppressing noisy exceptions."""
+        await services.tracker_write_service.close()
         await tracker_sync_service.stop()
         await container.close()
         optional.mcp_stop_event.set()
@@ -1669,10 +1391,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Drain any in-flight ephemeral background tasks before tearing down services.
         if _ephemeral_tasks:
             await asyncio.gather(*_ephemeral_tasks, return_exceptions=True)
-        await coderecon_service.stop()
         await services.sidecar_dispatcher.shutdown()
         await services.sidecar_sessions.shutdown()
         await services.runtime_service.shutdown()
+        await asyncio.gather(*(adapter.shutdown() for adapter in services.adapter_registry._adapters.values()))
         # Flush event processor (global enricher + title pipeline drain) AFTER
         # runtime stops pushing events. Safe because no new push() calls occur.
         await event_processor.shutdown()
@@ -1680,8 +1402,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await engine.dispose()
 
     try:
-        await asyncio.wait_for(_quiet_shutdown(), timeout=8.0)
+        await asyncio.wait_for(_quiet_shutdown(), timeout=45.0)
     except TimeoutError:
-        log.warning("shutdown_timeout", msg="Shutdown timed out after 8s — forcing exit")
+        log.error("shutdown_timeout", msg="Shutdown exceeded its 45s resource-drain deadline")
     except (asyncio.CancelledError, Exception) as exc:
         log.debug("shutdown_interrupted", error=str(exc))

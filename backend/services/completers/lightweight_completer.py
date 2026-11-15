@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from backend.services.adapters.agent_adapter import UtilityCompletionError
+
 if TYPE_CHECKING:
     from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
 
@@ -41,7 +43,10 @@ class LightweightCompleter:
 
     async def complete(self, prompt: str) -> CompletionResult:
         """Complete via the SDK adapter."""
-        return await self._adapter.complete(prompt, model=self._model)
+        result = await self._adapter.complete(prompt, model=self._model, excluded_tools=["*"])
+        if not result.text or not result.text.strip():
+            raise UtilityCompletionError("Utility completion returned no text", reason="empty_response")
+        return result
 
     async def complete_messages(
         self,
@@ -55,7 +60,10 @@ class LightweightCompleter:
             + "\n\n"
             + "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in messages)
         )
-        return await self._adapter.complete(flat)
+        result = await self._adapter.complete(flat, excluded_tools=["*"])
+        if not result.text or not result.text.strip():
+            raise UtilityCompletionError("Utility completion returned no text", reason="empty_response")
+        return result
 
     async def close(self) -> None:
         """No-op — no resources to clean up."""

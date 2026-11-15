@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -81,6 +82,23 @@ class TestCreateRequest:
         approval = await svc.create_request("job-1", "Check?")
         assert approval.id in svc._pending_futures
         assert not svc._pending_futures[approval.id].done()
+
+
+class TestRuntimeContract:
+    async def test_resolved_before_wait_is_read_from_database(self, svc):
+        approval = await svc.create_request("job-1", "Fixture approval")
+        await svc.resolve(approval.id, "approved")
+        result = None
+        with contextlib.suppress(ApprovalNotFoundError):
+            result = await svc.wait_for_resolution(approval.id)
+        assert result == "approved"
+
+    async def test_cancelled_future_does_not_leave_pending_row(self, svc):
+        approval = await svc.create_request("job-1", "Fixture approval")
+        svc._pending_futures[approval.id].cancel()
+        await svc.cleanup_job("job-1")
+        stored = await svc.get(approval.id)
+        assert stored.resolution == "rejected"
 
 
 class TestResolve:

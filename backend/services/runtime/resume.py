@@ -340,6 +340,15 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
     SDK session is no longer available (daemon restart, session expired, etc.).
     """
     resumable_states = TERMINAL_STATES | {JobState.review}
+    from backend.models.domain import JobSource
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    original = await host._get_job(job_id)
+    if original is None:
+        raise JobNotFoundError(f"Job {job_id} does not exist")
+    IntegrationPolicy(host._config).require_enabled(original.sdk)
+    if original.source != JobSource.managed:
+        raise StateConflictError("Native sessions must be resumed through their owning CLI")
     normalized_instruction = _normalize_resume_instruction(instruction)
 
     async with host._session_factory() as session:

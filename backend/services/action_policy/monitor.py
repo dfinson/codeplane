@@ -29,7 +29,6 @@ from backend.services.action_policy.project_context import (
 if TYPE_CHECKING:
     from backend.persistence.trail_repo import TrailNodeRepository
     from backend.services.action_policy.classifier import Action, Classification
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.completers.lightweight_completer import LightweightCompleter
 
 log = structlog.get_logger()
@@ -146,13 +145,11 @@ class MonitorSession:
         repo: str | None,
         completer: LightweightCompleter,
         trail_repo: TrailNodeRepository,
-        coderecon: CodeReconService | None = None,
     ) -> None:
         self._job_id = job_id
         self._job_prompt = job_prompt
         self._completer = completer
         self._trail_repo = trail_repo
-        self._coderecon = coderecon
         self._context = ProjectContext(worktree, repo)
         self._context_lock = asyncio.Lock()
         # LLM rate limiter: track timestamps of recent LLM calls
@@ -187,7 +184,7 @@ class MonitorSession:
         # Ensure project context is built (under lock to avoid concurrent rebuild)
         async with self._context_lock:
             if not self._context.built:
-                await self._context.build(self._coderecon)
+                await self._context.build()
 
             # Check if trail shows a manifest was modified — rebuild context
             await self._check_context_invalidation()
@@ -405,7 +402,7 @@ class MonitorSession:
             for f in files:
                 if isinstance(f, str) and is_manifest_file(f):
                     self._context.invalidate()
-                    await self._context.build(self._coderecon)
+                    await self._context.build()
                     return
 
     @staticmethod
