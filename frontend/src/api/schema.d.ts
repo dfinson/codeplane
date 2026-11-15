@@ -2959,6 +2959,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipes */
+        get: operations["list_recipes_api_recipes_get"];
+        put?: never;
+        /** Create Recipe */
+        post: operations["create_recipe_api_recipes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Recipe */
+        post: operations["validate_recipe_api_recipes_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/revisions/{revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recipe Revision */
+        get: operations["get_recipe_revision_api_recipes_revisions__revision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/revisions/{revision_id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy Recipe Revision */
+        post: operations["copy_recipe_revision_api_recipes_revisions__revision_id__copy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recipe */
+        get: operations["get_recipe_api_recipes__definition_id__get"];
+        /** Save Recipe */
+        put: operations["save_recipe_api_recipes__definition_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Recipe */
+        post: operations["publish_recipe_api_recipes__definition_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipe Revisions */
+        get: operations["list_recipe_revisions_api_recipes__definition_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3492,6 +3613,11 @@ export interface components {
             conversations: {
                 [key: string]: unknown;
             }[];
+        };
+        /** CopyRecipeRequest */
+        CopyRecipeRequest: {
+            /** Name */
+            name: string;
         };
         /** CostDriverEntry */
         CostDriverEntry: {
@@ -4785,6 +4911,7 @@ export interface components {
              */
             sidecarSessions: components["schemas"]["SidecarSessionSummary"][];
         };
+        JsonValue: unknown;
         /**
          * LaunchJobFromChatRequest
          * @description Launch a Job from a Chat, seeded from its transcript (CAP-12/AD-12, Story 5.2).
@@ -5553,6 +5680,354 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** PublishRecipeRequest */
+        PublishRecipeRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+        };
+        /** RecipeAgentRunner */
+        RecipeAgentRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "agent";
+            /** Provider */
+            provider?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Maxturns
+             * @default 1
+             */
+            maxTurns: number;
+            /**
+             * Session
+             * @default new
+             * @enum {string}
+             */
+            session: "new" | "reuse";
+        };
+        /** RecipeBlockRunner */
+        RecipeBlockRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "block";
+            /** Revisionid */
+            revisionId: string;
+        };
+        /** RecipeCommandRunner */
+        RecipeCommandRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "command";
+            /** Argv */
+            argv?: string[];
+            /**
+             * Timeoutseconds
+             * @default 300
+             */
+            timeoutSeconds: number;
+            /** Reconciles */
+            reconciles?: string[];
+        };
+        /** RecipeDefinition */
+        RecipeDefinition: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Kind
+             * @default recipe
+             * @enum {string}
+             */
+            kind: "recipe" | "block";
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["RecipeParameter"];
+            };
+            /** Entrysteps */
+            entrySteps?: string[];
+            /** Steps */
+            steps?: components["schemas"]["RecipeStep"][];
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["RecipeExport"];
+            };
+        };
+        /** RecipeDependency */
+        RecipeDependency: {
+            /** Stepid */
+            stepId: string;
+            /** Outcomes */
+            outcomes?: string[];
+        };
+        /** RecipeDraftListResponse */
+        RecipeDraftListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeDraftResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** RecipeDraftResponse */
+        RecipeDraftResponse: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: number;
+            definition: components["schemas"]["RecipeDefinition"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RecipeExport */
+        RecipeExport: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            binding: components["schemas"]["RecipeOutputBinding"];
+        };
+        /** RecipeHumanRunner */
+        RecipeHumanRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "human";
+            /**
+             * Proposedaction
+             * @default
+             */
+            proposedAction: string;
+            /** Decisions */
+            decisions?: string[];
+        };
+        /** RecipeInput */
+        RecipeInput: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /** Binding */
+            binding?: (components["schemas"]["RecipeParameterBinding"] | components["schemas"]["RecipeOutputBinding"] | components["schemas"]["RecipeLiteralBinding"]) | null;
+            /**
+             * Optional
+             * @default false
+             */
+            optional: boolean;
+            /** Degradedreason */
+            degradedReason?: string | null;
+        };
+        /** RecipeLiteralBinding */
+        RecipeLiteralBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "literal";
+            value: components["schemas"]["JsonValue"];
+        };
+        /** RecipeOutput */
+        RecipeOutput: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** RecipeOutputBinding */
+        RecipeOutputBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "output";
+            /** Stepid */
+            stepId: string;
+            /** Output */
+            output: string;
+        };
+        /** RecipeParameter */
+        RecipeParameter: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Required
+             * @default true
+             */
+            required: boolean;
+            default?: components["schemas"]["JsonValue"];
+        };
+        /** RecipeParameterBinding */
+        RecipeParameterBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "parameter";
+            /** Parameter */
+            parameter: string;
+        };
+        /** RecipePinnedBlock */
+        RecipePinnedBlock: {
+            /** Definitionid */
+            definitionId: string;
+            /** Revisionid */
+            revisionId: string;
+            /** Revision */
+            revision: number;
+            /** Checksum */
+            checksum: string;
+            definition: components["schemas"]["RecipeDefinition"];
+        };
+        /** RecipeRetryPolicy */
+        RecipeRetryPolicy: {
+            /**
+             * Maxattempts
+             * @default 1
+             */
+            maxAttempts: number;
+            /** Retryon */
+            retryOn?: "failed"[];
+            exhaustion?: components["schemas"]["RecipeRoute"];
+        };
+        /** RecipeRevisionListResponse */
+        RecipeRevisionListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeRevisionResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** RecipeRevisionResponse */
+        RecipeRevisionResponse: {
+            /** Id */
+            id: string;
+            /** Definitionid */
+            definitionId: string;
+            /** Revision */
+            revision: number;
+            definition: components["schemas"]["RecipeDefinition"];
+            /** Blocks */
+            blocks: {
+                [key: string]: components["schemas"]["RecipePinnedBlock"];
+            };
+            /** Checksum */
+            checksum: string;
+            /**
+             * Publishedat
+             * Format: date-time
+             */
+            publishedAt: string;
+        };
+        /** RecipeRoute */
+        RecipeRoute: {
+            /** Nextsteps */
+            nextSteps?: string[];
+            /** Terminal */
+            terminal?: ("succeeded" | "failed" | "canceled") | null;
+        };
+        /** RecipeStep */
+        RecipeStep: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /**
+             * Instructions
+             * @default
+             */
+            instructions: string;
+            /** Runner */
+            runner: components["schemas"]["RecipeAgentRunner"] | components["schemas"]["RecipeCommandRunner"] | components["schemas"]["RecipeHumanRunner"] | components["schemas"]["RecipeBlockRunner"];
+            /** Capabilities */
+            capabilities?: ("read" | "write" | "shell" | "delegate" | "external_access")[];
+            workspace?: components["schemas"]["RecipeWorkspacePolicy"];
+            /** Inputs */
+            inputs?: {
+                [key: string]: components["schemas"]["RecipeInput"];
+            };
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["RecipeOutput"];
+            };
+            /** Dependson */
+            dependsOn?: components["schemas"]["RecipeDependency"][];
+            /** Routes */
+            routes?: {
+                [key: string]: components["schemas"]["RecipeRoute"];
+            };
+            retry?: components["schemas"]["RecipeRetryPolicy"];
+        };
+        /** RecipeValidationIssue */
+        RecipeValidationIssue: {
+            /** Path */
+            path: string;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** RecipeValidationResult */
+        RecipeValidationResult: {
+            /** Valid */
+            valid: boolean;
+            /** Issues */
+            issues: components["schemas"]["RecipeValidationIssue"][];
+        };
+        /** RecipeWorkspacePolicy */
+        RecipeWorkspacePolicy: {
+            /**
+             * Mode
+             * @default snapshot
+             * @enum {string}
+             */
+            mode: "none" | "snapshot" | "mutable" | "isolated";
+            /**
+             * Key
+             * @default job
+             */
+            key: string;
+        };
         /** ReconcileTrackerOperationRequest */
         ReconcileTrackerOperationRequest: {
             /** Expectedversion */
@@ -5888,6 +6363,12 @@ export interface components {
             default: string;
             /** Sdks */
             sdks: components["schemas"]["SDKInfoResponse"][];
+        };
+        /** SaveRecipeDraftRequest */
+        SaveRecipeDraftRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            definition: components["schemas"]["RecipeDefinition"];
         };
         /** ScorecardActivity */
         ScorecardActivity: {
@@ -12935,6 +13416,307 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrackerSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recipes_api_recipes_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_recipe_api_recipes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_recipe_api_recipes_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeValidationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recipe_revision_api_recipes_revisions__revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    copy_recipe_revision_api_recipes_revisions__revision_id__copy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recipe_api_recipes__definition_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_recipe_api_recipes__definition_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveRecipeDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_recipe_api_recipes__definition_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recipe_revisions_api_recipes__definition_id__revisions_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionListResponse"];
                 };
             };
             /** @description Validation Error */

@@ -28,6 +28,39 @@ Unknown dialects, unresolved expansions, malformed syntax and resource limits
 are incomplete evidence, not a safe-command verdict. Syntax structure alone
 does not establish command semantics.
 
+### Recipe definitions and publication
+
+Recipes describe configurable intra-Job work. They are distinct from the legacy
+TaskLink chains and from StepTracker's transcript turns. `POST /api/recipes`
+creates a draft only. Saving, validating, copying and publishing definitions
+never creates a Job or dispatches a runner. Draft writes and publication use an
+expected version, so a stale editor cannot overwrite another revision.
+
+`POST /api/recipes/validate` returns actionable field paths and error codes.
+Publication rejects missing or mistyped bindings, unknown outcomes, unreachable
+nodes, dependency/route cycles, recursive block composition, unsafe parallel
+writers and invalid retry bounds. Outcome routes support fanout and explicit
+dependency joins. Human gates name the proposed action and explicit decisions.
+Retries count total attempts, cannot skip a human gate, and cannot automatically
+retry an uncertain external effect.
+
+Published revisions retain stable step IDs, runner settings, instructions,
+typed inputs/outputs, workspace policies and capability requirements. Reusable
+blocks reference published revision IDs. Publication retains the transitive
+block snapshots and a canonical SHA-256 checksum. Later draft edits or block
+publications do not rewrite those snapshots. Copying creates a new independent
+draft, with no execution, approval or completion identity.
+
+Recipe definition/revision lists are bounded to 100 records per page and use a
+storage sequence cursor plus `highWater`. The bound freezes which persisted
+revisions are included, not a fabricated historical view of mutable drafts.
+Migration 0076 adds Job-owned run, step-instance, immutable attempt/result,
+output-receipt, workspace-lease and review storage. Recipe gates reference
+existing approval records. Existing Jobs and transcript steps are not backfilled
+with invented recipe identities.
+
+### Existing runtime guarantees
+
 `runtime.copilot_only` defaults to true. This restricts CodePlane-managed
 provider integrations, not model families served by Copilot or manually typed
 terminal commands. Disabled integrations retain their code, configuration and

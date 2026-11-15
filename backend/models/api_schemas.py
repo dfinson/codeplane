@@ -25,6 +25,7 @@ from backend.models.domain import (  # noqa: TC001 — Pydantic resolves annotat
 # Re-exported here for backward compatibility.
 from backend.models.schemas.base import *  # noqa: E402,F401,F403
 from backend.models.schemas.metrics import *  # noqa: E402,F401,F403
+from backend.models.schemas.recipes import *  # noqa: E402,F401,F403
 from backend.models.schemas.telemetry import *  # noqa: E402,F401,F403
 from backend.models.schemas.tracker_operations import (
     ReconcileTrackerOperationRequest as ReconcileTrackerOperationRequest,

@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - SQLAlchemy needs this at runtime for annotation eval
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # All DateTime columns use timezone=True so timestamps are stored
@@ -14,6 +26,192 @@ TZDateTime = DateTime(timezone=True)
 
 class Base(DeclarativeBase):
     pass
+
+
+class RecipeDefinitionRow(Base):
+    __tablename__ = "recipe_definitions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    latest_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (CheckConstraint("version >= 1 AND latest_revision >= 0", name="ck_recipe_definition_version"),)
+
+
+class RecipeRevisionRow(Base):
+    __tablename__ = "recipe_revisions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    definition_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_definitions.id"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    blocks_json: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("definition_id", "revision", name="uq_recipe_revision_number"),
+        CheckConstraint("revision >= 1", name="ck_recipe_revision_number"),
+    )
+
+
+class RecipeRunRow(Base):
+    __tablename__ = "recipe_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    revision_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_revisions.id"), nullable=False)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    inputs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('blocked','ready','running','needs_decision','succeeded',"
+            "'failed','skipped','canceled','interrupted')",
+            name="ck_recipe_run_state",
+        ),
+    )
+
+
+class RecipeStepInstanceRow(Base):
+    __tablename__ = "recipe_step_instances"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False)
+    step_path: Mapped[str] = mapped_column(String, nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    current_attempt_id: Mapped[str | None] = mapped_column(String)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_path", name="uq_recipe_step_path"),
+        CheckConstraint(
+            "state IN ('blocked','ready','running','needs_decision','succeeded',"
+            "'failed','skipped','canceled','interrupted')",
+            name="ck_recipe_step_state",
+        ),
+    )
+
+
+class RecipeAttemptRow(Base):
+    """Dispatch identity and exact inputs are never overwritten by retry."""
+
+    __tablename__ = "recipe_attempts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    step_instance_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_step_instances.id", ondelete="CASCADE"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    inputs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_json: Mapped[str] = mapped_column(Text, nullable=False)
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dispatch_intent_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("step_instance_id", "number", name="uq_recipe_attempt_number"),
+        CheckConstraint("number >= 1", name="ck_recipe_attempt_number"),
+    )
+
+
+class RecipeAttemptResultRow(Base):
+    __tablename__ = "recipe_attempt_results"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeAttemptExecutionRow(Base):
+    """One attempt may retain several real agent executions, never fictional ones."""
+
+    __tablename__ = "recipe_attempt_executions"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    execution_token: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str | None] = mapped_column(String)
+    started_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeOutputReceiptRow(Base):
+    __tablename__ = "recipe_output_receipts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    value_type: Mapped[str] = mapped_column(String, nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("attempt_id", "name", name="uq_recipe_attempt_output"),)
+
+
+class RecipeGateBindingRow(Base):
+    __tablename__ = "recipe_gate_bindings"
+
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), primary_key=True
+    )
+    approval_id: Mapped[str] = mapped_column(String, ForeignKey("approvals.id"), nullable=False, unique=True)
+    input_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    proposed_action: Mapped[str] = mapped_column(Text, nullable=False)
+    next_steps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeWorkspaceLeaseRow(Base):
+    __tablename__ = "recipe_workspace_leases"
+
+    workspace: Mapped[str] = mapped_column(String, primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String, ForeignKey("recipe_attempts.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    acquired_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+
+class RecipeReviewRow(Base):
+    __tablename__ = "recipe_reviews"
+
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    code_ref_json: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("run_id", "idempotency_key", name="uq_recipe_review_request"),)
 
 
 class JobRow(Base):
