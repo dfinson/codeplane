@@ -42,6 +42,7 @@ from backend.api import (
     policy_settings,
     preview,
     projects,
+    recipes,
     settings,
     share,
     sidecar_templates,
@@ -66,6 +67,7 @@ from backend.models.domain import (
     StateConflictError,
     TaskLinkNotFoundError,
 )
+from backend.services.recipe.definition_service import RecipeNotFoundError, RecipeValidationError
 from backend.services.sharing.share_service import InvalidShareTokenError
 
 _FRONTEND_DIR = Path(__file__).resolve().parent / "web"
@@ -229,10 +231,19 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(chats.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(tracker_links.router, prefix="/api")
+    app.include_router(recipes.router, prefix="/api")
 
 
 def _register_domain_exception_handlers(app: FastAPI) -> None:
     """Map domain exceptions to HTTP error responses centrally."""
+
+    @app.exception_handler(RecipeNotFoundError)
+    async def _recipe_not_found(request: Request, exc: RecipeNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(RecipeValidationError)
+    async def _recipe_invalid(request: Request, exc: RecipeValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": exc.result.model_dump(mode="json", by_alias=True)})
 
     @app.exception_handler(JobNotFoundError)
     async def _job_not_found(request: Request, exc: JobNotFoundError) -> JSONResponse:

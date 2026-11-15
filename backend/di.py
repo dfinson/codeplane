@@ -24,6 +24,7 @@ from backend.persistence.file_access_repo import FileAccessRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.latency_attribution_repo import LatencyAttributionRepository
 from backend.persistence.project_repo import ProjectRepository
+from backend.persistence.recipe_repo import RecipeRepository
 from backend.persistence.sidecar_template_repo import SidecarTemplateRepository
 from backend.persistence.step_repo import StepRepository
 from backend.persistence.task_link_repo import TaskLinkRepository
@@ -49,6 +50,7 @@ from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
 from backend.services.project.project_service import ProjectService
+from backend.services.recipe.definition_service import RecipeDefinitionService
 from backend.services.recipe.recipe_service import RecipeService
 from backend.services.runtime import RuntimeService
 from backend.services.sharing.push_service import PushService
@@ -193,6 +195,14 @@ class RequestProvider(Provider):
     @provide
     def sidecar_template_repo(self, session: AsyncSession) -> SidecarTemplateRepository:
         return SidecarTemplateRepository(session)
+
+    @provide
+    def recipe_repo(self, session: AsyncSession) -> RecipeRepository:
+        return RecipeRepository(session)
+
+    @provide
+    def recipe_definition_service(self, repo: RecipeRepository) -> RecipeDefinitionService:
+        return RecipeDefinitionService(repo)
 
     @provide
     def sidecar_template_service(
