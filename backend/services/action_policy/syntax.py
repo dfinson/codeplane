@@ -7,8 +7,9 @@ import base64
 import binascii
 import hashlib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ class SyntaxDocument:
     dialect: str | None
     sha256: str
     origin: SourceOrigin | None = None
+    grammar_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +77,7 @@ class SyntaxFacts:
     incomplete: tuple[str, ...]
     elapsed_ms: float
     version: str = SYNTAX_VERSION
+    parser_version: str | None = None
 
     @property
     def complete(self) -> bool:
@@ -90,6 +93,7 @@ class _Budget:
     structures: set[str] = field(default_factory=set)
     incomplete: set[str] = field(default_factory=set)
     byte_count: int = 0
+    parser_version: str | None = None
 
     def available(self) -> bool:
         if time.perf_counter() >= self.deadline:
@@ -177,14 +181,37 @@ def _command_parts(node: Node, raw: bytes, dialect: str) -> tuple[Node | None, l
     arguments: list[Node] = []
     for child in children:
         if child.type == "command_elements":
-            arguments.extend(child.named_children)
+            arguments.extend(item for item in child.named_children if item.type != "command_argument_sep")
     return name, arguments
 
 
-def _embedded(node: Node, document: int, raw: bytes, dialect: str, depth: int, budget: _Budget) -> None:
+def _invoked_scriptblock(node: Node) -> bool:
+    parent = node.parent
+    return (
+        node.type == "script_block_expression"
+        and parent is not None
+        and parent.type == "command_name_expr"
+        and parent.parent is not None
+        and parent.parent.type == "command"
+        and any(child.type == "command_invokation_operator" for child in parent.parent.named_children)
+    )
+
+
+def _embedded(
+    node: Node,
+    document: int,
+    raw: bytes,
+    dialect: str,
+    depth: int,
+    budget: _Budget,
+    scope: Scope,
+    function: str | None,
+) -> None:
     name_node, args = _command_parts(node, raw, dialect)
     name = _literal(name_node, raw, dialect) if name_node is not None else None
     if name is None:
+        if name_node is not None and any(_invoked_scriptblock(child) for child in name_node.named_children):
+            return
         budget.incomplete.add("unresolved_expansion")
         return
     interpreter = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower().removesuffix(".exe")
@@ -230,12 +257,23 @@ def _embedded(node: Node, document: int, raw: bytes, dialect: str, depth: int, b
                 script_node.end_byte,
                 "base64-utf16le" if encoded else "literal",
             ),
+            scope=scope,
+            function=function,
         )
         return
     budget.incomplete.add("opaque_script")
 
 
-def _parse(raw: bytes, dialect: str | None, depth: int, budget: _Budget, origin: SourceOrigin | None = None) -> None:
+def _parse(
+    raw: bytes,
+    dialect: str | None,
+    depth: int,
+    budget: _Budget,
+    origin: SourceOrigin | None = None,
+    *,
+    scope: Scope = "immediate",
+    function: str | None = None,
+) -> None:
     from tree_sitter import Parser
 
     document = len(budget.documents)
@@ -247,6 +285,13 @@ def _parse(raw: bytes, dialect: str | None, depth: int, budget: _Budget, origin:
     if dialect not in GRAMMAR_VERSIONS:
         budget.incomplete.add("syntax_unsupported")
         return
+    distribution = "tree-sitter-powershell" if dialect == "powershell" else "tree-sitter-bash"
+    grammar_version = f"{distribution}/{version(distribution)}"
+    if dialect == "sh":
+        grammar_version += ":declared-posix"
+    budget.documents[document] = replace(budget.documents[document], grammar_version=grammar_version)
+    if grammar_version != GRAMMAR_VERSIONS[dialect] or budget.parser_version != "tree-sitter/0.25.2":
+        budget.incomplete.add("grammar_version_mismatch")
     if depth > MAX_DEPTH:
         budget.incomplete.add("depth_limit")
         return
@@ -273,7 +318,7 @@ def _parse(raw: bytes, dialect: str | None, depth: int, budget: _Budget, origin:
         budget.incomplete.add("partial_root")
     if root.has_error:
         budget.incomplete.add("syntax_error")
-    stack: list[tuple[Node, int | None, int, Scope, str | None]] = [(root, None, depth, "immediate", None)]
+    stack: list[tuple[Node, int | None, int, Scope, str | None]] = [(root, None, depth, scope, function)]
     while stack and budget.available():
         current, parent, node_depth, scope, function = stack.pop()
         if len(budget.nodes) >= MAX_NODES:
@@ -284,7 +329,7 @@ def _parse(raw: bytes, dialect: str | None, depth: int, budget: _Budget, origin:
             continue
         if current.is_missing or current.type == "ERROR":
             budget.incomplete.add("syntax_error")
-        if current.type in _DEFERRED:
+        if current.type in _DEFERRED and not _invoked_scriptblock(current):
             scope = "deferred"
             definition_name = current.child_by_field_name("name")
             if definition_name is not None:
@@ -322,7 +367,7 @@ def _parse(raw: bytes, dialect: str | None, depth: int, budget: _Budget, origin:
                     tuple(_literal(arg, raw, dialect) for arg in args),
                 )
             )
-            _embedded(current, document, raw, dialect, node_depth, budget)
+            _embedded(current, document, raw, dialect, node_depth, budget, scope, function)
         stack.extend((child, position, node_depth + 1, scope, function) for child in reversed(current.children))
 
 
@@ -330,10 +375,11 @@ def analyze_syntax(command: bytes | str, dialect: str | None) -> SyntaxFacts:
     """Keep original bytes and every visited node, including executable children."""
     start = time.perf_counter()
     budget = _Budget(start + PARSE_BUDGET_SECONDS)
-    raw = command.encode("utf-8") if isinstance(command, str) else command
+    raw = command.encode("utf-8", errors="surrogatepass") if isinstance(command, str) else command
     try:
+        budget.parser_version = f"tree-sitter/{version('tree-sitter')}"
         _parse(raw, dialect, 0, budget)
-    except ImportError:
+    except (ImportError, PackageNotFoundError):
         budget.documents = [SyntaxDocument(raw, dialect, hashlib.sha256(raw).hexdigest())]
         budget.incomplete.add("grammar_unavailable")
     return SyntaxFacts(
@@ -343,6 +389,7 @@ def analyze_syntax(command: bytes | str, dialect: str | None) -> SyntaxFacts:
         frozenset(budget.structures),
         tuple(sorted(budget.incomplete)),
         (time.perf_counter() - start) * 1000,
+        parser_version=budget.parser_version,
     )
 
 
