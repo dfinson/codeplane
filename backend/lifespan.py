@@ -1024,6 +1024,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from traceforge.pipeline import EventPipeline as TFEventPipeline
     from traceforge.sinks.callback import CallbackSink as TFCallbackSink
 
+    from backend.compat.traceforge_bridge import LegacyEnrichment, LegacyTitles
     from backend.services.events.event_processor import RECONSTRUCTING_EVENTS, EventProcessor
     from backend.services.events.turn_summary import build_turn_summary_payload
 
@@ -1079,8 +1080,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         diff_service=services.diff_service,
         step_tracker=services.step_tracker,
         trail_service=trail_service,
-        enricher=tf_enricher,
-        title_pipeline=title_pipeline,
+        enricher=LegacyEnrichment(tf_enricher),
+        title_pipeline=LegacyTitles(title_pipeline),
         persisted=_event_is_persisted,
     )
     services.runtime_service.set_event_processor(event_processor)

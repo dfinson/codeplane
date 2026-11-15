@@ -9,9 +9,10 @@ import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
-from traceforge.types import ToolMotivation
 
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import ToolMotivation
+from backend.models.usage import UsageAmount
 from backend.services.adapters.agent_adapter import CODEPLANE_SYSTEM_PROMPT, CompletionResult, UtilityCompletionError
 from backend.services.adapters.base_adapter import (
     CLIENT_STOP_TIMEOUT_S,
@@ -19,6 +20,7 @@ from backend.services.adapters.base_adapter import (
     BaseAgentAdapter,
     PermissionDecision,
 )
+from backend.services.adapters.completion_context import current_completion_context, validate_completion_identity
 from backend.services.auth.permission_policy import PermissionRequest as PolicyRequest
 from backend.services.copilot_adapter._client import create_copilot_client, stop_copilot_client
 
@@ -46,7 +48,14 @@ if TYPE_CHECKING:
     from copilot.generated.session_events import (
         SessionEvent as SdkSessionEvent,
     )
-    from copilot.session import CopilotSession, PermissionRequestResult, SystemMessageAppendConfig
+    from copilot.session import (
+        CopilotSession,
+        PermissionRequestResult,
+        PreToolUseHookInput,
+        PreToolUseHookOutput,
+        SessionHooks,
+        SystemMessageAppendConfig,
+    )
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.models.domain import SessionConfig
@@ -214,6 +223,22 @@ class CopilotAdapter(BaseAgentAdapter):
             read_only=request.read_only,
             possible_paths=candidate_paths or None,
         )
+        from backend.services.adapters.capability_guard import enforce_tool_capabilities
+        from backend.services.adapters.contracts import CapabilityDeniedError
+
+        try:
+            await enforce_tool_capabilities(
+                config.execution_capabilities,
+                workspace=config.workspace_path,
+                kind=kind_val,
+                tool_name=request.tool_name or "",
+                paths=candidate_paths,
+                command=request.full_command_text,
+                dialect="powershell" if request.tool_name == "powershell" else None,
+            )
+        except CapabilityDeniedError as exc:
+            log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
+            return _Result(kind="reject")
         decision = await self._evaluate_permission(
             sid,
             self._session_to_job.get(sid),
@@ -612,6 +637,33 @@ class CopilotAdapter(BaseAgentAdapter):
         async def _on_permission(request: PermissionRequest, invocation: dict[str, str]) -> PermissionRequestResult:
             return await self._handle_permission_request(request, invocation, config)
 
+        async def _guard_invocation(
+            request: PreToolUseHookInput, invocation: dict[str, str]
+        ) -> PreToolUseHookOutput | None:
+            from backend.services.adapters.capability_guard import enforce_invocation_capabilities
+            from backend.services.adapters.contracts import CapabilityDeniedError
+
+            if config.execution_capabilities is None:
+                return None
+            try:
+                arguments = request.get("toolArgs")
+                if not isinstance(arguments, dict):
+                    raise CapabilityDeniedError("Tool arguments are unavailable for capability enforcement")
+                await enforce_invocation_capabilities(
+                    config.execution_capabilities,
+                    workspace=config.workspace_path,
+                    tool_name=request["toolName"],
+                    arguments=arguments,
+                    dialect="powershell" if request["toolName"] == "powershell" else None,
+                )
+            except CapabilityDeniedError as exc:
+                log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
+                return {"permissionDecision": "deny", "permissionDecisionReason": str(exc)}
+            return None
+
+        hooks: SessionHooks | None = (
+            {"on_pre_tool_use": _guard_invocation} if config.execution_capabilities is not None else None
+        )
         if config.system_prompt_override:
             # Sidecar/preflight sessions define their own identity — skip the
             # main-agent CODEPLANE_SYSTEM_PROMPT and report_intent boilerplate.
@@ -641,6 +693,9 @@ class CopilotAdapter(BaseAgentAdapter):
         }
 
         available_tools = None
+        from backend.services.adapters.capability_guard import excluded_tools_for_capabilities
+
+        excluded_tools = excluded_tools_for_capabilities(config.execution_capabilities, config.disallowed_tools)
         if config.session_kind == "preflight":
             from backend.services.tools.preflight_curator import SCOUT_AVAILABLE_TOOLS
 
@@ -661,8 +716,9 @@ class CopilotAdapter(BaseAgentAdapter):
                     model=config.model or None,
                     system_message=system_message,
                     tools=None,
-                    excluded_tools=config.disallowed_tools or None,
+                    excluded_tools=excluded_tools or None,
                     available_tools=available_tools,
+                    hooks=hooks,
                 )
                 log.info("sdk_session_resumed", sdk_session_id=_resume_id)
             except (JsonRpcError, ProcessExitedError, ConnectionError, TimeoutError):
@@ -673,7 +729,8 @@ class CopilotAdapter(BaseAgentAdapter):
                     system_message=system_message,
                     model=config.model or None,
                     available_tools=available_tools,
-                    excluded_tools=config.disallowed_tools or None,
+                    excluded_tools=excluded_tools or None,
+                    hooks=hooks,
                 )
         else:
             session = await client.create_session(
@@ -682,7 +739,8 @@ class CopilotAdapter(BaseAgentAdapter):
                 system_message=system_message,
                 model=config.model or None,
                 available_tools=available_tools,
-                excluded_tools=config.disallowed_tools or None,
+                excluded_tools=excluded_tools or None,
+                hooks=hooks,
             )
 
         session_id = session.session_id  # Use SDK-assigned ID as CodePlane's session identifier
@@ -696,6 +754,7 @@ class CopilotAdapter(BaseAgentAdapter):
             raise RuntimeError(f"Copilot session is already active: {session_id}")
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
+        self.set_session_metadata(session_id, config)
         self._sessions[session_id] = session
         self._clients[session_id] = client
         self._clients.pop(lease_id, None)
@@ -758,7 +817,7 @@ class CopilotAdapter(BaseAgentAdapter):
         queue = self._queues.get(session_id)
         if queue is None:
             log.error("copilot_stream_no_queue", session_id=session_id)
-            from traceforge.types import EventMetadata
+            from backend.models.session_event import EventMetadata
 
             job_id = self._session_to_job.get(session_id, session_id)
             yield new_event(
@@ -845,10 +904,18 @@ class CopilotAdapter(BaseAgentAdapter):
         if owner is not None:
             self._opening_tasks.add(owner)
 
+        tool_attempted = False
+
         async def _deny_permission(request: object, invocation: dict[str, str]) -> PermissionRequestResult:
+            nonlocal tool_attempted
+            tool_attempted = True
             return _Result(kind="reject")
 
         accepting = True
+        completion = current_completion_context()
+        usage: list[UsageAmount] = []
+        served_model = ""
+        collected_bytes = 0
         try:
             import tempfile
 
@@ -864,7 +931,7 @@ class CopilotAdapter(BaseAgentAdapter):
             failure: UtilityCompletionError | None = None
 
             def _on_event(sdk_event: SdkSessionEvent) -> None:
-                nonlocal failure
+                nonlocal failure, served_model, collected_bytes
                 if not accepting or self._queues.get(tmp_session_id) is not queue:
                     return
                 kind_str = sdk_event.type.value if sdk_event.type else ""
@@ -872,10 +939,55 @@ class CopilotAdapter(BaseAgentAdapter):
                 if kind_str == "assistant.message":
                     content = payload.get("content") or ""
                     if isinstance(content, str) and content:
+                        collected_bytes += len(content.encode("utf-8")) + (1 if collected else 0)
+                        if collected_bytes > completion.max_output_bytes:
+                            failure = UtilityCompletionError(
+                                "Text-only output exceeds its bound", reason="output_limit"
+                            )
+                            done_event.set()
+                            return
                         collected.append(content)
                     if payload.get("toolRequests") or payload.get("tool_requests"):
                         failure = UtilityCompletionError("Text-only completion requested tools", reason="tool_request")
                         done_event.set()
+                elif kind_str == "assistant.usage":
+                    model_name = payload.get("model")
+                    if isinstance(model_name, str) and model_name:
+                        if served_model and served_model != model_name:
+                            failure = UtilityCompletionError("Utility served multiple models", reason="model_mismatch")
+                            done_event.set()
+                            return
+                        served_model = model_name
+                    for unit, keys in (
+                        ("input_tokens", ("inputTokens", "input_tokens")),
+                        ("output_tokens", ("outputTokens", "output_tokens")),
+                        ("cache_read_tokens", ("cacheReadTokens", "cache_read_tokens")),
+                        ("cache_write_tokens", ("cacheWriteTokens", "cache_write_tokens")),
+                        ("copilot_cost_unit", ("cost",)),
+                    ):
+                        value = next((payload[key] for key in keys if key in payload), None)
+                        if isinstance(value, (float, int)) and not isinstance(value, bool):
+                            try:
+                                amount = UsageAmount.model_validate(
+                                    {
+                                        "amount": value,
+                                        "unit": unit,
+                                        "producer": "copilot",
+                                        "model": served_model or None,
+                                        "job_id": completion.job_id,
+                                        "execution_epoch": completion.execution_epoch,
+                                        "role": completion.role,
+                                        "source": "assistant.usage",
+                                    }
+                                )
+                            except ValueError:
+                                failure = UtilityCompletionError("Invalid provider usage", reason="invalid_usage")
+                                done_event.set()
+                                return
+                            usage.append(amount)
+                elif kind_str in ("tool.execution_start", "tool.execution_complete"):
+                    failure = UtilityCompletionError("Text-only completion attempted tools", reason="tool_request")
+                    done_event.set()
                 elif kind_str in ("abort", "session.abort"):
                     failure = UtilityCompletionError("Text-only completion was aborted", reason="aborted")
                     done_event.set()
@@ -906,10 +1018,19 @@ class CopilotAdapter(BaseAgentAdapter):
                 await done_event.wait()
             if failure is not None:
                 raise failure
+            if tool_attempted:
+                raise UtilityCompletionError("Text-only completion requested tool permission", reason="tool_request")
             text = "\n".join(collected)
             if not text.strip():
                 raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
-            return CompletionResult(text=text)
+            validate_completion_identity(model, served_model, completion)
+            return CompletionResult(
+                text=text,
+                model=served_model,
+                usage=tuple(usage),
+                input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
+                output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
+            )
         except UtilityCompletionError:
             raise
         except TimeoutError as exc:

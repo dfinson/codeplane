@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from backend.services.git.git_service import GitService
 
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata
 from backend.services.git.git_service import GitError
 from backend.services.tools.tool_classifier import TOOL_CATEGORIES
 
@@ -92,9 +93,13 @@ class StepTracker:
         self,
         event_bus: EventBus,
         git_service: GitService | None = None,
+        *,
+        metadata: EventMetadata | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._git_service = git_service
+        self._metadata = metadata
+        self._attempts: dict[tuple[str, str, str], StepTracker] = {}
         self._current: dict[str, _StepState] = {}
         self._counters: dict[str, int] = {}
         self._worktree_paths: dict[str, str] = {}  # job_id → worktree cwd
@@ -105,13 +110,43 @@ class StepTracker:
 
     _BUFFER_SIZE = 10
 
-    def register_worktree(self, job_id: str, worktree_path: str, *, managed: bool = True) -> None:
+    def _attempt_tracker(self, job_id: str, metadata: EventMetadata) -> StepTracker:
+        if not metadata.attempt_id or not metadata.execution_epoch:
+            raise ValueError("Attempt transcript requires an explicit attempt and execution epoch")
+        key = (job_id, metadata.execution_epoch, metadata.attempt_id)
+        tracker = self._attempts.get(key)
+        if tracker is None:
+            tracker = StepTracker(self._event_bus, self._git_service, metadata=metadata)
+            self._attempts[key] = tracker
+        return tracker
+
+    def register_worktree(
+        self,
+        job_id: str,
+        worktree_path: str,
+        *,
+        managed: bool = True,
+        attempt_id: str | None = None,
+        execution_epoch: str | None = None,
+    ) -> None:
         """Set the worktree path for a job. Called from _execute_session_attempt."""
+        if attempt_id is not None:
+            tracker = self._attempt_tracker(
+                job_id, EventMetadata(attempt_id=attempt_id, execution_epoch=execution_epoch)
+            )
+            existing = tracker._worktree_paths.get(job_id)
+            if existing is not None and existing != worktree_path:
+                raise ValueError("An attempt workspace cannot change within its execution epoch")
+            tracker.register_worktree(job_id, worktree_path, managed=managed)
+            return
         self._worktree_paths[job_id] = worktree_path
         if not managed:
             self._observed_jobs.add(job_id)
 
     def restore_event(self, job_id: str, event: SessionEvent) -> None:
+        if self._metadata is None and event.metadata.attempt_id is not None:
+            self._attempt_tracker(job_id, event.metadata).restore_event(job_id, event)
+            return
         payload = event.payload
         if event.kind == EventKind.step_started:
             number = int(payload["step_number"])
@@ -133,11 +168,21 @@ class StepTracker:
             if current is not None:
                 self._accumulate_step(job_id, current, event)
 
-    def current_step(self, job_id: str) -> _StepState | None:
+    def current_step(
+        self, job_id: str, *, attempt_id: str | None = None, execution_epoch: str | None = None
+    ) -> _StepState | None:
+        if attempt_id is not None:
+            tracker = self._attempts.get((job_id, execution_epoch or "", attempt_id))
+            return tracker.current_step(job_id) if tracker is not None else None
         return self._current.get(job_id)
 
     async def on_transcript_event(self, job_id: str, event: SessionEvent) -> None:
         """Process a TranscriptUpdated event."""
+        if self._metadata is None and event.metadata.attempt_id is not None:
+            tracker = self._attempt_tracker(job_id, event.metadata)
+            tracker._metadata = event.metadata
+            await tracker.on_transcript_event(job_id, event)
+            return
         payload = event.payload
         content = str(payload.get("content", "") or "")
         turn_id = payload.get("turn_id") or ""
@@ -263,11 +308,19 @@ class StepTracker:
 
     async def on_job_terminal(self, job_id: str, outcome: str) -> None:
         """Close current step when job reaches terminal state."""
+        for key, tracker in tuple(self._attempts.items()):
+            if key[0] == job_id:
+                await tracker.on_job_terminal(job_id, outcome)
         current = self._current.get(job_id)
         if not current:
             return  # Already closed or never opened — idempotent
         status = "completed" if outcome in ("review", "completed") else outcome
         await self._close(job_id, current, status)
+
+    async def on_attempt_terminal(self, job_id: str, attempt_id: str, execution_epoch: str, outcome: str) -> None:
+        tracker = self._attempts.get((job_id, execution_epoch, attempt_id))
+        if tracker is not None:
+            await tracker.on_job_terminal(job_id, outcome)
 
     async def _open(
         self,
@@ -279,6 +332,13 @@ class StepTracker:
         n = self._counters.get(job_id, 0) + 1
         self._counters[job_id] = n
         step_id = f"step-{uuid.uuid4().hex[:12]}"
+        if self._metadata is not None:
+            step_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"cp-step-v1:{job_id}:{self._metadata.execution_epoch}:{self._metadata.attempt_id}:{n}:{turn_id}",
+                )
+            )
 
         start_sha: str | None = None
         if self._git_service:
@@ -304,6 +364,7 @@ class StepTracker:
                 session_id=job_id,
                 timestamp=state.started_at,
                 kind=EventKind.step_started,
+                metadata=self._metadata,
                 payload={
                     "step_id": step_id,
                     "step_number": n,
@@ -367,6 +428,7 @@ class StepTracker:
                 session_id=job_id,
                 timestamp=now,
                 kind=EventKind.step_completed,
+                metadata=self._metadata,
                 payload={
                     "step_id": state.step_id,
                     "turn_id": state.turn_id,
@@ -391,11 +453,19 @@ class StepTracker:
 
     def cleanup(self, job_id: str) -> None:
         """Remove all in-memory state for a job."""
+        for key in tuple(self._attempts):
+            if key[0] == job_id:
+                self._attempts.pop(key).cleanup(job_id)
         self._current.pop(job_id, None)
         self._counters.pop(job_id, None)
         self._worktree_paths.pop(job_id, None)
         self._observed_jobs.discard(job_id)
         self._transcript_buffers.pop(job_id, None)
+
+    def cleanup_attempt(self, job_id: str, attempt_id: str, execution_epoch: str) -> None:
+        tracker = self._attempts.pop((job_id, execution_epoch, attempt_id), None)
+        if tracker is not None:
+            tracker.cleanup(job_id)
 
 
 # ---------------------------------------------------------------------------

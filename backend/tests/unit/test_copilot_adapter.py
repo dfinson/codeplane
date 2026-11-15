@@ -243,6 +243,30 @@ def _install_auto_approve_router(adapter: Any, job_id: str = "job-1") -> None:
 
 
 class TestRuntimeContract:
+    async def test_utility_usage_preserves_native_zero_cost_and_actual_model(self, adapter) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        client, session = self._client()
+
+        async def send(*args, **kwargs):
+            session.fire_event(_FakeSdkSessionEvent(
+                "assistant.usage", _FakeEventData(model="approved-model", inputTokens=0, outputTokens=5, cost=0),
+            ))
+            session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="text")))
+            session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
+
+        session.send = send
+        with (
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            completion_context(CompletionContext(max_output_bytes=4)),
+        ):
+            result = await adapter.complete("test", model="approved-model")
+        assert result.model == "approved-model"
+        assert result.input_tokens == 0 and result.output_tokens == 5
+        native = next(item for item in result.usage if item.unit == "copilot_cost_unit")
+        assert native.amount == 0 and native.currency is None and not native.verified
+        assert not any(item.unit == "USD" for item in result.usage)
+
     @staticmethod
     def _client(session_id: str = "runtime-session") -> tuple[MagicMock, _FakeCopilotSession]:
         session = _FakeCopilotSession(session_id)
@@ -372,9 +396,10 @@ class TestRuntimeContract:
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
-            result = await adapter.complete("hello", excluded_tools=[])
-        assert result.text == "text only"
+            await adapter.complete("hello", excluded_tools=[])
+        assert failure.value.reason == "tool_request"
         assert decisions[0].kind == "reject"
 
     @pytest.mark.asyncio
@@ -1981,6 +2006,28 @@ class TestScoutAccounting:
 
 
 class TestScoutPermissions:
+    async def test_recipe_grant_blocks_actual_hook_before_permission_policy(self, adapter, tmp_path) -> None:
+        client = MagicMock()
+        session = _FakeCopilotSession("capability-session")
+        client.create_session = AsyncMock(return_value=session)
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+        config = _make_config(workspace_path=str(tmp_path), execution_capabilities=frozenset({"read", "shell"}))
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            sid = await adapter.create_session(config)
+        hook = client.create_session.call_args.kwargs["hooks"]["on_pre_tool_use"]
+        denied = await hook(
+            {"toolName": "bash", "toolArgs": {"command": "echo changed > file"}, "cwd": str(tmp_path), "timestamp": 0},
+            {"session_id": sid},
+        )
+        assert denied["permissionDecision"] == "deny"
+        allowed = await hook(
+            {"toolName": "view", "toolArgs": {"path": "file"}, "cwd": str(tmp_path), "timestamp": 0},
+            {"session_id": sid},
+        )
+        assert allowed is None, "Capability approval must not override ordinary permission policy"
+        await adapter.abort_session(sid)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("content", ["Let me create a temporary script.", ""])
     async def test_scout_preserves_tool_request_intent_before_execution(

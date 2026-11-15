@@ -6,10 +6,10 @@ import json
 from dataclasses import dataclass
 
 from sqlalchemy import delete, func, select, update
-from traceforge.types import EventMetadata
 
 from backend.models.db import EventRow
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata
 from backend.persistence.repository import BaseRepository
 
 

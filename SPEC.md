@@ -4,6 +4,53 @@
 
 ## Runtime admission and evidence invariants
 
+### Standalone interoperability transition
+
+The standalone replacement is reviewed against product base
+`871fc81af41fec13de756338aab2715839357af5` (tree
+`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
+the compatibility transition until decoder, policy and integration qualification
+permits retirement. Existing history is never discarded to complete migration.
+
+`services/adapters/contracts.py` separates observation, execution, blocking
+permission interception and text-only completion. An observer does not acquire
+launch or cancellation authority. Recipe capability requests must be a subset
+of both Job policy and actual adapter support. An unsatisfied request fails
+before side effects rather than silently reducing or broadening its grant.
+The invocation boundary must enforce the resulting grant, not rely on prompts.
+Recipe run/revision/step-instance/attempt correlation is additive and never
+replaces transcript `step_id` or `turn_id`.
+
+`services/action_policy/syntax.py` provides bounded Tree-sitter evidence using
+the declared Bash/POSIX-shell or PowerShell dialect. It retains source bytes,
+grammar node spans, conditional/deferred scopes and nested interpreter origins.
+Unknown dialects, unresolved expansions, malformed syntax and resource limits
+are incomplete evidence, not a safe-command verdict. Syntax structure alone
+does not establish command semantics.
+
+Managed events now use application-owned canonical models. Executions still
+pinned to TraceForge cross an explicit serialization bridge rather than importing
+its title/model runtime through the event type. SessionConfig's optional
+`execution_capabilities` is enforced at provider pre-tool hooks and permission
+callbacks. `None` retains the existing unrestricted-by-recipe behavior. Shell
+capability alone does not authorize mutation or external access, and an
+unproven arbitrary executable is not treated as a read.
+
+Recipe attempts register their actual adapter/session with RuntimeService and
+retain the returned exact execution token. Attempt controls never fall back to
+the primary Job session. Their events carry explicit execution epoch and attempt
+metadata. EventProcessor requires a separately registered attempt workspace and
+partitions turn, pairing, activity, StepTracker and diff state. Closing an
+attempt cannot close or auto-commit another attempt. Read-only observation
+does not mutate the Git index while calculating a diff.
+
+Text-only completion rejects tool attempts and reports provider errors, empty
+responses and output-limit failures explicitly. Returned typed usage distinguishes
+Copilot native cost units from verified USD and retains present zero values.
+Legacy numeric completion fields remain available during migration. The strict
+`cp-action-v1` evidence schema and deterministic credential filters are local
+primitives, not themselves permission authority or a claim of PII detection.
+
 ### Recipe definitions and publication
 
 Recipes describe configurable intra-Job work. They are distinct from the legacy
@@ -34,30 +81,6 @@ Migration 0076 adds Job-owned run, step-instance, immutable attempt/result,
 output-receipt, workspace-lease and review storage. Recipe gates reference
 existing approval records. Existing Jobs and transcript steps are not backfilled
 with invented recipe identities.
-
-### Standalone interoperability transition
-
-The standalone replacement is reviewed against product base
-`871fc81af41fec13de756338aab2715839357af5` (tree
-`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
-the compatibility transition until decoder, policy and integration qualification
-permits retirement. Existing history is never discarded to complete migration.
-
-`services/adapters/contracts.py` separates observation, execution, blocking
-permission interception and text-only completion. An observer does not acquire
-launch or cancellation authority. Recipe capability requests must be a subset
-of both Job policy and actual adapter support. An unsatisfied request fails
-before side effects rather than silently reducing or broadening its grant.
-The invocation boundary must enforce the resulting grant, not rely on prompts.
-Recipe run/revision/step-instance/attempt correlation is additive and never
-replaces transcript `step_id` or `turn_id`.
-
-`services/action_policy/syntax.py` provides bounded Tree-sitter evidence using
-the declared Bash/POSIX-shell or PowerShell dialect. It retains source bytes,
-grammar node spans, conditional/deferred scopes and nested interpreter origins.
-Unknown dialects, unresolved expansions, malformed syntax and resource limits
-are incomplete evidence, not a safe-command verdict. Syntax structure alone
-does not establish command semantics.
 
 ### Existing runtime guarantees
 

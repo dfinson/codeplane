@@ -8,7 +8,8 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 import structlog
-from traceforge.types import SessionEvent
+
+from backend.models.session_event import SessionEvent
 
 log = structlog.get_logger()
 

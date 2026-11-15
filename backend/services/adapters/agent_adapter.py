@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from backend.models.api_schemas import ExecutionPhase
     from backend.models.domain import SessionConfig
     from backend.models.events import SessionEvent
+    from backend.models.usage import UsageAmount
 
 
 @dataclass(slots=True)
@@ -29,6 +30,7 @@ class CompletionResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     model: str = ""
+    usage: tuple[UsageAmount, ...] = ()
 
 
 class UtilityCompletionError(OSError):

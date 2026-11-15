@@ -6,13 +6,13 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
 from backend.models.domain import SessionConfig
 from backend.models.events import EventKind
+from backend.services.auth.workspace_paths import workspace_target
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -100,14 +100,8 @@ def scout_read_allowed(workspace: str, kind: str, tool_name: str, paths: list[st
             return False
         candidates = [workspace]
     try:
-        root = Path(workspace).resolve(strict=True)
         for raw in candidates:
-            if "://" in raw or "\x00" in raw:
-                return False
-            candidate = Path(raw)
-            resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
-            if not resolved.is_relative_to(root):
-                return False
+            workspace_target(workspace, raw)
     except (OSError, ValueError, RuntimeError):
         return False
     return True
