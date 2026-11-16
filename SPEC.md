@@ -156,6 +156,13 @@ exact historical run and step identities remain addressable.
 
 ### Existing runtime guarantees
 
+`start_or_enqueue` admits or queues work without invoking sidecars. Startup is
+reserved before the first database await, then `_start_reserved_job` configures
+policy before built-in/custom sidecars or Scout can run. The contract-pin hook
+belongs immediately before that policy setup. Queued session tokens remain
+in-memory only and are removed on startup, cancellation or shutdown. Preflight,
+Scout and managed execution share bounded runtime slots.
+
 `runtime.copilot_only` defaults to true. This restricts CodePlane-managed
 provider integrations, not model families served by Copilot or manually typed
 terminal commands. Disabled integrations retain their code, configuration and
