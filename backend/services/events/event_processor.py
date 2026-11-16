@@ -32,6 +32,7 @@ from backend.models.events import (
     TRANSCRIPT_STREAMING_KINDS,
     EventKind,
     SessionEvent,
+    is_admission_receipt,
 )
 from backend.models.session_event import EventMetadata
 from backend.services.events.activity_projection import ActivityProjection
@@ -160,6 +161,11 @@ class EventProcessor:
         Returns the published event, or ``None`` if the event was consumed
         internally (e.g. a ``file.edited`` diff trigger) and nothing was emitted.
         """
+        if is_admission_receipt(event):
+            if not replay:
+                await self._event_bus.publish(event)
+                return event
+            return None
         if self._attempt_scope is None and event.metadata.attempt_id is not None:
             key = (job_id, event.metadata.execution_epoch or "", event.metadata.attempt_id)
             processor = self._attempt_processors.get(key)

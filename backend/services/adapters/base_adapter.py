@@ -21,6 +21,8 @@ import structlog
 from sqlalchemy.exc import DBAPIError
 
 from backend.models.domain import (
+    ApprovalAlreadyResolvedError,
+    ApprovalNotFoundError,
     ApprovalResolution,
 )
 from backend.models.events import EventKind, SessionEvent, new_event
@@ -39,6 +41,8 @@ if TYPE_CHECKING:
     from backend.models.api_schemas import ExecutionPhase
     from backend.models.domain import SessionConfig
     from backend.models.session_event import ToolMotivation
+    from backend.services.action_policy.classifier import RepoPolicy
+    from backend.services.action_policy.router import PolicyRouter
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
@@ -94,6 +98,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
         self._session_metadata: dict[str, EventMetadata] = {}
         self._session_workspaces: dict[str, str] = {}
+        self._permission_generations: dict[str, object] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
         self._event_bus = event_bus
@@ -103,6 +108,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._worktree_paths: dict[str, str] = {}  # job_id → cwd
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
+        self._session_models: dict[str, str] = {}
         self._last_telemetry_broadcast: dict[str, float] = {}
         self._current_phases: dict[str, str] = {}
         self._write_tasks: list[asyncio.Task[None]] = []
@@ -134,15 +140,19 @@ class BaseAgentAdapter(AgentAdapterInterface):
         dotted CodePlane ``EventKind`` and *payload*/*metadata* carry TF-native
         fields consumed by ``EventProcessor`` and downstream consumers.
         """
-        metadata = self._session_metadata.get(session_id, EventMetadata()).model_copy(
+        metadata = self._event_metadata(session_id).model_copy(
             update={
-                "source_framework": self._source_framework,
                 "duration_ms": duration_ms,
                 "motivation": motivation,
                 "partial": partial,
             }
         )
         self._enqueue(session_id, new_event(session_id=job_id, kind=kind, payload=payload, metadata=metadata))
+
+    def _event_metadata(self, session_id: str) -> EventMetadata:
+        return self._session_metadata.get(session_id, EventMetadata()).model_copy(
+            update={"source_framework": self._source_framework, "run_id": session_id},
+        )
 
     def _emit_log_line(self, session_id: str, job_id: str, message: str, level: str = "info") -> None:
         """Emit a native ``log`` event (re-homed from EventPipeline._emit_log)."""
@@ -161,6 +171,8 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
+        if self._session_to_job.get(session_id) != job_id:
+            self._permission_generations[session_id] = object()
         self._session_to_job[session_id] = job_id
         self._job_start_times.setdefault(job_id, time.monotonic())
 
@@ -169,10 +181,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds[session_id] = kind
 
     def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        self._permission_generations[session_id] = object()
         self._session_workspaces[session_id] = config.workspace_path
         self._session_metadata[session_id] = EventMetadata(
-            recipe_run_id=config.recipe_run_id, recipe_revision=config.recipe_revision,
-            step_instance_id=config.step_instance_id, attempt_id=config.attempt_id,
+            recipe_run_id=config.recipe_run_id,
+            recipe_revision=config.recipe_revision,
+            step_instance_id=config.step_instance_id,
+            attempt_id=config.attempt_id,
             execution_epoch=config.execution_epoch,
         )
 
@@ -186,9 +201,24 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def pause_tools(self, session_id: str) -> None:
         self._paused_sessions.add(session_id)
+        self._permission_generations[session_id] = object()
 
     def resume_tools(self, session_id: str) -> None:
         self._paused_sessions.discard(session_id)
+
+    def _capture_permission_fence(self, session_id: str) -> tuple[str | None, object]:
+        return self._session_to_job.get(session_id), self._permission_generations.setdefault(session_id, object())
+
+    def _permission_fence_is_current(self, session_id: str, fence: tuple[str | None, object]) -> bool:
+        owner, generation = fence
+        current = (
+            session_id not in self._paused_sessions
+            and self._permission_generations.get(session_id) is generation
+            and self._session_to_job.get(session_id) == owner
+        )
+        if not current:
+            log.warning("permission_decision_stale", job_id=owner, session_id=session_id)
+        return current
 
     # Per-job tracking dicts cleaned up together in _cleanup_session_state.
     # NOTE: _policy_router, _repo_policies, _worktree_paths are intentionally
@@ -211,7 +241,9 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._paused_sessions.discard(session_id)
         self._session_kinds.pop(session_id, None)
         self._session_metadata.pop(session_id, None)
+        self._permission_generations.pop(session_id, None)
         self._session_workspaces.pop(session_id, None)
+        self._session_models.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
@@ -342,15 +374,33 @@ class BaseAgentAdapter(AgentAdapterInterface):
         actual_model: str,
         requested_model: str,
     ) -> None:
-        """First-call model verification: log mismatch, emit event, persist.
-
-        Safe to call multiple times — only acts on the first invocation
-        per job (guards on ``_job_main_models``).
-        """
-        if not actual_model or job_id in self._job_main_models:
+        """Verify reported identity per attempt, retaining legacy primary Job behavior."""
+        if not actual_model:
             return
-        self._job_main_models[job_id] = actual_model
-        self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
+        metadata = self._session_metadata.get(session_id)
+        is_attempt = metadata is not None and metadata.attempt_id is not None
+        if is_attempt:
+            if self._session_models.get(session_id) == actual_model:
+                return
+            self._session_models[session_id] = actual_model
+            self._emit_tf(
+                session_id,
+                job_id,
+                EventKind.model_observed,
+                {
+                    "requested_model": requested_model or None,
+                    "actual_model": actual_model,
+                    "model_match": normalize_model_name(actual_model) == normalize_model_name(requested_model)
+                    if requested_model and requested_model != "auto"
+                    else None,
+                },
+            )
+        else:
+            if job_id in self._job_main_models:
+                return
+            self._session_models[session_id] = actual_model
+            self._job_main_models[job_id] = actual_model
+            self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
 
         if (
             requested_model
@@ -363,19 +413,17 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 actual=actual_model,
                 job_id=job_id,
             )
-            self._enqueue(
+            self._emit_tf(
                 session_id,
-                new_event(
-                    session_id=job_id,
-                    kind=EventKind.model_downgraded,
-                    payload={
-                        "requested_model": requested_model,
-                        "actual_model": actual_model,
-                    },
-                ),
+                job_id,
+                EventKind.model_downgraded,
+                {"requested_model": requested_model, "actual_model": actual_model},
             )
         else:
             log.info("model_confirmed", model=actual_model, job_id=job_id)
+
+    def get_reported_model(self, session_id: str) -> str | None:
+        return self._session_models.get(session_id)
 
     # ------------------------------------------------------------------
     # Shared tool event helpers (used by Claude + Copilot adapters)
@@ -414,6 +462,33 @@ class BaseAgentAdapter(AgentAdapterInterface):
         if job_id in self._repo_policies:
             self._repo_policies[job_id] = policy
 
+    def attach_attempt_policy(
+        self,
+        session_id: str,
+        job_id: str,
+        attempt_id: str,
+        epoch: str,
+        router: PolicyRouter,
+        policy: RepoPolicy,
+        *,
+        execution_token: str,
+    ) -> None:
+        metadata = self._session_metadata.get(session_id)
+        if (
+            self._session_to_job.get(session_id) != job_id
+            or metadata is None
+            or metadata.attempt_id != attempt_id
+            or metadata.execution_epoch != epoch
+            or not self._session_workspaces.get(session_id)
+            or not execution_token
+        ):
+            raise ValueError("Policy attachment requires the exact attributed session and trusted workspace")
+        self._policy_router[job_id] = router
+        self._repo_policies[job_id] = policy
+        if metadata.execution_token != execution_token:
+            self._permission_generations[session_id] = object()
+        self._session_metadata[session_id] = metadata.model_copy(update={"execution_token": execution_token})
+
     def cleanup_job_policy(self, job_id: str) -> None:
         """Remove per-job policy state.  Called at end-of-job by RuntimeService."""
         self._policy_router.pop(job_id, None)
@@ -446,6 +521,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         *,
         tool_name: str = "",
         tool_input: dict[str, Any] | None = None,
+        fence: tuple[str | None, object] | None = None,
     ) -> PermissionDecision:
         """Evaluate a tool permission request against CodePlane's policy.
 
@@ -455,8 +531,12 @@ class BaseAgentAdapter(AgentAdapterInterface):
         policy router via ``traceforge.governance``
         (RecommendedAction ALLOW / WARN / ESCALATE / DENY / TRANSFORM).
         """
-        # Paused — immediately deny
-        if session_id in self._paused_sessions:
+        fence = fence if fence is not None else self._capture_permission_fence(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return PermissionDecision.deny
+        owner, _ = fence
+        if owner is not None and owner != job_id:
+            log.error("permission_session_owner_mismatch", session_id=session_id, job_id=job_id)
             return PermissionDecision.deny
 
         # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
@@ -476,11 +556,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 shell_cmd,
                 tool_input,
             )
-            return PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
+            decision = (
+                PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
+            )
 
         # --- Action policy router ---
-        if job_id and job_id in self._policy_router:
-            return await self._evaluate_with_policy_router(
+        elif job_id and job_id in self._policy_router:
+            decision = await self._evaluate_with_policy_router(
                 session_id,
                 job_id,
                 request,
@@ -488,13 +570,17 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 tool_input=tool_input,
             )
 
-        log.error(
-            "no_policy_router_for_job",
-            job_id=job_id,
-            session_id=session_id,
-            tool_name=tool_name,
-        )
-        return PermissionDecision.deny
+        else:
+            log.error(
+                "no_policy_router_for_job",
+                job_id=job_id,
+                session_id=session_id,
+                tool_name=tool_name,
+            )
+            return PermissionDecision.deny
+        if not self._permission_fence_is_current(session_id, fence):
+            return PermissionDecision.deny
+        return decision
 
     async def _evaluate_with_policy_router(
         self,
@@ -537,8 +623,8 @@ class BaseAgentAdapter(AgentAdapterInterface):
         )
 
         cwd = self._worktree_paths.get(job_id)
-        metadata = self._session_metadata.get(session_id)
-        if metadata is not None and metadata.attempt_id is not None:
+        metadata = self._event_metadata(session_id)
+        if metadata.attempt_id is not None:
             cwd = self._session_workspaces.get(session_id)
             if not cwd:
                 log.error("attempt_permission_workspace_missing", job_id=job_id, session_id=session_id)
@@ -556,6 +642,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
                     session_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=EventKind.action_classified,
+                    metadata=metadata,
                     payload={
                         "recommendedAction": decision.recommended_action.value,
                         "reasonCode": cls.reason_code,
@@ -585,6 +672,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.error("hard_gated_command_blocked_no_infra", command=shell_cmd)
             return ApprovalResolution.rejected
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         description = f"⚠️ Hard-gated command (§18.2) — requires operator approval: {shell_cmd}"
         proposed = json.dumps(tool_input, default=str) if tool_input else shell_cmd
         approval = await self._approval_service.create_request(
@@ -593,11 +684,14 @@ class BaseAgentAdapter(AgentAdapterInterface):
             proposed_action=proposed,
             requires_explicit_approval=True,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed,
@@ -612,7 +706,29 @@ class BaseAgentAdapter(AgentAdapterInterface):
             job_id=job_id,
             command=shell_cmd,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
+
+    async def _retire_approval_if_stale(
+        self,
+        session_id: str,
+        fence: tuple[str | None, object],
+        approval_id: str,
+    ) -> bool:
+        if self._permission_fence_is_current(session_id, fence):
+            return False
+        assert self._approval_service is not None
+        try:
+            await self._approval_service.resolve(
+                approval_id,
+                ApprovalResolution.rejected,
+                notes="Originating execution changed before permission release",
+            )
+        except (ApprovalAlreadyResolvedError, ApprovalNotFoundError):
+            log.info("stale_permission_approval_already_retired", session_id=session_id, approval_id=approval_id)
+        return True
 
     async def _route_to_operator(
         self,
@@ -626,16 +742,23 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.warning("permission_ask_no_infra")
             return ApprovalResolution.approved
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         approval = await self._approval_service.create_request(
             job_id=job_id,
             description=description,
             proposed_action=proposed_action,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed_action,
@@ -648,7 +771,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             approval_id=approval.id,
             description=description,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
 
     @staticmethod
     def _build_permission_description(

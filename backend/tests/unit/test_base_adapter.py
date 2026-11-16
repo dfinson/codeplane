@@ -104,6 +104,46 @@ class TestBuildPermissionDescription:
 
 
 class TestSessionState:
+    def test_attempt_models_are_verified_independently_without_job_default_writes(self) -> None:
+        from backend.models.domain import SessionConfig
+        from backend.models.events import EventKind
+
+        adapter = _make_adapter()
+        adapter._schedule_db_write = MagicMock()
+        adapter._job_main_models["job"] = "primary-model"
+        for sid, attempt in (("first", "attempt-one"), ("second", "attempt-two")):
+            adapter._queues[sid] = asyncio.Queue()
+            adapter.set_job_id(sid, "job")
+            adapter.set_session_metadata(
+                sid,
+                SessionConfig(
+                    workspace_path="/repo",
+                    prompt="",
+                    job_id="job",
+                    attempt_id=attempt,
+                    execution_epoch="epoch",
+                    recipe_run_id="run",
+                ),
+            )
+        adapter._verify_and_set_model("first", "job", "served-one", "requested-one")
+        adapter._verify_and_set_model("second", "job", "served-two", "requested-two")
+        assert adapter.get_reported_model("first") == "served-one"
+        assert adapter.get_reported_model("second") == "served-two"
+        assert adapter._job_main_models["job"] == "primary-model"
+        adapter._schedule_db_write.assert_not_called()
+        for sid, attempt, actual in (
+            ("first", "attempt-one", "served-one"),
+            ("second", "attempt-two", "served-two"),
+        ):
+            observed = adapter._queues[sid].get_nowait()
+            mismatch = adapter._queues[sid].get_nowait()
+            assert observed.kind == EventKind.model_observed
+            assert mismatch.kind == EventKind.model_downgraded
+            assert observed.payload["actual_model"] == actual
+            assert observed.payload["model_match"] is False
+            assert mismatch.metadata.attempt_id == observed.metadata.attempt_id == attempt
+            assert observed.metadata.run_id == sid and observed.metadata.execution_epoch == "epoch"
+
     def test_set_job_id(self) -> None:
         adapter = _make_adapter()
         adapter.set_job_id("s1", "j1")
@@ -235,12 +275,19 @@ class TestEvaluatePermission:
         adapter._policy_router["job"] = router
         adapter._worktree_paths["job"] = "/primary"
         adapter.set_session_metadata(
-            "attempt-session", SessionConfig(
-                workspace_path="/attempt", prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+            "attempt-session",
+            SessionConfig(
+                workspace_path="/attempt",
+                prompt="",
+                job_id="job",
+                attempt_id="attempt",
+                execution_epoch="epoch",
             ),
         )
         decision = await adapter._evaluate_permission(
-            "attempt-session", "job", PermissionRequest(kind="read", workspace_path="/untrusted"),
+            "attempt-session",
+            "job",
+            PermissionRequest(kind="read", workspace_path="/untrusted"),
             tool_name="Read",
         )
         assert decision == PermissionDecision.allow

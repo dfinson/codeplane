@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from backend.models.db import Base, JobRow, ProjectRow, RecipeAttemptRow, Recipe
 from backend.models.domain import ApprovalResolution, StateConflictError
 from backend.models.schemas.recipes import (
     RecipeAgentResult,
+    RecipeAgentRunner,
     RecipeAttemptExecution,
     RecipeAttemptResult,
     RecipeBlockResult,
@@ -55,7 +57,10 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-async def sessions(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+async def sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    from backend.persistence import database
+
+    monkeypatch.setattr(database, "_write_lock", None)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runs.db'}")
     event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as connection:
@@ -64,16 +69,18 @@ async def sessions(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSess
     await engine.dispose()
 
 
-async def create_run(sessions, definition, job_id="job"):
+async def create_run(sessions, definition, job_id="job", *, repo_path="/repo"):
     async with sessions() as session:
         now = datetime.now(UTC)
-        session.add(ProjectRow(id=job_id, name=job_id, repo_paths='["/repo"]', created_at=now, updated_at=now))
+        session.add(
+            ProjectRow(id=job_id, name=job_id, repo_paths=json.dumps([repo_path]), created_at=now, updated_at=now)
+        )
         await session.flush()
         session.add(
             JobRow(
                 id=job_id,
                 project_id=job_id,
-                repo="/repo",
+                repo=repo_path,
                 prompt="A real Job owns this run",
                 state="running",
                 base_ref="main",
@@ -98,10 +105,20 @@ async def ready_attempt(session, run, step_id, workspace="/repo/snapshot"):
     instance = await repo.project_step(instance, "ready", "Selected by the cursor.")
     service = RecipeRunService(RecipeDefinitionService(RecipeRepository(session)), repo)
     inputs = await service.resolve_inputs(instance)
+    runner = instance.definition.runner
+    if isinstance(runner, RecipeAgentRunner):
+        job = await session.get(JobRow, run.job_id)
+        provider = runner.provider or job.sdk
+        runner = runner.model_copy(
+            update={
+                "provider": provider,
+                "model": runner.model if runner.model is not None else job.model if provider == job.sdk else None,
+            }
+        )
     attempt = await repo.claim_attempt(
         instance,
         inputs=inputs,
-        runner=instance.definition.runner,
+        runner=runner,
         capabilities=instance.definition.capabilities,
         workspace=RecipeResolvedWorkspace(
             path=workspace, code_ref="immutable-code", policy=instance.definition.workspace
@@ -359,6 +376,43 @@ async def test_uncertain_effect_retains_writer_lease_and_forbids_blind_retry(ses
         assert not can_retry(work, ended)
         assert completed_route(work, ended) is None
         assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) == attempt.id
+
+
+async def test_canceled_uncertainty_without_a_writer_lease_still_blocks_a_successor(sessions):
+    run = await create_run(
+        sessions, RecipeDefinition(name="Unknown effect", entry_steps=["work"], steps=[agent("work")])
+    )
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        attempt = await ready_attempt(session, run, "work")
+        await repo.request_cancel(run.id)
+        ended = await repo.finish_attempt(attempt.id, agent_result("failed", uncertain=True), {})
+        assert ended.result.outcome == "canceled"
+        assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) is None
+        with pytest.raises(StateConflictError, match="remains unresolved"):
+            await repo.resolve_run(run.id, "canceled")
+        assert (await repo.get(run.id)).resolved_at is None
+
+
+async def test_gate_recovery_does_not_resurrect_a_concurrently_resolved_request(sessions, monkeypatch):
+    await create_run(sessions, RecipeDefinition(name="Gate owner", entry_steps=["work"], steps=[agent("work")]))
+    original = ApprovalService(sessions)
+    approval = await original.create_request("job", "Pending decision", requires_explicit_approval=True)
+    stale = await original.list_pending("job")
+    await original.resolve(approval.id, ApprovalResolution.approved)
+    recovered = ApprovalService(sessions)
+    make_repo = recovered._make_repo
+
+    def stale_pending(session):
+        from unittest.mock import AsyncMock
+
+        repo = make_repo(session)
+        repo.list_pending = AsyncMock(return_value=stale)
+        return repo
+
+    monkeypatch.setattr(recovered, "_make_repo", stale_pending)
+    assert await recovered.recover_pending_approvals(job_id="job") == 0
+    assert await recovered.wait_for_resolution(approval.id) == ApprovalResolution.approved
 
 
 @pytest.mark.parametrize("safe", [False, True])

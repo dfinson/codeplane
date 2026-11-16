@@ -1,0 +1,77 @@
+"""Admission/recovery selection over immutable, application-owned contract pins."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from backend.models.domain import StateConflictError
+from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from backend.persistence.execution_contract_repo import ExecutionContractRepository
+
+
+class ExecutionContracts:
+    def __init__(
+        self,
+        repository: ExecutionContractRepository,
+        *,
+        available: Mapping[str, ExecutionContract],
+        selected_for_new: str,
+    ) -> None:
+        self._repository = repository
+        self._available = {key: value.model_copy(deep=True) for key, value in available.items()}
+        if any(key != contract.id for key, contract in self._available.items()):
+            raise ValueError("Contract catalog identities must match their selected implementations")
+        if selected_for_new not in self._available:
+            raise ValueError("Selected admission contract has no available implementation")
+        self._selected = selected_for_new
+
+    def require_available(self, pin: ExecutionContractPin) -> None:
+        if self._available.get(pin.contract.id) != pin.contract:
+            raise StateConflictError(
+                "Pinned implementation is unavailable or changed; explicit reconciliation is required"
+            )
+
+    async def fresh(self, job_id: str, admission_id: str) -> ExecutionContractPin:
+        """Only the trusted fresh-admission path calls this, after durable admission."""
+        retained = await self._repository.get(job_id, admission_id)
+        if retained is not None:
+            self.require_available(retained)
+            return retained
+        pin = ExecutionContractPin(
+            job_id=job_id,
+            admission_id=admission_id,
+            budget_id=job_id,
+            contract=self._available[self._selected].model_copy(deep=True),
+        )
+        return await self._repository.create(pin)
+
+    async def recover(self, job_id: str, admission_id: str) -> ExecutionContractPin | None:
+        """Missing provenance stays unrecorded; recovery never creates or upgrades a pin."""
+        pin = await self._repository.get(job_id, admission_id)
+        if pin is not None:
+            self.require_available(pin)
+        return pin
+
+    async def bind_handle(
+        self,
+        pin: ExecutionContractPin,
+        *,
+        sdk: str,
+        session_id: str,
+        live_epoch: str,
+        execution_token: str,
+        attempt_id: str | None = None,
+    ) -> None:
+        self.require_available(pin)
+        await self._repository.bind_handle(
+            pin,
+            sdk=sdk,
+            session_id=session_id,
+            live_epoch=live_epoch,
+            execution_token=execution_token,
+            attempt_id=attempt_id,
+        )

@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__get"];
+        get: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__get"];
+        put: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__get"];
+        post: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__get"];
+        delete: operations["preview_proxy_api_preview__port___path__patch"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__get"];
+        head: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__get"];
+        patch: operations["preview_proxy_api_preview__port___path__patch"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -3744,6 +3744,7 @@ export interface components {
             /** Sessiontoken */
             sessionToken?: string | null;
             mode?: components["schemas"]["JobMode"] | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {
@@ -4049,6 +4050,134 @@ export interface components {
             categories: components["schemas"]["EditEfficiencyCategory"][];
         };
         /**
+         * EventClassification
+         * @description Read-compatible historical labels, not permission authority.
+         */
+        EventClassification: {
+            /** Mechanism */
+            mechanism: string;
+            /** Effect */
+            effect?: string | null;
+            /**
+             * Scope
+             * @default []
+             */
+            scope: string[];
+            /**
+             * Role
+             * @default []
+             */
+            role: string[];
+            /**
+             * Action
+             * @default []
+             */
+            action: string[];
+            /**
+             * Capability
+             * @default []
+             */
+            capability: string[];
+            /**
+             * Structure
+             * @default []
+             */
+            structure: string[];
+            /**
+             * Source Labels
+             * @default []
+             */
+            source_labels: string[];
+            /** Shell Dialect */
+            shell_dialect?: string | null;
+            /**
+             * Binaries
+             * @default []
+             */
+            binaries: string[];
+            /**
+             * Phase Map
+             * @default []
+             */
+            phase_map: components["schemas"]["PhaseSegment"][];
+        };
+        /** EventMetadata */
+        EventMetadata: {
+            /** Source Framework */
+            source_framework?: string | null;
+            /** Ingestion Mode */
+            ingestion_mode?: ("stream" | "file_watch" | "poll" | "replay" | "sqlite") | null;
+            /** Raw Kind */
+            raw_kind?: string | null;
+            /** Span Id */
+            span_id?: string | null;
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Correlation Id */
+            correlation_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Sequence */
+            sequence?: number | null;
+            /** Namespace */
+            namespace?: string[] | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Repo */
+            repo?: string | null;
+            /** Turn Id */
+            turn_id?: string | null;
+            /**
+             * Visibility
+             * @default visible
+             * @enum {string}
+             */
+            visibility: "visible" | "system" | "collapsed";
+            /** Phases */
+            phases?: string[] | null;
+            /** Phase */
+            phase?: string | null;
+            /** Boundary */
+            boundary?: string | null;
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Step Id */
+            step_id?: string | null;
+            /** Activity Title */
+            activity_title?: string | null;
+            /** Step Title */
+            step_title?: string | null;
+            classification?: components["schemas"]["EventClassification"] | null;
+            /** Tool Display */
+            tool_display?: string | null;
+            motivation?: components["schemas"]["ToolMotivation"] | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** File Targets */
+            file_targets?: components["schemas"]["FileTarget"][];
+            /** Governance */
+            governance?: {
+                [key: string]: unknown;
+            } | null;
+            /** Integration Binding Id */
+            integration_binding_id?: string | null;
+            /** Execution Epoch */
+            execution_epoch?: string | null;
+            /** Execution Token */
+            execution_token?: string | null;
+            /** Recipe Run Id */
+            recipe_run_id?: string | null;
+            /** Recipe Revision */
+            recipe_revision?: number | null;
+            /** Step Instance Id */
+            step_instance_id?: string | null;
+            /** Attempt Id */
+            attempt_id?: string | null;
+        };
+        /**
          * ExecutionPhase
          * @enum {string}
          */
@@ -4246,6 +4375,15 @@ export interface components {
              * @default []
              */
             unmatchedEdits: components["schemas"]["HunkMotivation"][];
+        };
+        /** FileTarget */
+        FileTarget: {
+            /** Raw Path */
+            raw_path: string;
+            /** Path */
+            path: string;
+            /** Inside Root */
+            inside_root?: boolean | null;
         };
         /**
          * FireSidecarRequest
@@ -5454,6 +5592,26 @@ export interface components {
              */
             totalWasteUsd: number;
         };
+        /** PhaseSegment */
+        PhaseSegment: {
+            /** Phase */
+            phase: string;
+            /**
+             * Actions
+             * @default []
+             */
+            actions: string[];
+            /**
+             * Scopes
+             * @default []
+             */
+            scopes: string[];
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
+        };
         /** PinMetricRequest */
         PinMetricRequest: {
             /** Name */
@@ -5718,6 +5876,13 @@ export interface components {
             /** Revisionid */
             revisionId: string;
         };
+        /** RecipeCodeReference */
+        RecipeCodeReference: {
+            /** Workspace */
+            workspace: string;
+            /** Commit */
+            commit: string;
+        };
         /** RecipeCommandArgument */
         RecipeCommandArgument: {
             /** Input */
@@ -5931,6 +6096,96 @@ export interface components {
             checksum: string;
             definition: components["schemas"]["RecipeDefinition"];
         };
+        /** RecipeResumeResponse */
+        RecipeResumeResponse: {
+            /** Id */
+            id: string;
+            /** Repo */
+            repo: string;
+            /** Prompt */
+            prompt: string;
+            /** Projectid */
+            projectId?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Description */
+            description?: string | null;
+            state: components["schemas"]["JobState"];
+            /** Baseref */
+            baseRef: string;
+            /** Worktreepath */
+            worktreePath: string | null;
+            /** Branch */
+            branch: string | null;
+            preset?: components["schemas"]["Preset"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Completedat */
+            completedAt: string | null;
+            /** Prurl */
+            prUrl?: string | null;
+            mergeStatus?: components["schemas"]["GitMergeOutcome"] | null;
+            resolution?: components["schemas"]["Resolution"] | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Failurereason */
+            failureReason?: string | null;
+            /** Progressheadline */
+            progressHeadline?: string | null;
+            /** Progresssummary */
+            progressSummary?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Sdk
+             * @default copilot
+             */
+            sdk: string;
+            /** Worktreename */
+            worktreeName?: string | null;
+            /** Verify */
+            verify?: boolean | null;
+            /** Selfreview */
+            selfReview?: boolean | null;
+            /** Maxturns */
+            maxTurns?: number | null;
+            /** Verifyprompt */
+            verifyPrompt?: string | null;
+            /** Selfreviewprompt */
+            selfReviewPrompt?: string | null;
+            /** Enablestalldetection */
+            enableStallDetection?: boolean | null;
+            /** Enableplantracking */
+            enablePlanTracking?: boolean | null;
+            /** Parentjobid */
+            parentJobId?: string | null;
+            /**
+             * Source
+             * @default managed
+             */
+            source: string;
+            /** Externalsessionid */
+            externalSessionId?: string | null;
+            /** @default standard */
+            mode: components["schemas"]["JobMode"];
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Totaltokens */
+            totalTokens?: number | null;
+            /** Inputtokens */
+            inputTokens?: number | null;
+            /** Outputtokens */
+            outputTokens?: number | null;
+            recipeRun: components["schemas"]["RecipeRunResponse"];
+        };
         /** RecipeRetryPolicy */
         RecipeRetryPolicy: {
             /**
@@ -5978,6 +6233,65 @@ export interface components {
             nextSteps?: string[];
             /** Terminal */
             terminal?: ("succeeded" | "failed" | "canceled") | null;
+        };
+        /** RecipeRunResponse */
+        RecipeRunResponse: {
+            /** Id */
+            id: string;
+            /** Jobid */
+            jobId: string;
+            /** Runnumber */
+            runNumber: number;
+            /** Startrequestkey */
+            startRequestKey: string;
+            /** Continuationofid */
+            continuationOfId: string | null;
+            /** Instruction */
+            instruction: string | null;
+            codeRef: components["schemas"]["RecipeCodeReference"] | null;
+            /** Reason */
+            reason: string | null;
+            /** Revisionid */
+            revisionId: string;
+            snapshot: components["schemas"]["RecipeRevisionResponse"];
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted";
+            /** Version */
+            version: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Cancelrequestedat */
+            cancelRequestedAt: string | null;
+            /** Completedat */
+            completedAt: string | null;
+            /** Resolvedat */
+            resolvedAt: string | null;
+        };
+        /** RecipeSelection */
+        RecipeSelection: {
+            /** Revisionid */
+            revisionId: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /** RecipeStep */
         RecipeStep: {
@@ -6313,6 +6627,11 @@ export interface components {
         ResumeJobRequest: {
             /** Instruction */
             instruction?: string | null;
+            /** Expectedrunid */
+            expectedRunId?: string | null;
+            /** Startrequestkey */
+            startRequestKey?: string | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** RetryCostResponse */
         RetryCostResponse: {
@@ -7517,6 +7836,15 @@ export interface components {
             /** Items */
             items: components["schemas"]["ProgressHeadlinePayload"][];
         };
+        /** ToolMotivation */
+        ToolMotivation: {
+            /** Intent */
+            intent?: string | null;
+            /** Reasoning */
+            reasoning?: string | null;
+            /** Source Event Ids */
+            source_event_ids?: string[];
+        };
         /** ToolStatsEntry */
         ToolStatsEntry: {
             /**
@@ -7951,6 +8279,13 @@ export interface components {
             kind: string;
             /** Content */
             content: string;
+            /** Admissionstatus */
+            admissionStatus?: string | null;
+            /** Executionstatus */
+            executionStatus?: string | null;
+            /** Operatorcontent */
+            operatorContent?: string | null;
+            metadata?: components["schemas"]["EventMetadata"] | null;
             /** Title */
             title?: string | null;
             /** Turnid */
@@ -8786,7 +9121,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobResponse"];
+                    "application/json": components["schemas"]["RecipeResumeResponse"] | components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -11334,7 +11669,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -11364,7 +11699,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -11394,7 +11729,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -11424,7 +11759,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -11454,7 +11789,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -11484,7 +11819,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;

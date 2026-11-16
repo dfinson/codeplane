@@ -74,6 +74,11 @@ class EventRepository(BaseRepository):
         self._verify_identity(row, event)
         return True
 
+    async def get(self, event_id: str) -> SessionEvent | None:
+        result = await self._session.execute(select(EventRow).where(EventRow.event_id == event_id))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row is not None else None
+
     async def list_after(
         self,
         after_id: int,

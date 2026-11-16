@@ -582,6 +582,28 @@ class TestScoutPermissions:
 
 
 class TestProcessAssistantMessage:
+    @pytest.mark.parametrize("role", ["job", "preflight"])
+    @pytest.mark.parametrize("requested_model", ["", "requested-model"])
+    async def test_attempt_model_is_recorded_from_assistant_metadata(self, adapter, role, requested_model) -> None:
+        sid = "actual-session"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, role)
+        adapter.set_session_metadata(sid, _make_config(attempt_id="attempt", execution_epoch="epoch"))
+        adapter._requested_models[sid] = requested_model
+        adapter._job_main_models["job-1"] = "job-default"
+        await adapter._process_assistant_message(sid, _FakeAssistantMessage(model="reported-model"))
+        observed = adapter._queues[sid].get_nowait()
+        assert observed.kind == EventKind.model_observed
+        assert observed.payload == {
+            "requested_model": requested_model or None,
+            "actual_model": "reported-model",
+            "model_match": False if requested_model else None,
+        }
+        assert observed.metadata.attempt_id == "attempt"
+        assert adapter.get_reported_model(sid) == "reported-model"
+        assert adapter._job_main_models["job-1"] == "job-default"
+
     @pytest.mark.asyncio
     async def test_scout_text_after_tool_request_is_not_a_final_response(self, adapter: ClaudeAdapter) -> None:
         sid = "scout-tool-request"

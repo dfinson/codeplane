@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
 
-from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.events import EventKind, SessionEvent, is_admission_receipt, new_event
 from backend.models.session_event import EventMetadata
 from backend.services.git.git_service import GitError
 from backend.services.tools.tool_classifier import TOOL_CATEGORIES
@@ -178,6 +178,8 @@ class StepTracker:
 
     async def on_transcript_event(self, job_id: str, event: SessionEvent) -> None:
         """Process a TranscriptUpdated event."""
+        if is_admission_receipt(event):
+            return
         if self._metadata is None and event.metadata.attempt_id is not None:
             tracker = self._attempt_tracker(job_id, event.metadata)
             tracker._metadata = event.metadata

@@ -19,6 +19,7 @@ from backend.models.api_schemas import (
     JobResponse,
     ModelInfoResponse,
     ModelListResponse,
+    RecipeResumeResponse,
     ResolveGateRequest,
     ResumeJobRequest,
     SuggestNamesRequest,
@@ -198,6 +199,7 @@ async def create_job(
         enable_stall_detection=body.enable_stall_detection,
         enable_plan_tracking=body.enable_plan_tracking,
         mode=body.mode or JobMode.standard,
+        recipe=body.recipe,
     )
 
     job = await svc.create_job(spec)
@@ -402,13 +404,22 @@ async def continue_job(
     return _job_to_create_response(job)
 
 
-@router.post("/jobs/{job_id}/resume", response_model=JobResponse)
+@router.post("/jobs/{job_id}/resume", response_model=RecipeResumeResponse | JobResponse)
 async def resume_job(
     job_id: str,
     runtime_service: FromDishka[RuntimeService],
     body: ResumeJobRequest | None = None,
-) -> JobResponse:
+) -> RecipeResumeResponse | JobResponse:
     """Resume a completed/failed/canceled job in-place, optionally with extra instruction."""
+    if body is not None and body.expected_run_id is not None:
+        job, run = await runtime_service.resume_recipe_run(
+            job_id,
+            body.instruction,
+            expected_run_id=body.expected_run_id,
+            start_request_key=body.start_request_key,
+            selection=body.recipe,
+        )
+        return RecipeResumeResponse(**job_to_response(job).model_dump(), recipe_run=run)
     job = await runtime_service.resume_job(job_id, body.instruction if body is not None else None)
     return job_to_response(job)
 

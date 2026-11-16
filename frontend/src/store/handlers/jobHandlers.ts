@@ -30,6 +30,7 @@ export function enrichJob(job: JobSummary): JobSummary {
 // ---------------------------------------------------------------------------
 
 export function handleJobStateChanged(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const newState = payload.newState as string;
   const existing = state.jobs[jobId];
@@ -86,6 +87,7 @@ export function handleJobSetupProgress(state: AppState, payload: Record<string, 
 }
 
 export function handleJobReview(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const prUrl = (payload.prUrl as string | null) ?? null;
   const resolution = (payload.resolution as string | null) ?? null;
@@ -116,6 +118,7 @@ export function handleJobReview(state: AppState, payload: Record<string, unknown
 }
 
 export function handleJobCompleted(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const resolution = (payload.resolution as string | null) ?? null;
   const prUrl = (payload.prUrl as string | null) ?? null;
@@ -137,6 +140,7 @@ export function handleJobCompleted(state: AppState, payload: Record<string, unkn
 }
 
 export function handleJobFailed(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const reason = (payload.reason as string | null) ?? "Unknown error";
   const existing = state.jobs[jobId];
@@ -222,6 +226,7 @@ export function handleJobTitleUpdated(state: AppState, payload: Record<string, u
 }
 
 export function handleModelDowngraded(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const requestedModel = payload.requestedModel as string;
   const actualModel = payload.actualModel as string;

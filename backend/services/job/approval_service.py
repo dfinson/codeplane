@@ -234,7 +234,7 @@ class ApprovalService:
         """Return True if the operator has approved all for this job."""
         return job_id in self._trusted_jobs
 
-    async def recover_pending_approvals(self) -> int:
+    async def recover_pending_approvals(self, *, job_id: str | None = None) -> int:
         """Recreate in-memory futures for approvals that survived a server restart.
 
         Called during ``recover_on_startup()`` so that any job still in
@@ -245,20 +245,24 @@ class ApprovalService:
         """
         async with self._session_factory() as session:
             repo = self._make_repo(session)
-            pending = await repo.list_pending()
+            pending = await repo.list_pending(job_id) if job_id is not None else await repo.list_pending()
 
         loop = asyncio.get_running_loop()
         recovered = 0
-        async with self._lock:
-            for approval in pending:
-                if approval.id in self._pending_futures:
-                    continue  # already tracked (shouldn't happen, but defensive)
-                future: asyncio.Future[ApprovalResolution] = loop.create_future()
-                self._pending_futures[approval.id] = future
-                self._approval_to_job[approval.id] = approval.job_id
-                if approval.requires_explicit_approval:
-                    self._explicit_approval_ids.add(approval.id)
-                recovered += 1
+        for approval in pending:
+            async with self.execution_control.hold(approval.job_id):
+                current = await self.get(approval.id)
+                if current is None or current.resolution is not None:
+                    continue
+                async with self._lock:
+                    if approval.id in self._pending_futures:
+                        continue
+                    future: asyncio.Future[ApprovalResolution] = loop.create_future()
+                    self._pending_futures[approval.id] = future
+                    self._approval_to_job[approval.id] = approval.job_id
+                    if current.requires_explicit_approval:
+                        self._explicit_approval_ids.add(approval.id)
+                    recovered += 1
 
         if recovered:
             log.info("approvals_recovered", count=recovered)

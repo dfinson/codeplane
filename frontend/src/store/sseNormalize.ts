@@ -87,6 +87,17 @@ export function normalizeTFEvent(ev: TFSessionEvent): Record<string, unknown> {
   // from payload data.
   const meta = ev.metadata;
   const metadata = meta == null ? undefined : (meta as Record<string, unknown>);
+  if (metadata) payload.metadata = metadata;
+  for (const [source, target] of [
+    ["recipe_run_id", "recipeRunId"],
+    ["recipe_revision", "recipeRevision"],
+    ["step_instance_id", "stepInstanceId"],
+    ["attempt_id", "attemptId"],
+    ["execution_epoch", "executionEpoch"],
+    ["execution_token", "executionToken"],
+  ] as const) {
+    if (metadata?.[source] != null) payload[target] = metadata[source];
+  }
   delete payload.sequence;
   if (typeof metadata?.sequence === "number") {
     payload.sequence = metadata.sequence;
@@ -136,6 +147,7 @@ export function deriveJobStateFrame(
   kind: string,
   payload: Record<string, unknown>,
 ): Record<string, unknown> | null {
+  if (typeof payload.attemptId === "string") return null;
   const base = { jobId: payload.jobId, timestamp: payload.timestamp };
 
   if (kind === "permission.requested") {

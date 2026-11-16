@@ -19,7 +19,6 @@ from backend.models.schemas.recipes import (
     RecipeValueType,
     RecipeWorkspacePolicy,
 )
-from backend.services.adapters.integration_policy import IntegrationPolicy
 
 if TYPE_CHECKING:
     from backend.config import CPLConfig
@@ -34,7 +33,7 @@ def compatibility_definition(config: CPLConfig, *, plan_first: bool = False) -> 
             "Read the relevant code and instructions. Return a concise, source-backed brief. "
             "Do not edit files or run commands."
         ),
-        runner=RecipeAgentRunner(provider=IntegrationPolicy(config).default_sdk, model=config.runtime.utility_model),
+        runner=RecipeAgentRunner(model=config.runtime.utility_model),
         capabilities=["read"],
         workspace=RecipeWorkspacePolicy(mode="snapshot"),
         inputs={"request": requested},
@@ -68,7 +67,7 @@ def compatibility_definition(config: CPLConfig, *, plan_first: bool = False) -> 
                 "Implement the Job request using the received context and, when present, the exact approved plan. "
                 "Return a concise summary of the work."
             ),
-            runner=RecipeAgentRunner(),
+            runner=RecipeAgentRunner(session="reuse"),
             capabilities=["read", "write", "shell", "delegate", "external_access"],
             workspace=RecipeWorkspacePolicy(mode="mutable"),
             inputs={"request": requested, "brief": brief},

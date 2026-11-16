@@ -25,6 +25,7 @@ __all__ = [
     "EventPayload",
     "SessionEvent",
     "new_event",
+    "is_admission_receipt",
 ]
 
 
@@ -100,12 +101,15 @@ class EventKind(StrEnum):
     job_title_updated = "job.title_updated"
     progress_headline = "progress.headline"
     model_downgraded = "model.downgraded"
+    model_observed = "model.observed"
     tool_group_summary = "tool.group_summary"
     agent_plan_updated = "plan.updated"
     execution_phase_changed = "execution.phase_changed"
     telemetry_updated = "telemetry.updated"
     artifacts_updated = "artifacts.updated"
     tracker_operation_updated = "tracker.operation_updated"
+    recipe_updated = "recipe.updated"
+    review_recorded = "review.recorded"
     # --- Steps / plan ---
     step_started = "step.started"
     step_completed = "step.completed"
@@ -171,6 +175,10 @@ TRANSCRIPT_STREAMING_KINDS: frozenset[EventKind] = frozenset(
         EventKind.tool_result_chunk,
     }
 )
+
+
+def is_admission_receipt(event: SessionEvent) -> bool:
+    return bool(event.payload.get("admission_status") or event.payload.get("execution_status") == "unconfirmed")
 
 
 # ---------------------------------------------------------------------------

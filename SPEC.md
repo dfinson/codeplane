@@ -115,12 +115,31 @@ and cannot exceed the published total-attempt bound. Writer and shell attempts
 hold a canonical workspace lease. Uncertain effects retain that lease and
 remain interrupted rather than entering a blind retry.
 
+`POST /api/jobs` accepts an optional published `recipe` selection. The Job and
+its pinned run commit together before background setup starts. Missing or
+mistyped launch parameters create neither record. Recipe Jobs use the existing
+Job queue and shared runner capacity, not a second scheduler. Their graph owns
+Context, planning, verification and review steps, so legacy Scout/planning/
+verification paths do not execute a second time. Command and human steps do not
+create SDK sessions.
+
+Before governed recipe invocation, trusted composition must configure the
+actual available execution contracts. Fresh admission pins the selected
+contract to the run; recovery only reads its existing pin and never backdates
+one onto unrecorded history. The budget identity remains the Job across new
+run IDs. A real agent handle is persisted, bound to its contract and attached
+to the same Job policy before its initial prompt is submitted. Admission
+receipts report accepted/unconfirmed delivery, not observed execution.
+
 Successful dependency joins require their declared outcomes. An explicitly
 degraded input can retain a known failed diagnostic receipt, its producing
 attempt, original outcome and reason without treating it as successful output.
 Human decisions bind the existing ApprovalService record to the exact input
 checksum, action and next steps. Nonzero command status cannot become success
 through a runner claim, and missing command capture remains interrupted.
+Declared code reconciliation must retain each consumed writer commit in the
+result's Git ancestry. Merely declaring `reconciles` on an exit-zero command
+does not merge code or satisfy that contract.
 
 Nested block instances are scoped to the exact wrapper attempt, such as
 `checks@2/lint`. A block retry creates independent child instances rather than
@@ -133,6 +152,10 @@ app-owned confirmed-safe stop receipt. Recovery checks the current execution
 token, instance version, owning Job, cancellation state and workspace lease.
 Delayed stop callbacks cannot interrupt a subsequently resumed execution.
 An unconfirmed stop remains interrupted and retains its writer lease.
+Transport teardown alone does not establish completed-effect certainty.
+Writer, shell, delegation and external-access interruption stays uncertain
+without a provider-owned effect receipt or explicit reconciliation. Read-only
+recovery and positively recorded no-dispatch recovery do not mint new attempts.
 
 Input snapshots use private Git refs and an alternate index, preserving HEAD,
 the user's index and working files. Snapshot lookup requires an exact ref name;
@@ -153,6 +176,15 @@ code reference, retaining the selected revision unless a replacement was
 explicitly selected. Old attempts, results and approvals are not copied. Run
 numbers provide a deterministic current-run selector and bounded history cursor;
 exact historical run and step identities remain addressable.
+
+`POST /api/jobs/{jobId}/resume` accepts `expectedRunId` and `startRequestKey`
+for an exact continuation receipt, with an optional explicit replacement
+`recipe` selection. Replaying the same request cannot start a third run or
+change its inputs. A conflicting request key is rejected. A completed older
+run without a policy pin may still receive a fresh, explicitly selected
+continuation pin; its old history remains unrecorded. Compatible agent
+continuations reuse the actual native conversation, otherwise they receive
+retained historical context without treating old outcomes as current approvals.
 
 ### Existing runtime guarantees
 

@@ -95,6 +95,7 @@ def test_configured_compatibility_graph_preserves_agent_phases_and_plan_bound(pl
     result = validate_definition(graph)
     assert result.valid, result.issues
     assert graph.steps[0].capabilities == ["read"]
+    assert graph.steps[0].runner.provider is None
     assert graph.steps[0].runner.model == config.runtime.utility_model
     verifiers = [step for step in graph.steps if step.id.startswith("verify")]
     reviewers = [step for step in graph.steps if step.id.startswith("self_review")]

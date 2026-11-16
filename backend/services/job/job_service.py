@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
     from backend.services.merge_service import MergeService
+    from backend.services.recipe.run_service import RecipeRunService
 
 log = structlog.get_logger()
 
@@ -67,6 +68,7 @@ class JobService:
         event_repo: EventRepository | None = None,
         event_bus: EventBus | None = None,
         project_repo: ProjectRepository | None = None,
+        recipe_runs: RecipeRunService | None = None,
     ) -> None:
         self._job_repo = job_repo
         self._git = git_service
@@ -75,6 +77,7 @@ class JobService:
         self._event_repo = event_repo
         self._event_bus = event_bus
         self._project_repo = project_repo
+        self._recipe_runs = recipe_runs
 
     @classmethod
     def from_session(
@@ -90,6 +93,10 @@ class JobService:
         from backend.persistence.event_repo import EventRepository
         from backend.persistence.job_repo import JobRepository
         from backend.persistence.project_repo import ProjectRepository
+        from backend.persistence.recipe_repo import RecipeRepository
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.definition_service import RecipeDefinitionService
+        from backend.services.recipe.run_service import RecipeRunService
 
         job_repo = JobRepository(session)
         event_repo = EventRepository(session)
@@ -106,6 +113,9 @@ class JobService:
             event_repo=event_repo,
             event_bus=event_bus,
             project_repo=project_repo,
+            recipe_runs=RecipeRunService(
+                RecipeDefinitionService(RecipeRepository(session)), RecipeRunRepository(session)
+            ),
         )
 
     async def validate_repo_async(self, repo: str) -> str:
@@ -298,7 +308,20 @@ class JobService:
         public creation contract; task execution uses the two phases with a
         closed read session between preparation and its attachment transaction.
         """
-        return await self.persist_prepared_job(await self.prepare_job(spec), revalidate_project=False)
+        selection = None
+        if spec.recipe is not None:
+            if self._recipe_runs is None:
+                raise ServiceInitError("Recipe admission is unavailable.")
+            selection = await self._recipe_runs.prepare_job_selection(spec.recipe, spec.prompt)
+        job = await self.persist_prepared_job(
+            await self.prepare_job(spec),
+            revalidate_project=False,
+            recipe_admission=selection is not None,
+        )
+        if selection is not None:
+            assert self._recipe_runs is not None
+            await self._recipe_runs.admit_job(job.id, *selection)
+        return job
 
     async def prepare_job(self, spec: JobSpec) -> Job:
         """Read-only Git, ownership, SDK and naming preflight; never insert a row.
@@ -395,6 +418,7 @@ class JobService:
         *,
         revalidate_project: bool = True,
         align_generated_branch: bool = False,
+        recipe_admission: bool = False,
     ) -> Job:
         """Insert a prepared Job with a final DB name check, without Git or commit.
 
@@ -402,6 +426,8 @@ class JobService:
         Non-task create_job callers retain their existing transaction ownership.
         ``align_generated_branch`` is for task-generated ``feat/<slug>`` names;
         explicitly supplied non-task branches retain their existing behavior.
+        ``recipe_admission`` is explicit because the run is inserted later in
+        this transaction; temporary run absence must not select a legacy pin.
         """
         if revalidate_project:
             await self._resolve_job_project_id(prepared.repo, prepared.project_id)
@@ -423,7 +449,14 @@ class JobService:
             )
             log.warning("naming_collision_suffixed", job_id=job_id)
         await self._job_repo.create(job)
-        log.info("job_created", job_id=job.id, title=job.title, repo=job.repo, state=job.state)
+        log.info(
+            "job_created",
+            job_id=job.id,
+            title=job.title,
+            repo=job.repo,
+            state=job.state,
+            recipe_admission=recipe_admission,
+        )
         return job
 
     async def setup_workspace(self, job_id: str) -> Job:

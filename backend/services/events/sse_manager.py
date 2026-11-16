@@ -34,6 +34,8 @@ _BROADCAST_KINDS: frozenset[str] = frozenset(
     {
         EventKind.job_created,
         EventKind.tracker_operation_updated,
+        EventKind.recipe_updated,
+        EventKind.review_recorded,
         EventKind.job_setup_progress,
         EventKind.log_line_emitted,
         EventKind.diff_updated,
@@ -54,6 +56,7 @@ _BROADCAST_KINDS: frozenset[str] = frozenset(
         EventKind.job_archived,
         EventKind.job_title_updated,
         EventKind.model_downgraded,
+        EventKind.model_observed,
         EventKind.tool_group_summary,
         EventKind.telemetry_updated,
         EventKind.plan_step_updated,
