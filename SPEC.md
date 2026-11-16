@@ -168,6 +168,14 @@ an exit status or a passing check.
 The compatibility graph builder keeps configured verification and self-review
 as agent steps, not command checks. Plan First retains an initial plan and at
 most five replans, each with a fresh approval of its exact plan and code inputs.
+`POST /api/recipes/resolve-default` validates and retains a content-addressed
+published revision of that actual configuration, without launching a Job.
+Repeated resolution reuses the same revision. A configuration change creates
+another pin and does not rewrite earlier definitions or runs. New Job selects
+that default or an explicit published custom revision, validates typed launch
+inputs and previews resolved steps, capabilities and routes before creation.
+Custom graphs retain their own planning and gates rather than inheriting a
+second legacy Plan First loop.
 
 Migration 0078 retains multiple historical runs on the same Job and permits only
 one unresolved run, including canceled runs with uncertain execution effects.
@@ -176,6 +184,15 @@ code reference, retaining the selected revision unless a replacement was
 explicitly selected. Old attempts, results and approvals are not copied. Run
 numbers provide a deterministic current-run selector and bounded history cursor;
 exact historical run and step identities remain addressable.
+
+Job-owned inspection lives under `/api/jobs/{jobId}/recipe`: `current`, bounded
+`runs` history, and exact `runs/{runId}/steps/{stepId}/attempts/{attemptId}` reads.
+Each nested identity is checked against its owner, including historical runs.
+Reads never recover, resume or dispatch work. Step pages contain at most 100
+instances and attempt summaries at most 20 entries; full evidence is fetched
+only for the selected attempt. Active step pages are live cursor projections,
+not a claim of a frozen historical snapshot. Resolved run history retains its
+recorded definitions, outcomes and gate receipts after a successor is admitted.
 
 `POST /api/jobs/{jobId}/resume` accepts `expectedRunId` and `startRequestKey`
 for an exact continuation receipt, with an optional explicit replacement

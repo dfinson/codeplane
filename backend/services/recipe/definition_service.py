@@ -21,6 +21,7 @@ from backend.models.schemas.recipes import (
 from backend.services.recipe.validation import content_checksum, validate_definition
 
 if TYPE_CHECKING:
+    from backend.config import CPLConfig
     from backend.persistence.recipe_repo import RecipeRepository
 
 
@@ -74,6 +75,21 @@ class RecipeDefinitionService:
         if result.checksum != revision_checksum(result.definition, result.blocks):
             raise StateConflictError(f"Published revision '{revision_id}' failed its content integrity check.")
         return result
+
+    async def resolve_default(self, config: CPLConfig, *, plan_first: bool) -> RecipeRevisionResponse:
+        from backend.services.recipe.compatibility import compatibility_definition
+
+        # Programmatic defaults must retain union discriminator tags in the publication.
+        definition = RecipeDefinition.model_validate(
+            compatibility_definition(config, plan_first=plan_first).model_dump()
+        )
+        result = await self.validate(definition)
+        if not result.valid:
+            raise RecipeValidationError(result)
+        revision = await self._repo.ensure_configured_revision(
+            definition, revision_checksum(definition, {}), now=datetime.now(UTC)
+        )
+        return await self.get_revision(revision.id)
 
     async def copy_revision(self, revision_id: str, name: str) -> RecipeDraftResponse:
         revision = await self.get_revision(revision_id)

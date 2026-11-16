@@ -34,6 +34,7 @@ from backend.models.schemas.recipes import (
     RecipeAttemptExecution,
     RecipeAttemptResponse,
     RecipeAttemptResult,
+    RecipeAttemptSummary,
     RecipeCodeReference,
     RecipeCommandResult,
     RecipeCommandRunner,
@@ -1105,6 +1106,22 @@ class RecipeRunRepository(BaseRepository):
             assert attempt is not None
             attempts.append(attempt)
         return attempts
+
+    async def list_attempt_summaries(self, step_instance_id: str) -> list[RecipeAttemptSummary]:
+        rows = await self._session.execute(
+            select(
+                RecipeAttemptRow.id,
+                RecipeAttemptRow.number,
+                RecipeAttemptRow.dispatch_intent_at,
+                RecipeAttemptResultRow.outcome,
+                RecipeAttemptResultRow.completed_at,
+            )
+            .outerjoin(RecipeAttemptResultRow, RecipeAttemptResultRow.attempt_id == RecipeAttemptRow.id)
+            .where(RecipeAttemptRow.step_instance_id == step_instance_id)
+            .order_by(RecipeAttemptRow.number)
+            .limit(20)
+        )
+        return [RecipeAttemptSummary.model_validate(dict(row)) for row in rows.mappings()]
 
     async def record_execution(self, attempt_id: str, execution: RecipeAttemptExecution) -> None:
         attempt = await self.get_attempt(attempt_id)

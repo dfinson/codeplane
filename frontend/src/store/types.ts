@@ -5,7 +5,7 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload } from "../api/types";
+import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload, RecipeStepInspection, RecipeAttemptInspection, RecipeRun, RecipeRunList, RecipeStepList } from "../api/types";
 
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -226,6 +226,13 @@ export interface ContextHandoff {
 }
 
 export interface AppState {
+  recipeCurrentRuns: Record<string, RecipeRun | null>;
+  recipeRuns: Record<string, RecipeRun>;
+  recipeRunHistoryPages: Record<string, RecipeRunList>;
+  recipeStepPages: Record<string, RecipeStepList>;
+  recipeStepInspections: Record<string, RecipeStepInspection>;
+  recipeAttemptInspections: Record<string, RecipeAttemptInspection>;
+  recipeVersions: Record<string, number>;
   // Data slices
   trackerOperations: Record<string, TrackerOperationResponse>;
   trackerOperationLoads: Record<string, {

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, PlaneTakeoff } from "lucide-react";
 import { toast } from "sonner";
 import { createJob, fetchProjects, fetchRepoDetail, suggestNames, fetchModelComparison, warmUtilitySession, releaseUtilitySession, fetchPolicySettings } from "../api/client";
-import type { ProjectResponse, SDKInfo } from "../api/types";
+import type { ProjectResponse, SDKInfo, RecipeSelection } from "../api/types";
 import { useStore } from "../store";
 import { PromptWithVoice } from "./VoiceButton";
 import { SidecarPicker } from "./SidecarPicker";
@@ -13,6 +13,7 @@ import { Label } from "./ui/label";
 import { Combobox } from "./ui/combobox";
 import { Tooltip } from "./ui/tooltip";
 import { pathBasename } from "../lib/paths";
+import { RecipeLaunchPicker } from "./RecipeLaunchPicker";
 
 interface RepoOption {
   value: string;
@@ -56,6 +57,7 @@ export function JobCreationScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [preset, setPreset] = useState<"autonomous" | "supervised" | "locked">("supervised");
   const [mode, setMode] = useState<"standard" | "plan">("standard");
+  const [recipeSelection, setRecipeSelection] = useState<RecipeSelection | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [sdk, setSdk] = useState<string | null>(null);
   const [branchSuggesting, setBranchSuggesting] = useState(false);
@@ -64,9 +66,11 @@ export function JobCreationScreen() {
   const [selectedSidecars, setSelectedSidecars] = useState<string[]>([]);
   const [inlineSidecars, setInlineSidecars] = useState<string[]>([]);
   const branchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const suggestedNamesRef = useRef<{ title: string; description: string; worktreeName: string } | null>(null);
+  const suggestedNamesRef = useRef<{ prompt: string; title: string; description: string; worktreeName: string } | null>(null);
   const sessionTokenRef = useRef<string | null>(null);
   const jobCreatedRef = useRef(false);
+  const submittingRef = useRef(false);
+  const generation = useRef(0);
 
   // Pre-warm a sidecar session when the panel mounts; release on unmount if unused
   useEffect(() => {
@@ -173,7 +177,7 @@ export function JobCreationScreen() {
         .then((names) => {
           if (!cancelled) {
             setBranch(names.branchName);
-            suggestedNamesRef.current = { title: names.title, description: names.description, worktreeName: names.worktreeName };
+            suggestedNamesRef.current = { prompt, title: names.title, description: names.description, worktreeName: names.worktreeName };
           }
         })
         .catch(() => {
@@ -231,6 +235,11 @@ export function JobCreationScreen() {
   }, [model, repo]);
 
   const selectedProjectId = repos.find((item) => item.value === repo)?.projectId ?? scopedProject?.id ?? null;
+  const formIdentity = JSON.stringify([repo, prompt, selectedProjectId, preset, mode, activeSdk, model, recipeSelection]);
+  useLayoutEffect(() => {
+    generation.current += 1;
+    return () => { generation.current += 1; };
+  }, [formIdentity]);
 
   const validateField = useCallback((field: string, value: string) => {
     setErrors(prev => {
@@ -245,16 +254,20 @@ export function JobCreationScreen() {
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!repo || !prompt.trim() || voiceState !== "idle") return;
+    if (!repo || !prompt.trim() || !recipeSelection || voiceState !== "idle" || submittingRef.current) return;
+    submittingRef.current = true;
+    const operationGeneration = generation.current;
+    const isCurrent = () => generation.current === operationGeneration;
     setSubmitting(true);
     try {
       // Ensure LLM naming is available before submitting.
       // If suggest-names hasn't returned yet, call it now and wait.
-      let cached = suggestedNamesRef.current;
+      let cached = suggestedNamesRef.current?.prompt === prompt ? suggestedNamesRef.current : null;
       if (!cached) {
         try {
           const names = await suggestNames(prompt);
-          cached = { title: names.title, description: names.description, worktreeName: names.worktreeName };
+          if (!isCurrent()) return;
+          cached = { prompt, title: names.title, description: names.description, worktreeName: names.worktreeName };
           suggestedNamesRef.current = cached;
           if (!branchEdited) setBranch(names.branchName);
         } catch {
@@ -262,6 +275,7 @@ export function JobCreationScreen() {
           return;
         }
       }
+      if (!isCurrent()) return;
       const result = await createJob({
         repo,
         prompt: prompt.trim(),
@@ -276,16 +290,18 @@ export function JobCreationScreen() {
         sessionToken: sessionTokenRef.current ?? undefined,
         projectId: selectedProjectId ?? undefined,
         mode: mode !== "standard" ? mode : undefined,
+        recipe: recipeSelection,
       });
       jobCreatedRef.current = true;
       toast.success(`Job ${result.id} created`);
-      navigate(`/jobs/${result.id}`);
+      if (isCurrent()) navigate(`/jobs/${result.id}`);
     } catch (e) {
-      toast.error(String(e));
+      if (isCurrent()) toast.error(String(e));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
-  }, [repo, prompt, voiceState, baseRef, branch, branchEdited, model, navigate, preset, mode, activeSdk, defaultSdk, selectedProjectId]);
+  }, [repo, prompt, voiceState, baseRef, branch, branchEdited, model, navigate, preset, mode, activeSdk, defaultSdk, selectedProjectId, recipeSelection]);
 
   const enabledSdks = sdks.filter((s) => s.enabled);
   const showSdkSelector = enabledSdks.length > 1;
@@ -297,7 +313,8 @@ export function JobCreationScreen() {
       <h3 className="text-lg font-semibold text-foreground mb-4">New Job</h3>
 
       <div className="rounded-lg border border-border bg-card p-5">
-        <div className="flex flex-col gap-4">
+        <fieldset disabled={submitting} className="flex min-w-0 flex-col gap-4">
+          <RecipeLaunchPicker planFirst={mode === "plan"} onChange={setRecipeSelection} />
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-2">
             <Combobox
               label="Repository"
@@ -380,8 +397,8 @@ export function JobCreationScreen() {
             <div className="flex gap-2">
               {(
                 [
-                  { value: "standard" as const, label: "Standard", tip: "Agent executes the task directly in a single session." },
-                  { value: "plan" as const, label: "Plan First", tip: "Agent produces a plan for your review, then implements after approval." },
+                  { value: "standard" as const, label: "Standard", tip: "The configured default recipe runs context and implementation steps." },
+                  { value: "plan" as const, label: "Plan First", tip: "The configured default recipe requires approval of the exact plan before implementation." },
                 ]
               ).map(({ value, label, tip }) => (
                 <Tooltip key={value} content={tip}>
@@ -400,8 +417,8 @@ export function JobCreationScreen() {
               ))}
             </div>
             <p className="text-xs text-muted-foreground leading-snug">
-              {mode === "standard" && "Agent executes the task directly in a single session."}
-              {mode === "plan" && "Agent produces a structured plan for your review, then implements after approval."}
+              {mode === "standard" && "The configured default recipe runs context and implementation steps. Custom published recipes retain their own graph."}
+              {mode === "plan" && "The configured default recipe requires an exact plan approval before implementation. Custom published recipes retain their own gates."}
             </p>
           </div>
 
@@ -497,7 +514,7 @@ export function JobCreationScreen() {
               Cancel
             </Button>
             <Button
-              disabled={!repo || !prompt.trim() || voiceState !== "idle" || !!sdkNotReady}
+              disabled={!repo || !prompt.trim() || !recipeSelection || voiceState !== "idle" || !!sdkNotReady}
               loading={submitting}
               onClick={handleSubmit}
             >
@@ -505,7 +522,7 @@ export function JobCreationScreen() {
               {submitting && !suggestedNamesRef.current ? "Naming…" : "Create Job"}
             </Button>
           </div>
-        </div>
+        </fieldset>
       </div>
     </div>
   );

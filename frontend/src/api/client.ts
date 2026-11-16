@@ -16,6 +16,12 @@ import type {
   RecipeDraftList,
   RecipeRevisionList,
   RecipeValidationResult,
+  RecipeRun,
+  RecipeRunList,
+  RecipeCurrentRun,
+  RecipeStepList,
+  RecipeStepInspection,
+  RecipeAttemptInspection,
   ApprovalRequest,
   DiffFileModel,
   GenerateSidecarResponse,
@@ -52,6 +58,43 @@ const BASE = "/api";
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
+
+function recipeRunPath(jobId: string, runId: string): string {
+  return `/jobs/${encodeURIComponent(jobId)}/recipe/runs/${encodeURIComponent(runId)}`;
+}
+
+export function fetchCurrentRecipeRun(jobId: string): Promise<RecipeCurrentRun> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/recipe/current`);
+}
+
+export function fetchRecipeRun(jobId: string, runId: string): Promise<RecipeRun> {
+  return request(recipeRunPath(jobId, runId));
+}
+
+export function fetchRecipeRunHistory(
+  jobId: string, params: { after?: number; highWater?: number; limit?: number } = {},
+): Promise<RecipeRunList> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value));
+  return request(`/jobs/${encodeURIComponent(jobId)}/recipe/runs?${query}`);
+}
+
+export function fetchRecipeRunSteps(
+  jobId: string, runId: string, after = "",
+): Promise<RecipeStepList> {
+  const query = new URLSearchParams({ after, limit: "30" });
+  return request(`${recipeRunPath(jobId, runId)}/steps?${query}`);
+}
+
+export function fetchRecipeStep(jobId: string, runId: string, stepId: string): Promise<RecipeStepInspection> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}`);
+}
+
+export function fetchRecipeAttempt(
+  jobId: string, runId: string, stepId: string, attemptId: string,
+): Promise<RecipeAttemptInspection> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}`);
+}
 
 class ApiError extends Error {
   /** Parsed response body (if JSON), for structured error inspection. */
@@ -282,6 +325,10 @@ export function fetchRecipeRevisions(id: string, after = 0, highWater?: number):
 
 export function fetchRecipeRevision(id: string): Promise<RecipeRevision> {
   return request(`/recipes/revisions/${encodeURIComponent(id)}`);
+}
+
+export function resolveDefaultRecipe(planFirst: boolean): Promise<RecipeRevision> {
+  return request("/recipes/resolve-default", { method: "POST", body: JSON.stringify({ planFirst }) });
 }
 
 export function createRecipeDraft(definition: RecipeDefinition): Promise<RecipeDraft> {

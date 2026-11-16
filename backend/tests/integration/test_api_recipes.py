@@ -103,6 +103,137 @@ async def test_list_queries_are_bounded_and_responses_keep_frozen_highwater(clie
     assert (await client.get("/api/recipes", params={"limit": 101})).status_code == 422
 
 
+async def test_default_recipe_resolution_is_published_idempotent_and_never_launches(
+    client, session_factory, mock_runtime_service
+):
+    first = await client.post("/api/recipes/resolve-default", json={"planFirst": False})
+    again = await client.post("/api/recipes/resolve-default", json={"planFirst": False})
+    planned = await client.post("/api/recipes/resolve-default", json={"planFirst": True})
+    assert first.status_code == again.status_code == planned.status_code == 200
+    assert again.json() == first.json()
+    assert planned.json()["id"] != first.json()["id"]
+    assert any(step["runner"]["kind"] == "human" for step in planned.json()["definition"]["steps"])
+    revision = first.json()
+    assert (await client.get(f"/api/recipes/revisions/{revision['id']}")).json() == revision
+    context = revision["definition"]["steps"][0]
+    assert context["capabilities"] == ["read"]
+    assert context["instructions"] == (
+        "Read the relevant code and instructions. Return a concise, source-backed brief. "
+        "Do not edit files or run commands."
+    )
+    mock_runtime_service.start_or_enqueue.assert_not_awaited()
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(JobRow)) == 0
+
+
+async def test_changed_default_configuration_creates_a_new_pin_without_rewriting_old_revision(session_factory):
+    from backend.persistence.recipe_repo import RecipeRepository
+    from backend.services.recipe.definition_service import RecipeDefinitionService
+
+    config = CPLConfig()
+    async with session_factory() as session:
+        service = RecipeDefinitionService(RecipeRepository(session))
+        old = await service.resolve_default(config, plan_first=False)
+        await session.commit()
+        config.verification.verify = True
+        config.verification.verify_prompt = "Run the exact configured verifier."
+        new = await service.resolve_default(config, plan_first=False)
+        await session.commit()
+        assert old.id != new.id
+        assert (await service.get_revision(old.id)).model_dump() == old.model_dump()
+        assert new.definition.steps[-1].instructions == "Run the exact configured verifier."
+
+
+async def test_inspection_reads_exact_historical_attempt_without_dispatch(
+    client, session_factory, mock_runtime_service
+):
+    from backend.models.schemas.recipes import RecipeCodeReference
+
+    run = await create_run(session_factory, simple_recipe(), job_id="inspect-history")
+    async with session_factory() as session:
+        repo = RecipeRunRepository(session)
+        first = (await repo.list_steps(run.id))[0]
+        attempt = await ready_attempt(session, run, first.step_path)
+        await repo.finish_attempt(attempt.id, agent_result(), {"result": "Original evidence"})
+        await repo.resolve_run(run.id, "succeeded")
+        await session.commit()
+    base = f"/api/jobs/{run.job_id}/recipe"
+    old_detail = await client.get(f"{base}/runs/{run.id}/steps/{first.id}/attempts/{attempt.id}")
+    assert old_detail.status_code == 200, old_detail.text
+    history = (await client.get(f"{base}/runs", params={"limit": 1})).json()
+    async with session_factory() as session:
+        successor = await RecipeRunRepository(session).create(
+            run.job_id,
+            run.snapshot,
+            run.inputs,
+            start_request_key="inspect-successor",
+            continuation_of_id=run.id,
+            instruction="New work",
+            code_ref=RecipeCodeReference(workspace="/repo", commit="a" * 40),
+        )
+        await session.commit()
+    current = await client.get(f"{base}/current")
+    assert current.json()["run"]["id"] == successor.id
+    assert (
+        await client.get(f"{base}/runs/{run.id}/steps/{first.id}/attempts/{attempt.id}")
+    ).json() == old_detail.json()
+    step = (await client.get(f"{base}/runs/{run.id}/steps/{first.id}")).json()
+    assert step["attempts"][0]["id"] == attempt.id
+    assert step["attempts"][0]["outcome"] == "succeeded"
+    assert "outputs" not in step["attempts"][0]
+    frozen = (await client.get(f"{base}/runs", params={"highWater": history["highWater"]})).json()
+    assert [item["id"] for item in frozen["items"]] == [run.id]
+    mock_runtime_service.start_or_enqueue.assert_not_awaited()
+    mock_runtime_service.resume_job.assert_not_awaited()
+
+
+async def test_recipe_inspection_rejects_cross_job_run_step_and_attempt_identity(client, session_factory):
+    first = await create_run(session_factory, simple_recipe(), job_id="inspect-one")
+    second = await create_run(session_factory, simple_recipe(), job_id="inspect-two")
+    async with session_factory() as session:
+        repo = RecipeRunRepository(session)
+        first_step = (await repo.list_steps(first.id))[0]
+        second_step = (await repo.list_steps(second.id))[0]
+        first_attempt = await ready_attempt(session, first, first_step.step_path)
+        second_attempt = await ready_attempt(session, second, second_step.step_path)
+    root = f"/api/jobs/{first.job_id}/recipe"
+    for path in (
+        f"{root}/runs/{second.id}",
+        f"{root}/runs/{first.id}/steps/{second_step.id}",
+        f"{root}/runs/{first.id}/steps/{first_step.id}/attempts/{second_attempt.id}",
+        f"{root}/runs/{second.id}/steps/{second_step.id}/attempts/{first_attempt.id}",
+        "/api/jobs/missing/recipe/current",
+    ):
+        response = await client.get(path)
+        assert response.status_code == 404, response.text
+
+
+async def test_recipe_step_pages_bound_results_without_loading_attempt_evidence(client, session_factory):
+    from backend.models.schemas.recipes import RecipeDefinition
+    from backend.tests.unit.test_recipe_definitions import agent
+
+    run = await create_run(
+        session_factory,
+        RecipeDefinition(
+            name="Fanout",
+            entry_steps=["alpha", "beta", "gamma"],
+            steps=[
+                agent("alpha"),
+                agent("beta"),
+                agent("gamma"),
+            ],
+        ),
+        job_id="inspect-pages",
+    )
+    root = f"/api/jobs/{run.job_id}/recipe/runs/{run.id}/steps"
+    first = (await client.get(root, params={"limit": 1})).json()
+    second = (await client.get(root, params={"limit": 100, "after": first["nextCursor"]})).json()
+    assert [step["stepPath"] for step in first["items"] + second["items"]] == ["alpha", "beta", "gamma"]
+    assert second["nextCursor"] is None
+    assert (await client.get(root, params={"limit": 101})).status_code == 422
+    assert (await client.get(root, params={"limit": 0})).status_code == 422
+
+
 async def test_job_creation_pins_selected_revision_and_request_before_background_setup(
     client,
     session_factory,

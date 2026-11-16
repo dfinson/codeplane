@@ -42,6 +42,7 @@ from backend.api import (
     policy_settings,
     preview,
     projects,
+    recipe_runs,
     recipes,
     settings,
     share,
@@ -232,6 +233,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(projects.router, prefix="/api")
     app.include_router(tracker_links.router, prefix="/api")
     app.include_router(recipes.router, prefix="/api")
+    app.include_router(recipe_runs.router, prefix="/api")
 
 
 def _register_domain_exception_handlers(app: FastAPI) -> None:
