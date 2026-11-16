@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -43,3 +43,14 @@ class ExecutionContractPin(BaseModel):
     admission_id: Identity
     budget_id: Identity
     contract: ExecutionContract
+
+
+class ExecutionAdmission(BaseModel):
+    """A declared legacy invocation, not a successful execution or SDK session."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: Identity
+    job_id: Identity
+    origin: Literal["creation", "continuation"]
+    previous_admission_id: Identity | None = None

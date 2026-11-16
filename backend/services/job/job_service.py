@@ -395,6 +395,7 @@ class JobService:
         *,
         revalidate_project: bool = True,
         align_generated_branch: bool = False,
+        recipe_admission: bool = False,
     ) -> Job:
         """Insert a prepared Job with a final DB name check, without Git or commit.
 
@@ -423,6 +424,8 @@ class JobService:
             )
             log.warning("naming_collision_suffixed", job_id=job_id)
         await self._job_repo.create(job)
+        if not recipe_admission:
+            await self._job_repo.declare_initial_legacy_admission(job.id)
         log.info("job_created", job_id=job.id, title=job.title, repo=job.repo, state=job.state)
         return job
 

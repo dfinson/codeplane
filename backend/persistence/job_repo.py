@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     import builtins
     from datetime import datetime
 
+    from backend.models.execution_contracts import ExecutionAdmission
+
 
 def _safe_job_state(raw: str) -> JobState:
     """Convert a raw state string to JobState, defaulting to queued for unknown values."""
@@ -28,6 +30,16 @@ def _safe_job_state(raw: str) -> JobState:
 
 class JobRepository(BaseRepository):
     """Database access for job records."""
+
+    async def declare_initial_legacy_admission(self, job_id: str) -> ExecutionAdmission:
+        """Join the caller's new-Job transaction without owning its commit."""
+        import uuid
+
+        from backend.models.execution_contracts import ExecutionAdmission
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+
+        admission = ExecutionAdmission(id=str(uuid.uuid4()), job_id=job_id, origin="creation")
+        return await ExecutionAdmissionRepository(self._session).declare_legacy(admission, expected_current=None)
 
     async def _update_row(self, job_id: str, **updates: Any) -> None:
         """Fetch a job row by ID and apply field updates with optimistic locking.

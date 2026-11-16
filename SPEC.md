@@ -134,6 +134,14 @@ The trusted root catalog distinguishes implementations still available for old
 pins from the selected contract for new admission. Conflicts or unavailable
 pinned implementations require reconciliation rather than silent migration.
 
+Non-recipe creation records an internal legacy admission declaration in the same
+transaction as the Job. The explicit `recipe_admission` creation flag suppresses
+that declaration for recipe-owned admission, including before its run row exists.
+Declarations are not successful-start announcements. Immutable abandonment records
+restore the previous selection without deleting either admission or contract pin.
+Legacy continuation/reset consumers must keep declaration or abandonment atomic
+with their corresponding Job reset or restoration.
+
 Attempt model reports are session-qualified `model.observed` events carrying
 requested/actual identities and match status, with recipe, attempt and epoch
 metadata. A mismatch keeps that scope on `model.downgraded`. Attempt reports

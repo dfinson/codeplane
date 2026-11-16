@@ -80,6 +80,34 @@ async def job_service(
 
 
 class TestRuntimeContract:
+    @pytest.mark.parametrize("recipe_admission", [False, True])
+    async def test_prepared_creation_uses_explicit_admission_owner(
+        self, job_service, session, recipe_admission,
+    ):
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+        from backend.tests.unit.conftest import make_job
+
+        prepared = make_job(project_id="proj-default", repo="/repos/test")
+        job = await job_service.persist_prepared_job(
+            prepared, revalidate_project=False, recipe_admission=recipe_admission,
+        )
+        await session.commit()
+        admission = await ExecutionAdmissionRepository(session).current(job.id)
+        if recipe_admission:
+            assert admission is None, "A recipe run not yet inserted is not a legacy admission"
+        else:
+            assert admission is not None and admission.job_id == job.id and admission.origin == "creation"
+
+    async def test_creation_rollback_retains_neither_job_nor_admission(self, job_service, session):
+        from backend.persistence.event_repo import EventRepository
+        from backend.tests.unit.conftest import make_job
+
+        prepared = make_job(project_id="proj-default", repo="/repos/test")
+        await job_service.persist_prepared_job(prepared, revalidate_project=False)
+        await session.rollback()
+        assert await JobRepository(session).get(prepared.id) is None
+        assert await EventRepository(session).list_after(0, job_id=prepared.id) == []
+
     async def test_naming_returns_event_for_post_commit_publication(self):
         from backend.tests.unit.conftest import make_job
 
