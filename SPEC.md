@@ -6,6 +6,11 @@
 
 ### Standalone interoperability transition
 
+Authoritative operator messages are deduplicated by canonical event identity,
+never equal text across sessions or attempts. The composer settles only its own
+local placeholder when submission finishes; a receipt does not invent an
+observed transcript event or remove a real echo.
+
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
 `ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during

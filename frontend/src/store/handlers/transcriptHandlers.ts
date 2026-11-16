@@ -118,12 +118,8 @@ export function handleTranscriptUpdate(state: AppState, payload: Record<string, 
     }
   }
 
-  // Deduplicate canonical events by their stable TraceForge event id.
-  // For user messages, match on kind+content only (ignore timestamp) to
-  // suppress the SSE echo when an optimistic entry was already inserted.
-  if (entry.kind === "message.user"
-    ? existing.some((e) => e.kind === "message.user" && e.content === entry.content)
-    : existing.some((e) => sameTranscriptEntry(e, entry))) {
+  // Local optimistic entries are settled by their sender, never by text matching.
+  if (existing.some((e) => sameTranscriptEntry(e, entry))) {
     return null;
   }
   const updated = [...existing, entry];
