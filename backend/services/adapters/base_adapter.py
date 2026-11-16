@@ -12,6 +12,7 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -92,6 +93,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_to_job: dict[str, str] = {}
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
         self._session_metadata: dict[str, EventMetadata] = {}
+        self._session_workspaces: dict[str, str] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
         self._event_bus = event_bus
@@ -167,6 +169,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds[session_id] = kind
 
     def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        self._session_workspaces[session_id] = config.workspace_path
         self._session_metadata[session_id] = EventMetadata(
             recipe_run_id=config.recipe_run_id, recipe_revision=config.recipe_revision,
             step_instance_id=config.step_instance_id, attempt_id=config.attempt_id,
@@ -208,6 +211,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._paused_sessions.discard(session_id)
         self._session_kinds.pop(session_id, None)
         self._session_metadata.pop(session_id, None)
+        self._session_workspaces.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
@@ -533,6 +537,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
         )
 
         cwd = self._worktree_paths.get(job_id)
+        metadata = self._session_metadata.get(session_id)
+        if metadata is not None and metadata.attempt_id is not None:
+            cwd = self._session_workspaces.get(session_id)
+            if not cwd:
+                log.error("attempt_permission_workspace_missing", job_id=job_id, session_id=session_id)
+                return PermissionDecision.deny
+            action = dataclass_replace(action, workspace_path=cwd)
         router = self._policy_router[job_id]
 
         decision = await router.route(action, cwd=cwd)

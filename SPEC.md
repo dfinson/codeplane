@@ -51,6 +51,13 @@ durable recipe admission. Registration failure or caller cancellation closes the
 owned session. Job cancellation signals the primary task and fences every
 attempt before awaiting any slow transport teardown.
 
+For attributed attempts, permission routing and savepoints use the trusted
+session workspace, never the primary Job workspace. Adapter description and
+dependency readiness are separate from execution admission. The managed
+Copilot/Claude descriptors can be read while disabled without constructing SDK
+clients. Presets remain per-action approval policy, not categorical bans on
+write, shell or delegation capabilities.
+
 Text-only completion rejects tool attempts and reports provider errors, empty
 responses and output-limit failures explicitly. Returned typed usage distinguishes
 Copilot native cost units from verified USD and retains present zero values.

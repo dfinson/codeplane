@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import re
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
 import structlog
 
 from backend.config import CPLConfig
 from backend.models.domain import AgentSDK
+from backend.services.adapters.contracts import AdapterDescriptor, AdapterReadiness, Capability
 from backend.services.adapters.integration_policy import IntegrationPolicy
 
 if TYPE_CHECKING:
@@ -19,6 +22,48 @@ if TYPE_CHECKING:
     from backend.services.job.approval_service import ApprovalService
 
 log = structlog.get_logger()
+
+_DESCRIPTORS: dict[str, AdapterDescriptor] = {
+    "copilot": AdapterDescriptor(
+        id="copilot",
+        provider_family="github-copilot",
+        supported_versions=(">=0.3,<0.4",),
+        channels=frozenset({"sdk-events", "sdk-control", "sdk-tool-hooks"}),
+        hooks=("on_pre_tool_use", "on_permission_request"),
+        ownership="managed-sdk-session",
+        steering="message-admission",
+        cancellation="abort-and-release",
+        interception="before-native-tool",
+        identity_sources=("sdk-session-id", "tool-call-id"),
+        usage_units=frozenset(
+            {
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "premium_requests",
+                "copilot_cost_unit",
+            }
+        ),
+        capabilities=frozenset(Capability),
+        utility=True,
+    ),
+    "claude": AdapterDescriptor(
+        id="claude",
+        provider_family="anthropic-claude",
+        supported_versions=(">=0.0.25,<0.1",),
+        channels=frozenset({"sdk-events", "sdk-control", "sdk-tool-hooks"}),
+        hooks=("PreToolUse", "can_use_tool"),
+        ownership="managed-sdk-session",
+        steering="message-admission",
+        cancellation="abort-and-release",
+        interception="before-native-tool",
+        identity_sources=("sdk-session-id", "tool-use-id"),
+        usage_units=frozenset({"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "USD"}),
+        capabilities=frozenset(Capability),
+        utility=True,
+    ),
+}
 
 
 class AdapterRegistry:
@@ -36,6 +81,34 @@ class AdapterRegistry:
         self._session_factory = session_factory
         self._adapters: dict[AgentSDK, AgentAdapterInterface] = {}
         self.policy = IntegrationPolicy(config if config is not None else CPLConfig())
+
+    def describe(self, sdk: AgentSDK | str) -> AdapterDescriptor:
+        try:
+            return _DESCRIPTORS[str(sdk)]
+        except KeyError as exc:
+            raise ValueError(f"Unknown adapter: {sdk}") from exc
+
+    def list_descriptors(self) -> tuple[AdapterDescriptor, ...]:
+        """Registration is independent of enablement and never constructs clients."""
+        return tuple(_DESCRIPTORS.values())
+
+    def supported_capabilities(self, sdk: AgentSDK | str) -> frozenset[Capability]:
+        return self.describe(sdk).capabilities
+
+    def dependency_readiness(self, sdk: AgentSDK | str) -> AdapterReadiness:
+        descriptor = self.describe(sdk)
+        package = "github-copilot-sdk" if descriptor.id == "copilot" else "claude-code-sdk"
+        try:
+            installed = version(package)
+        except PackageNotFoundError:
+            return AdapterReadiness(False, f"Missing provider dependency: {package}")
+        match = re.fullmatch(r"0\.(\d+)\.(\d+)", installed)
+        compatible = match is not None and (
+            int(match[1]) == 3 if descriptor.id == "copilot" else int(match[1]) == 0 and int(match[2]) >= 25
+        )
+        return AdapterReadiness(
+            compatible, None if compatible else "Provider version is outside the supported release range", installed
+        )
 
     def get_adapter(self, sdk: AgentSDK | str) -> AgentAdapterInterface:
         """Return a (possibly cached) adapter instance for the given SDK."""
