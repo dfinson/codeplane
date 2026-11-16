@@ -59,7 +59,12 @@ from traceforge.governance import (
 )
 from traceforge.governance.pipeline import _build_policy_assessors
 
+from backend.services.action_policy.classifier import (
+    SECURITY_CRITICAL_REASON_CODES as SECURITY_CRITICAL_REASON_CODES,
+)
 from backend.services.action_policy.classifier import Action, ActionKind, Classification, Preset
+from backend.services.action_policy.classifier import RecommendedAction as ActionRecommendation
+from backend.services.action_policy.classifier import is_security_critical as is_security_critical
 from backend.services.action_policy.cost_ceiling import JobSpendCeilingAssessor
 from backend.services.action_policy.preset_profiles import PROFILES, PresetProfile, profile_for
 from backend.services.action_policy.tf_classify_adapter import tf_engine
@@ -70,26 +75,6 @@ log = structlog.get_logger()
 # ``data.db`` so TraceForge's alembic-on-construct never touches CodePlane's
 # ``alembic_version`` (F2 / condition §6).
 DEFAULT_GOVERNANCE_DB = Path.home() / ".codeplane" / "governance.db"
-
-# Reason codes whose escalate/deny verdict is SECURITY-CRITICAL and must reach a
-# human unconditionally (SPEC §18.2 / binding condition §3). A reason-code trust
-# grant may waive routine gates (e.g. a repetitive network mutation) but must
-# NEVER silently waive one of these, and the LLM auto-approver must not approve
-# them either. This is the native (reason-code) equivalent of the retired
-# raw-command force-gate list — no regex overrides.
-SECURITY_CRITICAL_REASON_CODES = frozenset(
-    {
-        "destructive_action",
-        "raw_block_device_write",
-        "filesystem_format",
-        "persistence_mechanism_write",
-        "fork_bomb_pattern",
-        "credential_exposure",
-        "piped_network_exec",
-        "protected_path",
-        "risk_score_critical",
-    }
-)
 
 # Non-security-critical reason codes that a gate can carry — the waivable set.
 # A blanket operator "trust this session" grant (see ``grant_session_trust``) is
@@ -106,17 +91,6 @@ WAIVABLE_REASON_CODES = frozenset(
         "readonly_shell_locked",
     }
 )
-
-
-def is_security_critical(reason_code: str | None) -> bool:
-    """True if a governance verdict must reach a human regardless of trust/monitor.
-
-    Covers the explicit security-critical reason codes plus any internal-error
-    fail-closed verdict (which must never be auto-waived).
-    """
-    if not reason_code:
-        return False
-    return reason_code in SECURITY_CRITICAL_REASON_CODES or reason_code.startswith("internal_error")
 
 
 async def load_usd_ceilings(
@@ -156,7 +130,7 @@ def _classification_from_meta(meta: SessionMeta) -> Classification:
     threshold — an implicit ALLOW. Only the fail-closed path carries an ESCALATE.
     """
     rec = meta.recommendation
-    action = rec.recommended_action if rec is not None else RecommendedAction.ALLOW
+    action = ActionRecommendation(rec.recommended_action.value) if rec is not None else ActionRecommendation.ALLOW
     reason_code = rec.reason_code if rec is not None else "allow"
     risk = meta.risk_assessment
     risk_score = int(risk.score) if risk is not None else 0

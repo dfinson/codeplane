@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +14,8 @@ from backend.models.domain import (
     SessionConfig,
 )
 from backend.services.adapters.adapter_registry import AdapterRegistry
-from backend.services.adapters.agent_adapter import AgentAdapterInterface
+from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult, UtilityCompletionError
+from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 # ---------------------------------------------------------------------------
 # AdapterRegistry tests
@@ -21,6 +23,142 @@ from backend.services.adapters.agent_adapter import AgentAdapterInterface
 
 
 class TestAdapterRegistry:
+    @pytest.mark.parametrize("work_sdk,utility_sdk,expected", [
+        ("claude", None, "copilot"), ("copilot", "claude", "claude"),
+    ])
+    async def test_runtime_monitor_uses_text_binding_not_work_harness(
+        self, session_factory, tmp_path, work_sdk, utility_sdk, expected,
+    ) -> None:
+        from backend.services.events.event_bus import EventBus
+        from backend.services.job.approval_service import ApprovalService
+        from backend.services.runtime import RuntimeService
+
+        config = CPLConfig(runtime=RuntimeConfig(
+            copilot_only=False, default_sdk="copilot", utility_sdk=utility_sdk, utility_model="claude-explicit",
+        ))
+        registry = AdapterRegistry(config=config)
+        text_adapter = registry.get_adapter(expected)
+        text_adapter.complete = AsyncMock(return_value=CompletionResult(text="text result"))
+        runtime = RuntimeService(
+            session_factory=session_factory, event_bus=EventBus(), adapter_registry=registry, config=config,
+            approval_service=ApprovalService(session_factory), git_service=MagicMock(),
+        )
+        runtime._governance_decider = MagicMock()
+        await runtime._setup_action_policy(
+            "job", SessionConfig(workspace_path=str(tmp_path), prompt="", sdk=work_sdk),
+            str(tmp_path), repo=str(tmp_path),
+        )
+        router = runtime._policy_routers["job"]
+        assert registry.get_adapter(work_sdk)._policy_router["job"] is router
+        assert (await router._monitor._completer.complete("context")).text == "text result"
+        text_adapter.complete.assert_awaited_once_with(
+            "context", model="claude-explicit", system_message=None, excluded_tools=["*"],
+        )
+
+    def test_completion_provider_resolution_does_not_create_an_execution_session(self) -> None:
+        registry = AdapterRegistry()
+        provider = registry.get_completion_provider("copilot")
+        assert not hasattr(provider, "create_session")
+        assert registry._adapters == {}
+
+    async def test_disabled_completion_provider_does_not_construct_a_client(self) -> None:
+        registry = AdapterRegistry()
+        provider = registry.get_completion_provider("claude")
+        with pytest.raises(UtilityCompletionError, match="disabled"):
+            await provider.complete("request")
+        assert registry._adapters == {}
+
+    @pytest.mark.parametrize(
+        "default_sdk,copilot_only,override,expected",
+        [("claude", True, None, "copilot"), ("claude", False, None, "claude"),
+         ("copilot", False, "claude", "claude"), ("claude", False, "copilot", "copilot")],
+    )
+    async def test_completion_uses_enabled_default_or_explicit_text_binding(
+        self, default_sdk, copilot_only, override, expected,
+    ) -> None:
+        config = CPLConfig(runtime=RuntimeConfig(
+            default_sdk=default_sdk, copilot_only=copilot_only, utility_sdk=override,
+        ))
+        registry = AdapterRegistry(config=config)
+        adapter = MagicMock(spec=AgentAdapterInterface)
+        completion = CompletionResult(text="reply", model="claude-observed", input_tokens=7)
+        adapter.complete = AsyncMock(return_value=completion)
+        with patch.object(registry, "_create", return_value=adapter) as create:
+            provider = registry.get_completion_provider(config.runtime.utility_sdk)
+            assert await provider.complete("prompt", model="claude-explicit", system_message="system") is completion
+        create.assert_called_once_with(AgentSDK(expected))
+        adapter.complete.assert_awaited_once_with(
+            "prompt", model="claude-explicit", system_message="system", excluded_tools=["*"],
+        )
+        adapter.create_session.assert_not_called()
+
+    async def test_cached_completion_binding_rechecks_enablement_without_switching_provider(self) -> None:
+        config = CPLConfig(runtime=RuntimeConfig(copilot_only=False))
+        registry = AdapterRegistry(config=config)
+        adapter = registry.get_adapter("claude")
+        adapter.complete = AsyncMock(return_value=CompletionResult(text="ok"))
+        provider = registry.get_completion_provider("claude")
+        config.runtime.copilot_only = True
+        with pytest.raises(UtilityCompletionError, match="disabled"):
+            await provider.complete("must not run")
+        adapter.complete.assert_not_awaited()
+        assert AgentSDK.copilot not in registry._adapters
+        config.runtime.copilot_only = False
+        adapter.complete.assert_not_awaited()
+        assert (await provider.complete("explicit call")).text == "ok"
+
+    async def test_completion_model_mismatch_does_not_substitute_or_call_provider(self) -> None:
+        registry = AdapterRegistry(config=CPLConfig(runtime=RuntimeConfig(copilot_only=False)))
+        adapter = registry.get_adapter("claude")
+        adapter.complete = AsyncMock()
+        provider = registry.get_completion_provider("claude")
+        with pytest.raises(UtilityCompletionError, match="not compatible"):
+            await provider.complete("request", model="gpt-explicit")
+        adapter.complete.assert_not_awaited()
+
+    async def test_completion_binding_preserves_cancellation(self) -> None:
+        registry = AdapterRegistry()
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def wait(*args, **kwargs):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        adapter = registry.get_adapter("copilot")
+        adapter.complete = AsyncMock(side_effect=wait)
+        provider = registry.get_completion_provider("copilot")
+        pending = asyncio.create_task(provider.complete("request"))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        finally:
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        assert cancelled.is_set()
+        adapter.complete.assert_awaited_once()
+
+    def test_unknown_completion_binding_is_explicitly_unavailable(self) -> None:
+        registry = AdapterRegistry()
+        with pytest.raises(UtilityCompletionError, match="Unknown adapter"):
+            registry.get_completion_provider("not-registered")
+        assert registry._adapters == {}
+
+    async def test_missing_completion_dependency_fails_explicitly(self) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.contracts import AdapterReadiness
+
+        registry = AdapterRegistry()
+        provider = registry.get_completion_provider("copilot")
+        with (
+            patch.object(registry, "dependency_readiness", return_value=AdapterReadiness(False, "Missing dependency")),
+            pytest.raises(UtilityCompletionError, match="Missing dependency"),
+        ):
+            await provider.complete("request")
+        assert registry._adapters == {}
+
     def test_descriptors_and_capabilities_remain_registered_while_disabled(self) -> None:
         from backend.services.adapters.contracts import Capability
 

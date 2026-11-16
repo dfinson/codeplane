@@ -39,6 +39,7 @@ from backend.services.completers.lightweight_completer import LightweightComplet
 if TYPE_CHECKING:
     from backend.models.domain import SessionConfig, SidecarConfig
     from backend.services.adapters.agent_adapter import AgentAdapterInterface
+    from backend.services.adapters.contracts import TextCompletionProvider
 
 log = structlog.get_logger()
 
@@ -81,7 +82,7 @@ class SidecarSession:
 
     def __init__(
         self,
-        adapter: AgentAdapterInterface,
+        adapter: TextCompletionProvider,
         *,
         system_prompt: str | None = None,
         max_turns: int | None = None,
@@ -290,13 +291,15 @@ class SidecarSessionManager:
         *,
         model: str = DEFAULT_UTILITY_MODEL,
         pool_size: int = _STANDBY_POOL_SIZE,
+        completion_provider: TextCompletionProvider | None = None,
     ) -> None:
         self._adapter = adapter
+        self._completion_provider = completion_provider if completion_provider is not None else adapter
         self._model = model
         self._pool_size = pool_size
 
         # Completer — delegates to adapter (SDK)
-        self._completer = LightweightCompleter(adapter, model=model)
+        self._completer = LightweightCompleter(self._completion_provider, model=model)
 
         # Standby pool — ready-to-use SidecarSession instances
         self._pool: deque[SidecarSession] = deque()
@@ -360,7 +363,7 @@ class SidecarSessionManager:
     ) -> SidecarSession:
         """Create a wrapper using the configured model unless explicitly overridden."""
         return SidecarSession(
-            adapter=self._adapter,
+            adapter=self._completion_provider,
             system_prompt=system_prompt,
             max_turns=max_turns,
             timeout_s=timeout_s,

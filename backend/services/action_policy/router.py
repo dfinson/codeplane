@@ -1,6 +1,6 @@
 """Action policy router — central enforcement point for every agent action.
 
-The router **acts on** a native TraceForge ``RecommendedAction`` produced by the
+The router **acts on** an application ``RecommendedAction`` produced by the
 :class:`~backend.services.action_policy.governance.GovernanceDecider`. It owns no
 policy logic of its own — classification, rules, budget, and trust waivers all
 live in the governance substrate. The router is CodePlane's product/enforcement
@@ -30,16 +30,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
-from traceforge.governance import RecommendedAction
 
 from backend.services.action_policy.batcher import BatchResolution, BatchResult
-from backend.services.action_policy.governance import GovernanceDecider, is_security_critical
+from backend.services.action_policy.classifier import RecommendedAction, is_security_critical
 from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
 
 if TYPE_CHECKING:
     from backend.services.action_policy.batcher import ApprovalBatcher
     from backend.services.action_policy.checkpoint_service import CheckpointService
     from backend.services.action_policy.classifier import Action, Classification
+    from backend.services.action_policy.governance import GovernanceDecider
 
 log = structlog.get_logger()
 

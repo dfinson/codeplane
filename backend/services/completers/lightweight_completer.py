@@ -1,7 +1,7 @@
 """Lightweight completion — delegates to the SDK adapter.
 
 Used for utility tasks (naming, summaries, monitoring).  All completions
-route through the agent adapter (Copilot SDK).
+route through the selected text-completion provider.
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ import structlog
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 
 if TYPE_CHECKING:
-    from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
+    from backend.services.adapters.agent_adapter import CompletionResult
+    from backend.services.adapters.contracts import TextCompletionProvider
 
 log = structlog.get_logger()
 
@@ -21,13 +22,12 @@ log = structlog.get_logger()
 class LightweightCompleter:
     """Completer that delegates to the agent adapter.
 
-    All calls go through ``adapter.complete()`` which routes through the
-    Copilot SDK — no API keys, no direct HTTP.
+    All calls go through the selected provider's tool-disabled ``complete()``.
     """
 
     def __init__(
         self,
-        adapter: AgentAdapterInterface,
+        adapter: TextCompletionProvider,
         *,
         model: str = "claude-haiku-4-20250414",
         max_tokens: int = 256,
@@ -60,7 +60,7 @@ class LightweightCompleter:
             + "\n\n"
             + "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in messages)
         )
-        result = await self._adapter.complete(flat, excluded_tools=["*"])
+        result = await self._adapter.complete(flat, model=self._model, excluded_tools=["*"])
         if not result.text or not result.text.strip():
             raise UtilityCompletionError("Utility completion returned no text", reason="empty_response")
         return result

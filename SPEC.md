@@ -117,6 +117,9 @@ Pending permissions retain the session's ownership generation. Pause/cancellatio
 session replacement or a newly attached execution token invalidates that generation.
 Both router and hard-gate approvals recheck it before returning permission, even
 when transport abort is still draining or the same native session ID is reused.
+SDK permission callbacks and pre-tool hooks capture that generation before
+awaiting capability parsing, so an old callback cannot adopt a replacement's
+ownership when it reaches policy evaluation.
 Strict dispatch publishes a durable admission receipt with the exact target
 session/token and accepted/unconfirmed markers, not an observed operator input.
 Receipts remain visible without feeding title, step or sidecar input processing.
@@ -1889,6 +1892,19 @@ tools:
 
 Missing or blank `runtime.utility_model` uses `claude-haiku-4.5`. An explicit
 nonblank model choice is preserved. This default is not a claim of lower billing.
+
+`runtime.utility_sdk` optionally selects a registered text-completion provider.
+When omitted, utility calls use the existing enabled-provider/default-SDK policy,
+independently of the primary work harness. Model choices are validated against the
+actual selected provider and never silently replaced. `copilot_only` applies to
+utility calls, including cached text sessions. Unavailable providers fail explicitly.
+This override applies to assessment, titles, monitoring, narration and text sidecars,
+not tool-using Scout or agentic sidecar execution. Those retain their execution
+binding and existing model override precedence.
+The enforcement recommendation contract preserves the five existing wire values
+without importing TraceForge's title runtime. This removes the import dependency
+from monitor/router construction, not the still-pending production governance and
+enrichment cutover.
 
 Entries support glob patterns via Python's `glob.glob`. Each pattern is expanded at startup and re-expanded when the config is reloaded. Only directories that are valid git repositories (contain `.git`) are included after expansion.
 

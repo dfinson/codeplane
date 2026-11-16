@@ -1,6 +1,6 @@
 """Tests for backend.services.action_policy.router — PolicyRouter.
 
-The router no longer owns any policy logic: it acts on the native TraceForge
+The router no longer owns any policy logic: it acts on the normalized
 ``RecommendedAction`` produced by ``GovernanceDecider.classify`` and turns it into
 a concrete outcome (proceed / git savepoint / LLM monitor / human approval gate).
 Trust is applied inside governance, so the router keeps no separate trust check.
@@ -15,10 +15,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from traceforge.governance import RecommendedAction
 
 from backend.services.action_policy.batcher import BatchResolution, BatchResult
-from backend.services.action_policy.classifier import Action, ActionKind, Classification
+from backend.services.action_policy.classifier import Action, ActionKind, Classification, RecommendedAction
 from backend.services.action_policy.monitor import MonitorVerdict
 from backend.services.action_policy.router import Decision, PolicyRouter
 

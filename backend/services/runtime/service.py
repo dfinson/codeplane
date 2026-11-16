@@ -1240,18 +1240,25 @@ class RuntimeService:
             from backend.persistence.trail_repo import TrailNodeRepository
 
             trail_repo = TrailNodeRepository(self._session_factory)
-            adapter = self._resolve_adapter(config.sdk)
+            from backend.services.adapters.agent_adapter import UtilityCompletionError
             from backend.services.completers.lightweight_completer import LightweightCompleter
 
-            completer = LightweightCompleter(adapter, model=self._config.runtime.utility_model)
-            monitor = MonitorSession(
-                job_id=job_id,
-                job_prompt=job_prompt,
-                worktree=worktree_path,
-                repo=repo,
-                completer=completer,
-                trail_repo=trail_repo,
-            )
+            try:
+                provider = self._adapter_registry.get_completion_provider(
+                    self._config.runtime.utility_sdk,
+                )
+            except (IntegrationDisabledError, UtilityCompletionError) as exc:
+                log.warning("policy_utility_provider_unavailable", job_id=job_id, reason=str(exc))
+            else:
+                completer = LightweightCompleter(provider, model=self._config.runtime.utility_model)
+                monitor = MonitorSession(
+                    job_id=job_id,
+                    job_prompt=job_prompt,
+                    worktree=worktree_path,
+                    repo=repo,
+                    completer=completer,
+                    trail_repo=trail_repo,
+                )
 
         router = PolicyRouter(
             checkpoint_service=checkpoint_svc,

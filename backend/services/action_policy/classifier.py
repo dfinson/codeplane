@@ -1,29 +1,44 @@
-"""Action model + governance-derived classification result.
-
-Input channels: file operations, SDK tools, MCP tools, shell commands.
-
-The DECISION (what to do about an action) is delegated **wholesale** to
-``traceforge.governance`` via :mod:`backend.services.action_policy.governance`.
-This module only defines CodePlane's action model, the preset enum, and the
-reshaped :class:`Classification` that surfaces TraceForge's native decision
-(:class:`~traceforge.governance.RecommendedAction` + risk + reason code) to the
-enforcement layer (router), the audit trail, and the UI. The retired
-hand-rolled tier resolution / explicit-rule matching / cost promotion lived here
-and have been deleted, not translated.
-"""
+"""Application-owned action and decision contracts, including legacy wire values."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import structlog
 
-if TYPE_CHECKING:
-    from traceforge.governance import RecommendedAction
-
 log = structlog.get_logger()
+
+
+class RecommendedAction(StrEnum):
+    ALLOW = "allow"
+    WARN = "warn"
+    ESCALATE = "escalate"
+    DENY = "deny"
+    TRANSFORM = "transform"
+
+
+SECURITY_CRITICAL_REASON_CODES = frozenset(
+    {
+        "destructive_action",
+        "raw_block_device_write",
+        "filesystem_format",
+        "persistence_mechanism_write",
+        "fork_bomb_pattern",
+        "credential_exposure",
+        "piped_network_exec",
+        "protected_path",
+        "risk_score_critical",
+    }
+)
+
+
+def is_security_critical(reason_code: str | None) -> bool:
+    """Preserve non-waivable legacy reasons at both trust and monitor boundaries."""
+    if not reason_code:
+        return False
+    return reason_code in SECURITY_CRITICAL_REASON_CODES or reason_code.startswith("internal_error")
 
 
 class Preset(StrEnum):
@@ -63,14 +78,7 @@ class Action:
 
 @dataclass(frozen=True, slots=True)
 class Classification:
-    """Governance decision for an action, surfaced from TraceForge's ``SessionMeta``.
-
-    ``recommended_action`` is TraceForge's native verdict; the enforcement layer
-    acts on it directly (no CodePlane tier vocabulary). ``risk_score`` /
-    ``risk_band`` come from the Assessor, ``effect`` / ``mechanism`` from the
-    classifier, and ``reason_code`` from the matched rule (or ``"allow"`` when no
-    rule fired and risk was below every threshold — an implicit allow).
-    """
+    """Normalized decision, retaining the legacy bridge's measured risk fields."""
 
     recommended_action: RecommendedAction
     reason_code: str

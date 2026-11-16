@@ -119,6 +119,7 @@ class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".codeplane-worktrees"
     utility_model: str = ""  # Missing/blank uses the provider default; explicit identifiers remain unchanged.
+    utility_sdk: str | None = None
     default_sdk: str = "copilot"  # copilot | claude
     copilot_only: bool = True
     suppressed_preflight_agent_prompts: list[str] = field(default_factory=list)
@@ -127,12 +128,16 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.copilot_only, bool):
             raise ValueError("runtime.copilot_only must be a boolean")
+        if self.utility_sdk is not None and (
+            not isinstance(self.utility_sdk, str) or not self.utility_sdk.strip()
+        ):
+            raise ValueError("runtime.utility_sdk must be a nonempty adapter ID or null")
         if not self.utility_model or not self.utility_model.strip():
-            self.utility_model = (
-                "claude-haiku-4.5"
-                if self.default_sdk == "claude" and not self.copilot_only
-                else _DEFAULT_COPILOT_UTILITY_MODEL
-            )
+            provider = self.utility_sdk or ("copilot" if self.copilot_only else self.default_sdk)
+            self.utility_model = {
+                "copilot": _DEFAULT_COPILOT_UTILITY_MODEL,
+                "claude": "claude-haiku-4.5",
+            }.get(provider, "")
 
 
 @dataclass

@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from traceforge.types import TitleUpdate
 
+    from backend.services.adapters.contracts import TextCompletionProvider
     from backend.services.completers.copilot_steer import CopilotSteerClient
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
@@ -585,9 +586,21 @@ async def _wire_core_services(
 
     # --- Sidecar session manager (per-job dedicated utility sessions) ---
     utility_adapter = adapter_registry.get_adapter(adapter_registry.policy.default_sdk)
+    from backend.services.adapters.adapter_registry import UnavailableTextCompletion
+    from backend.services.adapters.agent_adapter import UtilityCompletionError
+    from backend.services.adapters.integration_policy import IntegrationDisabledError
+
+    try:
+        utility_completion: TextCompletionProvider = adapter_registry.get_completion_provider(
+            config.runtime.utility_sdk,
+        )
+    except (IntegrationDisabledError, UtilityCompletionError) as exc:
+        log.error("utility_completion_unavailable", reason=str(exc))
+        utility_completion = UnavailableTextCompletion(str(exc))
     sidecar_sessions = SidecarSessionManager(
         adapter=utility_adapter,
         model=config.runtime.utility_model,
+        completion_provider=utility_completion,
     )
     log.debug("sidecar_sessions_starting", model=config.runtime.utility_model, sdk=config.runtime.default_sdk)
     await sidecar_sessions.start()
@@ -609,7 +622,7 @@ async def _wire_core_services(
 
     # --- Narrator completer (dedicated long-form story generation) ---
     narrator_completer = NarratorCompleter(
-        adapter=utility_adapter,
+        adapter=utility_completion,
         model=config.runtime.utility_model,
     )
 

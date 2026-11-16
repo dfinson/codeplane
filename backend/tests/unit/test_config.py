@@ -17,6 +17,41 @@ if TYPE_CHECKING:
 
 
 class TestUtilityModelContract:
+    def test_text_provider_override_roundtrips_without_retargeting_execution(self, tmp_path: Path) -> None:
+        path = tmp_path / "utility-provider.yaml"
+        path.write_text(yaml.safe_dump({
+            "runtime": {"default_sdk": "copilot", "copilot_only": False,
+                        "utility_sdk": "claude", "utility_model": "claude-explicit"},
+        }), encoding="utf-8")
+        config = load_config(path)
+        save_config(config, path)
+        restored = load_config(path)
+        assert restored.runtime.utility_sdk == "claude"
+        assert restored.runtime.utility_model == "claude-explicit"
+        assert restored.runtime.default_sdk == "copilot"
+
+    @pytest.mark.parametrize("invalid", ["", " ", 42, False])
+    def test_invalid_text_provider_identifier_is_rejected(self, invalid) -> None:
+        from backend.config import RuntimeConfig
+
+        with pytest.raises(ValueError, match="utility_sdk"):
+            RuntimeConfig(utility_sdk=invalid)
+
+    def test_blank_text_model_uses_the_actual_provider_default(self, monkeypatch) -> None:
+        import backend.config as config_module
+
+        monkeypatch.setattr(config_module, "_DEFAULT_COPILOT_UTILITY_MODEL", "copilot-provider-default")
+        config = config_module.RuntimeConfig(
+            default_sdk="copilot", utility_sdk="claude", copilot_only=False,
+        )
+        assert config.utility_model == "claude-haiku-4.5"
+        assert config.default_sdk == "copilot"
+        config = config_module.RuntimeConfig(
+            default_sdk="claude", utility_sdk="copilot", copilot_only=False,
+        )
+        assert config.utility_model == "copilot-provider-default"
+        assert config.default_sdk == "claude"
+
     @pytest.mark.parametrize("configured", [None, "", " \t "])
     @pytest.mark.parametrize("default_sdk,copilot_only", [("copilot", True), ("copilot", False), ("claude", True)])
     def test_blank_utility_uses_approved_copilot_default(
@@ -74,19 +109,22 @@ class TestUtilityModelContract:
         assert restricted.default_sdk == "claude"
 
     def test_primary_job_model_is_independent_of_utility_default(self, tmp_path: Path, monkeypatch) -> None:
-        from types import SimpleNamespace
+        from datetime import UTC, datetime
 
         import backend.config as config_module
+        from backend.models.domain import Job, JobState
 
         monkeypatch.setattr(config_module, "discover_mcp_servers", lambda *args: {})
         monkeypatch.setattr(config_module, "resolve_protected_paths", lambda *args: [])
-        job = SimpleNamespace(
+        job = Job(
             worktree_path=None,
             repo=str(tmp_path),
             prompt="Primary task",
             id="primary",
             model="primary-model",
             sdk="copilot",
+            project_id="project", state=JobState.queued, base_ref="main", branch=None,
+            session_id=None, created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
         )
         config = CPLConfig()
         session = config_module.build_session_config(job, config)

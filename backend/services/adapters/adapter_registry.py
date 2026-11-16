@@ -10,18 +10,54 @@ from typing import TYPE_CHECKING
 import structlog
 
 from backend.config import CPLConfig
-from backend.models.domain import AgentSDK
-from backend.services.adapters.contracts import AdapterDescriptor, AdapterReadiness, Capability
+from backend.models.domain import AgentSDK, SDKModelMismatchError
+from backend.services.adapters.agent_adapter import UtilityCompletionError, validate_sdk_model
+from backend.services.adapters.contracts import AdapterDescriptor, AdapterReadiness, Capability, TextCompletionProvider
 from backend.services.adapters.integration_policy import IntegrationPolicy
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from backend.services.adapters.agent_adapter import AgentAdapterInterface
+    from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
 log = structlog.get_logger()
+
+
+class UnavailableTextCompletion:
+    """An unavailable utility capability, not a fabricated execution adapter."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    async def complete(
+        self, prompt: str, *, model: str | None = None,
+        system_message: str | None = None, excluded_tools: list[str] | None = None,
+    ) -> CompletionResult:
+        raise UtilityCompletionError(self.reason, reason="provider_unavailable")
+
+
+class _RegisteredTextCompletion:
+    def __init__(self, registry: AdapterRegistry, sdk: AgentSDK | str) -> None:
+        self._registry = registry
+        self._sdk = sdk
+
+    async def complete(
+        self, prompt: str, *, model: str | None = None,
+        system_message: str | None = None, excluded_tools: list[str] | None = None,
+    ) -> CompletionResult:
+        # Cached text wrappers must not outlive a provider's enablement.
+        adapter = self._registry._resolve_completion_adapter(self._sdk)
+        try:
+            validate_sdk_model(str(self._sdk), model)
+        except SDKModelMismatchError as exc:
+            raise UtilityCompletionError(str(exc), reason="model_mismatch") from exc
+        return await adapter.complete(
+            prompt, model=model, system_message=system_message,
+            excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
+        )
+
 
 _DESCRIPTORS: dict[str, AdapterDescriptor] = {
     "copilot": AdapterDescriptor(
@@ -117,6 +153,32 @@ class AdapterRegistry:
             adapter = self._create(sdk)
             self._adapters[sdk] = adapter
         return self._adapters[sdk]
+
+    def get_completion_provider(self, sdk: AgentSDK | str | None = None) -> TextCompletionProvider:
+        """Bind a registered text capability; admission is checked on each actual call."""
+        try:
+            selected = sdk if sdk is not None else self.policy.default_sdk
+            descriptor = self.describe(selected)
+        except (ValueError, SDKModelMismatchError) as exc:
+            raise UtilityCompletionError(str(exc), reason="provider_unavailable") from exc
+        if not descriptor.utility:
+            raise UtilityCompletionError("The selected adapter has no text-completion capability", reason="unsupported")
+        return _RegisteredTextCompletion(self, selected)
+
+    def _resolve_completion_adapter(self, selected: AgentSDK | str) -> AgentAdapterInterface:
+        try:
+            descriptor = self.describe(selected)
+            self.policy.require_enabled(selected)
+        except (ValueError, SDKModelMismatchError) as exc:
+            raise UtilityCompletionError(str(exc), reason="provider_unavailable") from exc
+        if not descriptor.utility:
+            raise UtilityCompletionError("The selected adapter has no text-completion capability", reason="unsupported")
+        readiness = self.dependency_readiness(selected)
+        if not readiness.ready:
+            raise UtilityCompletionError(
+                readiness.reason or "The selected completion provider is unavailable", reason="provider_unavailable",
+            )
+        return self.get_adapter(selected)
 
     def _create(self, sdk: AgentSDK) -> AgentAdapterInterface:
         if sdk == AgentSDK.copilot:

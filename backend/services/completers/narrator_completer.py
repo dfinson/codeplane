@@ -18,7 +18,7 @@ import structlog
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 
 if TYPE_CHECKING:
-    from backend.services.adapters.agent_adapter import AgentAdapterInterface
+    from backend.services.adapters.contracts import TextCompletionProvider
 
 log = structlog.get_logger()
 
@@ -51,7 +51,7 @@ class NarratorCompleter:
 
     def __init__(
         self,
-        adapter: AgentAdapterInterface,
+        adapter: TextCompletionProvider,
         *,
         model: str = "claude-haiku-4-5",
     ) -> None:
