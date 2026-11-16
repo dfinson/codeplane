@@ -1,0 +1,212 @@
+# Aider analytics JSONL mapping for MappedJsonAdapter
+# Targets: aider >= 0.70 analytics log (--analytics-log <path>)
+# Source: Aider-AI/aider v0.86.0 (a4be6ccd), aider/{commands,analytics}.py — verified 2026-08-02
+#
+# Aider writes JSONL to a USER-SPECIFIED path via --analytics-log flag.
+# There is NO default structured output file. Users must configure:
+#   aider --analytics-log .aider.analytics.jsonl
+#
+# JSONL schema (4 top-level fields):
+#   {"event": str, "properties": dict, "user_id": str, "time": unix_int}
+#
+# The markdown chat history (.aider.chat.history.md) uses AiderPreParser
+# via aider_markdown.yaml — that mapping is separate and independent.
+
+framework: aider
+framework_version: ">=0.70"
+ingestion_mode: file_watch
+type_field: event
+timestamp_field: time
+default_kind: raw
+
+# ── Event Definitions ──
+# 21 real events verified from source (main.py, base_coder.py, watch.py, onboarding.py)
+
+events:
+  # ── Core LLM interaction ──
+  message_send:
+    kind: llm.call.completed
+    payload:
+      model: properties.main_model
+      edit_format: properties.edit_format
+      input_tokens: properties.prompt_tokens
+      output_tokens: properties.completion_tokens
+      total_tokens: properties.total_tokens
+      cost: properties.cost
+      total_cost: properties.total_cost
+
+  message_send_starting:
+    kind: llm.call.started
+    payload: {}
+
+  message_send_exception:
+    kind: llm.call.error
+    payload:
+      error: properties.exception
+
+  # ── Session lifecycle ──
+  launched:
+    kind: session.started
+    payload: {}
+
+  "cli session":
+    kind: session.configured
+    payload:
+      model: properties.main_model
+      weak_model: properties.weak_model
+      editor_model: properties.editor_model
+      edit_format: properties.edit_format
+
+  "gui session":
+    kind: session.configured
+    payload: {}
+
+  exit:
+    kind: session.ended
+    payload:
+      reason: properties.reason
+
+  # ── Repository context ──
+  repo:
+    kind: context.repository
+    payload:
+      num_files: properties.num_files
+
+  no-repo:
+    kind: context.no_repository
+    payload: {}
+
+  # ── Configuration ──
+  auto_commits:
+    kind: config.auto_commits
+    payload:
+      enabled: properties.enabled
+
+  "copy-paste mode":
+    kind: config.copy_paste
+    payload: {}
+
+  "model warning":
+    kind: config.model_warning
+    payload:
+      model: properties.main_model
+      weak_model: properties.weak_model
+      editor_model: properties.editor_model
+
+  # ── AI-comment file watcher ──
+  "ai-comments file-add":
+    kind: watch.file_added
+    payload: {}
+
+  "ai-comments execute":
+    kind: watch.execute
+    payload: {}
+
+  # ── OAuth onboarding ──
+  oauth_flow_initiated:
+    kind: auth.oauth_started
+    payload:
+      provider: properties.provider
+
+  oauth_flow_success:
+    kind: auth.oauth_success
+    payload:
+      provider: properties.provider
+
+  oauth_flow_failure:
+    kind: auth.oauth_failed
+    payload: {}
+
+  oauth_flow_failed:
+    kind: auth.oauth_failed
+    payload:
+      provider: properties.provider
+      reason: properties.reason
+
+  oauth_flow_code_received:
+    kind: auth.oauth_code_received
+    payload:
+      provider: properties.provider
+
+  oauth_flow_save_failed:
+    kind: auth.oauth_save_failed
+    payload:
+      provider: properties.provider
+      reason: properties.reason
+
+  auto_model_selection:
+    kind: config.auto_model
+    payload:
+      model: properties.model
+
+  # ── User commands (dynamically generated from /command input) ──
+  # These all have empty properties — they record which slash-command was used.
+  # Unmapped command_* variants fall through to default_kind: raw.
+  command_add:
+    kind: user.command
+    payload: {}
+
+  command_drop:
+    kind: user.command
+    payload: {}
+
+  command_ask:
+    kind: user.command
+    payload: {}
+
+  command_code:
+    kind: user.command
+    payload: {}
+
+  command_commit:
+    kind: user.command
+    payload: {}
+
+  command_run:
+    kind: user.command
+    payload: {}
+
+  command_undo:
+    kind: user.command
+    payload: {}
+
+  command_clear:
+    kind: user.command
+    payload: {}
+
+  command_model:
+    kind: user.command
+    payload: {}
+
+  command_paste:
+    kind: user.command
+    payload: {}
+
+  command_web:
+    kind: user.command
+    payload: {}
+
+  command_exit:
+    kind: user.command
+    payload: {}
+
+  command_edit:
+    kind: user.command
+    payload: {}
+
+  command_read-only:
+    kind: user.command
+    payload: {}
+
+  command_chat-mode:
+    kind: user.command
+    payload: {}
+
+  command_reasoning-effort:
+    kind: user.command
+    payload: {}
+
+  # ── Interactive help (#41: fires on /help <query>, no properties) ──
+  "interactive help":
+    kind: user.command
+    payload: {}

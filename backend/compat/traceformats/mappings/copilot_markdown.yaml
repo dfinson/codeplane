@@ -1,0 +1,72 @@
+# Copilot Markdown Pre-Parser output mapping for MappedJsonAdapter
+# Maps event dicts emitted by CopilotPreParser → canonical event kinds.
+#
+# Input: parse_turn() output — events from the SQLite turns table (rendered
+# markdown). Tool calls are extracted from fenced code blocks in the assistant
+# response, so fidelity is medium (heuristic, no raw tool_use/tool_result ids).
+#
+# NOTE: The high-fidelity Copilot capture path is copilot.yaml over
+# ~/.copilot/session-state/<id>/events.jsonl. The old process-log path
+# (parse_log_line, api_*/telemetry/session_event) targeted a dead Anthropic log
+# format and was removed (issue #45).
+
+framework: copilot_markdown
+framework_version: ">=1.0"
+ingestion_mode: sqlite
+type_field: type
+timestamp_field: timestamp
+
+motivation:
+  targets: ["tool.call.started"]
+  sources:
+    - events: ["assistant_text"]
+      field: content
+      role: intent
+
+events:
+  # ── From parse_turn(): SQLite turns table ──
+
+  user_message:
+    kind: message.user
+    payload:
+      content: content
+      turn_index: turn_index
+
+  assistant_text:
+    kind: message.assistant
+    payload:
+      content: content
+
+  tool_call:
+    kind: tool.call.started
+    payload:
+      tool_name: tool_name
+      input: command
+
+  code_block:
+    kind: tool.output
+    payload:
+      language: language
+      content: content
+
+  structured_output:
+    kind: tool.output
+    payload:
+      format: format
+      data: data
+
+  section_heading:
+    kind: session.info
+    payload:
+      level: level
+      title: title
+
+  table_output:
+    kind: tool.output
+    payload:
+      content: content
+
+  quoted_output:
+    kind: tool.output
+    payload:
+      content: content

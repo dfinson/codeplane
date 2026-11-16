@@ -1,0 +1,129 @@
+# Claude (Anthropic Claude Code / Agent SDK) — YAML mapping for traceforge
+#
+# Wire format: JSONL lines with shapes:
+#   User:      {type: "user", message: {content: "..." | [blocks]}}
+#   Assistant: {type: "assistant", message: {content: [blocks]}}
+#   Result:    {type: "result", subtype: ..., duration_ms: ..., usage: {...}}
+#   System:    {type: "system", subtype: ...}
+#
+# Content blocks in assistant messages can be:
+#   {type: "text", text: "..."}
+#   {type: "tool_use", id: "...", name: "...", input: {...}}
+#   {type: "tool_result", tool_use_id: "...", content: "...", is_error: bool}
+#   {type: "thinking", thinking: "...", signature: "..."}
+#
+# The "claude" preprocessor flattens content blocks into individual dicts
+# with a synthesized `block_type` field (e.g. "assistant.text",
+# "assistant.tool_use", "user.text", "system.init", "result").
+#
+# Source: Claude Agent SDK JSONL output
+# Verified against: claude_session.jsonl fixture
+
+framework: claude
+framework_version: "0.x"
+ingestion_mode: file_watch
+type_field: block_type
+default_kind: ""
+preprocessor: claude
+repo_field: cwd
+
+motivation:
+  sources:
+    - events: ["assistant.text"]
+      field: content
+      role: intent
+    - events: ["assistant.thinking"]
+      field: content
+      role: reasoning
+
+events:
+  # ── Session initialization ─────────────────────────────────────────────────
+  # Agent SDK SDKSystemMessage is initialization metadata, not a system prompt.
+  system.init:
+    kind: session.started
+    payload:
+      subtype: subtype
+      model: model
+      claude_code_version: claude_code_version
+      api_key_source: apiKeySource
+      permission_mode: permissionMode
+      tools: tools
+      mcp_servers: mcp_servers
+      slash_commands: slash_commands
+      output_style: output_style
+      skills: skills
+      plugins: plugins
+
+  # ── User messages ──────────────────────────────────────────────────────────
+  user.text:
+    kind: message.user
+    payload:
+      content: content
+
+  # ── Assistant text ─────────────────────────────────────────────────────────
+  assistant.text:
+    kind: message.assistant
+    payload:
+      content: text
+
+  # ── Tool use (call started) ────────────────────────────────────────────────
+  assistant.tool_use:
+    kind: tool.call.started
+    payload:
+      tool_call_id: id
+      tool_name: name
+      arguments: input
+
+  # ── Tool result (call completed) ───────────────────────────────────────────
+  # Note: tool_result blocks appear in assistant messages (not user messages)
+  # because Claude's wire format wraps tool results in assistant turns.
+  assistant.tool_result:
+    kind: tool.call.completed
+    payload:
+      tool_call_id: tool_use_id
+      success: success
+      result: content_text
+
+  # Also handle tool results that appear in user context
+  user.tool_result:
+    kind: tool.call.completed
+    payload:
+      tool_call_id: tool_use_id
+      success: success
+      result: content_text
+
+  # ── Thinking ───────────────────────────────────────────────────────────────
+  assistant.thinking:
+    kind: llm.reasoning.chunk
+    payload:
+      content: thinking
+
+  # ── Per-message usage (real Claude Code transcripts) ───────────────────────
+  # Claude Code has no `result` line — token usage rides every assistant message.
+  # The preprocessor emits one synthetic `assistant.usage` block per assistant
+  # line, so the SAME message.id appears ~3x (one per content block); the watch
+  # usage bridge dedups on `msg_id` before summing, routes these to
+  # `usage_records` only (never the enriched-events timeline), and aggregates the
+  # input components. No cost field exists in the per-message wire (cost_usd stays
+  # null — never synthesized).
+  assistant.usage:
+    kind: telemetry.usage
+    payload:
+      model: model
+      input_tokens: input_tokens
+      output_tokens: output_tokens
+      cache_read_tokens: cache_read_input_tokens
+      cache_write_tokens: cache_creation_input_tokens
+      msg_id: msg_id
+
+  # ── Result (session summary with usage) ────────────────────────────────────
+  result:
+    kind: telemetry.usage
+    payload:
+      duration_ms: duration_ms
+      cost_usd: total_cost_usd
+      num_turns: num_turns
+      input_tokens: usage_input_tokens
+      output_tokens: usage_output_tokens
+      cache_read_tokens: usage_cache_read_input_tokens
+      cache_write_tokens: usage_cache_creation_input_tokens
