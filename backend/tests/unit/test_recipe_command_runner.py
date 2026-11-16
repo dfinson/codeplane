@@ -15,6 +15,7 @@ from backend.models.domain import ApprovalResolution, JobState, SessionConfig, S
 from backend.models.execution_contracts import ExecutionContract, ImplementationPin
 from backend.models.schemas.recipes import (
     RecipeBlockRunner,
+    RecipeCodeReference,
     RecipeCommandArgument,
     RecipeCommandRunner,
     RecipeDefinition,
@@ -44,7 +45,9 @@ from backend.services.git.git_service import GitService
 from backend.services.job.approval_service import ApprovalService
 from backend.services.recipe.command_runner import CommandStepRunner
 from backend.services.recipe.definition_service import RecipeDefinitionService
+from backend.services.recipe.workspace import prepare_workspace
 from backend.services.runtime import RuntimeService
+from backend.tests.unit.test_recipe_definitions import agent
 from backend.tests.unit.test_recipe_runs import create_run
 from backend.tests.unit.test_recipe_runs import sessions as sessions
 
@@ -62,6 +65,54 @@ def configure_test_contract(runtime):
         title=implementation,
     )
     runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
+
+
+async def test_parallel_snapshot_preparation_reuses_one_complete_worktree(sessions, tmp_path, monkeypatch):
+    graph = RecipeDefinition(
+        name="Shared snapshots", entry_steps=["check", "peer"], steps=[agent("check"), agent("peer")]
+    )
+    host, _, run, first, _ = await command_context(sessions, tmp_path, monkeypatch, "unused", graph=graph, admit=False)
+    git = host._git_service
+    async with sessions() as session:
+        job = await JobRepository(session).get(run.job_id)
+        second = await RecipeRunRepository(session).get_step_by_path(run.id, "peer")
+    code = await git.rev_parse("HEAD", cwd=job.repo)
+    run = run.model_copy(update={"code_ref": RecipeCodeReference(workspace=job.repo, commit=code)})
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    attempted = asyncio.Event()
+    original_create = git.create_worktree
+    creates = 0
+
+    async def gated_create(*args, **kwargs):
+        nonlocal creates
+        creates += 1
+        entered.set()
+        await release.wait()
+        return await original_create(*args, **kwargs)
+
+    monkeypatch.setattr(git, "create_worktree", gated_create)
+    first_task = asyncio.create_task(
+        prepare_workspace(git, job, run, first, {}, preparation_control=host._execution_control)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    async def prepare_second():
+        attempted.set()
+        return await prepare_workspace(git, job, run, second, {}, preparation_control=host._execution_control)
+
+    second_task = asyncio.create_task(prepare_second())
+    await asyncio.wait_for(attempted.wait(), timeout=5)
+    release.set()
+    results = await asyncio.wait_for(asyncio.gather(first_task, second_task, return_exceptions=True), timeout=10)
+    assert not any(isinstance(result, BaseException) for result in results), results
+    assert creates == 1
+    assert results[0].path == results[1].path
+    assert await git.rev_parse("HEAD", cwd=results[0].path) == code
+    (Path(results[0].path) / "source.txt").write_text("Unexpected modification\n")
+    with pytest.raises(StateConflictError, match="differs from its pinned snapshot"):
+        await prepare_workspace(git, job, run, first, {}, preparation_control=host._execution_control)
+    assert (Path(results[0].path) / "source.txt").read_text() == "Unexpected modification\n"
 
 
 async def command_context(
