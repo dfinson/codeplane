@@ -103,6 +103,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._worktree_paths: dict[str, str] = {}  # job_id → cwd
         self._job_start_times: dict[str, float] = {}
         self._job_main_models: dict[str, str] = {}
+        self._session_models: dict[str, str] = {}
         self._last_telemetry_broadcast: dict[str, float] = {}
         self._current_phases: dict[str, str] = {}
         self._write_tasks: list[asyncio.Task[None]] = []
@@ -213,6 +214,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds.pop(session_id, None)
         self._session_metadata.pop(session_id, None)
         self._session_workspaces.pop(session_id, None)
+        self._session_models.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
@@ -343,15 +345,30 @@ class BaseAgentAdapter(AgentAdapterInterface):
         actual_model: str,
         requested_model: str,
     ) -> None:
-        """First-call model verification: log mismatch, emit event, persist.
-
-        Safe to call multiple times — only acts on the first invocation
-        per job (guards on ``_job_main_models``).
-        """
-        if not actual_model or job_id in self._job_main_models:
+        """Verify reported identity per attempt, retaining legacy primary Job behavior."""
+        if not actual_model:
             return
-        self._job_main_models[job_id] = actual_model
-        self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
+        metadata = self._session_metadata.get(session_id)
+        is_attempt = metadata is not None and metadata.attempt_id is not None
+        if is_attempt:
+            if self._session_models.get(session_id) == actual_model:
+                return
+            self._session_models[session_id] = actual_model
+            self._emit_tf(
+                session_id, job_id, EventKind.model_observed,
+                {
+                    "requested_model": requested_model or None,
+                    "actual_model": actual_model,
+                    "model_match": normalize_model_name(actual_model) == normalize_model_name(requested_model)
+                    if requested_model and requested_model != "auto" else None,
+                },
+            )
+        else:
+            if job_id in self._job_main_models:
+                return
+            self._session_models[session_id] = actual_model
+            self._job_main_models[job_id] = actual_model
+            self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=actual_model))
 
         if (
             requested_model
@@ -364,19 +381,15 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 actual=actual_model,
                 job_id=job_id,
             )
-            self._enqueue(
-                session_id,
-                new_event(
-                    session_id=job_id,
-                    kind=EventKind.model_downgraded,
-                    payload={
-                        "requested_model": requested_model,
-                        "actual_model": actual_model,
-                    },
-                ),
+            self._emit_tf(
+                session_id, job_id, EventKind.model_downgraded,
+                {"requested_model": requested_model, "actual_model": actual_model},
             )
         else:
             log.info("model_confirmed", model=actual_model, job_id=job_id)
+
+    def get_reported_model(self, session_id: str) -> str | None:
+        return self._session_models.get(session_id)
 
     # ------------------------------------------------------------------
     # Shared tool event helpers (used by Claude + Copilot adapters)

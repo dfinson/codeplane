@@ -87,6 +87,15 @@ export function normalizeTFEvent(ev: TFSessionEvent): Record<string, unknown> {
   // from payload data.
   const meta = ev.metadata;
   const metadata = meta == null ? undefined : (meta as Record<string, unknown>);
+  for (const [source, target] of [
+    ["recipe_run_id", "recipeRunId"],
+    ["recipe_revision", "recipeRevision"],
+    ["step_instance_id", "stepInstanceId"],
+    ["attempt_id", "attemptId"],
+    ["execution_epoch", "executionEpoch"],
+  ] as const) {
+    if (metadata?.[source] != null) payload[target] = metadata[source];
+  }
   delete payload.sequence;
   if (typeof metadata?.sequence === "number") {
     payload.sequence = metadata.sequence;

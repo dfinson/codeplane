@@ -58,6 +58,11 @@ durable recipe admission. Registration failure or caller cancellation closes the
 owned session. Job cancellation signals the primary task and fences every
 attempt before awaiting any slow transport teardown.
 
+Attempt model reports are session-qualified `model.observed` events carrying
+requested/actual identities and match status, with recipe, attempt and epoch
+metadata. A mismatch keeps that scope on `model.downgraded`. Attempt reports
+never replace the primary Job model/default or another attempt's verification.
+
 For attributed attempts, permission routing and savepoints use the trusted
 session workspace, never the primary Job workspace. Adapter description and
 dependency readiness are separate from execution admission. The managed

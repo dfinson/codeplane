@@ -648,10 +648,23 @@ describe("dispatchSSEEvent — additional events", () => {
       requestedModel: "gpt-4",
       actualModel: "gpt-3.5",
     });
+
     const job = selectJobs(useStore.getState())["job-1"]!;
     expect(job.modelDowngraded).toBe(true);
     expect(job.requestedModel).toBe("gpt-4");
     expect(job.actualModel).toBe("gpt-3.5");
+  });
+
+  it("does not replace a Job default with an attributed attempt model mismatch", () => {
+    useStore.setState({ jobs: { "job-1": makeJob({ model: "job-default" }) } });
+    useStore.getState().dispatchSSEEvent("model.downgraded", normalizeTFEvent({
+      kind: "model.downgraded", session_id: "job-1",
+      payload: { requested_model: "attempt-request", actual_model: "attempt-actual" },
+      metadata: { attempt_id: "attempt", execution_epoch: "epoch" },
+    }));
+    const job = useStore.getState().jobs["job-1"];
+    expect(job?.model).toBe("job-default");
+    expect(job?.modelDowngraded).not.toBe(true);
   });
 
   it("ignores model_downgraded for unknown job", () => {

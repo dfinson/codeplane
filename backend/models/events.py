@@ -100,6 +100,7 @@ class EventKind(StrEnum):
     job_title_updated = "job.title_updated"
     progress_headline = "progress.headline"
     model_downgraded = "model.downgraded"
+    model_observed = "model.observed"
     tool_group_summary = "tool.group_summary"
     agent_plan_updated = "plan.updated"
     execution_phase_changed = "execution.phase_changed"

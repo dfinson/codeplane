@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { deepSnakeToCamel, normalizeTFEvent, deriveJobStateFrame, type TFSessionEvent } from "./sseNormalize";
 
+it("preserves authoritative attempt model scope from canonical metadata", () => {
+  const result = normalizeTFEvent({
+    id: "event", kind: "model.downgraded", session_id: "job",
+    payload: { actual_model: "actual", attempt_id: "untrusted-payload" },
+    metadata: { attempt_id: "attempt", execution_epoch: "epoch", recipe_run_id: "run" },
+  });
+  expect(result).toMatchObject({ actualModel: "actual", attemptId: "attempt", executionEpoch: "epoch", recipeRunId: "run" });
+});
+
 describe("deepSnakeToCamel", () => {
   it("converts top-level snake keys to camelCase", () => {
     expect(deepSnakeToCamel({ tool_name: "x", raw_size: 3 })).toEqual({ toolName: "x", rawSize: 3 });

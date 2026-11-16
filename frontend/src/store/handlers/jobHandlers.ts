@@ -222,6 +222,7 @@ export function handleJobTitleUpdated(state: AppState, payload: Record<string, u
 }
 
 export function handleModelDowngraded(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (typeof payload.attemptId === "string") return null;
   const jobId = payload.jobId as string;
   const requestedModel = payload.requestedModel as string;
   const actualModel = payload.actualModel as string;

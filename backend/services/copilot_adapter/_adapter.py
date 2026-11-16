@@ -478,7 +478,7 @@ class CopilotAdapter(BaseAgentAdapter):
                         self._verify_and_set_model(session_id, job_id, actual_model, requested_model)
 
                 # Sub-agent detection
-                main_model = self._job_main_models.get(job_id, "")
+                main_model = self._session_models.get(session_id, self._job_main_models.get(job_id, ""))
                 is_subagent = bool(main_model and actual_model != main_model)
 
                 self._emit_tf(
@@ -547,8 +547,13 @@ class CopilotAdapter(BaseAgentAdapter):
         elif kind_str == "session.model_change":
             mc = cast("SessionModelChangeData", data) if data else None
             if mc and mc.new_model and self.get_session_kind(session_id) != "preflight":
-                self._job_main_models[job_id] = mc.new_model
-                self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=mc.new_model))
+                metadata = self._session_metadata.get(session_id)
+                if metadata is not None and metadata.attempt_id is not None:
+                    self._verify_and_set_model(session_id, job_id, mc.new_model, requested_model)
+                else:
+                    self._session_models[session_id] = mc.new_model
+                    self._job_main_models[job_id] = mc.new_model
+                    self._schedule_db_write(self._db_write_set_model(job_id=job_id, model=mc.new_model))
                 self._emit_log_line(session_id, job_id, f"Model changed to {mc.new_model}", "info")
 
         elif kind_str == "session.shutdown":

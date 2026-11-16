@@ -347,7 +347,11 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and self.get_session_kind(session_id) != "preflight":
             requested = self._requested_models.get(session_id, "")
-            if not self._model_verified.get(session_id):
+            metadata = self._session_metadata.get(session_id)
+            is_attempt = metadata is not None and metadata.attempt_id is not None
+            if not getattr(message, "parent_tool_use_id", None) and (
+                is_attempt or not self._model_verified.get(session_id)
+            ):
                 self._model_verified[session_id] = True
                 self._verify_and_set_model(session_id, job_id, model, requested)
 
