@@ -460,6 +460,7 @@ def new_event(
     metadata: EventMetadata | None = None,
     sequence: int | None = None,
     event_id: str | None = None,
+    raw_event: dict[str, Any] | None = None,
 ) -> SessionEvent:
     """Construct a canonical ``traceforge.SessionEvent`` for a CodePlane job.
 
@@ -479,6 +480,7 @@ def new_event(
         "timestamp": timestamp if timestamp is not None else datetime.now(UTC),
         "payload": dict(payload),
         "metadata": metadata,
+        "raw_event": raw_event,
     }
     if event_id is not None:
         fields["id"] = event_id

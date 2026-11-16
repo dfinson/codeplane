@@ -18,6 +18,10 @@ The standalone replacement is reviewed against product base
 `ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
 the compatibility transition until decoder, policy and integration qualification
 permits retirement. Existing history is never discarded to complete migration.
+Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
+and replay. Historical NULL remains unknown, never reconstructed, and downgrade
+refuses to erase retained raw data. Event timestamps are stored as UTC instants.
+Raw data remains excluded from metadata-only export.
 
 `services/adapters/contracts.py` separates observation, execution, blocking
 permission interception and text-only completion. An observer does not acquire

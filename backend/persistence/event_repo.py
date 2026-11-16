@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC
 
 from sqlalchemy import delete, func, select, update
 
@@ -33,10 +34,11 @@ class EventRepository(BaseRepository):
         return new_event(
             event_id=row.event_id,
             session_id=row.job_id,
-            timestamp=row.timestamp,
+            timestamp=row.timestamp.replace(tzinfo=UTC) if row.timestamp.tzinfo is None else row.timestamp,
             kind=row.kind,
             payload=json.loads(row.payload),
             metadata=metadata,
+            raw_event=json.loads(row.raw_event) if row.raw_event is not None else None,
         )
 
     async def append(self, event: SessionEvent) -> int:
@@ -50,9 +52,13 @@ class EventRepository(BaseRepository):
             event_id=event.id,
             job_id=event.session_id or None,
             kind=str(event.kind),
-            timestamp=event.timestamp,
+            timestamp=(
+                event.timestamp.replace(tzinfo=UTC)
+                if event.timestamp.tzinfo is None else event.timestamp.astimezone(UTC)
+            ),
             payload=json.dumps(dict(event.payload)),
             event_metadata=json.dumps(event.metadata.model_dump(mode="json")),
+            raw_event=json.dumps(event.raw_event) if event.raw_event is not None else None,
         )
         self._session.add(row)
         await self._session.flush()
@@ -63,7 +69,8 @@ class EventRepository(BaseRepository):
         previous = json.loads(row.payload)
         source = event.payload.get("_codeplane_source")
         same = previous.get("_codeplane_source") == source if source else previous == dict(event.payload)
-        if row.job_id != event.session_id or row.kind != str(event.kind) or not same:
+        raw_matches = row.raw_event is None or json.loads(row.raw_event) == event.raw_event
+        if row.job_id != event.session_id or row.kind != str(event.kind) or not same or not raw_matches:
             raise ValueError(f"Conflicting content for event identity {event.id}")
 
     async def contains(self, event: SessionEvent) -> bool:
@@ -73,6 +80,11 @@ class EventRepository(BaseRepository):
             return False
         self._verify_identity(row, event)
         return True
+
+    async def get(self, event_id: str) -> SessionEvent | None:
+        result = await self._session.execute(select(EventRow).where(EventRow.event_id == event_id))
+        row = result.scalar_one_or_none()
+        return self._to_domain(row) if row is not None else None
 
     async def list_after(
         self,

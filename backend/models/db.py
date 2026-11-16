@@ -390,6 +390,7 @@ class EventRow(Base):
     # visibility/…). Persisted so DB-replay consumers (REST transcript, snapshot,
     # search) reconstruct the full TF event, since enrichment lives on metadata.
     event_metadata: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")  # JSON
+    raw_event: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON when supplied by the producer
 
     __table_args__ = (Index("idx_events_job_id", "job_id"),)
 

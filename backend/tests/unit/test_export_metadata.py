@@ -19,6 +19,7 @@ def test_raw_prompts_commands_results_paths_and_personal_ids_never_leave_project
             "success": False,
         },
         metadata=EventMetadata(run_id="personal external ID", span_id="alice-span", parent_id="alice-parent"),
+        raw_event={"raw_secret": "private raw source must not leave the application"},
     )
     exported = export_metadata(
         event,
