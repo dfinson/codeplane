@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from backend.models.domain import Job
     from backend.models.schemas.recipes import RecipeInputReceipt, RecipeRunResponse, RecipeStepInstanceResponse
     from backend.services.git.git_service import GitService
+    from backend.services.runtime.execution_control import ExecutionControl
 
 
 async def prepare_workspace(
@@ -23,6 +24,7 @@ async def prepare_workspace(
     instance: RecipeStepInstanceResponse,
     inputs: dict[str, RecipeInputReceipt],
     *,
+    preparation_control: ExecutionControl,
     parent_workspace: RecipeResolvedWorkspace | None = None,
 ) -> RecipeResolvedWorkspace:
     if run.code_ref is None:
@@ -62,14 +64,21 @@ async def prepare_workspace(
         key = hashlib.sha256(f"{policy.key}:{source.commit}".encode()).hexdigest()[:16]
         name = f"recipe-{run.id}-{key}"
     path = git.recipe_worktree_path(job.repo, name)
-    if Path(path).exists():
-        if (
-            policy.mode != "snapshot"
-            or await git.get_current_branch(cwd=path) != f"codeplane/recipe/{name}"
-            or await git.rev_parse("HEAD", cwd=path) != source.commit
-            or await git.run_git("status", "--porcelain", cwd=path)
-        ):
-            raise StateConflictError("The prepared recipe worktree differs from its pinned snapshot.")
-    else:
-        path, _ = await git.create_worktree(job.repo, name, source.commit, f"codeplane/recipe/{name}")
-    return RecipeResolvedWorkspace(path=str(Path(path).resolve()), code_ref=source.commit, policy=policy)
+
+    async def prepare() -> RecipeResolvedWorkspace:
+        if Path(path).exists():
+            if (
+                policy.mode != "snapshot"
+                or await git.get_current_branch(cwd=path) != f"codeplane/recipe/{name}"
+                or await git.rev_parse("HEAD", cwd=path) != source.commit
+                or await git.run_git("status", "--porcelain", cwd=path)
+            ):
+                raise StateConflictError("The prepared recipe worktree differs from its pinned snapshot.")
+        else:
+            await git.create_worktree(job.repo, name, source.commit, f"codeplane/recipe/{name}")
+        return RecipeResolvedWorkspace(path=str(Path(path).resolve()), code_ref=source.commit, policy=policy)
+
+    if policy.mode == "snapshot":
+        async with preparation_control.hold(f"recipe-snapshot:{Path(path).resolve()}"):
+            return await prepare()
+    return await prepare()

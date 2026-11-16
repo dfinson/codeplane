@@ -291,6 +291,7 @@ class RecipeExecutor:
             run,
             instance,
             inputs,
+            preparation_control=self._host._execution_control,
             parent_workspace=parent.workspace if parent else None,
         )
         runner = instance.definition.runner
