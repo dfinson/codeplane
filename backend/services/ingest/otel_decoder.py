@@ -180,7 +180,15 @@ def span_event(
     if not isinstance(status, dict):
         raise ValueError("Span status must be an object")
     if status.get("code", status.get("status_code")) in (2, "STATUS_CODE_ERROR"):
-        kind = "session.error" if mapping is not None else "tool.call.failed" if tool else "llm.call.failed"
+        kind = (
+            "session.error"
+            if mapping is not None
+            else "tool.call.failed"
+            if is_tool
+            else "llm.call.failed"
+            if is_llm
+            else "raw"
+        )
         payload["message"] = status.get("message", "Unknown error")
     if start is not None and end is not None:
         payload["duration_ms"] = (end - start) / 1_000_000

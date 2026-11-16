@@ -1,9 +1,14 @@
+import hashlib
+import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from backend.persistence.event_repo import EventRepository
 from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder, resolve_mapping_path
+from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 ANCHOR = datetime(2026, 1, 2, tzinfo=UTC)
 
@@ -98,3 +103,53 @@ def test_custom_mapping_precedence_and_invalid_timestamp_state_rollback(tmp_path
     first = decoder.decode({"type": "message", "content": "accepted"}, 0)
     decoder.restore(state)
     assert decoder.decode({"type": "message", "content": "accepted"}, 0) == first
+
+
+async def test_binding_scoped_ids_and_turns_persist_independently_and_replay_once(session_factory) -> None:
+    path = Path(__file__).parents[2] / "compat" / "traceformats" / "mappings" / "copilot.yaml"
+    raw = {"type": "assistant.message", "data": {"content": "Same source bytes"}}
+    identities = set()
+    turns = set()
+    for job, binding in (("job-1", "first"), ("job-1", "second"), ("job-2", "third")):
+        decoder = NativeMappingDecoder(
+            path,
+            job_id=job,
+            binding_id=binding,
+            external_session_id="shared-label",
+            anchor=ANCHOR,
+        )
+        event = decoder.decode(raw, 0)[0]
+        identities.add(event.id)
+        turns.add(event.payload["turn_id"])
+        async with session_factory() as session:
+            repo = EventRepository(session)
+            cursor = await repo.append(event)
+            await session.commit()
+        replay = NativeMappingDecoder(
+            path,
+            job_id=job,
+            binding_id=binding,
+            external_session_id="shared-label",
+            anchor=ANCHOR,
+        ).decode(raw, 0)[0]
+        async with session_factory() as session:
+            assert await EventRepository(session).append(replay) == cursor
+            await session.commit()
+    assert len(identities) == len(turns) == 3
+    async with session_factory() as session:
+        assert len(await EventRepository(session).list_after(0)) == 3
+
+
+def test_explicit_legacy_identity_retains_old_seed_without_rewriting_history() -> None:
+    raw = {"type": "assistant.message", "data": {"content": "Legacy"}}
+    event = _decoder("copilot", legacy_identity=True).decode(raw, 4)[0]
+    digest = hashlib.sha256(
+        json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    expected = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        json.dumps(["codeplane-native-v1", "copilot", "external", 4, 0, digest], separators=(",", ":")),
+    )
+    assert event.id == str(expected)
+    assert event.payload["turn_id"] == str(uuid.uuid5(uuid.NAMESPACE_URL, "job:native-turn:0"))
+    assert "binding_id" not in event.payload["_codeplane_source"]

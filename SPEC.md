@@ -71,11 +71,13 @@ globally and one per Job. At most 32 requests wait for admission for up to two
 seconds. The 20-second decision deadline includes queueing and liveness checks.
 Canceled provider cleanup retains its concurrency slot until it actually ends,
 without delaying the caller's unavailable result. Redacted semantics, stale
-bindings and invalid evidence cannot become automatic permission.
+bindings and invalid evidence cannot become automatic permission. A completed
+utility call retains its known model and usage even when its assessment is
+rejected for stale state or invalid output.
 
 The AGT policy component uses the pinned core package's `PolicyEngine` with
 explicit `priority_first_match` priorities and no evaluation-time rate limits.
-Its standalone ledger uses separate storage with atomic executed-call identity
+Its standalone ledger uses separate storage with atomic source-qualified executed-call identity
 and counters, marks missing call IDs unaccountable, and sums only verified USD.
 The metadata-only export projection excludes raw prompts, arguments, results,
 paths and rationale and keys external identities before any exporter queue.
@@ -84,8 +86,11 @@ qualification; their presence is not a claim that TraceForge retirement is done.
 
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream
-license. The standalone native decoder preserves `codeplane-native-v1` event
-identity and rolls back its motivation/turn buffer if a record fails. Configured
+license. New native event and fallback turn identities are scoped by stable
+binding/Job ownership (`codeplane-native-v2`), so reused vendor session labels
+do not collide. Explicit legacy identity mode reproduces retained v1 seeds
+without rewriting history. The decoder rolls back its motivation/turn buffer
+if a record fails. Configured
 mapping directories override migrated user definitions, legacy user definitions
 and bundled assets in that order. Inbound OTLP JSON is independent of exporter
 packages and bounds raw input to 1 MiB/1000 spans, nesting to 32 levels and

@@ -1,7 +1,9 @@
 import asyncio
 import json
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
+from backend.models.usage import UsageAmount
 from backend.services.action_policy.assessment import ActionBinding, AssessmentService
 from backend.services.adapters.agent_adapter import CompletionResult
 
@@ -28,7 +30,23 @@ def _completion():
         {"field": field, "value": raw[field], "source": "command", "start": 0, "end": 3}
         for field in ("effect", "scope", "network", "reversibility")
     ]
-    return CompletionResult(text=json.dumps(raw), model="approved-model")
+    return CompletionResult(
+        text=json.dumps(raw),
+        model="approved-model",
+        input_tokens=12,
+        usage=(
+            UsageAmount(
+                amount=Decimal(12),
+                unit="input_tokens",
+                producer="fixture",
+                model="approved-model",
+                job_id=None,
+                execution_epoch=None,
+                role="assessment",
+                source="response",
+            ),
+        ),
+    )
 
 
 async def test_single_text_only_attempt_binds_sources_and_rechecks_epoch() -> None:
@@ -86,7 +104,11 @@ async def test_stale_result_and_invalid_output_are_unavailable() -> None:
         is_current=AsyncMock(side_effect=[True, False]),
     )
     assert result.reason == "stale_execution" and result.assessment is None
-    provider.complete.return_value = CompletionResult(text='{"authority":"allow"}', model="approved-model")
+    assert result.completion is not None and result.completion.model == "approved-model"
+    assert result.completion.input_tokens == 12 and result.completion.usage[0].amount == 12
+    invalid = _completion()
+    invalid.text = '{"authority":"allow"}'
+    provider.complete.return_value = invalid
     result = await service.assess(
         _binding(),
         FIELDS,
@@ -95,6 +117,9 @@ async def test_stale_result_and_invalid_output_are_unavailable() -> None:
         is_current=AsyncMock(return_value=True),
     )
     assert result.reason == "assessment_invalid_output" and result.assessment is None
+    assert result.completion is not None
+    assert result.completion is provider.complete.return_value
+    assert result.completion.input_tokens == 12 and result.completion.usage[0].amount == 12
 
 
 async def test_hard_deadline_returns_while_cancelled_provider_drains_without_reusing_slot(monkeypatch) -> None:
@@ -183,9 +208,7 @@ async def test_thirty_third_waiter_is_rejected_without_an_extra_model_attempt() 
     kwargs = dict(provider=provider, model="approved-model", is_current=AsyncMock(return_value=True))
     tasks = [asyncio.create_task(service.assess(_binding(f"active-{i}"), FIELDS, **kwargs)) for i in range(2)]
     await active.wait()
-    tasks.extend(
-        asyncio.create_task(service.assess(_binding(f"queued-{i}"), FIELDS, **kwargs)) for i in range(32)
-    )
+    tasks.extend(asyncio.create_task(service.assess(_binding(f"queued-{i}"), FIELDS, **kwargs)) for i in range(32))
     await asyncio.sleep(0)
     try:
         result = await service.assess(_binding("overflow"), FIELDS, **kwargs)

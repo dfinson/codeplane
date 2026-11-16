@@ -215,6 +215,9 @@ def _embedded(
         budget.incomplete.add("unresolved_expansion")
         return
     interpreter = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].lower().removesuffix(".exe")
+    if interpreter == "cmd":
+        budget.incomplete.add("syntax_unsupported")
+        return
     if interpreter not in {"bash", "sh", "pwsh", "powershell"}:
         if interpreter in {"eval", "invoke-expression", "iex", ".", "source"}:
             budget.incomplete.add("opaque_script")

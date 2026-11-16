@@ -103,8 +103,8 @@ class AssessmentService:
         start = time.monotonic()
         sources: tuple[AssessmentSource, ...] = ()
 
-        def unavailable(reason: str) -> AssessmentResult:
-            return AssessmentResult(binding.sha256, None, reason, sources=sources)
+        def unavailable(reason: str, completion: CompletionResult | None = None) -> AssessmentResult:
+            return AssessmentResult(binding.sha256, None, reason, completion=completion, sources=sources)
 
         if self._closed:
             return unavailable("assessment_shutdown")
@@ -190,15 +190,18 @@ class AssessmentService:
                 )
                 with completion_context(invocation):
                     result = await provider.complete(prompt, model=model, system_message=system, excluded_tools=["*"])
-                validate_completion_identity(model, result.model, invocation)
-                if not await is_current():
-                    return unavailable("stale_execution")
-                if result.text is None or len(result.text.encode("utf-8")) > MAX_OUTPUT_BYTES:
-                    return unavailable("assessment_output_limit")
+                try:
+                    validate_completion_identity(model, result.model, invocation)
+                    if not await is_current():
+                        return unavailable("stale_execution", result)
+                    if result.text is None or len(result.text.encode("utf-8")) > MAX_OUTPUT_BYTES:
+                        return unavailable("assessment_output_limit", result)
+                except (UtilityCompletionError, OSError, RuntimeError, ValueError):
+                    return unavailable("assessment_postprocessing_failed", result)
                 try:
                     assessment = ActionAssessment.model_validate_json(result.text, context=context)
                 except ValidationError:
-                    return unavailable("assessment_invalid_output")
+                    return unavailable("assessment_invalid_output", result)
                 return AssessmentResult(
                     binding.sha256,
                     assessment,

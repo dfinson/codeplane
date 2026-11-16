@@ -96,6 +96,7 @@ class GovernanceLedger:
         epoch: str,
         event_id: str,
         tool_call_id: str | None,
+        source_id: str | None,
         action_digest: str,
         executed: bool,
         succeeded: bool,
@@ -107,6 +108,7 @@ class GovernanceLedger:
             epoch,
             event_id,
             tool_call_id,
+            source_id,
             action_digest,
             executed,
             succeeded,
@@ -119,6 +121,7 @@ class GovernanceLedger:
         epoch: str,
         event_id: str,
         tool_call_id: str | None,
+        source_id: str | None,
         action_digest: str,
         executed: bool,
         succeeded: bool,
@@ -130,16 +133,30 @@ class GovernanceLedger:
             return False
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            if not tool_call_id or not tool_call_id.strip():
+            if not tool_call_id or not tool_call_id.strip() or not source_id or not source_id.strip():
                 connection.execute(
                     "INSERT OR IGNORE INTO cp_unaccounted_tools VALUES(?,?,?,?)",
-                    (job_id, epoch, event_id, "missing_tool_call_id"),
+                    (
+                        job_id,
+                        epoch,
+                        event_id,
+                        "missing_tool_call_id" if not tool_call_id else "missing_source_identity",
+                    ),
                 )
                 return False
+            # Only storage identity is qualified; the canonical event's vendor
+            # tool_call_id remains unchanged on the wire and in history.
+            identity = json.dumps(["cp-tool-v1", source_id, tool_call_id], separators=(",", ":"))
+            legacy = connection.execute(
+                "SELECT 1 FROM cp_executed_tools WHERE job_id=? AND epoch=? AND tool_call_id=?",
+                (job_id, epoch, tool_call_id),
+            ).fetchone()
+            if legacy is not None:
+                raise ValueError("Unqualified historical tool identity requires reconciliation")
             previous = connection.execute(
                 """SELECT action_digest, outcome, destructive FROM cp_executed_tools
                    WHERE job_id=? AND epoch=? AND tool_call_id=?""",
-                (job_id, epoch, tool_call_id),
+                (job_id, epoch, identity),
             ).fetchone()
             outcome = "succeeded" if succeeded else "failed"
             if previous is not None:
@@ -152,7 +169,7 @@ class GovernanceLedger:
                 return False
             connection.execute(
                 "INSERT INTO cp_executed_tools VALUES(?,?,?,?,?,?)",
-                (job_id, epoch, tool_call_id, action_digest, outcome, int(destructive)),
+                (job_id, epoch, identity, action_digest, outcome, int(destructive)),
             )
             connection.execute(
                 """INSERT INTO cp_governance_totals VALUES(?,?,1,?)

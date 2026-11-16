@@ -49,7 +49,7 @@ NATIVE_FORMATS = frozenset(
         "sweagent",
     ]
 )
-PARSER_REVISION = "cp-mappings-v1"
+PARSER_REVISION = "cp-mappings-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +171,7 @@ class NativeMappingDecoder:
         anchor: datetime,
         framework_id: str | None = None,
         binding_id: str | None = None,
+        legacy_identity: bool = False,
     ) -> None:
         if not job_id.strip() or not external_session_id.strip():
             raise ValueError("Native decoding requires distinct explicit Job and external source identities")
@@ -182,6 +183,10 @@ class NativeMappingDecoder:
         self.job_id = job_id
         self.external_id = external_session_id
         self.binding_id = binding_id
+        if legacy_identity and binding_id is not None:
+            raise ValueError("Legacy identity is only valid for explicitly unbound historical sources")
+        self.legacy_identity = legacy_identity
+        self._scope = {"job_id": job_id, "binding_id": binding_id, "scope": "binding" if binding_id else "job"}
         self.anchor = anchor.replace(tzinfo=UTC) if anchor.tzinfo is None else anchor
         self._preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
         if self.mapping.preprocessor and self._preprocessor is None:
@@ -191,6 +196,7 @@ class NativeMappingDecoder:
             canonical_record(
                 {
                     "revision": PARSER_REVISION,
+                    "legacy_identity": legacy_identity,
                     "mapping_sha256": hashlib.sha256(source).hexdigest(),
                     "preprocessor_sha256": hashlib.sha256(Path(preprocessor_file).read_bytes()).hexdigest()
                     if preprocessor_file
@@ -210,6 +216,45 @@ class NativeMappingDecoder:
         self._intent: str | None = None
         self._reasoning: str | None = None
         self._turn = 0
+
+    def _event_id(self, record_index: int, output_index: int, digest: str) -> str:
+        values: list[object] = [
+            "codeplane-native-v1" if self.legacy_identity else "codeplane-native-v2",
+            self.framework,
+            self.external_id,
+            record_index,
+            output_index,
+            digest,
+        ]
+        if not self.legacy_identity:
+            values.insert(1, self._scope)
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(values, sort_keys=True, separators=(",", ":"))))
+
+    def _turn_id(self) -> str:
+        material = (
+            f"{self.job_id}:native-turn:{self._turn}"
+            if self.legacy_identity
+            else json.dumps(
+                ["codeplane-turns-v2", self._scope, self.framework, self.external_id, self._turn],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
+
+    def _source(self, raw: dict[str, Any], record_index: int, output_index: int, digest: str) -> dict[str, Any]:
+        source = {
+            "contract": "codeplane-native-v1" if self.legacy_identity else "codeplane-native-v2",
+            "framework": self.framework,
+            "session_id": self.external_id,
+            "record_index": record_index,
+            "output_index": output_index,
+            "record_sha256": digest,
+            "vendor_event_id": raw.get("id"),
+        }
+        if not self.legacy_identity:
+            source.update(self._scope)
+        return source
 
     def decode(self, raw: dict[str, Any], record_index: int) -> tuple[SessionEvent, ...]:
         previous = self.checkpoint()
@@ -245,28 +290,15 @@ class NativeMappingDecoder:
                 job_id=self.job_id,
                 binding_id=self.binding_id or f"{self.framework}:{self.external_id}",
                 source=self.framework,
-                event_id=str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        json.dumps(
-                            ["codeplane-native-v1", self.framework, self.external_id, record_index, 0, digest],
-                            separators=(",", ":"),
-                        ),
-                    )
-                ),
+                event_id=self._event_id(record_index, 0, digest),
                 fallback_timestamp=self.anchor + timedelta(microseconds=record_index),
                 mapping=self.mapping,
             )
             payload = dict(event.payload)
-            payload["_codeplane_source"] = {
-                "contract": "codeplane-native-v1",
-                "framework": self.framework,
-                "session_id": self.external_id,
-                "record_index": record_index,
-                "output_index": 0,
-                "record_sha256": digest,
-                "vendor_event_id": raw.get("id"),
-            }
+            payload["_codeplane_source"] = self._source(raw, record_index, 0, digest)
+            payload.setdefault("turn_id", self._turn_id())
+            if event.kind == "message.assistant":
+                self._turn += 1
             return (
                 event.model_copy(
                     update={
@@ -303,15 +335,7 @@ class NativeMappingDecoder:
             if kind == "raw" or mapping is None:
                 payload["original_type"] = raw_kind
             index = len(output)
-            stable_id = str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_URL,
-                    json.dumps(
-                        ["codeplane-native-v1", self.framework, self.external_id, record_index, index, digest],
-                        separators=(",", ":"),
-                    ),
-                )
-            )
+            stable_id = self._event_id(record_index, index, digest)
             for field, role in self._sources.get(raw_kind, ()):
                 value = payload.get(field)
                 text = (
@@ -335,17 +359,9 @@ class NativeMappingDecoder:
                 _path(obj, self.mapping.timestamp_field) if self.mapping.timestamp_field else None,
                 self.anchor + timedelta(microseconds=record_index),
             )
-            payload["_codeplane_source"] = {
-                "contract": "codeplane-native-v1",
-                "framework": self.framework,
-                "session_id": self.external_id,
-                "record_index": record_index,
-                "output_index": index,
-                "record_sha256": digest,
-                "vendor_event_id": raw.get("id"),
-            }
+            payload["_codeplane_source"] = self._source(raw, record_index, index, digest)
             if not payload.get("turn_id"):
-                payload["turn_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.job_id}:native-turn:{self._turn}"))
+                payload["turn_id"] = self._turn_id()
             if kind == "message.assistant":
                 self._turn += 1
             event = SessionEvent(

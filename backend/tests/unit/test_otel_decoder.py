@@ -77,6 +77,23 @@ def test_simplified_span_without_source_ids_never_invents_global_session() -> No
 
 
 @pytest.mark.parametrize(
+    ("attributes", "kind"),
+    [({"http.request.method": "GET"}, "raw"), ({"gen_ai.operation.name": "execute_tool"}, "tool.call.failed")],
+)
+def test_error_status_does_not_invent_an_llm_operation(attributes, kind) -> None:
+    event = span_event(
+        {"name": "operation", "attributes": attributes, "status": {"code": 2, "message": "failed"}},
+        job_id="job",
+        binding_id="binding",
+        source="otel",
+        event_id="event",
+        fallback_timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert event.kind == kind
+    assert "model" not in event.payload
+
+
+@pytest.mark.parametrize(
     "body",
     [
         b'{"resourceSpans":[],"invalid": NaN}',

@@ -120,3 +120,8 @@ def test_powershell_variable_dispatch_is_explicitly_unresolved() -> None:
     facts = analyze_syntax("$script = { Get-Content file }; & $script", "powershell")
     assert not facts.complete
     assert "unresolved_expansion" in facts.incomplete
+
+
+def test_supported_outer_shell_does_not_make_nested_cmd_supported() -> None:
+    facts = analyze_syntax("cmd.exe /c dir", "powershell")
+    assert not facts.complete and "syntax_unsupported" in facts.incomplete

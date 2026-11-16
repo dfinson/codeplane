@@ -137,6 +137,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         metadata = self._session_metadata.get(session_id, EventMetadata()).model_copy(
             update={
                 "source_framework": self._source_framework,
+                "run_id": session_id,
                 "duration_ms": duration_ms,
                 "motivation": motivation,
                 "partial": partial,
