@@ -85,6 +85,49 @@ class ArtifactService:
 
         return cls(ArtifactRepository(session))
 
+    async def store_immutable_file(
+        self, job_id: str, name: str, source: Path, *, mime_type: str = "text/plain"
+    ) -> tuple[Artifact, str]:
+        """Seal a new content revision; never upsert an existing artifact path."""
+        import asyncio
+        import hashlib
+
+        artifact_id = f"art-{uuid.uuid4().hex}"
+        destination = _new_artifact_path(job_id, artifact_id, name)
+        created = False
+
+        async def copy_and_hash() -> tuple[int, str]:
+            nonlocal created
+            digest = hashlib.sha256()
+            size = 0
+            with source.open("rb") as incoming, destination.open("xb") as outgoing:
+                created = True
+                while chunk := incoming.read(64 * 1024):
+                    outgoing.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+                    await asyncio.sleep(0)
+            return size, digest.hexdigest()
+
+        try:
+            size, checksum = await copy_and_hash()
+            artifact = Artifact(
+                id=artifact_id,
+                job_id=job_id,
+                name=name,
+                type=ArtifactType.document,
+                mime_type=mime_type,
+                size_bytes=size,
+                disk_path=str(destination),
+                phase=ExecutionPhase.verification,
+                created_at=datetime.now(UTC),
+            )
+            return await self._repo.create(artifact), checksum
+        except BaseException:
+            if created:
+                destination.unlink(missing_ok=True)
+            raise
+
     async def _update_content(self, artifact: Artifact, job_id: str, content: str | bytes) -> Artifact:
         source = resolve_artifact_path(artifact, job_id=job_id)
         base = get_artifacts_base().resolve()

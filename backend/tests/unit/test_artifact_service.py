@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import subprocess
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -54,6 +57,67 @@ def mock_repo() -> AsyncMock:
 @pytest.fixture
 def artifact_service(mock_repo: AsyncMock) -> ArtifactService:
     return ArtifactService(mock_repo)
+
+
+class TestImmutableFile:
+    async def test_collision_never_removes_an_existing_artifact(self, artifact_service, tmp_path, monkeypatch):
+        store = tmp_path / "store"
+        identity = uuid.UUID(int=1)
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.uuid.uuid4", lambda: identity)
+        destination = store / "job" / f"art-{identity.hex}-stdout.txt"
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"retained evidence")
+        source = tmp_path / "new.stdout"
+        source.write_bytes(b"replacement")
+        with pytest.raises(FileExistsError):
+            await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert destination.read_bytes() == b"retained evidence"
+
+    async def test_retains_independent_content_revisions(self, artifact_service, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.services.artifacts.artifact_service.get_artifacts_base", lambda: tmp_path / "store"
+        )
+        source = tmp_path / "command.stdout"
+        first_content = b"first output\n" * 10_000
+        source.write_bytes(first_content)
+        first, first_hash = await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        source.write_bytes(b"next output")
+        second, second_hash = await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert first.id != second.id
+        assert first_hash == hashlib.sha256(first_content).hexdigest()
+        assert first_hash != second_hash
+        assert first.size_bytes == len(first_content)
+        assert Path(first.disk_path).read_bytes() == first_content
+        assert Path(second.disk_path).read_bytes() == b"next output"
+
+    async def test_canceling_copy_removes_partial_file_before_return(
+        self, artifact_service, mock_repo, tmp_path, monkeypatch
+    ):
+        store = tmp_path / "store"
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        source = tmp_path / "command.stdout"
+        source.write_bytes(b"x" * (256 * 1024))
+        task = asyncio.create_task(artifact_service.store_immutable_file("job", "stdout.txt", source))
+        await asyncio.sleep(0)
+        assert list((store / "job").iterdir())
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+        assert not list((store / "job").iterdir())
+        mock_repo.create.assert_not_awaited()
+        assert source.stat().st_size == 256 * 1024
+
+    async def test_metadata_failure_removes_unpublished_copy(self, artifact_service, mock_repo, tmp_path, monkeypatch):
+        store = tmp_path / "store"
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        source = tmp_path / "command.stdout"
+        source.write_bytes(b"actual output")
+        mock_repo.create.side_effect = RuntimeError("metadata unavailable")
+        with pytest.raises(RuntimeError, match="metadata unavailable"):
+            await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert not list((store / "job").iterdir())
 
 
 class TestStoreDiffSnapshot:

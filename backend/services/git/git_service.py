@@ -7,6 +7,7 @@ import contextlib
 import os
 import re
 import shutil
+import signal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,9 +49,9 @@ class GitService:
             return urlunparse(cleaned)
         return url
 
-    async def _run_git(self, *args: str, cwd: str | Path) -> str:
+    async def _run_git(self, *args: str, cwd: str | Path, env_overrides: dict[str, str] | None = None) -> str:
         """Run a git command and return stdout. Raises GitError on failure."""
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_overrides or {})}
         cwd_path = Path(cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -60,6 +61,7 @@ class GitService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             missing_cwd = exc.filename is not None and Path(exc.filename) == cwd_path
@@ -70,7 +72,22 @@ class GitService:
             raise GitError("git executable not found. Ensure Git is installed and available on PATH.") from exc
         except OSError as exc:
             raise GitError(f"git failed to start: {exc}") from exc
-        stdout_bytes, stderr_bytes = await proc.communicate()
+        communication = asyncio.create_task(proc.communicate())
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.shield(communication)
+        except asyncio.CancelledError:
+            with contextlib.suppress(ProcessLookupError):
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                elif proc.returncode is None:
+                    proc.kill()
+            while not communication.done():
+                try:
+                    await asyncio.shield(communication)
+                except asyncio.CancelledError:
+                    continue
+            communication.result()
+            raise
         stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
@@ -212,6 +229,59 @@ class GitService:
         await self.add_all(cwd=cwd)
         await self.commit(message, cwd=cwd)
         return True
+
+    async def capture_worktree_commit(self, *, cwd: str | Path, snapshot_ref: str) -> str:
+        """Retain current code without changing the user's index, HEAD or files."""
+        import tempfile
+
+        if not snapshot_ref.startswith("refs/codeplane/recipe-inputs/"):
+            raise GitError("Recipe snapshots require an internal reference namespace")
+        await self._run_git("check-ref-format", snapshot_ref, cwd=cwd)
+        existing = await self._run_git("for-each-ref", "--format=%(objectname)", snapshot_ref, cwd=cwd)
+        if existing:
+            return existing
+        head = await self.rev_parse("HEAD", cwd=cwd)
+        if await self._run_git("status", "--porcelain", cwd=cwd):
+            with tempfile.TemporaryDirectory(prefix="codeplane-recipe-index-") as temporary:
+                environment = {"GIT_INDEX_FILE": str(Path(temporary) / "index")}
+                await self._run_git("read-tree", head, cwd=cwd, env_overrides=environment)
+                await self._run_git("add", "-A", cwd=cwd, env_overrides=environment)
+                tree = await self._run_git("write-tree", cwd=cwd, env_overrides=environment)
+                captured = await self._run_git(
+                    "-c",
+                    "user.name=CodePlane",
+                    "-c",
+                    "user.email=codeplane@localhost",
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    head,
+                    "-m",
+                    "CodePlane recipe input snapshot",
+                    cwd=cwd,
+                )
+        else:
+            captured = head
+        try:
+            await self._run_git("update-ref", snapshot_ref, captured, "0" * len(captured), cwd=cwd)
+        except GitError:
+            winner = await self._run_git("for-each-ref", "--format=%(objectname)", snapshot_ref, cwd=cwd)
+            if not winner:
+                raise
+            if await self.rev_parse(f"{winner}^{{tree}}", cwd=cwd) != await self.rev_parse(
+                f"{captured}^{{tree}}", cwd=cwd
+            ):
+                raise GitError("A concurrent input snapshot captured different code") from None
+            return winner
+        return captured
+
+    def recipe_worktree_path(self, repo_path: str, name: str) -> str:
+        self._validate_worktree_name(name)
+        parent = (Path(repo_path) / self._worktrees_dirname).resolve()
+        target = (parent / name).resolve()
+        if target.parent != parent:
+            raise GitError("Recipe workspace escapes the configured worktree directory")
+        return str(target)
 
     async def stash(self, *, cwd: str | Path) -> bool:
         """Stash uncommitted changes. Returns True if something was stashed."""

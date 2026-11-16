@@ -227,6 +227,8 @@ class RecipeInputReceipt(RecipeModel):
     producer_outcome: str | None = None
     checksum: str | None = None
     degraded_reason: str | None = None
+    scope_attempt_id: str | None = None
+    parameter_name: str | None = None
 
 
 class RecipeOutputReceipt(RecipeModel):
@@ -247,6 +249,13 @@ class RecipeAttemptExecution(RecipeModel):
     started_at: datetime
 
 
+class RecipeArtifactReceipt(RecipeModel):
+    artifact_id: str
+    checksum: str
+    size_bytes: int
+    complete: bool = True
+
+
 class RecipeCommandResult(RecipeModel):
     kind: Literal["command"] = "command"
     argv: list[str]
@@ -257,6 +266,11 @@ class RecipeCommandResult(RecipeModel):
     start_code_ref: str
     end_code_ref: str | None
     uncertain: bool = False
+    started: bool = True
+    stdout_artifact: RecipeArtifactReceipt | None = None
+    stderr_artifact: RecipeArtifactReceipt | None = None
+    stdout_preview: str | None = None
+    stderr_preview: str | None = None
 
 
 class RecipeAgentResult(RecipeModel):
@@ -264,12 +278,13 @@ class RecipeAgentResult(RecipeModel):
     session_ids: list[str]
     text: str | None
     uncertain: bool = False
+    actual_models: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class RecipeHumanResult(RecipeModel):
     kind: Literal["human"] = "human"
-    approval_id: str
-    decision: str
+    approval_id: str | None
+    decision: str | None
     input_checksum: str
 
 
@@ -281,6 +296,23 @@ class RecipeGateProposal(RecipeModel):
     input_checksum: str
     proposed_action: str
     next_steps: dict[str, list[str]]
+
+
+class RecipeGateBinding(RecipeModel):
+    attempt_id: str
+    approval_id: str
+    input_checksum: str
+    proposed_action: str
+    next_steps: dict[str, list[str]]
+    created_at: datetime
+
+
+class RecipeDecisionReceipt(RecipeModel):
+    kind: Literal["recipe_decision"] = "recipe_decision"
+    attempt_id: str
+    input_checksum: str
+    outputs: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
+    notes: str | None = Field(default=None, max_length=10_000)
 
 
 class RecipeBlockResult(RecipeModel):

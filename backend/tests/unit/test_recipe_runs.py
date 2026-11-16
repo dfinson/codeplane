@@ -15,6 +15,8 @@ from backend.models.schemas.recipes import (
     RecipeAgentResult,
     RecipeAttemptExecution,
     RecipeAttemptResult,
+    RecipeBlockResult,
+    RecipeBlockRunner,
     RecipeCommandArgument,
     RecipeCommandResult,
     RecipeCommandRunner,
@@ -23,8 +25,11 @@ from backend.models.schemas.recipes import (
     RecipeGateProposal,
     RecipeHumanResult,
     RecipeHumanRunner,
+    RecipeInput,
     RecipeInputReceipt,
     RecipeOutput,
+    RecipeParameter,
+    RecipeParameterBinding,
     RecipeResolvedWorkspace,
     RecipeRetryPolicy,
     RecipeRoute,
@@ -354,6 +359,213 @@ async def test_uncertain_effect_retains_writer_lease_and_forbids_blind_retry(ses
         assert not can_retry(work, ended)
         assert completed_route(work, ended) is None
         assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) == attempt.id
+
+
+@pytest.mark.parametrize("safe", [False, True])
+async def test_interrupted_agent_resumes_same_attempt_only_after_confirmed_safe_stop(sessions, safe):
+    work = agent("work")
+    work.capabilities = ["read", "write"]
+    work.workspace.mode = "mutable"
+    run = await create_run(sessions, RecipeDefinition(name="Recover", entry_steps=["work"], steps=[work]))
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        attempt = await ready_attempt(session, run, "work")
+        execution = RecipeAttemptExecution(
+            execution_token="epoch-one-session-one",
+            session_id="real-session-one",
+            provider="copilot",
+            model=None,
+            started_at=datetime.now(UTC),
+        )
+        await repo.record_execution(attempt.id, execution)
+        before = await repo.get_step(attempt.step_instance_id)
+        await repo.interrupt_attempt(
+            attempt.id,
+            "Server shutdown",
+            stop_confirmed=safe,
+            resume_safe=True,
+            execution_epoch="epoch-one",
+            expected_execution=execution.execution_token,
+            expected_instance_version=before.version,
+        )
+        await session.commit()
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        instance = await repo.get_step(attempt.step_instance_id)
+        if not safe:
+            with pytest.raises(StateConflictError, match="confirmed-safe"):
+                await repo.resume_interrupted(instance)
+            assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) == attempt.id
+            return
+        resumed = await repo.resume_interrupted(instance)
+        await session.commit()
+        assert resumed.id == attempt.id and resumed.number == 1 and resumed.result is None
+        assert [item.session_id for item in resumed.executions] == ["real-session-one"]
+        assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) == attempt.id
+        with pytest.raises(StateConflictError, match="no longer current"):
+            await repo.interrupt_attempt(
+                attempt.id,
+                "Delayed old shutdown callback",
+                stop_confirmed=True,
+                resume_safe=True,
+                execution_epoch="epoch-one",
+                expected_execution=execution.execution_token,
+                expected_instance_version=before.version,
+            )
+        assert (await repo.get_step(attempt.step_instance_id)).state == "running"
+        assert len(await repo.list_attempts(attempt.step_instance_id)) == 1
+
+
+async def test_cancellation_fences_previously_safe_interrupted_recovery(sessions):
+    run = await create_run(sessions, RecipeDefinition(name="Stop", entry_steps=["work"], steps=[agent("work")]))
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        attempt = await ready_attempt(session, run, "work")
+        instance = await repo.get_step(attempt.step_instance_id)
+        await repo.interrupt_attempt(
+            attempt.id,
+            "Before dispatch",
+            stop_confirmed=True,
+            resume_safe=True,
+            execution_epoch="epoch-one",
+            expected_execution=None,
+            expected_instance_version=instance.version,
+        )
+        await repo.request_cancel(run.id)
+        await session.commit()
+        instance = await repo.get_step(instance.id)
+        with pytest.raises(StateConflictError, match="no longer admits"):
+            await repo.resume_interrupted(instance)
+        assert (await repo.get_step(instance.id)).state == "interrupted"
+
+
+async def test_block_retry_has_independent_children_and_exact_parameter_scope(sessions):
+    child = agent("child")
+    child.outputs = {}
+    child.inputs = {
+        "message": RecipeInput(type="string", binding=RecipeParameterBinding(parameter="message")),
+        "count": RecipeInput(type="integer", binding=RecipeParameterBinding(parameter="count")),
+    }
+    block = RecipeDefinition(
+        name="Reusable work",
+        kind="block",
+        entry_steps=["child"],
+        steps=[child],
+        parameters={
+            "message": RecipeParameter(type="string", required=False, default="fallback"),
+            "count": RecipeParameter(type="integer", required=False, default=7),
+        },
+    )
+    async with sessions() as session:
+        definitions = RecipeDefinitionService(RecipeRepository(session))
+        draft = await definitions.create(block)
+        revision = await definitions.publish(draft.id, expected_version=1)
+        await session.commit()
+    call = RecipeStep(
+        id="call",
+        title="Call block",
+        runner=RecipeBlockRunner(revision_id=revision.id),
+        capabilities=["read"],
+        inputs={"message": received("source", optional=True)},
+        depends_on=[RecipeDependency(step_id="source", outcomes=["failed"])],
+        retry=RecipeRetryPolicy(max_attempts=2, retry_on=["failed"]),
+        routes={"succeeded": RecipeRoute(terminal="succeeded"), "failed": RecipeRoute(terminal="failed")},
+    )
+    source = agent("source")
+    source.routes["failed"] = RecipeRoute(next_steps=["call"])
+    run = await create_run(sessions, RecipeDefinition(name="Caller", entry_steps=["source"], steps=[source, call]))
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        producing = await ready_attempt(session, run, "source")
+        await repo.finish_attempt(producing.id, agent_result("failed"), {"result": "exact input"})
+        await session.commit()
+        first = await ready_attempt(session, run, "call")
+        await repo.ensure_scope(run.id, "call@1", block)
+        child_instance = await repo.get_step_by_path(run.id, "call@1/child")
+        child_instance = await repo.project_step(child_instance, "ready", "Pinned block invocation")
+        service = RecipeRunService(RecipeDefinitionService(RecipeRepository(session)), repo)
+        forged = await service.resolve_inputs(child_instance)
+        forged["message"] = forged["message"].model_copy(
+            update={
+                "receipt_id": None,
+                "producing_attempt_id": None,
+                "producer_outcome": None,
+            }
+        )
+        with pytest.raises(StateConflictError, match="source provenance"):
+            await repo.claim_attempt(
+                child_instance,
+                inputs=forged,
+                runner=child.runner,
+                capabilities=child.capabilities,
+                workspace=RecipeResolvedWorkspace(path="/repo/snapshot", code_ref="code", policy=child.workspace),
+            )
+        child_one = await ready_attempt(session, run, "call@1/child")
+        assert child_one.inputs["message"].value == "exact input"
+        assert child_one.inputs["message"].scope_attempt_id == first.id
+        assert child_one.inputs["message"].producing_attempt_id == producing.id
+        assert child_one.inputs["message"].producer_outcome == "failed"
+        assert child_one.inputs["count"].value == 7
+        await repo.finish_attempt(child_one.id, agent_result("failed"), {})
+        await repo.finish_attempt(
+            first.id,
+            RecipeAttemptResult(
+                outcome="failed",
+                evidence=RecipeBlockResult(revision_id=revision.id, child_attempt_ids=[child_one.id]),
+                reason="Child failed",
+                completed_at=datetime.now(UTC),
+            ),
+            {},
+        )
+        await session.commit()
+        second = await ready_attempt(session, run, "call")
+        await repo.ensure_scope(run.id, "call@2", block)
+        child_two = await ready_attempt(session, run, "call@2/child")
+        assert child_two.id != child_one.id and child_two.step_instance_id != child_one.step_instance_id
+        assert child_two.number == 1
+        assert child_two.inputs["message"].scope_attempt_id == second.id
+        assert (await repo.get_attempt(child_one.id)).result.outcome == "failed"
+        with pytest.raises(StateConflictError, match="current unfinished"):
+            await repo.ensure_scope(run.id, "call@1", block)
+        altered = block.model_copy(deep=True)
+        altered.steps[0].instructions = "Not the published instructions"
+        with pytest.raises(StateConflictError, match="pinned invocation"):
+            await repo.ensure_scope(run.id, "call@2", altered)
+
+
+async def test_command_that_never_started_cannot_report_a_passing_check(sessions):
+    step = agent("check")
+    step.runner = RecipeCommandRunner(argv=["missing-check"])
+    step.capabilities = ["shell"]
+    step.outputs = {}
+    run = await create_run(sessions, RecipeDefinition(name="Launch failure", entry_steps=["check"], steps=[step]))
+    async with sessions() as session:
+        repo = RecipeRunRepository(session)
+        attempt = await ready_attempt(session, run, "check")
+        finished = await repo.finish_attempt(
+            attempt.id,
+            RecipeAttemptResult(
+                outcome="succeeded",
+                reason="Executable missing",
+                completed_at=datetime.now(UTC),
+                evidence=RecipeCommandResult(
+                    argv=["missing-check"],
+                    started=False,
+                    exit_status=None,
+                    stdout=None,
+                    stderr=None,
+                    workspace=attempt.workspace.path,
+                    start_code_ref=attempt.workspace.code_ref,
+                    end_code_ref=None,
+                ),
+            ),
+            {},
+        )
+        await session.commit()
+        assert finished.result.outcome == "failed"
+        assert finished.result.evidence.exit_status is None
+        assert not finished.result.evidence.uncertain
+        assert await session.scalar(select(RecipeWorkspaceLeaseRow.attempt_id)) is None
 
 
 async def test_human_output_is_typed_handoff_and_requires_the_exact_approval(sessions):

@@ -15,6 +15,7 @@ from sqlalchemy import MetaData, Table, create_engine, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from alembic import command
+from backend.config import CPLConfig
 from backend.models.db import ApprovalRow, Base, JobRow, RecipeRevisionRow, RecipeRunRow
 from backend.models.domain import StateConflictError
 from backend.models.schemas.recipes import (
@@ -38,6 +39,7 @@ from backend.models.schemas.recipes import (
     RecipeWorkspacePolicy,
 )
 from backend.persistence.recipe_repo import RecipeRepository
+from backend.services.recipe.compatibility import compatibility_definition
 from backend.services.recipe.definition_service import (
     RecipeDefinitionService,
     RecipeValidationError,
@@ -79,6 +81,39 @@ def received(step_id: str, *, optional: bool = False) -> RecipeInput:
 
 def issue_codes(definition: RecipeDefinition) -> set[str]:
     return {issue.code for issue in validate_definition(definition).issues}
+
+
+@pytest.mark.parametrize("plan_first", [False, True])
+@pytest.mark.parametrize("verify,self_review", [(False, False), (True, False), (False, True), (True, True)])
+def test_configured_compatibility_graph_preserves_agent_phases_and_plan_bound(plan_first, verify, self_review):
+    config = CPLConfig()
+    config.verification.verify = verify
+    config.verification.self_review = self_review
+    config.verification.max_turns = 3
+    config.verification.verify_prompt = "Configured verification instructions"
+    graph = compatibility_definition(config, plan_first=plan_first)
+    result = validate_definition(graph)
+    assert result.valid, result.issues
+    assert graph.steps[0].capabilities == ["read"]
+    assert graph.steps[0].runner.model == config.runtime.utility_model
+    verifiers = [step for step in graph.steps if step.id.startswith("verify")]
+    reviewers = [step for step in graph.steps if step.id.startswith("self_review")]
+    assert len(verifiers) == ((6 if plan_first else 1) if verify else 0)
+    assert len(reviewers) == ((6 if plan_first else 1) if self_review else 0)
+    assert all(
+        isinstance(step.runner, RecipeAgentRunner)
+        and step.runner.max_turns == 3
+        and step.instructions == config.verification.verify_prompt
+        for step in verifiers
+    )
+    gates = [step for step in graph.steps if isinstance(step.runner, RecipeHumanRunner)]
+    assert len(gates) == (6 if plan_first else 0)
+    if gates:
+        assert gates[-1].routes["rejected"].terminal == "failed"
+        for gate in gates:
+            target = next(step for step in graph.steps if step.id == gate.routes["approved"].next_steps[0])
+            assert RecipeDependency(step_id=gate.id, outcomes=["approved"]) in target.depends_on
+            assert target.workspace.source_input == "code"
 
 
 @pytest.fixture
