@@ -56,7 +56,7 @@ def _tool_args_to_str(arguments: Any) -> str | None:
         return None
     if isinstance(arguments, str):
         return arguments
-    if isinstance(arguments, dict):
+    if isinstance(arguments, (dict, list)):
         return json.dumps(arguments, ensure_ascii=False)
     return str(arguments)
 
@@ -69,7 +69,12 @@ def _tool_visibility(e: Any) -> str | None:
 
 
 def _is_hidden_tool_event(e: Any) -> bool:
-    if e.kind not in (EventKind.tool_call_started, EventKind.tool_call_completed, EventKind.tool_result_chunk):
+    if e.kind == EventKind.tool_call_failed or e.payload.get("success") is False:
+        return False
+    if e.kind not in (
+        EventKind.tool_call_started, EventKind.tool_call_completed,
+        EventKind.tool_call_failed, EventKind.tool_result_chunk,
+    ):
         return False
     return _tool_visibility(e) == "hidden"
 
@@ -98,13 +103,13 @@ def _metadata_tool_display(e: Any, *, full: bool = False) -> str | None:
             str(tool_name),
             arguments,
             tool_result=e.payload.get("result") or None,
-            tool_success=e.payload.get("success") is not False,
+            tool_success=e.kind != EventKind.tool_call_failed and e.payload.get("success") is not False,
         )
     return format_tool_display_full(
         str(tool_name),
         arguments,
         tool_result=e.payload.get("result") or None,
-        tool_success=e.payload.get("success") is not False,
+        tool_success=e.kind != EventKind.tool_call_failed and e.payload.get("success") is not False,
     )
 
 
@@ -145,11 +150,17 @@ def _build_transcript(
             content=e.payload.get("content", ""),
             title=e.payload.get("title"),
             turn_id=e.payload.get("turn_id"),
+            tool_call_id=e.payload.get("tool_call_id"),
+            metadata=e.metadata,
+            pairing_status=e.payload.get("_codeplane_pairing", {}).get("status"),
+            pairing_reason=e.payload.get("_codeplane_pairing", {}).get("reason"),
             tool_name=e.payload.get("tool_name"),
             arguments=_tool_args_to_str(e.payload.get("arguments")),
-            result=e.payload.get("result"),
-            success=e.payload.get("success"),
-            tool_issue=e.payload.get("tool_issue"),
+            result=_tool_args_to_str(e.payload.get("result")),
+            success=False if e.kind == EventKind.tool_call_failed else e.payload.get("success"),
+            tool_issue=_tool_args_to_str(e.payload.get("tool_issue") or (
+                e.payload.get("error") or e.payload.get("message") if e.kind == EventKind.tool_call_failed else None
+            )),
             tool_intent=_metadata_tool_intent(e),
             tool_title=e.payload.get("tool_title"),
             tool_display=_metadata_tool_display(e),

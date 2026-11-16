@@ -40,6 +40,7 @@ from backend.services.events.event_bus import EventBus
 from backend.services.events.ingest_service import IngestService
 from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
+from backend.services.ingest.body_limit import ObservationBodyLimit
 from backend.services.job.approval_service import ApprovalService
 from backend.services.merge_service import MergeService
 from backend.services.runtime import RuntimeService
@@ -224,6 +225,7 @@ async def app(
     from backend.app_factory import _register_domain_exception_handlers
 
     application = FastAPI(title="CodePlane", version="0.1.0")
+    application.add_middleware(ObservationBodyLimit)
     _register_domain_exception_handlers(application)
 
     # -- routers (same order as create_app) --------------------------------

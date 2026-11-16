@@ -14,6 +14,7 @@ import structlog
 
 from backend.models.api_schemas import ApprovalResponse, SnapshotPayload
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent
+from backend.services.events.observation import allows_observation_notification
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -196,7 +197,7 @@ class SSEManager:
         broadcast allowlist are internal-only and dropped here. The optional SSE
         resume cursor is storage-local and never changes event metadata.
         """
-        if event.kind not in _BROADCAST_KINDS:
+        if event.kind not in _BROADCAST_KINDS or not allows_observation_notification(event):
             return  # internal-only event
 
         sse_id = str(storage_cursor) if storage_cursor is not None else None
@@ -335,7 +336,7 @@ class SSEManager:
         # Replay the events
         for stored in stored_events:
             event = stored.event
-            if event.kind not in _BROADCAST_KINDS:
+            if event.kind not in _BROADCAST_KINDS or not allows_observation_notification(event):
                 continue
             frame = _format_sse(
                 str(stored.storage_cursor),

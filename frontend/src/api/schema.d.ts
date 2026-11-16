@@ -3097,6 +3097,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/{binding_id}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append Observation Records */
+        post: operations["append_observation_records_api_integrations__binding_id__records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observation Events */
+        get: operations["get_observation_events_api_integrations__binding_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3510,6 +3544,29 @@ export interface components {
              * @default 0
              */
             jobCount: number;
+        };
+        /** CanonicalSessionEvent */
+        CanonicalSessionEvent: {
+            /** Id */
+            id?: string;
+            /** Kind */
+            kind: string;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Raw Event */
+            raw_event?: {
+                [key: string]: unknown;
+            } | null;
+            metadata?: components["schemas"]["EventMetadata"];
         };
         /**
          * ChatChainStatusResponse
@@ -4066,6 +4123,132 @@ export interface components {
             categories: components["schemas"]["EditEfficiencyCategory"][];
         };
         /**
+         * EventClassification
+         * @description Read-compatible historical labels, not permission authority.
+         */
+        EventClassification: {
+            /** Mechanism */
+            mechanism: string;
+            /** Effect */
+            effect?: string | null;
+            /**
+             * Scope
+             * @default []
+             */
+            scope: string[];
+            /**
+             * Role
+             * @default []
+             */
+            role: string[];
+            /**
+             * Action
+             * @default []
+             */
+            action: string[];
+            /**
+             * Capability
+             * @default []
+             */
+            capability: string[];
+            /**
+             * Structure
+             * @default []
+             */
+            structure: string[];
+            /**
+             * Source Labels
+             * @default []
+             */
+            source_labels: string[];
+            /** Shell Dialect */
+            shell_dialect?: string | null;
+            /**
+             * Binaries
+             * @default []
+             */
+            binaries: string[];
+            /**
+             * Phase Map
+             * @default []
+             */
+            phase_map: components["schemas"]["PhaseSegment"][];
+        };
+        /** EventMetadata */
+        EventMetadata: {
+            /** Source Framework */
+            source_framework?: string | null;
+            /** Ingestion Mode */
+            ingestion_mode?: ("stream" | "file_watch" | "poll" | "replay" | "sqlite") | null;
+            /** Raw Kind */
+            raw_kind?: string | null;
+            /** Span Id */
+            span_id?: string | null;
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Correlation Id */
+            correlation_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Sequence */
+            sequence?: number | null;
+            /** Namespace */
+            namespace?: string[] | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Repo */
+            repo?: string | null;
+            /** Turn Id */
+            turn_id?: string | null;
+            /**
+             * Visibility
+             * @default visible
+             * @enum {string}
+             */
+            visibility: "visible" | "system" | "collapsed";
+            /** Phases */
+            phases?: string[] | null;
+            /** Phase */
+            phase?: string | null;
+            /** Boundary */
+            boundary?: string | null;
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Step Id */
+            step_id?: string | null;
+            /** Activity Title */
+            activity_title?: string | null;
+            /** Step Title */
+            step_title?: string | null;
+            classification?: components["schemas"]["EventClassification"] | null;
+            /** Tool Display */
+            tool_display?: string | null;
+            motivation?: components["schemas"]["ToolMotivation"] | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** File Targets */
+            file_targets?: components["schemas"]["FileTarget"][];
+            /** Governance */
+            governance?: {
+                [key: string]: unknown;
+            } | null;
+            /** Integration Binding Id */
+            integration_binding_id?: string | null;
+            /** Execution Epoch */
+            execution_epoch?: string | null;
+            /** Recipe Run Id */
+            recipe_run_id?: string | null;
+            /** Recipe Revision */
+            recipe_revision?: number | null;
+            /** Step Instance Id */
+            step_instance_id?: string | null;
+            /** Attempt Id */
+            attempt_id?: string | null;
+        };
+        /**
          * ExecutionPhase
          * @enum {string}
          */
@@ -4263,6 +4446,15 @@ export interface components {
              * @default []
              */
             unmatchedEdits: components["schemas"]["HunkMotivation"][];
+        };
+        /** FileTarget */
+        FileTarget: {
+            /** Raw Path */
+            raw_path: string;
+            /** Path */
+            path: string;
+            /** Inside Root */
+            inside_root?: boolean | null;
         };
         /**
          * FireSidecarRequest
@@ -5419,6 +5611,57 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ObservationEventList */
+        ObservationEventList: {
+            /** Events */
+            events: components["schemas"]["CanonicalSessionEvent"][];
+            /** Nextcursor */
+            nextCursor: number;
+        };
+        /** ObservationRecordBatch */
+        ObservationRecordBatch: {
+            /** Sourcekey */
+            sourceKey: string;
+            /** Startindex */
+            startIndex: number;
+            /**
+             * Prefixsha256
+             * @default 0000000000000000000000000000000000000000000000000000000000000000
+             */
+            prefixSha256: string;
+            /** Records */
+            records: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Endsession
+             * @default false
+             */
+            endSession: boolean;
+        };
+        /** ObservationRecordReceipt */
+        ObservationRecordReceipt: {
+            /** Acceptedrecords */
+            acceptedRecords: number;
+            /** Nextindex */
+            nextIndex: number;
+            /** Prefixsha256 */
+            prefixSha256: string;
+            /** Checkpointversion */
+            checkpointVersion: number;
+            /**
+             * Replay
+             * @default false
+             */
+            replay: boolean;
+            /** Projectionversion */
+            projectionVersion?: number | null;
+            /**
+             * Sessionclosed
+             * @default false
+             */
+            sessionClosed: boolean;
+        };
         /** ObservationsListResponse */
         ObservationsListResponse: {
             /**
@@ -5477,6 +5720,26 @@ export interface components {
              * @default 0
              */
             totalWasteUsd: number;
+        };
+        /** PhaseSegment */
+        PhaseSegment: {
+            /** Phase */
+            phase: string;
+            /**
+             * Actions
+             * @default []
+             */
+            actions: string[];
+            /**
+             * Scopes
+             * @default []
+             */
+            scopes: string[];
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
         };
         /** PinMetricRequest */
         PinMetricRequest: {
@@ -7558,6 +7821,15 @@ export interface components {
             /** Items */
             items: components["schemas"]["ProgressHeadlinePayload"][];
         };
+        /** ToolMotivation */
+        ToolMotivation: {
+            /** Intent */
+            intent?: string | null;
+            /** Reasoning */
+            reasoning?: string | null;
+            /** Source Event Ids */
+            source_event_ids?: string[];
+        };
         /** ToolStatsEntry */
         ToolStatsEntry: {
             /**
@@ -7998,6 +8270,11 @@ export interface components {
             turnId?: string | null;
             /** Toolcallid */
             toolCallId?: string | null;
+            metadata?: components["schemas"]["EventMetadata"] | null;
+            /** Pairingstatus */
+            pairingStatus?: "unresolved" | null;
+            /** Pairingreason */
+            pairingReason?: string | null;
             /** Toolname */
             toolName?: string | null;
             /** Arguments */
@@ -13806,6 +14083,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    append_observation_records_api_integrations__binding_id__records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservationRecordBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationRecordReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observation_events_api_integrations__binding_id__events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationEventList"];
                 };
             };
             /** @description Validation Error */

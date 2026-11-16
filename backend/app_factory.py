@@ -68,6 +68,7 @@ from backend.models.domain import (
     StateConflictError,
     TaskLinkNotFoundError,
 )
+from backend.services.ingest.body_limit import ObservationBodyLimit
 from backend.services.recipe.definition_service import RecipeNotFoundError, RecipeValidationError
 from backend.services.sharing.share_service import InvalidShareTokenError
 
@@ -351,6 +352,7 @@ def create_app(
     app = FastAPI(title="CodePlane", version=__version__, lifespan=lifespan)
 
     app.add_middleware(ContainerMiddleware)
+    app.add_middleware(ObservationBodyLimit)
     _configure_middleware(
         app, dev=dev, tunnel_origin=tunnel_origin, password=password, remote=remote, access_only=access_only
     )

@@ -9,7 +9,7 @@ import { SyntaxBlock } from "./SyntaxBlock";
 import { stripAnsi } from "../lib/ansi";
 import { RunningToolIndicator } from "./RunningToolIndicator";
 import type { TranscriptEntry } from "../store";
-import { transcriptReactKey } from "../lib/transcriptIdentity";
+import { isFailedTool, isRunningTool, isToolOutcome, transcriptReactKey } from "../lib/transcriptIdentity";
 import { repositoryRelativePath, trimWorktreeRoot } from "../lib/pathDisplay";
 import { useStore } from "../store";
 
@@ -136,7 +136,7 @@ export function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
           <div className={cn(
             "px-3 py-1.5",
             (entry.result || description) && "border-b border-border/30",
-            entry.success === false ? "bg-red-950/30" : "bg-zinc-950/50",
+            isFailedTool(entry) ? "bg-red-950/30" : "bg-zinc-950/50",
           )}>
             <span className="text-muted-foreground">$ </span>
             <span className="text-foreground/90 whitespace-pre-wrap">{command}</span>
@@ -187,7 +187,7 @@ export function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
             <Codicon name="edit" size={11} className="text-amber-400 shrink-0" />
             <span className="font-mono text-foreground/80" title={filePath}>{shortPath}</span>
             <span className="text-muted-foreground">
-              {entry.success !== false ? "→ applied" : "→ failed"}
+              {isFailedTool(entry) ? "→ failed" : isToolOutcome(entry.kind) ? "→ applied" : "Outcome unrecorded"}
             </span>
           </div>
           {typeof oldStr === "string" && typeof newStr === "string" && (
@@ -217,7 +217,7 @@ export function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
             <Codicon name="edit" size={11} className="text-amber-400 shrink-0" />
             <span className="font-mono text-foreground/80">{label}</span>
             <span className="text-muted-foreground">
-              {entry.success !== false ? "→ applied" : "→ failed"}
+              {isFailedTool(entry) ? "→ failed" : isToolOutcome(entry.kind) ? "→ applied" : "Outcome unrecorded"}
             </span>
           </div>
           {edits.slice(0, 3).map((e, i) => {
@@ -376,7 +376,7 @@ export function StructuredToolContent({ entry }: { entry: TranscriptEntry }) {
             <span className="text-foreground/80">{displayName}</span>
             {entry.result && (
               <span className="text-muted-foreground">
-                {entry.success !== false ? "→ done" : "→ failed"}
+                {isFailedTool(entry) ? "→ failed" : isToolOutcome(entry.kind) ? "→ done" : "Outcome unrecorded"}
               </span>
             )}
           </div>
@@ -416,7 +416,7 @@ export function hasStructuredRenderer(toolName?: string): boolean {
 export function ToolDetail({ entry }: { entry: TranscriptEntry }) {
   return (
     <div className="ml-0 mt-1 mb-2 rounded border border-border/40 bg-muted/20 text-[13px] sm:text-xs overflow-hidden">
-      {entry.success === false && entry.toolIssue && (
+      {isFailedTool(entry) && entry.toolIssue && (
         <div className="px-3 py-1.5 bg-red-500/5 border-b border-border/30">
           <span className="text-red-400 font-medium">{entry.toolIssue}</span>
         </div>
@@ -481,7 +481,7 @@ export function groupToolCalls(calls: TranscriptEntry[]): ToolSegment[] {
     if (isSubagentTool(call.toolName)) {
       const children: TranscriptEntry[] = [];
 
-      if (call.kind === "tool.call.started") {
+      if (isRunningTool(call)) {
         i++;
         while (i < calls.length) {
           children.push(calls[i]!);
@@ -550,8 +550,8 @@ export function SubAgentSection({
   isActive: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const isRunning = entry.kind === "tool.call.started";
-  const failed = entry.success === false;
+  const isRunning = isRunningTool(entry);
+  const failed = isFailedTool(entry);
 
   const args = parseArgs(entry.arguments);
   const rawLabel = entry.toolDisplayFull
@@ -574,7 +574,7 @@ export function SubAgentSection({
     <div className="relative pl-4 sm:pl-5">
       <div className="absolute left-0 top-[3px] w-[15px] h-[15px] flex items-center justify-center">
         <Network size={13} className={iconColor} />
-        {(isActive || isRunning) && (
+        {!failed && entry.pairingStatus !== "unresolved" && (isActive || isRunning) && (
           <span className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full bg-violet-400" />
         )}
       </div>
@@ -657,9 +657,10 @@ export function ToolStep({ entry, isActive }: {
   isActive: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const failed = entry.success === false;
-  const isRunning = entry.kind === "tool.call.started";
-  const label = entry.toolIntent || entry.toolTitle || entry.toolDisplayFull || entry.toolDisplay || entry.toolName || entry.content;
+  const failed = isFailedTool(entry);
+  const isRunning = isRunningTool(entry);
+  const label = entry.toolIntent || entry.toolTitle || entry.toolDisplayFull || entry.toolDisplay
+    || entry.toolName || entry.content || (failed ? "Tool failed" : "Tool call");
   const icon = resolveToolIcon(entry.toolName);
 
   return (
@@ -670,7 +671,7 @@ export function ToolStep({ entry, isActive }: {
             : (isActive || isRunning) ? "text-blue-400"
             : "text-muted-foreground/80",
         )} />
-        {(isActive || isRunning) && (
+        {!failed && entry.pairingStatus !== "unresolved" && (isActive || isRunning) && (
           <span className="absolute -right-0.5 -top-0.5 w-1.5 h-1.5 rounded-full bg-blue-400" />
         )}
       </div>
@@ -690,6 +691,11 @@ export function ToolStep({ entry, isActive }: {
           {entry.toolDurationMs != null && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0">
               {formatDuration(entry.toolDurationMs)}
+            </span>
+          )}
+          {entry.pairingStatus === "unresolved" && (
+            <span className="text-[10px] text-amber-400 shrink-0">
+              {entry.kind === "tool.call.started" ? "Outcome unrecorded" : "Start unrecorded"}
             </span>
           )}
           {failed && entry.toolIssue && (
@@ -712,7 +718,7 @@ export function ToolStep({ entry, isActive }: {
 // ---------------------------------------------------------------------------
 
 export function ToolStepList({ calls, isActive }: { calls: TranscriptEntry[]; isActive: boolean }) {
-  const visibleCalls = calls.filter((c) => c.toolName !== "report_intent");
+  const visibleCalls = calls.filter((c) => c.toolName !== "report_intent" || isFailedTool(c));
   const segments = groupToolCalls(visibleCalls);
   return (
     <div className="relative sm:ml-1">

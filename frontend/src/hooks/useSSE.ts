@@ -118,6 +118,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "llm.reasoning.chunk",
         "tool.call.started",
         "tool.call.completed",
+        "tool.call.failed",
         "tool.result.chunk",
         "sidecar.transcript",
         "sidecar.agent_message",

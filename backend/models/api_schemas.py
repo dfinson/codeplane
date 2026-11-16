@@ -55,6 +55,7 @@ from backend.models.schemas.tracker_operations import (
 from backend.models.schemas.tracker_operations import (
     TrackerTargetKind as TrackerTargetKind,
 )
+from backend.models.session_event import EventMetadata  # noqa: TC001 - Pydantic resolves annotations at runtime.
 
 if TYPE_CHECKING:
     from backend.models.domain import Job
@@ -604,6 +605,9 @@ class TranscriptPayload(CamelModel):
     title: str | None = None  # annotation title on agent messages
     turn_id: str | None = None  # groups reasoning + tool_calls + message
     tool_call_id: str | None = None  # pairs tool.call.started/completed
+    metadata: EventMetadata | None = None
+    pairing_status: Literal["unresolved"] | None = None
+    pairing_reason: str | None = None
     tool_name: str | None = None  # tool.call.*: tool identifier
     arguments: str | None = None  # tool.call.*: JSON-serialized arguments
     result: str | None = None  # tool.call.completed: text output from tool

@@ -60,6 +60,7 @@ class EventKind(StrEnum):
     planning_started = "planning.started"
     tool_call_started = "tool.call.started"
     tool_call_completed = "tool.call.completed"
+    tool_call_failed = "tool.call.failed"
     tool_result_chunk = "tool.result.chunk"
     # --- Imported/native session lifecycle. ``session.ended``/``session.error``
     #     are consumed by the ingest sources (services/ingest/_base.py) for
@@ -159,6 +160,7 @@ TRANSCRIPT_KINDS: frozenset[EventKind] = frozenset(
         EventKind.llm_reasoning_failed,
         EventKind.tool_call_started,
         EventKind.tool_call_completed,
+        EventKind.tool_call_failed,
         EventKind.tool_result_chunk,
     }
 )

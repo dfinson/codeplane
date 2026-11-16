@@ -79,7 +79,7 @@ export function normalizeTFEvent(ev: TFSessionEvent): Record<string, unknown> {
 
   // The event kind is the transcript discriminator in the TF shape; carry it
   // into the FE payload view unless REST-style payload data already provided it.
-  if (payload.kind === undefined) {
+  if (payload.kind === undefined || ev.kind === "tool.call.failed") {
     payload.kind = ev.kind;
   }
 
@@ -87,6 +87,24 @@ export function normalizeTFEvent(ev: TFSessionEvent): Record<string, unknown> {
   // from payload data.
   const meta = ev.metadata;
   const metadata = meta == null ? undefined : (meta as Record<string, unknown>);
+  payload.metadata = metadata;
+  const pairing = ev.payload?.["_codeplane_pairing"];
+  if (pairing && typeof pairing === "object") {
+    const state = pairing as Record<string, unknown>;
+    if (state.status === "unresolved") payload.pairingStatus = state.status;
+    if (typeof state.reason === "string") payload.pairingReason = state.reason;
+  }
+  if (ev.kind === "tool.call.failed") {
+    payload.success = false;
+    const issue = payload.toolIssue ?? payload.error ?? payload.message;
+    if (issue != null) payload.toolIssue = typeof issue === "string" ? issue : JSON.stringify(issue);
+  }
+  if (payload.arguments != null && typeof payload.arguments !== "string") {
+    payload.arguments = JSON.stringify(payload.arguments);
+  }
+  if (payload.result != null && typeof payload.result !== "string") {
+    payload.result = JSON.stringify(payload.result);
+  }
   for (const [source, target] of [
     ["recipe_run_id", "recipeRunId"],
     ["recipe_revision", "recipeRevision"],

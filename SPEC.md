@@ -13,6 +13,38 @@ Jobs expose `observationOnly` and `integrationBindingId`, may have null `repo`
 and `baseRef`, and cannot enter managed execution, workspace or instruction
 paths. Artifact collection is `not_applicable`, not a fabricated success.
 
+`POST /api/integrations/{bindingId}/records` accepts bounded, operator-authenticated
+record batches with `sourceKey`, `startIndex` and the previously accepted
+`prefixSha256`. Request bodies are limited to 1 MiB before JSON parsing, batches
+to 1,000 records, and normalized output plus buffered state to 8 MiB.
+`GET /api/integrations/{bindingId}/events` reads canonical history with a separate
+storage cursor. These are operator import endpoints, not binding-scoped external
+ingest credentials or execution admission.
+
+Migration 0080 owns one versioned projection checkpoint per binding. Decoder
+context, pairing, transcript steps and activities are shared across acquisition
+channels for the registered source session. Projection CAS, per-source cursor,
+canonical events and durable batch acknowledgment commit together. Retrying any
+accepted batch returns its acknowledgment without publishing it again. Ambiguous
+older per-source projection state requires explicit reconciliation, never an
+automatic merge or reset. Downgrade refuses to discard retained projection state.
+
+Observation grouping prefers explicit producer turns, then source-scoped native
+request/run-operation identity. Otherwise assistant and metadata records remain
+in one derived source-session segment. Genuine operator input can establish a
+boundary. Source termination or `endSession: true` closes the segment without
+claiming a managed execution outcome. An empty batch is valid only to declare
+that end explicitly. Acquisition occurrences keep distinct event identities
+even when their text and record indexes match.
+
+`tool.call.failed` remains a distinct wire kind, pairs by source-qualified call
+identity, and renders a failed tool outcome without terminating its Job or
+agent step. Observed failure is not proof of execution for governance accrual.
+Source control-looking records remain history and cannot dispatch control-plane
+actions on live delivery or SSE replay. Observation events do not trigger legacy
+sidecars or plan/title inference. Native usage remains retained rather than
+being passed to legacy USD rollups without typed accounting qualification.
+
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
 `ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during

@@ -32,6 +32,7 @@ import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
+import { isToolOutcome } from "../lib/transcriptIdentity";
 import { trimWorktreePaths } from "./ToolRenderers";
 import type { ActionCluster, AgentTurn, FeedItem } from "./CuratedFeedLogic";
 import { buildFeedItems } from "./CuratedFeedLogic";
@@ -565,7 +566,7 @@ export function CuratedFeed({
       ? [{ jobId, timestamp: promptTimestamp ?? "", kind: "message.user", content: prompt }]
       : []),
     ...rawEntries.filter((e) => {
-      if (!e.content?.trim() && e.kind !== "tool.call.completed" && e.kind !== "tool.call.started") return false;
+      if (!e.content?.trim() && !isToolOutcome(e.kind) && e.kind !== "tool.call.started") return false;
       if (prompt && e.kind === "message.user" && e.content === prompt) return false;
       return true;
     }),

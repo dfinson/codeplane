@@ -58,6 +58,7 @@ class DecoderState:
     reasoning: str | None
     references: tuple[str, ...]
     turn: int
+    active_turn: str | None = None
 
 
 class _MappingModel(BaseModel):
@@ -172,6 +173,7 @@ class NativeMappingDecoder:
         framework_id: str | None = None,
         binding_id: str | None = None,
         legacy_identity: bool = False,
+        source_key: str | None = None,
     ) -> None:
         if not job_id.strip() or not external_session_id.strip():
             raise ValueError("Native decoding requires distinct explicit Job and external source identities")
@@ -187,6 +189,8 @@ class NativeMappingDecoder:
             raise ValueError("Legacy identity is only valid for explicitly unbound historical sources")
         self.legacy_identity = legacy_identity
         self._scope = {"job_id": job_id, "binding_id": binding_id, "scope": "binding" if binding_id else "job"}
+        if source_key is not None:
+            self._scope["source_key"] = source_key
         self.anchor = anchor.replace(tzinfo=UTC) if anchor.tzinfo is None else anchor
         self._preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
         if self.mapping.preprocessor and self._preprocessor is None:
@@ -216,6 +220,7 @@ class NativeMappingDecoder:
         self._intent: str | None = None
         self._reasoning: str | None = None
         self._turn = 0
+        self._active_turn: str | None = None
 
     def _event_id(self, record_index: int, output_index: int, digest: str) -> str:
         values: list[object] = [
@@ -235,14 +240,62 @@ class NativeMappingDecoder:
             f"{self.job_id}:native-turn:{self._turn}"
             if self.legacy_identity
             else json.dumps(
-                ["codeplane-turns-v2", self._scope, self.framework, self.external_id, self._turn],
+                ["codeplane-turns-v2", self._session_scope(), self.framework, self.external_id, self._turn],
                 sort_keys=True,
                 separators=(",", ":"),
             )
         )
         return str(uuid.uuid5(uuid.NAMESPACE_URL, material))
 
-    def _source(self, raw: dict[str, Any], record_index: int, output_index: int, digest: str) -> dict[str, Any]:
+    def _session_scope(self) -> dict[str, str | None]:
+        return {key: value for key, value in self._scope.items() if key != "source_key"}
+
+    def _group_payload(self, payload: dict[str, Any], kind: str, raw: dict[str, Any]) -> None:
+        if self.legacy_identity:
+            if not payload.get("turn_id"):
+                payload["turn_id"] = self._turn_id()
+            if kind == "message.assistant":
+                self._turn += 1
+            return
+        real_operator = kind == "message.user" and not (
+            payload.get("admission_status") or payload.get("execution_status") == "unconfirmed"
+        )
+        if real_operator:
+            self._turn += 1
+            self._active_turn = None
+        explicit = payload.get("turn_id")
+        if not isinstance(explicit, str) or not explicit.strip():
+            explicit = next((
+                value for path in ("turn_id", "turnId", "data.turnId")
+                if isinstance(value := _path(raw, path), str) and value.strip()
+            ), None)
+        if explicit is not None:
+            payload["turn_id"] = explicit
+            self._active_turn = None if kind == "turn.ended" else explicit
+            payload["_codeplane_grouping"] = {"derived": False, "basis": "producer_turn"}
+            return
+        if self._active_turn is not None:
+            payload["turn_id"] = self._active_turn
+            payload["_codeplane_grouping"] = {"derived": True, "basis": "producer_turn"}
+            return
+        native = next((
+            (field, value) for field in ("request_id", "operation_id", "run_id")
+            if isinstance(value := payload.get(field, raw.get(field)), str) and value.strip()
+        ), None)
+        if native is not None:
+            payload["turn_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps([
+                "codeplane-source-operation-v1", self._session_scope(), self.framework, self.external_id, *native,
+            ], sort_keys=True, separators=(",", ":"))))
+            basis = native[0]
+        else:
+            payload["turn_id"] = self._turn_id()
+            basis = "operator_message" if self._turn else "source_session"
+        payload["_codeplane_grouping"] = {"derived": True, "basis": basis}
+
+    def _source(
+        self, raw: dict[str, Any], record_index: int, output_index: int, digest: str,
+        *, timestamp_fallback: bool = False,
+    ) -> dict[str, Any]:
         source = {
             "contract": "codeplane-native-v1" if self.legacy_identity else "codeplane-native-v2",
             "framework": self.framework,
@@ -254,6 +307,7 @@ class NativeMappingDecoder:
         }
         if not self.legacy_identity:
             source.update(self._scope)
+            source["timestamp_fallback"] = timestamp_fallback
         return source
 
     def decode(self, raw: dict[str, Any], record_index: int) -> tuple[SessionEvent, ...]:
@@ -265,7 +319,7 @@ class NativeMappingDecoder:
             raise
 
     def checkpoint(self) -> DecoderState:
-        return DecoderState(self._intent, self._reasoning, tuple(self._references), self._turn)
+        return DecoderState(self._intent, self._reasoning, tuple(self._references), self._turn, self._active_turn)
 
     def restore(self, state: DecoderState) -> None:
         if state.turn < 0 or len(state.references) > self._config.source_window:
@@ -274,6 +328,7 @@ class NativeMappingDecoder:
         self._reasoning = state.reasoning
         self._references = deque(state.references, maxlen=self._config.source_window)
         self._turn = state.turn
+        self._active_turn = state.active_turn
 
     def _decode(self, raw: dict[str, Any], record_index: int) -> tuple[SessionEvent, ...]:
         if record_index < 0:
@@ -295,10 +350,19 @@ class NativeMappingDecoder:
                 mapping=self.mapping,
             )
             payload = dict(event.payload)
-            payload["_codeplane_source"] = self._source(raw, record_index, 0, digest)
-            payload.setdefault("turn_id", self._turn_id())
-            if event.kind == "message.assistant":
-                self._turn += 1
+            payload["_codeplane_source"] = self._source(
+                raw, record_index, 0, digest,
+                timestamp_fallback=not any(
+                    raw.get(key) is not None for key in ("startTimeUnixNano", "start_time_unix_nano", "start_time",
+                                                       "endTimeUnixNano", "end_time_unix_nano", "end_time")
+                ),
+            )
+            if self.legacy_identity:
+                payload.setdefault("turn_id", self._turn_id())
+                if event.kind == "message.assistant":
+                    self._turn += 1
+            else:
+                self._group_payload(payload, event.kind, raw)
             return (
                 event.model_copy(
                     update={
@@ -355,15 +419,15 @@ class NativeMappingDecoder:
                 else None
             )
             repo = _path(obj, self.mapping.repo_field) if self.mapping.repo_field else None
+            raw_timestamp = _path(obj, self.mapping.timestamp_field) if self.mapping.timestamp_field else None
             timestamp = _timestamp(
-                _path(obj, self.mapping.timestamp_field) if self.mapping.timestamp_field else None,
+                raw_timestamp,
                 self.anchor + timedelta(microseconds=record_index),
             )
-            payload["_codeplane_source"] = self._source(raw, record_index, index, digest)
-            if not payload.get("turn_id"):
-                payload["turn_id"] = self._turn_id()
-            if kind == "message.assistant":
-                self._turn += 1
+            payload["_codeplane_source"] = self._source(
+                raw, record_index, index, digest, timestamp_fallback=raw_timestamp is None,
+            )
+            self._group_payload(payload, kind, obj)
             event = SessionEvent(
                 id=stable_id,
                 session_id=self.job_id,

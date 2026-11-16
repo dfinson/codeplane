@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -110,6 +111,34 @@ class StepTracker:
 
     _BUFFER_SIZE = 10
 
+    def snapshot(self, job_id: str) -> dict[str, Any]:
+        current = self._current.get(job_id)
+        state = None
+        if current is not None:
+            state = asdict(current)
+            state["started_at"] = current.started_at.isoformat()
+        return {
+            "version": 1, "counter": self._counters.get(job_id, 0), "current": state,
+            "buffer": [dict(entry) for entry in self._transcript_buffers.get(job_id, ())],
+        }
+
+    def restore_snapshot(self, job_id: str, value: dict[str, Any]) -> None:
+        if value.get("version") != 1 or not isinstance(value.get("counter"), int) or value["counter"] < 0:
+            raise ValueError("Invalid step projection checkpoint")
+        buffer = TypeAdapter(list[dict[str, str]]).validate_python(value.get("buffer"))
+        if len(buffer) > self._BUFFER_SIZE:
+            raise ValueError("Step projection checkpoint exceeds buffer bound")
+        raw_current = value.get("current")
+        current = TypeAdapter(_StepState).validate_python(raw_current) if raw_current is not None else None
+        if current is not None and (current.step_number < 1 or current.step_number > value["counter"]):
+            raise ValueError("Invalid step projection progress")
+        self._counters[job_id] = value["counter"]
+        self._transcript_buffers[job_id] = buffer
+        if current is not None:
+            self._current[job_id] = current
+        else:
+            self._current.pop(job_id, None)
+
     def _attempt_tracker(self, job_id: str, metadata: EventMetadata) -> StepTracker:
         if not metadata.attempt_id or not metadata.execution_epoch:
             raise ValueError("Attempt transcript requires an explicit attempt and execution epoch")
@@ -163,7 +192,7 @@ class StepTracker:
             current = self._current.get(job_id)
             if current is not None and current.step_id == payload.get("step_id"):
                 self._current.pop(job_id, None)
-        elif event.kind in (EventKind.tool_call_completed, EventKind.message_assistant):
+        elif event.kind in (EventKind.tool_call_completed, EventKind.tool_call_failed, EventKind.message_assistant):
             current = self._current.get(job_id)
             if current is not None:
                 self._accumulate_step(job_id, current, event)
@@ -184,6 +213,8 @@ class StepTracker:
             await tracker.on_transcript_event(job_id, event)
             return
         payload = event.payload
+        if payload.get("admission_status") or payload.get("execution_status") == "unconfirmed":
+            return
         content = str(payload.get("content", "") or "")
         turn_id = payload.get("turn_id") or ""
         motivation = getattr(event.metadata, "motivation", None)
@@ -199,7 +230,7 @@ class StepTracker:
         if event.kind not in (EventKind.message_delta, EventKind.tool_result_chunk, EventKind.tool_call_started):
             entry: dict[str, str] = {"kind": str(event.kind)}
             t_name = payload.get("tool_name")
-            if event.kind == EventKind.tool_call_completed:
+            if event.kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
                 if t_name:
                     entry["tool_name"] = str(t_name)
                 t_args = _tool_args_to_str(payload.get("arguments"))
@@ -280,11 +311,13 @@ class StepTracker:
         content = str(payload.get("content") or "")
         if turn_id and not current.turn_id:
             current.turn_id = turn_id
-        if event.kind == EventKind.tool_call_completed:
+        if event.kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             current.tool_count += 1
             tool_name = payload.get("tool_name", "")
             if tool_name and tool_name not in current.tool_names:
                 current.tool_names.append(tool_name)
+            if event.kind == EventKind.tool_call_failed or payload.get("success") is False:
+                return
             tool_args = _tool_args_to_str(payload.get("arguments"))
             path = _extract_file_path(tool_name, tool_args)
             if path:

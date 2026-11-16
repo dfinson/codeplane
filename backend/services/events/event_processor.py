@@ -72,6 +72,9 @@ class EventProcessor:
         enricher: EventEnrichment | None = None,
         title_pipeline: TitlePipeline | None = None,
         persisted: Callable[[SessionEvent], Awaitable[bool]] | None = None,
+        activity_projection: ActivityProjection | None = None,
+        retain_source_events: bool = False,
+        fail_on_enrichment_error: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._diff_service = diff_service
@@ -86,7 +89,9 @@ class EventProcessor:
         self._attempt_processors: dict[tuple[str, str, str], EventProcessor] = {}
         self._attempt_workspaces: dict[tuple[str, str, str], tuple[str, str | None]] = {}
         self._attempt_scope: tuple[str, str, str] | None = None
-        self._activity_projection: ActivityProjection | None = None
+        self._activity_projection = activity_projection
+        self._retain_source_events = retain_source_events
+        self._fail_on_enrichment_error = fail_on_enrichment_error
 
     def register_attempt_worktree(
         self,
@@ -179,7 +184,8 @@ class EventProcessor:
             if diff_eligible:
                 assert self._diff_service is not None and worktree_path and base_ref
                 await self._diff_service.on_worktree_file_modified(job_id, worktree_path, base_ref)
-            return None
+            if diff_eligible or not self._retain_source_events:
+                return None
 
         # ── TraceForge enrichment ──
         # Run the TF enricher before any CodePlane annotation so that
@@ -191,6 +197,8 @@ class EventProcessor:
             try:
                 enriched = self._enricher.process(event)
             except Exception:
+                if self._fail_on_enrichment_error:
+                    raise
                 log.warning(
                     "tf_enricher_failed",
                     event_id=event.id,
@@ -225,7 +233,7 @@ class EventProcessor:
         # Diff recalculation on tool completions (skip internal marker tools)
         if (
             diff_eligible
-            and kind == EventKind.tool_call_completed
+            and kind in (EventKind.tool_call_completed, EventKind.tool_call_failed)
             and event.payload.get("tool_name") != _DIFF_SKIP_TOOL
         ):
             assert self._diff_service is not None and worktree_path and base_ref
@@ -254,7 +262,7 @@ class EventProcessor:
             current = self._current_step(job_id, event)
             if current:
                 event.payload["step_number"] = current.step_number
-                if self._attempt_scope is not None:
+                if self._attempt_scope is not None or self._trail_service is None:
                     event.payload["step_id"] = current.step_id
             # TrailService is the sole step_id authority (ps-* IDs)
             if self._trail_service is not None:
@@ -307,7 +315,7 @@ class EventProcessor:
 
         if (
             diff_eligible
-            and kind == EventKind.tool_call_completed
+            and kind in (EventKind.tool_call_completed, EventKind.tool_call_failed)
             and event.payload.get("tool_name") != _DIFF_SKIP_TOOL
         ):
             assert self._diff_service is not None and worktree_path and base_ref
@@ -331,7 +339,7 @@ class EventProcessor:
             current = self._current_step(job_id, event)
             if current:
                 event.payload["step_number"] = current.step_number
-                if self._attempt_scope is not None:
+                if self._attempt_scope is not None or self._trail_service is None:
                     event.payload["step_id"] = current.step_id
             if self._trail_service is not None:
                 plan_step_id = self._trail_service.get_active_plan_step_id(job_id)

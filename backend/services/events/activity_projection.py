@@ -10,6 +10,8 @@ from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new
 from backend.services.action_policy.credential_filter import filter_credentials
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from backend.services.events.event_bus import EventBus
 
 
@@ -30,7 +32,31 @@ class ActivityProjection:
 
     @staticmethod
     def _key(event: SessionEvent) -> tuple[str, str, str]:
-        return (event.session_id, event.metadata.execution_epoch or "", event.metadata.attempt_id or "")
+        source = event.metadata.attempt_id or (
+            f"binding:{event.metadata.integration_binding_id}" if event.metadata.integration_binding_id else ""
+        )
+        return (event.session_id, event.metadata.execution_epoch or "", source)
+
+    def snapshot(self) -> list[dict[str, object]]:
+        return [
+            {"key": list(key), "id": value.id, "label": value.label, "plan_step_id": value.plan_step_id,
+             "source_event": value.source_event.model_dump(mode="json")}
+            for key, value in self._active.items()
+        ]
+
+    def restore(self, entries: list[dict[str, object]]) -> None:
+        restored: dict[tuple[str, str, str], _Activity] = {}
+        for entry in entries:
+            event = SessionEvent.model_validate(entry["source_event"])
+            key = self._key(event)
+            activity_id, label = entry.get("id"), entry.get("label")
+            if entry.get("key") != list(key) or not isinstance(activity_id, str) or not isinstance(label, str):
+                raise ValueError("Invalid activity projection checkpoint")
+            plan = entry.get("plan_step_id")
+            if plan is not None and not isinstance(plan, str):
+                raise ValueError("Invalid activity plan identity")
+            restored[key] = _Activity(activity_id, label, plan, event)
+        self._active = restored
 
     @staticmethod
     def _label(value: object, fallback: str) -> str:
@@ -53,6 +79,12 @@ class ActivityProjection:
             current is None
             or event.kind == EventKind.message_user
             or (plan_id is not None and current.plan_step_id is not None and plan_id != current.plan_step_id)
+            or (
+                event.metadata.integration_binding_id is not None
+                and current is not None
+                and bool(event.payload.get("turn_id"))
+                and event.payload.get("turn_id") != current.source_event.payload.get("turn_id")
+            )
         )
         if current is not None and plan_id is not None and current.plan_step_id is None:
             current.plan_step_id = plan_id
@@ -65,6 +97,8 @@ class ActivityProjection:
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.version}:{key}:{event.id}"))
         activity = _Activity(identity, label, plan_id, event)
         if not replay:
+            if current is not None and event.metadata.integration_binding_id is not None:
+                await self._close_activity(current, event.timestamp)
             await self._event_bus.publish(
                 new_event(
                     event.session_id,
@@ -80,6 +114,7 @@ class ActivityProjection:
                         "version": 1,
                         "step_id": event.payload.get("step_id"),
                         "turn_id": event.payload.get("turn_id"),
+                        "grouping": event.payload.get("_codeplane_grouping"),
                     },
                     metadata=event.metadata,
                     event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{identity}:activity:1")),
@@ -87,6 +122,27 @@ class ActivityProjection:
                 )
             )
         self._active[key] = activity
+
+    async def _close_activity(self, activity: _Activity, timestamp: datetime) -> None:
+        source = activity.source_event
+        await self._event_bus.publish(new_event(
+            source.session_id, EventKind.turn_summary,
+            {
+                "title": activity.label, "activity_id": activity.id, "activity_label": activity.label,
+                "activity_status": "closed", "is_new_activity": False, "plan_item_id": activity.plan_step_id,
+                "grouping_version": self.version, "version": 2,
+                "step_id": source.payload.get("step_id"), "turn_id": source.payload.get("turn_id"),
+                "grouping": source.payload.get("_codeplane_grouping"),
+            },
+            metadata=source.metadata,
+            event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{activity.id}:activity:2")), timestamp=timestamp,
+        ))
+
+    async def close(self, job_id: str, timestamp: datetime) -> None:
+        for key in tuple(self._active):
+            if key[0] == job_id:
+                await self._close_activity(self._active[key], timestamp)
+                self._active.pop(key)
 
     def cleanup(self, job_id: str, *, attempt_id: str | None = None, execution_epoch: str | None = None) -> None:
         for key in tuple(self._active):

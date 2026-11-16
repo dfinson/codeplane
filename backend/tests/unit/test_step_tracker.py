@@ -66,6 +66,23 @@ class TestExtractFilePath:
 class TestStepLifecycle:
     """Tests for step open/close lifecycle via transcript events."""
 
+    async def test_failed_tool_does_not_end_the_step_or_claim_file_effects(self, tracker, event_bus) -> None:
+        await tracker.on_transcript_event("job-1", _make_event(role="operator"))
+        current = tracker.current_step("job-1")
+        event_bus.publish.reset_mock()
+        await tracker.on_transcript_event("job-1", new_event(
+            "job-1", EventKind.tool_call_failed,
+            {"turn_id": "turn-1", "tool_name": "write", "arguments": {"path": "not-written"}, "error": "Denied"},
+        ))
+        assert tracker.current_step("job-1") is current
+        assert current.tool_count == 1 and current.files_written == []
+        event_bus.publish.assert_not_awaited()
+
+    async def test_delivery_receipt_is_not_an_operator_boundary(self, tracker, event_bus) -> None:
+        await tracker.on_transcript_event("job-1", _make_event(role="operator", admission_status="queued"))
+        assert tracker.current_step("job-1") is None
+        event_bus.publish.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_first_event_opens_step(self, tracker: StepTracker, event_bus: AsyncMock) -> None:
         event = _make_event(role="agent", turn_id="turn-1")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC
@@ -23,11 +24,25 @@ class ToolPairing:
         self._limit = max_pending
         self._starts: OrderedDict[tuple[str, str], SessionEvent] = OrderedDict()
 
+    @staticmethod
+    def _key(event: SessionEvent, call_id: str) -> tuple[str, str]:
+        metadata = event.metadata
+        namespace = metadata.namespace or ()
+        if namespace and namespace[0] == "observation-source":
+            namespace = namespace[2:]
+        scope = json.dumps([
+            metadata.integration_binding_id, metadata.run_id, metadata.execution_epoch,
+            metadata.attempt_id, namespace, call_id,
+        ], separators=(",", ":"))
+        return event.session_id, scope
+
     def process(self, event: SessionEvent) -> SessionEvent | list[SessionEvent] | None:
         call_id = event.payload.get("tool_call_id")
         if not isinstance(call_id, str) or not call_id.strip():
+            if event.kind in (EventKind.tool_call_started, EventKind.tool_call_completed, EventKind.tool_call_failed):
+                return self._orphan(event, "missing_identity")
             return event
-        key = (event.session_id, call_id)
+        key = self._key(event, call_id)
         if event.kind == EventKind.tool_call_started:
             previous = self._starts.get(key)
             if previous is not None:
@@ -41,7 +56,7 @@ class ToolPairing:
                 _, oldest = self._starts.popitem(last=False)
                 return self._orphan(oldest, "pairing_capacity")
             return None
-        if event.kind != EventKind.tool_call_completed:
+        if event.kind not in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             return event
         start = self._starts.pop(key, None)
         if start is None:
@@ -53,10 +68,16 @@ class ToolPairing:
         payload = dict(start.payload)
         payload.update(event.payload)
         duration = event.metadata.duration_ms
-        if duration is None:
+        fallback_time = any(
+            isinstance(source := item.payload.get("_codeplane_source"), dict) and source.get("timestamp_fallback")
+            for item in (start, event)
+        )
+        if duration is None and not fallback_time:
             finished_at = event.timestamp if event.timestamp.tzinfo is not None else event.timestamp.replace(tzinfo=UTC)
             started_at = start.timestamp if start.timestamp.tzinfo is not None else start.timestamp.replace(tzinfo=UTC)
-            duration = max(0.0, (finished_at - started_at).total_seconds() * 1000)
+            elapsed = (finished_at - started_at).total_seconds() * 1000
+            if elapsed >= 0:
+                duration = elapsed
         updates = start.metadata.model_dump()
         updates.update(event.metadata.model_dump(exclude_unset=True))
         updates["duration_ms"] = duration
@@ -65,11 +86,12 @@ class ToolPairing:
         name = payload.get("tool_name")
         arguments = payload.get("arguments")
         if isinstance(name, str):
-            import json
-
+            result = payload.get("result")
             updates["tool_display"] = event.metadata.tool_display or format_tool_display(
                 name,
                 arguments if isinstance(arguments, str) else json.dumps(arguments),
+                tool_result=result if isinstance(result, str) else None,
+                tool_success=event.kind != EventKind.tool_call_failed and payload.get("success") is not False,
             )
         return event.model_copy(update={"payload": payload, "metadata": EventMetadata.model_validate(updates)})
 
@@ -100,7 +122,7 @@ class ToolPairing:
             call_id = event.payload.get("tool_call_id")
             if event.kind != EventKind.tool_call_started or not isinstance(call_id, str) or not call_id.strip():
                 raise ValueError("Invalid pending tool checkpoint")
-            key = (event.session_id, call_id)
+            key = self._key(event, call_id)
             if key in starts:
                 raise ValueError("Duplicate pending tool identity")
             starts[key] = event

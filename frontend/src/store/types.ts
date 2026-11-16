@@ -5,7 +5,7 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, Job, SDKInfo, StoryResponse, TrackerOperationResponse } from "../api/types";
+import type { DiffFileModel, Job, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload } from "../api/types";
 
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -76,7 +76,7 @@ export interface LogLine {
   context: Record<string, unknown> | null;
 }
 
-export interface TranscriptEntry {
+export interface TranscriptEntry extends Pick<TranscriptPayload, "metadata" | "pairingStatus" | "pairingReason"> {
   jobId: string;
   eventId?: string;
   sequence?: number;

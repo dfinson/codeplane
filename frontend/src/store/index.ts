@@ -16,6 +16,7 @@ import { sseHandlers, enrichJob, mergeTrackerOperations } from "./sseHandlers";
 export { enrichJob } from "./sseHandlers";
 import { deriveJobStateFrame } from "./sseNormalize";
 import { pathBasename } from "../lib/paths";
+import { removePairedToolStarts } from "../lib/transcriptIdentity";
 
 // Re-export all types so existing `import { ... } from "../store"` still works
 export type {
@@ -523,17 +524,7 @@ export const useStore = create<AppState>((set, get) => ({
       // completed tool_call — both are persisted but only one should render.
       // Use turnId-scoped keys when available to avoid false-positive removal
       // of in-flight tool_running entries for the same tool name.
-      const completedCallKeys = new Set<string>();
-      for (const e of snapshot.transcript) {
-        if (e.kind === "tool.call.completed" && e.toolName) {
-          completedCallKeys.add(e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName);
-        }
-      }
-      const deduped = snapshot.transcript.filter((e) => {
-        if (e.kind !== "tool.call.started" || !e.toolName) return true;
-        const key = e.turnId ? `${e.toolName}::${e.turnId}` : e.toolName;
-        return !completedCallKeys.has(key);
-      });
+      const deduped = removePairedToolStarts(snapshot.transcript);
       const hydratedJob = currentJob ? { ...currentJob, ...incomingJob } : incomingJob;
       return {
         ...evictedState,

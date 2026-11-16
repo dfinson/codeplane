@@ -25,10 +25,10 @@ import structlog
 
 from backend.models.events import EventKind
 from backend.services.action_policy.classifier import Action, ActionKind
+from backend.services.events.observation import is_observation_history
 
 if TYPE_CHECKING:
-    from traceforge.types import SessionEvent
-
+    from backend.models.session_event import SessionEvent
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.events.event_bus import EventBus
 
@@ -162,6 +162,8 @@ class GovernanceSubscriber:
 
     async def handle_event(self, event: SessionEvent) -> None:
         """Advance governance budget/taint for each executed tool call."""
+        if is_observation_history(event):
+            return
         if str(event.kind) != EventKind.tool_call_completed:
             return
         job_id = event.session_id

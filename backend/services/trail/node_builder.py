@@ -639,7 +639,7 @@ class TrailNodeBuilder:
 
         if event.kind == EventKind.message_user:
             await self._handle_operator_transcript(event, state)
-        elif event.kind == EventKind.tool_call_completed:
+        elif event.kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             await self._handle_tool_call_transcript(event, state)
         elif event.kind == EventKind.message_assistant:
             await self._handle_assistant_transcript(event, state)
@@ -715,7 +715,7 @@ class TrailNodeBuilder:
             tool_display = format_tool_display(str(tool_name), arguments)
         motivation = getattr(event.metadata, "motivation", None)
         tool_intent = getattr(motivation, "intent", None) or None
-        tool_success = payload.get("success")
+        tool_success = False if event.kind == EventKind.tool_call_failed else payload.get("success")
         if tool_success is not None:
             tool_success = bool(tool_success)
 

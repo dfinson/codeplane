@@ -24,6 +24,7 @@ import {
 } from "../index";
 import type { DiffFileModel, TrackerOperationResponse } from "../../api/types";
 import { normalizeTFEvent } from "../sseNormalize";
+import { toolOutputKey } from "../../lib/transcriptIdentity";
 import type {
   AppState,
   ActivityTimelineState,
@@ -57,6 +58,45 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     ...overrides,
   };
 }
+
+it("records a failed tool without terminating the Job or removing a sibling call", () => {
+  useStore.setState({ jobs: { "job-1": makeJob() }, transcript: {}, streamingToolOutput: {} });
+  const dispatch = (id: string, kind: string, session: string, payload: Record<string, unknown>) => {
+    useStore.getState().dispatchSSEEvent(kind, normalizeTFEvent({
+      id, kind, session_id: "job-1", timestamp: "2026-01-01T00:00:00Z", payload,
+      metadata: { run_id: session, attempt_id: session, execution_epoch: "epoch" },
+    }));
+  };
+  dispatch("start-a", "tool.call.started", "a", { tool_call_id: "same", tool_name: "write" });
+  dispatch("start-b", "tool.call.started", "b", { tool_call_id: "same", tool_name: "write" });
+  dispatch("chunk-a", "tool.result.chunk", "a", { tool_call_id: "same", content: "first" });
+  dispatch("chunk-b", "tool.result.chunk", "b", { tool_call_id: "same", content: "second" });
+  dispatch("failure", "tool.call.failed", "a", {
+    tool_call_id: "same", tool_name: "write", error: "Permission denied", success: true,
+  });
+
+  const state = useStore.getState();
+  expect(state.jobs["job-1"]?.state).toBe("running");
+  expect(state.transcript["job-1"]?.map((entry) => entry.eventId)).toEqual(["start-b", "failure"]);
+  expect(state.transcript["job-1"]?.[1]).toMatchObject({
+    kind: "tool.call.failed", success: false, toolIssue: "Permission denied",
+  });
+  const sibling = state.transcript["job-1"]![0]!;
+  expect(state.streamingToolOutput).toEqual({ [toolOutputKey(sibling)]: "second" });
+  dispatch("failure", "tool.call.failed", "a", { tool_call_id: "same", error: "Permission denied" });
+  expect(useStore.getState().transcript["job-1"]).toHaveLength(2);
+});
+
+it("retains distinct observed operator occurrences with identical text", () => {
+  for (const source of ["first", "second"]) {
+    useStore.getState().dispatchSSEEvent("message.user", normalizeTFEvent({
+      id: source, kind: "message.user", session_id: "observed-job",
+      payload: { content: "Identical text" },
+      metadata: { integration_binding_id: "binding", namespace: ["observation-source", source] },
+    }));
+  }
+  expect(useStore.getState().transcript["observed-job"]?.map((entry) => entry.eventId)).toEqual(["first", "second"]);
+});
 
 type HydratedSnapshot = Parameters<AppState["hydrateJob"]>[0];
 

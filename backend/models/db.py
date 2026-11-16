@@ -346,6 +346,26 @@ class IntegrationSourceCheckpointRow(Base):
     )
 
 
+class IntegrationProjectionCheckpointRow(Base):
+    __tablename__ = "integration_projection_checkpoints"
+
+    binding_id: Mapped[str] = mapped_column(String, ForeignKey("integration_bindings.id"), primary_key=True)
+    parser_revision: Mapped[str] = mapped_column(String, nullable=False)
+    parser_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    buffer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_integration_projection_version"),
+        CheckConstraint("state IN ('accepted','reconciliation_required')", name="ck_integration_projection_state"),
+        CheckConstraint("length(CAST(buffer_json AS BLOB)) <= 8388608", name="ck_integration_projection_bound"),
+    )
+
+
 class IntegrationIdentityRow(Base):
     __tablename__ = "integration_identities"
 

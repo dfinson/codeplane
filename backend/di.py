@@ -48,6 +48,7 @@ from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
 from backend.services.ingest.claude_source import ClaudeSessionStateWatcher
 from backend.services.ingest.history_registration import HistoryRegistration
+from backend.services.ingest.record_service import ObservationRecords
 from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
@@ -170,6 +171,12 @@ class RequestProvider(Provider):
         self, bindings: IntegrationRepository, jobs: JobRepository, projects: ProjectRepository,
     ) -> HistoryRegistration:
         return HistoryRegistration(bindings, jobs, projects)
+
+    @provide
+    def observation_records(
+        self, bindings: IntegrationRepository, jobs: JobRepository, event_bus: EventBus,
+    ) -> ObservationRecords:
+        return ObservationRecords(bindings, jobs, event_bus)
 
     @provide
     async def session(
