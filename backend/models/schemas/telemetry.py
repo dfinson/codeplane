@@ -396,10 +396,10 @@ class TelemetryFileAccess(CamelModel):
 
 
 class TelemetryQuotaSnapshot(CamelModel):
-    used_requests: int = 0
-    entitlement_requests: int = 0
+    used_requests: float = 0
+    entitlement_requests: float = 0
     remaining_percentage: float = 0
-    overage: int = 0
+    overage: float = 0
     overage_allowed: bool = False
     is_unlimited: bool = False
     reset_date: str = ""

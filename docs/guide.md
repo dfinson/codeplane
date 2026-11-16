@@ -119,7 +119,7 @@ Some commands **always** require approval regardless of preset: `git merge`, `gi
 
 ## Code Review
 
-When a job finishes, the review experience has three layers: the narrative story, structural analysis, and the raw diff.
+When a job finishes, the review experience has two complementary views: the narrative story and the actual Git diff.
 
 ### Review Story
 
@@ -127,25 +127,8 @@ The **Review** tab opens with a narrative that explains what the agent changed a
 
 - **What changed** — a structured walkthrough of the modifications with verified file references
 - **Why it changed** — motivation provenance traced from the agent's reasoning through trail enrichment
-- **Attention items** — structural concerns, unverified callers, and risk areas flagged for human review
-- **Merge confidence verdict** — HIGH / MEDIUM / LOW based on structural risk scoring, dependency cycles, and caller verification
 
 This is designed so you can decide whether to merge *before* reading a single line of code.
-
-### Structural Analysis
-
-CodeRecon provides graph-based structural analysis that goes beyond text diffs:
-
-- **Semantic diff** — changes classified as added, removed, modified, or moved symbols (not just lines)
-- **Risk scoring** — each change gets a composite risk score based on category severity, unverified caller ratio, and test coverage gaps
-- **Reference tiers** — callers of modified symbols are classified by confidence:
-    - *Proven* — direct static references
-    - *Strong / Anchored / Semantic* — inferred via type or semantic analysis
-    - *Unknown* — found but not verified
-- **Communities** — related changes grouped by module/feature for holistic review
-- **Dependency cycles** — new cycles introduced by the change are flagged
-
-Use the triage bar to filter changes by risk category and focus on what matters.
 
 ### Diff & Workspace
 

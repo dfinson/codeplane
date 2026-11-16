@@ -115,11 +115,6 @@ class EventKind(StrEnum):
     turn_summary = "turn.summary"
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
-    # --- Repo index ---
-    repo_index_progress = "repo.index_progress"
-    repo_index_complete = "repo.index_complete"
-    # --- Structural health ---
-    structural_warning = "structural.warning"
     stall_detected = "stall.detected"
     # --- Monitors ---
     monitor_approved = "monitor.approved"

@@ -27,13 +27,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from backend.api import settings as _settings  # noqa: F401 - bind route types before per-test Git factory patches
 from backend.config import CPLConfig
 from backend.di import AppProvider, CachedModelsBySdk, RequestProvider, VoiceMaxBytes
 from backend.models.db import Base, JobRow
 from backend.models.domain import JobNotFoundError
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.services.adapters.platform_adapter import PlatformRegistry
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.completers.voice_service import VoiceService
 from backend.services.events.event_bus import EventBus
 from backend.services.events.ingest_service import IngestService
@@ -155,14 +155,6 @@ def mock_terminal_service() -> Mock:
 
 
 @pytest.fixture
-def mock_coderecon_service() -> AsyncMock:
-    svc = AsyncMock(spec=CodeReconService)
-    svc.available = False
-    svc.ensure_repo_indexed.return_value = None
-    return svc
-
-
-@pytest.fixture
 def mock_tracker_sync_service() -> AsyncMock:
     return AsyncMock(spec=TrackerSyncService)
 
@@ -200,7 +192,6 @@ async def app(
     mock_platform_registry: Mock,
     mock_utility_session: AsyncMock,
     mock_terminal_service: Mock,
-    mock_coderecon_service: AsyncMock,
     mock_tracker_sync_service: AsyncMock,
     voice_max_bytes_value: int,
     monkeypatch: pytest.MonkeyPatch,
@@ -266,7 +257,6 @@ async def app(
             CachedModelsBySdk: CachedModelsBySdk({}),
             VoiceMaxBytes: VoiceMaxBytes(voice_max_bytes_value),
             TerminalService: mock_terminal_service,
-            CodeReconService: mock_coderecon_service,
             IngestService: AsyncMock(spec=IngestService),
             TrackerSyncService: mock_tracker_sync_service,
         },

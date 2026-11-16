@@ -19,6 +19,50 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.mark.asyncio
+async def test_asgi_startup_refuses_failed_migration_before_database_consumers(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.lifespan as module
+
+    class MigrationError(RuntimeError):
+        pass
+
+    def reject_migration() -> None:
+        raise MigrationError("retirement blocked")
+
+    def unexpected_engine() -> None:
+        raise AssertionError("Database consumers started before the guarded migration")
+
+    monkeypatch.setattr(module, "run_migrations", reject_migration, raising=False)
+    monkeypatch.setattr(module, "create_engine", unexpected_engine)
+    with pytest.raises(MigrationError, match="retirement blocked"):
+        async with module.lifespan(None):
+            raise AssertionError("Startup must not yield after failed migration")
+
+
+@pytest.mark.asyncio
+async def test_asgi_startup_upgrades_before_creating_database_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.lifespan as module
+
+    order: list[str] = []
+
+    class StopAfterEngineError(RuntimeError):
+        pass
+
+    def migrate() -> None:
+        order.append("migrate")
+
+    def engine() -> None:
+        order.append("engine")
+        raise StopAfterEngineError
+
+    monkeypatch.setattr(module, "run_migrations", migrate, raising=False)
+    monkeypatch.setattr(module, "create_engine", engine)
+    with pytest.raises(StopAfterEngineError):
+        async with module.lifespan(None):
+            raise AssertionError("Probe stops at engine creation")
+    assert order == ["migrate", "engine"]
+
+
 class _FakeSession:
     def __init__(self) -> None:
         self.commit = AsyncMock()

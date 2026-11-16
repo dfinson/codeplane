@@ -6,7 +6,7 @@ Recreate the table via batch_alter_operations so the PK is
 ``(job_id, session_kind)`` and the ON CONFLICT clause works.
 
 Revision ID: 0050
-Revises: 0049
+Revises: 0048
 Create Date: 2026-05-17
 
 """
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0050"
-down_revision = "0049"
+down_revision = "0048"
 branch_labels = None
 depends_on = None
 
@@ -40,8 +40,7 @@ def upgrade() -> None:
         recreate="always",
     ) as batch_op:
         batch_op.alter_column("job_id", existing_type=sa.String(), nullable=False)
-        batch_op.alter_column("session_kind", existing_type=sa.String(), nullable=False,
-                              server_default="job")
+        batch_op.alter_column("session_kind", existing_type=sa.String(), nullable=False, server_default="job")
         batch_op.create_primary_key("pk_job_telemetry_summary", ["job_id", "session_kind"])
 
 

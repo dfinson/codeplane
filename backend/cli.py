@@ -15,7 +15,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-# Prevent libraries (e.g. coderecon) from fork-bombing the server process.
+# Prevent libraries from duplicating the server process.
 # The default "fork" start method duplicates the entire parent address space
 # for each worker — on a 20-core host this creates 16× copies of a ~1 GB
 # process.  "spawn" starts fresh interpreters that only load what they need.

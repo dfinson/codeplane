@@ -127,35 +127,10 @@ def run_migrations(db_path: Path | None = None) -> None:
     from alembic import command
 
     alembic_cfg = Config()
-    repo_root = Path(__file__).resolve().parents[2]
-    alembic_cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    backend_dir = Path(__file__).resolve().parents[1]
+    packaged_scripts = backend_dir / "_migrations"
+    scripts = packaged_scripts if packaged_scripts.is_dir() else backend_dir.parent / "alembic"
+    alembic_cfg.set_main_option("script_location", str(scripts))
     db_url = f"sqlite:///{db_path or (backend_config.get_codeplane_dir() / 'data.db')}"
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-    try:
-        command.upgrade(alembic_cfg, "head")
-    except command.util.CommandError as exc:  # type: ignore[attr-defined]  # alembic.command.util not typed
-        if "Can't locate revision" in str(exc):
-            import sqlite3
-
-            import structlog
-
-            log = structlog.get_logger()
-            log.warning(
-                "stale_alembic_revision",
-                error=str(exc),
-                action="stamping to head",
-            )
-            conn = sqlite3.connect(str(db_path or (backend_config.get_codeplane_dir() / "data.db")))
-            try:
-                from alembic.script import ScriptDirectory
-
-                script = ScriptDirectory.from_config(alembic_cfg)
-                heads = script.get_heads()
-                head_rev = heads[0] if heads else "head"
-                conn.execute("UPDATE alembic_version SET version_num = ?", (head_rev,))
-                conn.commit()
-            finally:
-                conn.close()
-            command.upgrade(alembic_cfg, "head")
-        else:
-            raise
+    command.upgrade(alembic_cfg, "head")

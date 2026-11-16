@@ -15,7 +15,7 @@ dependencies = [
     "aiosqlite>=0.20,<1",
     "alembic>=1.14,<2",
     # Agent SDK
-    "github-copilot-sdk>=0.3.0,<0.4",
+    "github-copilot-sdk>=1.0.34,<2",
     # Structured logging
     "structlog>=24.0,<26",
     # Terminal UI
@@ -36,8 +36,6 @@ dependencies = [
     "dishka[fastapi]>=1.9.1,<2",
     "pyjwt[crypto]>=2.12.0,<3",
     "cryptography>=46.0,<47",
-    # Structural analysis (full SDK — SPLADE/CE disabled by default via config)
-    "coderecon-ai @ git+https://github.com/dfinson/coderecon.git@main",
     "cloudflare>=5.1.0",
     "sh-guard>=0.1.10",
     # Agent-trace intelligence substrate — deterministic/CPU-only pipeline that
@@ -70,22 +68,6 @@ cpl = "backend.main:cli"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv]
-# The coderecon-ai model sub-packages contain large binary model files that
-# require Git LFS and fail to build in CI. They are only needed at runtime for
-# ML inference, not for building/testing codeplane. Redirect them to local stubs.
-override-dependencies = [
-    "coderecon-ai-models-ce",
-    "coderecon-ai-models-ce-tiny",
-    "coderecon-ai-models-splade",
-]
-
-[tool.uv.sources]
-coderecon-ai-models-ce = { path = "stubs/coderecon-models-ce" }
-coderecon-ai-models-ce-tiny = { path = "stubs/coderecon-models-ce-tiny" }
-coderecon-ai-models-splade = { path = "stubs/coderecon-models-splade" }
-
-
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -97,6 +79,10 @@ path = "tools/hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["backend"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alembic/env.py" = "backend/_migrations/env.py"
+"alembic/versions" = "backend/_migrations/versions"
 
 [tool.ruff]
 target-version = "py312"
@@ -138,7 +124,7 @@ warn_unused_configs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["faster_whisper.*", "copilot.*", "mcp.*", "qrcode.*", "questionary.*", "winpty.*", "coderecon.*", "psutil"]
+module = ["faster_whisper.*", "copilot.*", "mcp.*", "qrcode.*", "questionary.*", "winpty.*", "psutil"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

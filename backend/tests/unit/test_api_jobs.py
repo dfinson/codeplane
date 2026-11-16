@@ -72,7 +72,6 @@ async def test_resolve_job_publishes_after_commit() -> None:
         published_events.append(published_event)
 
     event_bus = SimpleNamespace(publish=AsyncMock(side_effect=_publish))
-    coderecon = SimpleNamespace(available=False)
 
     response = await resolve_job(
         job_id="job-1",
@@ -82,7 +81,6 @@ async def test_resolve_job_publishes_after_commit() -> None:
         runtime_service=runtime_service,
         merge_service=merge_service,
         event_bus=event_bus,
-        coderecon=coderecon,
     )
 
     assert response.resolution == "discarded"

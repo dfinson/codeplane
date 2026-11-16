@@ -838,11 +838,10 @@ export function resumeJob(
 export function resolveJob(
   jobId: string,
   action: "merge" | "smart_merge" | "create_pr" | "discard" | "agent_merge",
-  opts?: { confirmLowConfidence?: boolean },
 ): Promise<{ resolution: string; prUrl?: string | null; conflictFiles?: string[] | null; error?: string | null }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/resolve`, {
     method: "POST",
-    body: JSON.stringify({ action, confirmLowConfidence: opts?.confirmLowConfidence ?? false }),
+    body: JSON.stringify({ action }),
   });
 }
 
@@ -953,196 +952,18 @@ export function fetchJobStory(
   return request(`/jobs/${encodeURIComponent(jobId)}/story${qs}`);
 }
 
-// Structural Changes
+// Diff motivations
 // ---------------------------------------------------------------------------
-
-export interface StructuralChange {
-  kind: string;
-  symbol: string | null;
-  file: string;
-  summary: string | null;
-  category: string;  // breaking | body | additive | non-structural
-  refCount: number;
-  refTiers: Record<string, number>;  // verified | inferred | unverified → count
-  testFiles: string[];
-  risk: number;
-  lineRange: number[] | null;
-  coverageConfidence: string | null;  // high | medium | low | null
-}
-
-// Multi-Session
-// ---------------------------------------------------------------------------
-
-export interface SessionSegment {
-  sessionNumber: number;
-  startSha: string | null;
-  endSha: string | null;
-  changes: StructuralChange[];
-  risk: number;
-  warnings: Array<Record<string, unknown>>;
-}
-
-export interface MultiSessionResponse {
-  jobId: string;
-  available: boolean;
-  sessions: SessionSegment[];
-  directionChanges: Array<Record<string, unknown>>;
-}
-
-export function fetchMultiSession(jobId: string): Promise<MultiSessionResponse> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/multi-session`);
-}
-
-// Impact Graph
-// ---------------------------------------------------------------------------
-
-export interface ImpactReference {
-  symbol: string;
-  file: string;
-  line: number | null;
-  tier: string;  // verified | inferred | unverified
-  isTest: boolean;
-  rawTier: string;
-  covered: boolean | null;
-  testPassed: boolean | null;
-  coveringTestIds: string[];
-  stale: boolean | null;
-}
-
-export interface ImpactGraphResponse {
-  jobId: string;
-  target: string;
-  available: boolean;
-  totalReferences: number;
-  filesAffected: number;
-  summary: string;
-  references: ImpactReference[];
-  failCount: number;
-  uncoveredCount: number;
-}
-
-export function fetchImpactGraph(jobId: string, symbol: string): Promise<ImpactGraphResponse> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/impact-graph/${encodeURIComponent(symbol)}`);
-}
-
-export interface ImpactGraphBatchResponse {
-  jobId: string;
-  results: Record<string, ImpactGraphResponse>;
-}
-
-export function fetchImpactGraphBatch(jobId: string, symbols: string[]): Promise<ImpactGraphBatchResponse> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/impact-graph-batch`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbols }),
-  });
-}
-
-// Coverage / Blast Radius
-// ---------------------------------------------------------------------------
-
-export interface CoveringTestCandidate {
-  testId: string;
-  source: string;  // coverage | reachability | graph
-  distance: number;
-  confidence: number;
-  reason: string;
-}
-
-export interface CoveringTestsResponse {
-  jobId: string;
-  filePath: string;
-  available: boolean;
-  symbols: Record<string, CoveringTestCandidate[]>;
-}
-
-export function fetchCoveringTests(jobId: string, filePath: string): Promise<CoveringTestsResponse> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/covering-tests?file_path=${encodeURIComponent(filePath)}`);
-}
-
-export function fetchLineCoverage(
-  jobId: string,
-  filePath: string,
-  lineRange?: { start: number; end: number },
-): Promise<import("./types").LineCoverageResponse> {
-  let url = `/jobs/${encodeURIComponent(jobId)}/line-coverage?file_path=${encodeURIComponent(filePath)}`;
-  if (lineRange) {
-    url += `&start_line=${lineRange.start}&end_line=${lineRange.end}`;
-  }
-  return request(url);
-}
 
 export function fetchJobMotivations(jobId: string): Promise<import("./types").JobMotivationsResponse> {
   return request(`/jobs/${encodeURIComponent(jobId)}/motivations`);
 }
 
-// Review Story
-// ---------------------------------------------------------------------------
-
-export interface ReviewStoryHeader {
-  title: string;
-  fileCount: number;
-  breakingCount: number;
-  mergeConfidence: string | null;
-}
-
-export interface ReviewStoryVerdict {
-  confidence: string;
-  blockers: string[];
-  summary: string;
-}
-
-export interface EdgeCaseBlock {
-  kind: string;
-  icon: string;
-  title: string;
-  files: string[];
-  detail: string;
-}
-
-export interface CommunityRollup {
-  name: string;
-  changeCount: number;
-  avgRisk: number;
-  highestRiskSymbol: string | null;
-  highestRisk: number;
-  summary: string;
-}
-
-export interface PatternGroup {
-  pattern: string;
-  count: number;
-  files: string[];
-  summary: string;
-}
-
-export interface ReviewStoryResponse {
-  jobId: string;
-  available: boolean;
-  collapsed: boolean;
-  header: ReviewStoryHeader | null;
-  attentionRequired: Array<Record<string, unknown>>;
-  structuralConcerns: Array<Record<string, unknown>>;
-  whatChanged: Array<Record<string, unknown>>;
-  whatAdded: Array<Record<string, unknown>>;
-  nonStructuralCount: number;
-  edgeCases: EdgeCaseBlock[];
-  communityRollups: CommunityRollup[];
-  patternGroups: PatternGroup[];
-  verdict: ReviewStoryVerdict | null;
-}
-
-export function fetchReviewStory(jobId: string): Promise<ReviewStoryResponse> {
-  return request(`/jobs/${encodeURIComponent(jobId)}/review-story`);
-}
-
 export { ApiError };
-
-// Re-export analytics module for backward compatibility
 export * from "./client-analytics";
 
-// --- Repo Summary (dashboard) ---
-
+// Repository summary
+// ---------------------------------------------------------------------------
 export interface RepoJobSummary {
   id: string;
   title: string | null;
@@ -1159,17 +980,6 @@ export interface RepoCostSummary {
   totalTokens: number;
 }
 
-export interface RepoHealthSummary {
-  repo: string;
-  available: boolean;
-  indexStatus: string | null;
-  symbolCount: number;
-  fileCount: number;
-  lastIndexedSha: string | null;
-  communityCount: number;
-  cycleCount: number;
-  stale: boolean;
-}
 
 export interface RepoSummaryResponse {
   path: string;
@@ -1180,7 +990,6 @@ export interface RepoSummaryResponse {
   recentJobs: RepoJobSummary[];
   activeJobCount: number;
   cost: RepoCostSummary;
-  health: RepoHealthSummary | null;
 }
 
 export function fetchRepoSummary(repoPath: string): Promise<RepoSummaryResponse> {

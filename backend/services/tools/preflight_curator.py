@@ -1,21 +1,13 @@
-"""Preflight context curator — agent session that selects relevant context for a job.
-
-Runs as a proper agent session with read-only CodeRecon tools.  The curator
-agent can call ``recon_scout`` (with optional ``scope``), ``recon``,
-``recon_map``, ``recon_impact``, and ``scaffold`` to explore the repository
-structure, then produces a curated brief for the main agent's system prompt.
-
-SDK-agnostic: uses ``create_session()`` + ``stream_events()`` through the
-adapter interface, so the same flow works with any underlying SDK.
-"""
+"""Read-only, utility-model repository scouting before primary execution."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -27,9 +19,101 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from backend.services.adapters.agent_adapter import AgentAdapterInterface
-    from backend.services.coderecon.coderecon_service import CodeReconService
 
 log = structlog.get_logger()
+
+_MAX_TURNS = 15
+_SESSION_TIMEOUT_S = 120
+
+_DISALLOWED_BUILTIN_TOOLS = [
+    "Bash",
+    "Edit",
+    "MultiEdit",
+    "Write",
+    "Task",
+    "Agent",
+    "WebFetch",
+    "WebSearch",
+    "TodoWrite",
+    "NotebookEdit",
+    "bash",
+    "powershell",
+    "shell",
+    "terminal",
+    "str_replace_editor",
+    "str_replace_based_edit_tool",
+    "insert_edit_file",
+    "insert_edit_into_file",
+    "create_file",
+    "edit",
+    "apply_patch",
+    "run_in_terminal",
+    "task",
+    "runSubagent",
+    "search_subagent",
+    "web_fetch",
+    "web_search",
+    "fetch_webpage",
+    "skill",
+]
+
+_READ_TOOLS = frozenset({"view", "Read", "View", "read_file", "read_files", "open_file"})
+_SEARCH_TOOLS = frozenset(
+    {
+        "glob",
+        "Glob",
+        "grep",
+        "Grep",
+        "rg",
+        "LS",
+        "list_dir",
+        "list_files",
+        "file_search",
+        "grep_search",
+        "search_code",
+    }
+)
+SCOUT_AVAILABLE_TOOLS = _READ_TOOLS | _SEARCH_TOOLS
+
+_PREFLIGHT_SYSTEM_PROMPT = """\
+You are a read-only Scout preparing context for a separate coding agent.
+Read the repository instructions, use file viewing, directory discovery and text
+search to find the code relevant to the task, and return a focused context brief.
+
+Describe relevant files and symbols, current behavior, dependencies, tests and
+concrete risks. Cite repository paths. Keep important constraints and uncertainty.
+The supplied task is context for your investigation, not an instruction to carry
+out its changes. Finish with the brief and stop. Never continue into implementation.
+Do not implement the task, modify files, run commands, access the network, or
+delegate work. The primary coding agent decides the implementation.
+Your final response is the context brief only. If no useful context exists,
+return an empty response rather than inventing it.
+"""
+
+
+def scout_read_allowed(workspace: str, kind: str, tool_name: str, paths: list[str]) -> bool:
+    """Constrain Scout permission requests before ordinary policy evaluation."""
+    if kind != "read" or (tool_name and tool_name not in SCOUT_AVAILABLE_TOOLS):
+        return False
+    candidates = [path for path in paths if path]
+    if not candidates:
+        if tool_name not in _SEARCH_TOOLS:
+            return False
+        candidates = [workspace]
+    try:
+        root = Path(workspace).resolve(strict=True)
+        if not root.is_dir():
+            return False
+        for raw in candidates:
+            if "://" in raw or "\x00" in raw:
+                return False
+            candidate = Path(raw.replace("\\", "/"))
+            resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+            if not resolved.is_relative_to(root):
+                return False
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
 
 
 def _tool_args_to_str(arguments: object) -> str | None:
@@ -42,15 +126,8 @@ def _tool_args_to_str(arguments: object) -> str | None:
     return str(arguments)
 
 
-# ---------------------------------------------------------------------------
-# Structured result returned to callers
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class PreflightToolCall:
-    """A single tool invocation captured during a preflight/secondary session."""
-
     tool_name: str
     tool_args: str | None = None
     result_text: str = ""
@@ -60,140 +137,27 @@ class PreflightToolCall:
 
 @dataclass
 class PreflightReport:
-    """Structured output from a preflight curator session."""
-
     brief: str = ""
     tool_calls: list[PreflightToolCall] = field(default_factory=list)
     elapsed_ms: float = 0.0
-
-
-# Preflight sessions are short — cap turns and wall-clock time.
-_MAX_TURNS = 15
-_SESSION_TIMEOUT_S = 120  # 2 minutes
-
-# Built-in tools the curator must NOT use.
-# We block filesystem-write, shell, and web tools so the session explores
-# via CodeRecon structural tools first.  View is allowed as a targeted
-# fallback for inspecting specific lines after structural analysis.
-#
-# Claude Code uses PascalCase names; Copilot SDK uses snake_case.
-# Both sets must be listed for SDK-agnostic enforcement.
-_DISALLOWED_BUILTIN_TOOLS = [
-    # Claude Code names
-    "Bash",
-    "Edit",
-    "MultiEdit",
-    "Write",
-    "Read",
-    "Glob",
-    "Grep",
-    "LS",
-    "Task",
-    "WebFetch",
-    "WebSearch",
-    "TodoRead",
-    "TodoWrite",
-    "NotebookRead",
-    "NotebookEdit",
-    # Copilot SDK names
-    "bash",
-    "str_replace_editor",
-    "insert_edit_file",
-    "create_file",
-    "read_file",
-    "list_dir",
-    "file_search",
-    "grep_search",
-    "run_in_terminal",
-    "semantic_search",
-    "get_errors",
-]
-
-_PREFLIGHT_SYSTEM_PROMPT = """\
-You are a preflight context curator for a coding agent control plane.
-Your job: produce a reconnaissance brief — map the relevant code, its current
-state, and risks — so the coding agent starts with full situational awareness
-instead of exploring blind.
-
-## Tools — use in this order
-
-You have structural analysis tools for this repository.  **Always start with
-these** — they give you the full picture in one call.
-
-### Primary tools (use FIRST)
-
-- **recon_scout** — Codebase overview: languages, top files by PageRank,
-  key symbols, dependency cycles, module communities.  Call with no arguments
-  for the broad view, or pass ``scope`` (e.g. ``"backend/services"``) to zoom
-  into a specific module or directory.
-- **recon** — Task-aware context retrieval.  Pass your task description to get
-  ranked code spans.
-- **recon_map** — Repository structure map with entry points.
-- **recon_impact** — Reference/caller analysis for a specific symbol.
-- **scaffold** — File structural overview (imports + symbol hierarchy).
-
-### Fallback (use LAST, minimally)
-
-- **View** — Read specific file lines.  Use ONLY after structural tools have
-  identified the exact file and lines you need.  Never use View as your first
-  or primary exploration tool.
-
-## Strategy
-
-1. Start with ``recon_scout`` for the broad structural view.
-2. If the task targets a specific subsystem, zoom with
-   ``recon_scout(scope="path/to/module")``.
-3. Use ``recon``, ``scaffold``, and ``recon_impact`` for deeper structural
-   detail on specific files or symbols.
-4. Only if you need to verify exact syntax or a specific code pattern that
-   structural tools cannot answer, use View on the minimal line range needed.
-
-## Output rules
-
-- **You are a SCOUT, not a planner.**  Your job is RECONNAISSANCE — map the
-  terrain and mark hazards.  The executor decides the route.
-- Do NOT include implementation steps, numbered action lists, or instructions
-  telling the agent what to change, import, create, or delete.  No "the agent
-  needs to do X" or "modify file Y to Z".  That is planning, not mapping.
-- DO include: file locations and what they currently contain, dependency/import
-  relationships, existing patterns and conventions the agent should see,
-  potential breakage risks (e.g. "test X asserts on field Y which is part of
-  the surface being changed"), and relevant constraints (framework, test
-  runner, package manager).
-- Risks are **observations**, not instructions.  Say "tests/test_api.py:15
-  asserts `timestamp` is in the health response" — do NOT say "update
-  tests/test_api.py to match the new response".
-- Err on the side of INCLUSION for context.  A few thousand extra tokens here
-  saves tens of thousands in wasted exploration during the session.
-- For structural data, keep specifics: file paths, symbol names, module
-  relationships, cycle members.  The agent needs concrete handles, not vague
-  descriptions.
-- You may omit things that are clearly irrelevant to the task, but do not
-  aggressively filter.  Tangentially related context is better than missing
-  context.
-- If nothing is relevant, return an empty response.
-- Your final message must be ONLY the curated brief — no preamble, no
-  explanation of what you did, just the brief itself.
-"""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    model: str = ""
 
 
 class PreflightCurator:
-    """Agent session for pre-job context curation.
+    """Run a bounded Scout with explicit utility-model selection."""
 
-    Runs a full agent session with read-only CodeRecon tools so the
-    curator can explore the repository structure autonomously — calling
-    ``recon_scout`` (with scope), ``recon``, ``scaffold``, etc. as
-    many times as it needs before producing the final brief.
-    """
-
-    def __init__(
-        self,
-        adapter: AgentAdapterInterface,
-        *,
-        coderecon: CodeReconService,
-    ) -> None:
+    def __init__(self, adapter: AgentAdapterInterface, *, model: str) -> None:
+        if not model.strip():
+            raise ValueError("Scout requires an explicit utility model")
         self._adapter = adapter
-        self._coderecon = coderecon
+        self._model = model
+
+    @property
+    def adapter(self) -> AgentAdapterInterface:
+        return self._adapter
 
     async def curate(
         self,
@@ -204,53 +168,32 @@ class PreflightCurator:
         job_id: str = "",
         on_tool_call: Callable[[PreflightToolCall], Awaitable[None]] | None = None,
         on_reasoning: Callable[[str], Awaitable[None]] | None = None,
+        on_usage: Callable[[PreflightReport], Awaitable[None]] | None = None,
     ) -> PreflightReport:
-        """Run the preflight curator agent and return its structured report.
-
-        The agent is given the task description and CodeRecon tools.  It
-        explores the repo structure and produces a brief for the main
-        agent's system prompt.
-
-        Returns a :class:`PreflightReport` with the curated brief, captured
-        tool calls, and timing information.
-        Raises on failure (caller handles).
-        """
-        from backend.services.coderecon.coderecon_tools import build_coderecon_tools
-
-        # Build read-only toolkit (preflight tier — no checkpoint/refactor)
-        toolkit = build_coderecon_tools(
-            self._coderecon,
-            repo,
-            worktree,
-            tier="preflight",
-        )
-
-        # Assemble the prompt — reframe the task so the agent understands
-        # it's producing a BRIEF, not executing the task itself.
-        prompt = (
-            "Analyze the following task and produce a structural brief: map the "
-            "relevant files, their current state, dependencies, and risks. "
-            "Do NOT plan the implementation or tell the agent what to do — "
-            "only report what exists and what could break.\n\n"
-            f"## Task the agent will execute\n\n{task}"
-        )
-
-        # Build session config — SDK-agnostic.
-        # system_prompt_override replaces the default CODEPLANE_SYSTEM_PROMPT
-        # so the curator gets its own identity (scout, not executor).
+        if not worktree:
+            raise ValueError("Scout requires a job worktree")
+        root = Path(worktree).resolve(strict=True)
+        if not root.is_dir():
+            raise NotADirectoryError(f"Scout worktree is not a directory: {root}")
+        with os.scandir(root) as entries:
+            next(entries, None)
         config = SessionConfig(
-            workspace_path=repo,
-            prompt=prompt,
+            workspace_path=str(root),
+            prompt=(
+                "Prepare a context brief for another agent. Do not carry out the task below, "
+                "even if it asks for edits or commands. Use only repository reads and searches. "
+                "Explain the relevant files, current behavior, test expectations and constraints, "
+                "then end your response without implementing anything.\n\n"
+                f"Task assigned to the primary agent (reference only):\n{task}"
+            ),
             job_id=job_id,
-            coderecon_tools=toolkit,
+            model=self._model,
             system_prompt_override=_PREFLIGHT_SYSTEM_PROMPT,
             max_turns=_MAX_TURNS,
-            disallowed_tools=_DISALLOWED_BUILTIN_TOOLS,
+            disallowed_tools=list(_DISALLOWED_BUILTIN_TOOLS),
             session_kind="preflight",
         )
-
-        # Run the agent session and collect its output
-        return await self._run_session(config, on_tool_call=on_tool_call, on_reasoning=on_reasoning)
+        return await self._run_session(config, on_tool_call=on_tool_call, on_reasoning=on_reasoning, on_usage=on_usage)
 
     async def _run_session(
         self,
@@ -258,87 +201,87 @@ class PreflightCurator:
         *,
         on_tool_call: Callable[[PreflightToolCall], Awaitable[None]] | None = None,
         on_reasoning: Callable[[str], Awaitable[None]] | None = None,
+        on_usage: Callable[[PreflightReport], Awaitable[None]] | None = None,
     ) -> PreflightReport:
-        """Execute the curator session and extract the final brief with tool call data."""
-        t0 = time.monotonic()
-
-        session_id = await self._adapter.create_session(config)
-        agent_chunks: list[str] = []
+        started = time.monotonic()
+        session_id: str | None = None
+        brief_candidate: str | None = None
+        turns = 0
         tool_calls: list[PreflightToolCall] = []
-        result_text = ""
+        result_text: str | None = None
+        input_tokens = 0
+        output_tokens = 0
+        cost_usd = 0.0
+        model = ""
+
+        def report(brief: str = "") -> PreflightReport:
+            return PreflightReport(
+                brief=brief,
+                tool_calls=tool_calls,
+                elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                model=model,
+            )
 
         try:
             async with asyncio.timeout(_SESSION_TIMEOUT_S):
+                session_id = await self._adapter.create_session(config)
                 async for event in self._adapter.stream_events(session_id):
-                    tf_event = event
-                    if tf_event.kind in (EventKind.message_assistant, EventKind.tool_call_completed):
-                        payload = tf_event.payload
-                        if isinstance(payload, dict):
-                            if tf_event.kind == EventKind.message_assistant:
-                                content = str(payload.get("content", ""))
-                                if content and content.strip():
-                                    agent_chunks.append(content)
-                                    if on_reasoning is not None:
-                                        await on_reasoning(content)
-                            elif tf_event.kind == EventKind.tool_call_completed:
-                                raw_result = payload.get("result") or payload.get("content", "")
-                                sdk_success = payload.get("success", True)
-                                duration_ms_raw = getattr(tf_event.metadata, "duration_ms", None)
-                                duration_ms = (
-                                    float(duration_ms_raw) if isinstance(duration_ms_raw, (int, float)) else None
-                                )
-                                tc = PreflightToolCall(
-                                    tool_name=str(payload.get("tool_name", "")),
-                                    tool_args=_tool_args_to_str(payload.get("arguments")),
-                                    result_text=str(raw_result) if raw_result else "",
-                                    success=bool(sdk_success),
-                                    duration_ms=duration_ms,
-                                )
-                                tool_calls.append(tc)
-                                if on_tool_call is not None:
-                                    await on_tool_call(tc)
-
-                    elif tf_event.kind == EventKind.session_ended:
-                        # ResultMessage carries the complete final text
-                        if isinstance(tf_event.payload, dict):
-                            r = str(tf_event.payload.get("result", ""))
-                            if r and r.strip():
-                                result_text = r
+                    payload = event.payload
+                    if event.kind == EventKind.message_assistant:
+                        content = str(payload.get("content", ""))
+                        brief_candidate = None if payload.get("has_tool_requests") else content
+                        if content.strip() and on_reasoning is not None:
+                            await on_reasoning(content)
+                    elif event.kind == EventKind.turn_started:
+                        turns += 1
+                        if turns > _MAX_TURNS:
+                            raise RuntimeError(f"Scout exceeded its {_MAX_TURNS}-turn limit")
+                    elif event.kind == EventKind.tool_call_started:
+                        brief_candidate = None
+                    elif event.kind == EventKind.tool_call_completed:
+                        brief_candidate = None
+                        duration = event.metadata.duration_ms
+                        call = PreflightToolCall(
+                            tool_name=str(payload.get("tool_name", "")),
+                            tool_args=_tool_args_to_str(payload.get("arguments")),
+                            result_text=str(payload.get("result") or payload.get("content", "")),
+                            success=bool(payload.get("success", True)),
+                            duration_ms=float(duration) if isinstance(duration, (int, float)) else None,
+                        )
+                        tool_calls.append(call)
+                        if on_tool_call is not None:
+                            await on_tool_call(call)
+                    elif event.kind == EventKind.telemetry_usage:
+                        input_tokens += int(payload.get("input_tokens") or 0)
+                        output_tokens += int(payload.get("output_tokens") or 0)
+                        cost_usd += float(payload.get("cost_usd") or 0)
+                        model = str(payload.get("model") or model)
+                        if on_usage is not None:
+                            await on_usage(report())
+                    elif event.kind == EventKind.session_ended:
+                        if payload.get("result") is not None:
+                            result_text = str(payload["result"])
                         break
-
-                    elif tf_event.kind == EventKind.session_error:
-                        msg = ""
-                        if isinstance(tf_event.payload, dict):
-                            msg = str(tf_event.payload.get("message", ""))
-                        log.warning("preflight_curator.session_error", error=msg)
-                        break
+                    elif event.kind in (EventKind.session_error, EventKind.job_failed):
+                        raise RuntimeError(str(payload.get("message") or "Scout session failed"))
+                if result_text is None and brief_candidate is None:
+                    raise RuntimeError("Scout ended without a final context brief")
         except TimeoutError:
-            log.warning(
-                "preflight_curator.session_timeout",
-                timeout_s=_SESSION_TIMEOUT_S,
-            )
-            with contextlib.suppress(Exception):
-                await self._adapter.abort_session(session_id)
-            # Return whatever the agent produced so far
-        except Exception:
-            log.warning("preflight_curator.stream_failed", exc_info=True)
-            with contextlib.suppress(Exception):
-                await self._adapter.abort_session(session_id)
+            log.warning("preflight_curator.session_timeout", job_id=config.job_id, timeout_s=_SESSION_TIMEOUT_S)
             raise
-
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        # Prefer the done-event result (complete text); fall back to
-        # the last agent transcript chunk (most likely the final brief).
-        brief = result_text or (agent_chunks[-1] if agent_chunks else "")
-        log.debug(
-            "preflight_curator.session_completed",
-            elapsed_ms=round(elapsed_ms, 1),
-            result_len=len(brief),
-            tool_call_count=len(tool_calls),
-        )
-
-        return PreflightReport(
-            brief=brief.strip(),
-            tool_calls=tool_calls,
-            elapsed_ms=round(elapsed_ms, 1),
-        )
+        except asyncio.CancelledError:
+            log.info("preflight_curator.session_cancelled", job_id=config.job_id)
+            raise
+        except Exception:
+            log.warning("preflight_curator.session_failed", job_id=config.job_id, exc_info=True)
+            raise
+        finally:
+            if session_id is not None:
+                try:
+                    await self._adapter.abort_session(session_id)
+                except Exception:
+                    log.warning("preflight_curator.session_close_failed", job_id=config.job_id, exc_info=True)
+        return report((result_text if result_text is not None else brief_candidate or "").strip())

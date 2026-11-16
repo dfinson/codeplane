@@ -251,11 +251,3 @@ class TraceForgeIngestBase:
         self._prompt_captured.discard(job_id)
         self._emitted_counts.pop(job_id, None)
         self._event_processor.cleanup(job_id)
-
-    async def _run_coderecon(self, job_id: str, repo_path: str, coderecon: Any | None) -> None:
-        if coderecon is None:
-            return
-        try:
-            await coderecon.ensure_repo_indexed(repo_path)
-        except Exception:
-            log.debug("%s_coderecon_failed", self._watcher_log_prefix, job_id=job_id, exc_info=True)

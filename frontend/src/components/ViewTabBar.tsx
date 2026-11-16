@@ -6,7 +6,7 @@ import { cn } from "../lib/utils";
 const DEFAULT_TAB_ITEMS = [
   { id: "live", icon: Radio, label: "Live", tip: "Real-time agent activity feed" },
   { id: "files", icon: FolderTree, label: "Files", tip: "Browse the workspace file tree" },
-  { id: "review", icon: ScanSearch, label: "Review", tip: "Review code changes and structural analysis", conditional: true },
+  { id: "review", icon: ScanSearch, label: "Review", tip: "Review code changes and the agent story", conditional: true },
   { id: "metrics", icon: BarChart3, label: "Metrics", tip: "Cost, tokens, and performance metrics" },
   { id: "artifacts", icon: Package, label: "Artifacts", tip: "Checkpoints, logs, and exported files", conditional: true },
 ] as const;

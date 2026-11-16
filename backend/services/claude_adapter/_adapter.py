@@ -62,6 +62,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         )
         self._consumer_tasks: dict[str, asyncio.Task[None]] = {}
         self._requested_models: dict[str, str] = {}
+        self._scout_models: dict[str, str] = {}
         self._model_verified: dict[str, bool] = {}
         # Stderr capture files for debugging failed sessions
         self._stderr_files: dict[str, str] = {}
@@ -89,7 +90,8 @@ class ClaudeAdapter(BaseAgentAdapter):
                 os.unlink(stderr_path)
         # Claude-specific model tracking
         job_id = self._session_to_job.get(session_id)
-        if job_id:
+        self._scout_models.pop(session_id, None)
+        if job_id and self.get_session_kind(session_id) != "preflight":
             self._requested_models.pop(job_id, None)
             self._model_verified.pop(job_id, None)
             self._log_seqs.pop(job_id, None)
@@ -143,6 +145,20 @@ class ClaudeAdapter(BaseAgentAdapter):
             tool_kind = _claude_tool_kind.get(tool_name, "custom-tool")
             full_cmd = str(input_data.get("command", "")) if tool_name == "Bash" else None
             file_name = str(input_data.get("file_path", "") or input_data.get("path", "")) or None
+            if config.session_kind == "preflight":
+                from backend.services.tools.preflight_curator import scout_read_allowed
+
+                if not scout_read_allowed(
+                    config.workspace_path,
+                    tool_kind,
+                    tool_name,
+                    [
+                        value
+                        for key in (("file_path", "path", "pattern") if tool_name == "Glob" else ("file_path", "path"))
+                        if isinstance(value := input_data.get(key), str) and value
+                    ],
+                ):
+                    return PermissionResultDeny(message="Scout tools are limited to workspace reads and searches")
             decision = await self._evaluate_permission(
                 session_id,
                 job_id,
@@ -198,7 +214,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                         try:
                             if isinstance(message, SystemMessage):
                                 job_id = self._session_to_job.get(session_id)
-                                if job_id:
+                                if job_id and self.get_session_kind(session_id) != "preflight":
                                     self._emit_tf(
                                         session_id,
                                         job_id,
@@ -229,6 +245,13 @@ class ClaudeAdapter(BaseAgentAdapter):
 
                     else:
                         # Iterator exhausted without ResultMessage — session ended
+                        if self.get_session_kind(session_id) == "preflight":
+                            self._emit_tf(
+                                session_id,
+                                self._session_to_job.get(session_id) or session_id,
+                                EventKind.job_failed,
+                                {"message": "Claude Scout ended without a final context brief"},
+                            )
                         done = True
                 except Exception as exc:
                     if MessageParseError is not None and isinstance(exc, MessageParseError):
@@ -314,9 +337,12 @@ class ClaudeAdapter(BaseAgentAdapter):
         content_blocks = getattr(message, "content", []) or []
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
+        is_scout = self.get_session_kind(session_id) == "preflight"
 
         # Lock in the main model from the first AssistantMessage that carries one
-        if job_id and model:
+        if is_scout and model:
+            self._scout_models[session_id] = model
+        elif job_id and model:
             requested = self._requested_models.get(job_id, "")
             if not self._model_verified.get(job_id):
                 self._model_verified[job_id] = True
@@ -325,12 +351,25 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
+        if is_scout:
+            texts = [block.text or "" for block in content_blocks if isinstance(block, TextBlock)]
+            has_tool_requests = any(isinstance(block, ToolUseBlock) for block in content_blocks)
+            if texts or has_tool_requests:
+                self._emit_tf(
+                    session_id,
+                    job_id,
+                    EventKind.message_assistant,
+                    {"content": "\n".join(texts), "has_tool_requests": has_tool_requests},
+                )
         for block in content_blocks:
             if isinstance(block, TextBlock):
+                if is_scout:
+                    continue
                 text = block.text or ""
                 if not text.strip():
                     continue
-                self._emit_tf(session_id, job_id, EventKind.message_assistant, {"content": text})
+                payload: dict[str, Any] = {"content": text}
+                self._emit_tf(session_id, job_id, EventKind.message_assistant, payload)
 
             elif isinstance(block, ToolUseBlock):
                 await self._process_tool_use_block(session_id, block, job_id)
@@ -437,7 +476,11 @@ class ClaudeAdapter(BaseAgentAdapter):
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
         if job_id:
-            model = self._job_main_models.get(job_id, "")
+            model = (
+                self._scout_models.get(session_id, "")
+                if self.get_session_kind(session_id) == "preflight"
+                else self._job_main_models.get(job_id, "")
+            )
             num_turns = getattr(message, "num_turns", 0) or 1
 
             self._emit_tf(
@@ -464,6 +507,21 @@ class ClaudeAdapter(BaseAgentAdapter):
                 job_id or session_id,
                 EventKind.job_failed,
                 {"message": "Claude session ended with error", "result": result_text},
+            )
+        elif self.get_session_kind(session_id) == "preflight":
+            if getattr(message, "result", None) is None:
+                self._emit_tf(
+                    session_id,
+                    job_id or session_id,
+                    EventKind.job_failed,
+                    {"message": "Claude Scout ended without a final context brief"},
+                )
+                return
+            self._emit_tf(
+                session_id,
+                job_id or session_id,
+                EventKind.session_ended,
+                {"result": getattr(message, "result", None)},
             )
         # On success no explicit event is emitted; the ``done=True`` break in
         # ``_consume_messages`` triggers the queue sentinel that ends the stream.
@@ -536,7 +594,9 @@ class ClaudeAdapter(BaseAgentAdapter):
 
         if config.job_id:
             self.set_job_id(session_id, config.job_id)
-            if config.model:
+            if config.session_kind == "preflight":
+                self._scout_models[session_id] = config.model or ""
+            elif config.model:
                 self._requested_models[config.job_id] = config.model
         if config.session_kind != "job":
             self.set_session_kind(session_id, config.session_kind)
@@ -547,12 +607,9 @@ class ClaudeAdapter(BaseAgentAdapter):
         self._stderr_files[session_id] = stderr_path
         self._stderr_file_objects[session_id] = stderr_file
 
-        # Build system prompt — append CodeRecon tool guidance when tools are provisioned (§8.5)
         # Sidecar/preflight sessions define their own identity — skip the
         # main-agent CODEPLANE_SYSTEM_PROMPT entirely.
         system_prompt = config.system_prompt_override or CODEPLANE_SYSTEM_PROMPT
-        if config.coderecon_tools is not None and config.coderecon_tools.system_prompt:
-            system_prompt = system_prompt + "\n\n" + config.coderecon_tools.system_prompt
 
         # Workspace memory — curated context hidden from transcript
         if config.memory_context:
@@ -589,13 +646,6 @@ class ClaudeAdapter(BaseAgentAdapter):
                     entry["env"] = srv.env
                 mcp_config[name] = entry
 
-        # CodeRecon in-process SDK tools (§8.1)
-        if config.coderecon_tools is not None and config.coderecon_tools.claude_mcp_server is not None:
-            mcp_config["coderecon"] = config.coderecon_tools.claude_mcp_server
-            # Auto-allow CodeRecon tools so they run without permission prompts
-            if config.coderecon_tools.allowed_tool_names:
-                options.allowed_tools = list(options.allowed_tools or []) + config.coderecon_tools.allowed_tool_names
-
         if mcp_config:
             options.mcp_servers = mcp_config
 
@@ -605,29 +655,28 @@ class ClaudeAdapter(BaseAgentAdapter):
 
         # Create client and connect — the SDK requires an AsyncIterable prompt
         # when can_use_tool is set (streaming mode).
+        client = None
         try:
-            client = ClaudeSDKClient(options)
-            await client.connect(_prompt_to_stream(config.prompt))
-        except Exception:
-            if options.resume:
-                # Resume failed — fall back to a fresh session (mirrors CopilotAdapter behaviour)
+            try:
+                client = ClaudeSDKClient(options)
+                await client.connect(_prompt_to_stream(config.prompt))
+            except Exception:
+                if not options.resume:
+                    raise
                 log.warning(
                     "claude_session_resume_failed_creating_new",
                     resume_id=options.resume,
                     exc_info=True,
                 )
+                _kill_sdk_subprocess(client)
                 options.resume = None
-                try:
-                    client = ClaudeSDKClient(options)
-                    await client.connect(_prompt_to_stream(config.prompt))
-                except Exception:
-                    log.error("claude_session_create_failed", exc_info=True)
-                    self._cleanup_session(session_id)
-                    raise
-            else:
-                log.error("claude_session_create_failed", exc_info=True)
-                self._cleanup_session(session_id)
-                raise
+                client = ClaudeSDKClient(options)
+                await client.connect(_prompt_to_stream(config.prompt))
+        except BaseException:
+            log.error("claude_session_create_failed", exc_info=True)
+            _kill_sdk_subprocess(client)
+            self._cleanup_session(session_id)
+            raise
 
         self._clients[session_id] = client
 

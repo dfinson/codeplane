@@ -119,6 +119,26 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
 
 
 @pytest.mark.asyncio
+async def test_quota_observations_merge_resources_and_keep_fractional_balances(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from backend.models.api_schemas import TelemetryQuotaSnapshot
+
+    async with session_factory() as session:
+        repo = TelemetrySummaryRepository(session)
+        await repo.init_job("job-1", sdk="copilot")
+        await repo.set_quota("job-1", json.dumps({"credits": {"used_requests": 1.25, "overage": 0.5}}))
+        await repo.set_quota("job-1", json.dumps({"requests": {"used_requests": 2}}))
+        await repo.set_quota("job-1", json.dumps({"credits": {"used_requests": 3.75, "overage": 0.25}}))
+        stored = await session.scalar(text("SELECT quota_json FROM job_telemetry_summary WHERE job_id = 'job-1'"))
+    resources = json.loads(stored)
+    assert resources["requests"]["used_requests"] == 2
+    snapshot = TelemetryQuotaSnapshot.model_validate(resources["credits"])
+    assert snapshot.used_requests == 3.75
+    assert snapshot.overage == 0.25
+
+
+@pytest.mark.asyncio
 async def test_subscriber_persists_usage_tools_files_and_messages(
     session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,

@@ -313,9 +313,12 @@ async def cancel_job(
     svc: FromDishka[JobService],
     runtime_service: FromDishka[RuntimeService],
     ingest: FromDishka[IngestService],
+    session: FromDishka[AsyncSession],
 ) -> JobResponse:
     """Cancel a running or queued job."""
     job = await svc.cancel_job(job_id)
+    # Scout finalizes through a separate session when the runtime is canceled.
+    await session.commit()
 
     # Delegate abort to IngestService for imported sessions
     if job.source != "managed":

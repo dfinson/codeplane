@@ -148,29 +148,6 @@ export function handlePolicySettingsChanged(_state: AppState): Partial<AppState>
   };
 }
 
-export function handleRepoIndexProgress(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
-  const repo = payload.repo as string;
-  return {
-    repoIndexState: {
-      ...state.repoIndexState,
-      [repo]: {
-        repo,
-        indexed: payload.indexed as number,
-        total: payload.total as number,
-        phase: payload.phase as string,
-      },
-    },
-  };
-}
-
-export function handleRepoIndexComplete(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
-  // Remove from active indexing state — the repo is now ready.
-  const repo = payload.repo as string;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { [repo]: _done, ...rest } = state.repoIndexState;
-  return { repoIndexState: rest };
-}
-
 export function handleContextHandoff(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
   const jobId = payload.jobId as string | undefined;
   if (!jobId) return null;
@@ -199,24 +176,5 @@ export const miscHandlers: Record<string, SSEHandler> = {
   "telemetry.updated": handleTelemetryUpdated,
   "artifacts.updated": handleArtifactsUpdated,
   "policy.settings_changed": handlePolicySettingsChanged,
-  "repo.index_progress": handleRepoIndexProgress,
-  "repo.index_complete": handleRepoIndexComplete,
   "context.handoff": handleContextHandoff,
-  "structural.warning": (state, payload) => {
-    const jobId = payload.jobId as string | undefined;
-    if (!jobId) return {};
-    const warning = {
-      warningType: (payload.warningType as string) || "",
-      detail: (payload.detail as string) || "",
-      repo: (payload.repo as string) || "",
-      timestamp: Date.now(),
-    };
-    const existing = state.structuralWarnings[jobId] ?? [];
-    return {
-      structuralWarnings: {
-        ...state.structuralWarnings,
-        [jobId]: [...existing, warning],
-      },
-    };
-  },
 };

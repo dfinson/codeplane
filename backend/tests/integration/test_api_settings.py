@@ -177,16 +177,26 @@ class TestListRepos:
         assert created.json()["repoPaths"][0] in resp.json()["items"]
 
 
+@pytest.fixture
+async def detail_repo_path(client: AsyncClient, tmp_path: Path) -> str:
+    response = await client.post(
+        "/api/settings/projects",
+        json={"name": "Repository detail", "repoPaths": [str(tmp_path)]},
+    )
+    assert response.status_code == 201
+    return str(response.json()["repoPaths"][0])
+
+
 class TestGetRepoDetail:
     """GET /api/settings/repos/{repo_path}"""
 
     @pytest.mark.asyncio
-    async def test_registered_repo(self, client: AsyncClient, app: FastAPI) -> None:
+    async def test_registered_repo(self, client: AsyncClient, app: FastAPI, detail_repo_path: str) -> None:
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["path"] == "/test/repo"
+        assert data["path"] == detail_repo_path
         assert data["originUrl"] is not None
         assert data["baseBranch"] == "main"
         assert data["currentBranch"] == "feature/my-branch"
@@ -238,22 +248,22 @@ class TestGetRepoDetail:
 
     @pytest.mark.asyncio
     async def test_detached_head_returns_head_string(
-        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock, detail_repo_path: str
     ) -> None:
         mock_git_service.get_current_branch.return_value = "HEAD"
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["currentBranch"] == "HEAD"
 
     @pytest.mark.asyncio
     async def test_current_branch_git_error_returns_none(
-        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock
+        self, client: AsyncClient, app: FastAPI, mock_git_service: AsyncMock, detail_repo_path: str
     ) -> None:
         mock_git_service.get_current_branch.side_effect = GitError("detached HEAD")
 
-        resp = await client.get("/api/settings/repos//test/repo")
+        resp = await client.get(f"/api/settings/repos/{quote(detail_repo_path, safe='')}")
         assert resp.status_code == 200
         data = resp.json()
         assert data["currentBranch"] is None
@@ -497,6 +507,7 @@ class TestBrowseDirectories:
         (fake_home / "readme.txt").write_text("hi")  # not a dir — excluded
 
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get("/api/settings/browse", params={"path": str(fake_home)})
         assert resp.status_code == 200
@@ -516,6 +527,7 @@ class TestBrowseDirectories:
         fake_home = tmp_path / "fakehome"
         fake_home.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get(
             "/api/settings/browse",
@@ -535,6 +547,7 @@ class TestBrowseDirectories:
         outside = tmp_path / "outside"
         outside.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("USERPROFILE", str(fake_home))
 
         resp = await client.get("/api/settings/browse", params={"path": str(outside)})
         assert resp.status_code == 403

@@ -67,8 +67,6 @@ export {
   selectHoveredPlanItemId,
   selectSecondarySessions,
   selectContextHandoffs,
-  selectMultiSession,
-  selectReviewStory,
 } from "./selectors";
 
 import type {
@@ -206,7 +204,7 @@ function touchJob(jobId: string): string[] {
 
 /** Evict per-job data for stale jobs from a state snapshot. */
 function evictStaleJobs(
-  state: Pick<AppState, "logs" | "transcript" | "diffs" | "stories" | "plans" | "timelines" | "activityTimelines" | "secondarySessions" | "streamingMessages" | "streamingToolOutput" | "multiSessions" | "reviewStories" | "contextHandoffs">,
+  state: Pick<AppState, "logs" | "transcript" | "diffs" | "stories" | "plans" | "timelines" | "activityTimelines" | "secondarySessions" | "streamingMessages" | "streamingToolOutput" | "contextHandoffs">,
   evictIds: string[],
 ): Partial<AppState> | null {
   if (evictIds.length === 0) return null;
@@ -218,8 +216,6 @@ function evictStaleJobs(
   const timelines = { ...state.timelines };
   const activityTimelines = { ...state.activityTimelines };
   const secondarySessions = { ...state.secondarySessions };
-  const multiSessions = { ...state.multiSessions };
-  const reviewStories = { ...state.reviewStories };
   const contextHandoffs = { ...state.contextHandoffs };
   let streamingMessages = state.streamingMessages;
   let streamingToolOutput = state.streamingToolOutput;
@@ -234,8 +230,6 @@ function evictStaleJobs(
     delete timelines[id];
     delete activityTimelines[id];
     delete secondarySessions[id];
-    delete multiSessions[id];
-    delete reviewStories[id];
     delete contextHandoffs[id];
     // Clean streaming messages for evicted jobs
     for (const key of Object.keys(streamingMessages)) {
@@ -251,7 +245,7 @@ function evictStaleJobs(
       }
     }
   }
-  return { logs, transcript, diffs, stories, plans, timelines, activityTimelines, secondarySessions, streamingMessages, streamingToolOutput, multiSessions, reviewStories, contextHandoffs };
+  return { logs, transcript, diffs, stories, plans, timelines, activityTimelines, secondarySessions, streamingMessages, streamingToolOutput, contextHandoffs };
 }
 
 /** Rebuild activity timeline state from a flat list of turn summary payloads (hydration). */
@@ -349,10 +343,6 @@ export const useStore = create<AppState>((set, get) => ({
   streamingReasoning: {},
   telemetryVersions: {},
   artifactVersions: {},
-  repoIndexState: {},
-  multiSessions: {},
-  reviewStories: {},
-  structuralWarnings: {},
   contextHandoffs: {},
   connectionStatus: "reconnecting",
   reconnectAttempt: 0,
@@ -579,11 +569,6 @@ export const useStore = create<AppState>((set, get) => ({
       if (update !== null) set(update);
     }
 
-    // Side-effect: prefetch structural review data when a job enters review.
-    if (eventType === "job.review") {
-      const jobId = (payload as { jobId?: string }).jobId;
-      if (jobId) get().prefetchReviewData(jobId);
-    }
   },
   // ------------------------------------------------------------------
   // Terminal actions
@@ -672,29 +657,7 @@ export const useStore = create<AppState>((set, get) => ({
   })),
 
   // Structural review cache actions
-  setMultiSession: (jobId, data) => {
-    const evictIds = touchJob(jobId);
-    set((state) => ({
-      ...evictStaleJobs(state, evictIds),
-      multiSessions: { ...state.multiSessions, [jobId]: data },
-    }));
-  },
 
-  setReviewStory: (jobId, data) => {
-    const evictIds = touchJob(jobId);
-    set((state) => ({
-      ...evictStaleJobs(state, evictIds),
-      reviewStories: { ...state.reviewStories, [jobId]: data },
-    }));
-  },
-
-  prefetchReviewData: (jobId) => {
-    // Fire-and-forget — fetch review data into cache
-    import("../api/client").then(({ fetchMultiSession, fetchReviewStory }) => {
-      fetchMultiSession(jobId).then((d) => get().setMultiSession(jobId, d)).catch(() => {});
-      fetchReviewStory(jobId).then((d) => get().setReviewStory(jobId, d)).catch(() => {});
-    });
-  },
 }));
 
 // Expose the store on window so Playwright capture scripts can inject

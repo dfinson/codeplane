@@ -14,7 +14,6 @@ export const modKey = isMac ? "⌘" : "Ctrl";
 /** Steps that indicate active setup is still in progress. */
 const ACTIVE_SETUP_STEPS = new Set([
   "creating_workspace",
-  "worktree_indexed",
   "configuring_policy",
   "exploring_codebase",
   "starting_agent",
@@ -23,7 +22,6 @@ const ACTIVE_SETUP_STEPS = new Set([
 /** Human-readable label for each setup step. */
 const SETUP_STEP_LABELS: Record<string, string> = {
   creating_workspace: "Creating workspace…",
-  worktree_indexed: "Indexing workspace…",
   configuring_policy: "Configuring permissions…",
   exploring_codebase: "Exploring codebase…",
   starting_agent: "Starting agent…",
