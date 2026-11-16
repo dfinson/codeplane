@@ -150,13 +150,9 @@ class RecipeRunRepository(BaseRepository):
     ) -> RecipeRunResponse:
         request_key = start_request_key or f"initial:{job_id}"
         checksum = content_checksum(snapshot.model_dump(mode="json", exclude_unset=True))
-        existing = await self._session.scalar(
-            select(RecipeRunRow)
-            .where(RecipeRunRow.start_request_key == request_key)
-            .execution_options(populate_existing=True)
-        )
-        if existing is not None:
-            result = self._run(existing)
+
+        def require_same_start(row: RecipeRunRow) -> RecipeRunResponse:
+            result = self._run(row)
             if (
                 result.job_id != job_id
                 or result.snapshot_checksum != checksum
@@ -167,6 +163,14 @@ class RecipeRunRepository(BaseRepository):
             ):
                 raise StateConflictError("This run-start request already identifies different inputs or ownership.")
             return result
+
+        existing = await self._session.scalar(
+            select(RecipeRunRow)
+            .where(RecipeRunRow.start_request_key == request_key)
+            .execution_options(populate_existing=True)
+        )
+        if existing is not None:
+            return require_same_start(existing)
         current = await self.get_for_job(job_id)
         if current is not None:
             if current.resolved_at is None:
@@ -226,7 +230,7 @@ class RecipeRunRepository(BaseRepository):
         stored = await self._session.scalar(select(RecipeRunRow).where(RecipeRunRow.start_request_key == request_key))
         if stored is None:
             raise StateConflictError("Another run start was admitted concurrently for this Job.")
-        return self._run(stored)
+        return require_same_start(stored)
 
     async def list_runs(
         self, job_id: str, *, after: int = 0, limit: int = 30, high_water: int | None = None

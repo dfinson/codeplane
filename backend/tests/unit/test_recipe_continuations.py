@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 from alembic.config import Config
-from sqlalchemy import MetaData, Table, create_engine, func, select
+from sqlalchemy import MetaData, Table, create_engine, delete, func, select
 
 from alembic import command
 from backend.models.db import ApprovalRow, RecipeRunRow
 from backend.models.domain import StateConflictError
-from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition
+from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition, RecipeParameter
 from backend.persistence.database import serialized_write
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.services.recipe.validation import content_checksum
@@ -95,6 +95,41 @@ async def test_concurrent_double_resume_reuses_one_admitted_run(sessions):
                 previous.inputs,
                 **{**continuation_arguments(previous), "instruction": "A different request"},
             )
+
+
+async def test_post_insert_collision_rechecks_the_competing_request_payload(sessions):
+    definition = RecipeDefinition(
+        name="Competing starts",
+        entry_steps=["work"],
+        steps=[agent("work")],
+        parameters={"request": RecipeParameter(type="string", required=False, default="seed")},
+    )
+    seeded = await create_run(sessions, definition)
+    async with sessions() as session:
+        await session.execute(delete(RecipeRunRow).where(RecipeRunRow.id == seeded.id))
+        await session.commit()
+
+    class CompetingRepository(RecipeRunRepository):
+        async def get_for_job(self, job_id):
+            before = await super().get_for_job(job_id)
+            assert before is None
+            async with sessions() as competitor:
+                await RecipeRunRepository(competitor).create(
+                    job_id, seeded.snapshot, {"request": "winner"}, start_request_key="same-request"
+                )
+                await competitor.commit()
+            return before
+
+    async with sessions() as session:
+        with pytest.raises(StateConflictError, match="different inputs"):
+            await CompetingRepository(session).create(
+                seeded.job_id, seeded.snapshot, {"request": "loser"}, start_request_key="same-request"
+            )
+        await session.rollback()
+    async with sessions() as session:
+        winner = await RecipeRunRepository(session).get_for_job(seeded.job_id)
+        assert winner.inputs == {"request": "winner"}
+        assert await session.scalar(select(func.count()).select_from(RecipeRunRow)) == 1
 
 
 async def test_canceled_uncertain_run_still_blocks_another_run(sessions):
