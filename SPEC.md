@@ -17,6 +17,8 @@ paths. Artifact collection is `not_applicable`, not a fabricated success.
 record batches with `sourceKey`, `startIndex` and the previously accepted
 `prefixSha256`. Request bodies are limited to 1 MiB before JSON parsing, batches
 to 1,000 records, and normalized output plus buffered state to 8 MiB.
+New binding IDs are URL-safe path segments (ASCII letters, digits, `.`, `_`, `~`
+and `-`, excluding `.`/`..`); external session IDs and source keys remain opaque.
 `GET /api/integrations/{bindingId}/events` reads canonical history with a separate
 storage cursor. These are operator import endpoints, not binding-scoped external
 ingest credentials or execution admission.
@@ -34,6 +36,8 @@ request/run-operation identity. Otherwise assistant and metadata records remain
 in one derived source-session segment. Genuine operator input can establish a
 boundary. Source termination or `endSession: true` closes the segment without
 claiming a managed execution outcome. An empty batch is valid only to declare
+An error severity alone, including a mapped span emitted as `session.error`,
+is not termination evidence and does not close the registered source. An empty batch is valid only to declare
 that end explicitly. Acquisition occurrences keep distinct event identities
 even when their text and record indexes match.
 Authoritative operator messages are deduplicated by canonical event identity,
@@ -58,6 +62,12 @@ Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
 and replay. Historical NULL remains unknown, never reconstructed, and downgrade
 refuses to erase retained raw data. Event timestamps are stored as UTC instants.
 Raw data remains excluded from metadata-only export.
+Migration 0081 separates transcript-step timing provenance from canonical
+transport ordering. Source projections use supplied source bounds across batches
+and retain the last source clock for empty import-end requests. Unknown bounds
+and duration remain NULL in step rows/read models. Existing timestamp bytes are
+retained with `legacy_unrecorded` provenance, and live timing remains explicit
+`live` timing. Downgrade refuses to erase recorded provenance or nullable bounds.
 
 `services/adapters/contracts.py` separates observation, execution, blocking
 permission interception and text-only completion. An observer does not acquire
@@ -103,6 +113,19 @@ existing Job router and current policy to that exact provider session. It does
 not register another budget or replace the primary session's workspace. The
 adapter validates the attempt/epoch and uses its trusted SessionConfig workspace.
 Cross-provider runners attach this policy before admitting their first prompt.
+Strict dispatch publishes a durable admission receipt with the exact target
+session/token and accepted/unconfirmed markers, not an observed operator input.
+Receipts remain visible without feeding title, step or sidecar input processing.
+Uncorrelated SDK observations are retained separately.
+
+Internal `execution.contract.pinned` records bind an immutable implementation
+selection to a durable application admission ID and the carried Job budget ID.
+Recovery reads that original pin without minting one for unrecorded history.
+Fresh continuation uses a new admission, not a fresh budget. Actual SDK handles,
+live epochs and tokens are recorded separately and may change on recovery.
+The trusted root catalog distinguishes implementations still available for old
+pins from the selected contract for new admission. Conflicts or unavailable
+pinned implementations require reconciliation rather than silent migration.
 
 Attempt model reports are session-qualified `model.observed` events carrying
 requested/actual identities and match status, with recipe, attempt and epoch

@@ -32,6 +32,7 @@ from backend.models.events import (
     TRANSCRIPT_STREAMING_KINDS,
     EventKind,
     SessionEvent,
+    is_admission_receipt,
 )
 from backend.models.session_event import EventMetadata
 from backend.services.events.activity_projection import ActivityProjection
@@ -173,6 +174,11 @@ class EventProcessor:
             workspace, reference = self._attempt_workspaces[key]
             return await processor.process_event(job_id, event, workspace, reference, replay=replay)
         kind = event.kind
+        if is_admission_receipt(event):
+            if not replay:
+                await self._event_bus.publish(event)
+                return event
+            return None
         if replay:
             await self._reconstruct(event)
             return None
@@ -186,6 +192,16 @@ class EventProcessor:
                 await self._diff_service.on_worktree_file_modified(job_id, worktree_path, base_ref)
             if diff_eligible or not self._retain_source_events:
                 return None
+
+        if self._retain_source_events and kind == EventKind.tool_call_started:
+            if self._step_tracker is not None:
+                await self._step_tracker.on_transcript_event(job_id, event)
+                current = self._current_step(job_id, event)
+                if current is not None:
+                    event.payload["step_id"] = current.step_id
+                    event.payload["step_number"] = current.step_number
+            if self._activity_projection is not None:
+                await self._activity_projection.push(event)
 
         # ── TraceForge enrichment ──
         # Run the TF enricher before any CodePlane annotation so that

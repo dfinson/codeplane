@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from backend.models.db import StepRow
@@ -38,6 +39,8 @@ class StepPersistenceSubscriber:
 
     async def _on_step_started(self, event: SessionEvent) -> None:
         p = cast("StepStartedPayloadDict", event.payload)
+        source_start = p.get("source_started_at")
+        timing_source = p.get("timing_source", "legacy_unrecorded")
         row = StepRow(
             id=p["step_id"],
             job_id=event.session_id,
@@ -45,7 +48,10 @@ class StepPersistenceSubscriber:
             turn_id=p.get("turn_id"),
             intent=p.get("intent", ""),
             trigger=p["trigger"],
-            started_at=event.timestamp,
+            started_at=(
+                datetime.fromisoformat(source_start) if source_start is not None else None
+            ) if timing_source == "source" else event.timestamp,
+            timing_source=timing_source,
         )
         await self._step_repo.create(row)
 
@@ -53,6 +59,10 @@ class StepPersistenceSubscriber:
         p = cast("StepCompletedPayloadDict", event.payload)
         step_id = p["step_id"]
         assert step_id is not None
+        source_end = p.get("source_completed_at")
+        completed_at = (
+            datetime.fromisoformat(source_end) if source_end is not None else None
+        ) if p.get("timing_source") == "source" else event.timestamp
 
         # Derive title from files_written or agent_message
         title = _derive_step_title(
@@ -66,7 +76,7 @@ class StepPersistenceSubscriber:
             tool_count=p.get("tool_count", 0),
             duration_ms=p.get("duration_ms"),
             agent_message=p.get("agent_message"),
-            completed_at=event.timestamp,
+            completed_at=completed_at,
             start_sha=p.get("start_sha"),
             end_sha=p.get("end_sha"),
             files_read=json.dumps(p.get("files_read", [])),

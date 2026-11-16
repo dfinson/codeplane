@@ -176,6 +176,10 @@ TRANSCRIPT_STREAMING_KINDS: frozenset[EventKind] = frozenset(
 )
 
 
+def is_admission_receipt(event: SessionEvent) -> bool:
+    return bool(event.payload.get("admission_status") or event.payload.get("execution_status") == "unconfirmed")
+
+
 # ---------------------------------------------------------------------------
 # Typed event payloads
 #
@@ -373,12 +377,17 @@ class TelemetryUpdatedPayloadDict(_BasePayload, total=False):
 class StepStartedPayloadDict(_BasePayload, total=False):
     intent: str
     trigger: str
+    timing_source: str
+    source_started_at: str | None
 
 
 class StepCompletedPayloadDict(_BasePayload, total=False):
     status: str
     tool_count: int
-    duration_ms: int
+    duration_ms: int | None
+    timing_source: str
+    source_started_at: str | None
+    source_completed_at: str | None
     has_summary: bool
     agent_message: str | None
     files_read: list[str]
@@ -387,6 +396,9 @@ class StepCompletedPayloadDict(_BasePayload, total=False):
     start_sha: str | None
     end_sha: str | None
     preceding_context: str | None
+    diff_additions: int
+    diff_deletions: int
+    worktree_path: str | None
 
 
 class StepTitlePayloadDict(_BasePayload, total=False):

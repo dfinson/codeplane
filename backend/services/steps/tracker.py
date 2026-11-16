@@ -28,7 +28,14 @@ if TYPE_CHECKING:
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
 
-from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.events import (
+    EventKind,
+    SessionEvent,
+    StepCompletedPayloadDict,
+    StepStartedPayloadDict,
+    is_admission_receipt,
+    new_event,
+)
 from backend.models.session_event import EventMetadata
 from backend.services.git.git_service import GitError
 from backend.services.tools.tool_classifier import TOOL_CATEGORIES
@@ -74,6 +81,15 @@ class _StepState:
     files_read: list[str] = field(default_factory=list)
     files_written: list[str] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
+    source_start_known: bool = True
+    source_start_event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _SourceClock:
+    timestamp: datetime
+    event_id: str
+    known: bool
 
 
 class StepTracker:
@@ -96,10 +112,13 @@ class StepTracker:
         git_service: GitService | None = None,
         *,
         metadata: EventMetadata | None = None,
+        source_timestamps: bool = False,
     ) -> None:
         self._event_bus = event_bus
         self._git_service = git_service
         self._metadata = metadata
+        self._source_timestamps = source_timestamps
+        self._source_clock: dict[str, _SourceClock] = {}
         self._attempts: dict[tuple[str, str, str], StepTracker] = {}
         self._current: dict[str, _StepState] = {}
         self._counters: dict[str, int] = {}
@@ -111,6 +130,18 @@ class StepTracker:
 
     _BUFFER_SIZE = 10
 
+    def observe_source_time(self, job_id: str, event: SessionEvent) -> None:
+        if not self._source_timestamps or is_admission_receipt(event):
+            return
+        source = event.payload.get("_codeplane_source")
+        known = not (isinstance(source, dict) and source.get("timestamp_fallback") is True)
+        timestamp = event.timestamp.replace(tzinfo=UTC) if event.timestamp.tzinfo is None else event.timestamp
+        self._source_clock[job_id] = _SourceClock(timestamp, event.id, known)
+
+    def source_end_timestamp(self, job_id: str) -> datetime | None:
+        clock = self._source_clock.get(job_id)
+        return clock.timestamp if clock is not None else None
+
     def snapshot(self, job_id: str) -> dict[str, Any]:
         current = self._current.get(job_id)
         state = None
@@ -120,11 +151,26 @@ class StepTracker:
         return {
             "version": 1, "counter": self._counters.get(job_id, 0), "current": state,
             "buffer": [dict(entry) for entry in self._transcript_buffers.get(job_id, ())],
+            "source_timestamps": self._source_timestamps,
+            "source_clock": (
+                {
+                    "timestamp": self._source_clock[job_id].timestamp.isoformat(),
+                    "event_id": self._source_clock[job_id].event_id, "known": self._source_clock[job_id].known,
+                }
+                if job_id in self._source_clock else None
+            ),
         }
 
     def restore_snapshot(self, job_id: str, value: dict[str, Any]) -> None:
         if value.get("version") != 1 or not isinstance(value.get("counter"), int) or value["counter"] < 0:
             raise ValueError("Invalid step projection checkpoint")
+        if value.get("source_timestamps", False) != self._source_timestamps:
+            raise ValueError("Step timing semantics changed; source reconciliation is required")
+        raw_clock = value.get("source_clock")
+        if raw_clock is not None:
+            self._source_clock[job_id] = TypeAdapter(_SourceClock).validate_python(raw_clock)
+        else:
+            self._source_clock.pop(job_id, None)
         buffer = TypeAdapter(list[dict[str, str]]).validate_python(value.get("buffer"))
         if len(buffer) > self._BUFFER_SIZE:
             raise ValueError("Step projection checkpoint exceeds buffer bound")
@@ -213,7 +259,7 @@ class StepTracker:
             await tracker.on_transcript_event(job_id, event)
             return
         payload = event.payload
-        if payload.get("admission_status") or payload.get("execution_status") == "unconfirmed":
+        if is_admission_receipt(event):
             return
         content = str(payload.get("content", "") or "")
         turn_id = payload.get("turn_id") or ""
@@ -299,7 +345,7 @@ class StepTracker:
         if new_step_trigger:
             if current:
                 await self._close(job_id, current, "completed")
-            await self._open(job_id, intent, turn_id, new_step_trigger)
+            await self._open(job_id, intent, turn_id, new_step_trigger, source_event=event)
             current = self._current[job_id]
 
         if current:
@@ -361,6 +407,8 @@ class StepTracker:
         intent: str,
         turn_id: str | None,
         trigger: str,
+        *,
+        source_event: SessionEvent | None = None,
     ) -> None:
         n = self._counters.get(job_id, 0) + 1
         self._counters[job_id] = n
@@ -382,29 +430,41 @@ class StepTracker:
                 except GitError:
                     log.debug("step_open_rev_parse_failed", job_id=job_id, exc_info=True)
 
+        source = source_event.payload.get("_codeplane_source") if source_event is not None else None
+        source_known = not (isinstance(source, dict) and source.get("timestamp_fallback") is True)
+        if self._source_timestamps:
+            if source_event is None:
+                raise ValueError("An observation step requires source timestamp provenance")
+            started_at = source_event.timestamp
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=UTC)
+        else:
+            started_at = datetime.now(UTC)
         state = _StepState(
             step_id=step_id,
             step_number=n,
             turn_id=turn_id,
             intent=intent,
             trigger=trigger,
-            started_at=datetime.now(UTC),
+            started_at=started_at,
             start_sha=start_sha,
+            source_start_known=source_known if self._source_timestamps else True,
+            source_start_event_id=source_event.id if self._source_timestamps and source_event is not None else None,
         )
         self._current[job_id] = state
+        payload: StepStartedPayloadDict = {
+            "step_id": step_id, "step_number": n, "turn_id": turn_id, "intent": intent, "trigger": trigger,
+            "timing_source": "source" if self._source_timestamps else "live",
+        }
+        if self._source_timestamps:
+            payload["source_started_at"] = state.started_at.isoformat() if state.source_start_known else None
         await self._event_bus.publish(
             new_event(
                 session_id=job_id,
                 timestamp=state.started_at,
                 kind=EventKind.step_started,
                 metadata=self._metadata,
-                payload={
-                    "step_id": step_id,
-                    "step_number": n,
-                    "turn_id": turn_id,
-                    "intent": intent,
-                    "trigger": trigger,
-                },
+                payload=payload,
             )
         )
 
@@ -417,8 +477,28 @@ class StepTracker:
         if job_id not in self._current:
             return  # Already closed — idempotent
 
-        now = datetime.now(UTC)
-        duration_ms = int((now - state.started_at).total_seconds() * 1000)
+        timing: StepCompletedPayloadDict = {}
+        duration_ms: int | None
+        if self._source_timestamps:
+            clock = self._source_clock.get(job_id)
+            now = clock.timestamp if clock is not None else state.started_at
+            end_known = (
+                clock is not None and clock.known and clock.event_id != state.source_start_event_id
+                and (not state.source_start_known or now >= state.started_at)
+            )
+            duration_ms = (
+                int((now - state.started_at).total_seconds() * 1000)
+                if state.source_start_known and end_known else None
+            )
+            timing = {
+                "timing_source": "source",
+                "source_started_at": state.started_at.isoformat() if state.source_start_known else None,
+                "source_completed_at": now.isoformat() if end_known else None,
+            }
+        else:
+            now = datetime.now(UTC)
+            duration_ms = int((now - state.started_at).total_seconds() * 1000)
+            timing = {"timing_source": "live"}
 
         end_sha: str | None = None
         if self._git_service:
@@ -456,30 +536,32 @@ class StepTracker:
                 except GitError:
                     log.debug("step_diff_numstat_failed", job_id=job_id, exc_info=True)
 
+        payload: StepCompletedPayloadDict = {
+            "step_id": state.step_id,
+            "turn_id": state.turn_id,
+            "status": status,
+            "tool_count": state.tool_count,
+            "duration_ms": duration_ms,
+            "has_summary": state.last_agent_message is not None,
+            "agent_message": state.last_agent_message,
+            "files_read": state.files_read,
+            "files_written": state.files_written,
+            "tool_names": state.tool_names,
+            "start_sha": state.start_sha,
+            "end_sha": end_sha,
+            "preceding_context": preceding_context,
+            "diff_additions": diff_additions,
+            "diff_deletions": diff_deletions,
+            "worktree_path": self._worktree_paths.get(job_id),
+        }
+        payload.update(timing)
         await self._event_bus.publish(
             new_event(
                 session_id=job_id,
                 timestamp=now,
                 kind=EventKind.step_completed,
                 metadata=self._metadata,
-                payload={
-                    "step_id": state.step_id,
-                    "turn_id": state.turn_id,
-                    "status": status,
-                    "tool_count": state.tool_count,
-                    "duration_ms": duration_ms,
-                    "has_summary": state.last_agent_message is not None,
-                    "agent_message": state.last_agent_message,
-                    "files_read": state.files_read,
-                    "files_written": state.files_written,
-                    "tool_names": state.tool_names,
-                    "start_sha": state.start_sha,
-                    "end_sha": end_sha,
-                    "preceding_context": preceding_context,
-                    "diff_additions": diff_additions,
-                    "diff_deletions": diff_deletions,
-                    "worktree_path": self._worktree_paths.get(job_id),
-                },
+                payload=payload,
             )
         )
         self._current.pop(job_id, None)
@@ -494,6 +576,7 @@ class StepTracker:
         self._worktree_paths.pop(job_id, None)
         self._observed_jobs.discard(job_id)
         self._transcript_buffers.pop(job_id, None)
+        self._source_clock.pop(job_id, None)
 
     def cleanup_attempt(self, job_id: str, attempt_id: str, execution_epoch: str) -> None:
         tracker = self._attempts.pop((job_id, execution_epoch, attempt_id), None)

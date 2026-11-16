@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
+from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, is_admission_receipt, new_event
 from backend.services.action_policy.credential_filter import filter_credentials
 
 if TYPE_CHECKING:
@@ -69,7 +69,7 @@ class ActivityProjection:
     async def push(self, event: SessionEvent, *, replay: bool = False) -> None:
         if event.kind not in TRANSCRIPT_KINDS:
             return
-        if event.payload.get("admission_status") or event.payload.get("execution_status") == "unconfirmed":
+        if is_admission_receipt(event):
             return
         key = self._key(event)
         current = self._active.get(key)

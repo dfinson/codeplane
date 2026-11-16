@@ -12,10 +12,13 @@ from backend.persistence.event_repo import EventRepository
 from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
+from backend.persistence.step_repo import StepRepository
+from backend.services.events.event_bus import EventBus
 from backend.services.events.sse_manager import SSEConnection, SSEManager
 from backend.services.ingest.history_registration import HistoryRegistration
 from backend.services.ingest.mapping import PARSER_REVISION
 from backend.services.ingest.record_service import ObservationRecords
+from backend.services.steps.persistence import StepPersistenceSubscriber
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 
@@ -182,6 +185,131 @@ async def test_import_end_retains_unfinished_tool_without_claiming_an_outcome(se
         assert tool.payload["_codeplane_pairing"]["reason"] == "missing_completion"
         assert "success" not in tool.payload and "result" not in tool.payload
         assert not any(event.kind in {"tool.call.completed", "tool.call.failed", "job.completed"} for event in stored)
+
+
+async def test_mapped_operation_error_does_not_terminate_the_registered_source(session_factory) -> None:
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="binding", project_id="proj-1", format_id="maf", external_session_id="source",
+        )
+        await session.commit()
+        service = ObservationRecords(bindings, jobs, AsyncMock())
+        receipt = await service.append("binding", ObservationRecordBatch(
+            source_key="events", start_index=0, records=[
+                {
+                    "name": "agents.storage.read", "start_time_unix_nano": 0, "end_time_unix_nano": 1_000_000_000,
+                    "status": {"code": 2, "message": "Storage read failed"}, "attributes": {},
+                },
+                {"name": "agents.adapter.process", "attributes": {"activity.type": "message"}},
+            ],
+        ))
+        assert not receipt.session_closed
+        await service.append("binding", ObservationRecordBatch(
+            source_key="events", start_index=2, prefix_sha256=receipt.prefix_sha256,
+            records=[{"name": "agents.adapter.process", "attributes": {"activity.type": "message"}}],
+        ))
+        stored = [item.event for item in await EventRepository(session).list_after(0, job_id=job.id)]
+        assert any(
+            event.kind == "session.error" and event.payload["message"] == "Storage read failed" for event in stored
+        )
+        assert len([event for event in stored if event.kind == "message.user"]) == 2
+        assert not (await bindings.projection("binding")).buffer["closed"]
+
+
+async def test_historical_step_clock_survives_batches_and_empty_import_end(session_factory) -> None:
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="binding", project_id="proj-1", format_id="copilot", external_session_id="source",
+        )
+        await session.commit()
+        bus = EventBus()
+        steps = StepRepository(session_factory)
+        bus.subscribe(StepPersistenceSubscriber(steps), required=True)
+        first = await ObservationRecords(bindings, jobs, bus).append("binding", ObservationRecordBatch(
+            source_key="events", start_index=0, records=[
+                {"type": "user.message", "timestamp": "2000-01-02T03:04:05Z", "data": {"content": "Inspect"}},
+            ],
+        ))
+        second = await ObservationRecords(bindings, jobs, bus).append("binding", ObservationRecordBatch(
+            source_key="events", start_index=1, prefix_sha256=first.prefix_sha256, records=[
+                {"type": "assistant.message", "timestamp": "2000-01-02T03:04:17Z", "data": {"content": "Observed"}},
+            ],
+        ))
+        await ObservationRecords(bindings, jobs, bus).append("binding", ObservationRecordBatch(
+            source_key="events", start_index=2, prefix_sha256=second.prefix_sha256, records=[], end_session=True,
+        ))
+        start = datetime(2000, 1, 2, 3, 4, 5, tzinfo=UTC)
+        end = datetime(2000, 1, 2, 3, 4, 17, tzinfo=UTC)
+        stored = [item.event for item in await EventRepository(session).list_after(0, job_id=job.id)]
+        opened = next(event for event in stored if event.kind == "step.started")
+        closed = next(event for event in stored if event.kind == "step.completed")
+        assert opened.timestamp == start and closed.timestamp == end
+        assert closed.payload["duration_ms"] == 12_000
+        row = (await steps.get_by_job(job.id))[0]
+        assert row.timing_source == "source"
+        assert row.started_at.replace(tzinfo=UTC) == start
+        assert row.completed_at.replace(tzinfo=UTC) == end and row.duration_ms == 12_000
+
+
+async def test_buffered_tool_start_supplies_the_source_step_start_bound(session_factory) -> None:
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="binding", project_id="proj-1", format_id="copilot", external_session_id="source",
+        )
+        await session.commit()
+        service = ObservationRecords(bindings, jobs, AsyncMock())
+        first = await service.append("binding", ObservationRecordBatch(
+            source_key="events", start_index=0, records=[{
+                "type": "tool.execution_start", "timestamp": "2000-01-02T03:04:05Z",
+                "data": {"toolCallId": "call", "toolName": "view"},
+            }],
+        ))
+        await service.append("binding", ObservationRecordBatch(
+            source_key="events", start_index=1, prefix_sha256=first.prefix_sha256, end_session=True, records=[{
+                "type": "tool.execution_complete", "timestamp": "2000-01-02T03:04:17Z",
+                "data": {"toolCallId": "call", "success": True},
+            }],
+        ))
+        stored = [item.event for item in await EventRepository(session).list_after(0, job_id=job.id)]
+        opened = next(event for event in stored if event.kind == "step.started")
+        closed = next(event for event in stored if event.kind == "step.completed")
+        assert opened.timestamp == datetime(2000, 1, 2, 3, 4, 5, tzinfo=UTC)
+        assert closed.payload["duration_ms"] == 12_000
+
+
+@pytest.mark.parametrize("missing_bound", ["start", "end", "single"])
+async def test_unknown_source_bounds_never_become_measured_step_duration(session_factory, missing_bound) -> None:
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="binding", project_id="proj-1", format_id="copilot", external_session_id="source",
+        )
+        await session.commit()
+        records = [
+            {"type": "user.message", "data": {"content": "Inspect"}, "timestamp": "2000-01-02T03:04:05Z"},
+            {"type": "assistant.message", "data": {"content": "Observed"}, "timestamp": "2000-01-02T03:04:17Z"},
+        ]
+        if missing_bound == "single":
+            records = records[:1]
+        else:
+            records[0 if missing_bound == "start" else 1].pop("timestamp")
+        bus = EventBus()
+        steps = StepRepository(session_factory)
+        bus.subscribe(StepPersistenceSubscriber(steps), required=True)
+        await ObservationRecords(bindings, jobs, bus).append("binding", ObservationRecordBatch(
+            source_key="events", start_index=0, records=records, end_session=True,
+        ))
+        stored = [item.event for item in await EventRepository(session).list_after(0, job_id=job.id)]
+        closed = next(event for event in stored if event.kind == "step.completed")
+        assert closed.payload["duration_ms"] is None
+        field = "source_started_at" if missing_bound == "start" else "source_completed_at"
+        assert closed.payload[field] is None
+        row = (await steps.get_by_job(job.id))[0]
+        assert row.duration_ms is None and row.timing_source == "source"
+        assert (row.started_at if missing_bound == "start" else row.completed_at) is None
 
 
 async def test_source_control_records_never_become_live_or_replayed_commands(session_factory, monkeypatch) -> None:

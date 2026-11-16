@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from backend.models.domain import Job, JobNotFoundError, JobSource, JobState, StateConflictError
 from backend.services.action_policy.credential_filter import filter_credentials
 from backend.services.ingest.mapping import NATIVE_FORMATS
+from backend.validators import validate_integration_binding_id
 
 if TYPE_CHECKING:
     from backend.persistence.integration_repo import IntegrationBinding, IntegrationRepository
@@ -48,6 +49,7 @@ class HistoryRegistration:
         repo: str | None = None,
         base_ref: str | None = None,
     ) -> Job:
+        validate_integration_binding_id(binding_id)
         if format_id not in NATIVE_FORMATS:
             raise ValueError("Unsupported native history format")
         if not binding_id or not external_session_id or len(binding_id) > 128 or len(external_session_id) > 512:

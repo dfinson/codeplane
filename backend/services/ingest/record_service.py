@@ -157,7 +157,7 @@ class ObservationRecords:
 
         staging_bus.subscribe(collect, required=True)
         pairing = ToolPairing()
-        tracker = StepTracker(staging_bus, metadata=EventMetadata(
+        tracker = StepTracker(staging_bus, source_timestamps=True, metadata=EventMetadata(
             integration_binding_id=binding.id, run_id=external_id, namespace=(OBSERVATION_NAMESPACE,),
         ))
         activities = ActivityProjection(staging_bus)
@@ -201,14 +201,15 @@ class ObservationRecords:
         for event in normalized:
             if closed and event.kind in TRANSCRIPT_KINDS:
                 raise ValueError("Transcript records follow the source session termination")
+            tracker.observe_source_time(job.id, event)
             await processor.process_event(job.id, event)
-            if event.kind in {"session.ended", "session.error"}:
+            if event.kind == "session.ended":
                 await processor.on_job_terminal(job.id, "source_ended")
                 await activities.close(job.id, event.timestamp)
                 closed = True
         if batch.end_session and not closed:
             await processor.on_job_terminal(job.id, "source_ended")
-            await activities.close(job.id, normalized[-1].timestamp if normalized else datetime.now(UTC))
+            await activities.close(job.id, tracker.source_end_timestamp(job.id) or job.created_at)
             closed = True
         buffer = {
             "version": 1, "owner": owner, "closed": closed,

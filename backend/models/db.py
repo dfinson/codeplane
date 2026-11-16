@@ -479,7 +479,10 @@ class StepRow(Base):
     trigger: Mapped[str] = mapped_column(String(30), nullable=False)
     tool_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     agent_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    timing_source: Mapped[str] = mapped_column(
+        String, nullable=False, default="legacy_unrecorded", server_default="legacy_unrecorded"
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     start_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -489,7 +492,11 @@ class StepRow(Base):
     # Transcript context at step close (migration 0020)
     preceding_context: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
 
-    __table_args__ = (Index("ix_steps_job_number", "job_id", "step_number"),)
+    __table_args__ = (
+        Index("ix_steps_job_number", "job_id", "step_number"),
+        CheckConstraint("timing_source IN ('legacy_unrecorded','live','source')", name="ck_steps_timing_source"),
+        CheckConstraint("timing_source != 'live' OR started_at IS NOT NULL", name="ck_steps_live_start"),
+    )
 
 
 class JobTelemetrySummaryRow(Base):

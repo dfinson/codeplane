@@ -76,7 +76,8 @@ export interface LogLine {
   context: Record<string, unknown> | null;
 }
 
-export interface TranscriptEntry extends Pick<TranscriptPayload, "metadata" | "pairingStatus" | "pairingReason"> {
+export interface TranscriptEntry extends Pick<TranscriptPayload,
+  "metadata" | "pairingStatus" | "pairingReason" | "admissionStatus" | "executionStatus" | "operatorContent"> {
   jobId: string;
   eventId?: string;
   sequence?: number;

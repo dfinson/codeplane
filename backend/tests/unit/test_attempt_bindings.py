@@ -6,14 +6,18 @@ import pytest
 
 from backend.config import CPLConfig
 from backend.models.domain import SessionConfig
+from backend.models.events import EventKind, new_event
 from backend.services.action_policy.classifier import Preset, RepoPolicy
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.claude_adapter import ClaudeAdapter
 from backend.services.copilot_adapter import CopilotAdapter
+from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
+from backend.services.events.event_processor import EventProcessor
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
 from backend.services.runtime.attempt_bindings import AttemptBindingConflictError, AttemptBindings
+from backend.services.steps.tracker import StepTracker
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 
@@ -86,6 +90,41 @@ async def test_runtime_targets_exact_attempt_not_primary_or_sibling(session_fact
     assert (await runtime.get_current_execution_context("job-1", attempt_id="second")).execution_token == (
         second.execution_token
     )
+
+
+async def test_accepted_dispatch_is_a_receipt_not_a_second_operator_boundary(session_factory):
+    runtime, _, _, _ = _runtime(session_factory)
+    received = []
+    runtime._event_bus.subscribe(AsyncMock(side_effect=received.append))
+    context = await runtime.get_current_execution_context("job-1")
+    result = await runtime.dispatch_current_execution("job-1", context.execution_token, "Operator instruction")
+    assert result.status == "accepted"
+    receipt = received[0]
+    assert receipt.payload["admission_status"] == "accepted"
+    assert receipt.payload["execution_status"] == "unconfirmed"
+    assert receipt.payload["operator_content"] == "Operator instruction"
+    assert receipt.metadata.execution_token == context.execution_token
+    assert receipt.metadata.run_id == "primary"
+    assert "Operator instruction" not in runtime._echo_suppress.get("job-1", set())
+    bus = EventBus()
+    output = []
+    bus.subscribe(AsyncMock(side_effect=output.append))
+    tracker, activities = StepTracker(bus), ActivityProjection(bus)
+    titles = SimpleNamespace(push=AsyncMock())
+    processor = EventProcessor(bus, step_tracker=tracker, activity_projection=activities, title_pipeline=titles)
+    await processor.process_event("job-1", new_event(
+        "job-1", EventKind.message_user, {"content": "Actual input", "turn_id": "observed-turn"},
+    ))
+    step = tracker.current_step("job-1")
+    activity = activities.snapshot()
+    titles.push.reset_mock()
+    output.clear()
+    await processor.process_event("job-1", receipt)
+    assert output == [receipt]
+    assert tracker.current_step("job-1") is step
+    assert activities.snapshot() == activity
+    assert "turn_id" not in receipt.payload and "step_id" not in receipt.payload
+    titles.push.assert_not_awaited()
 
 
 async def test_runtime_pending_approval_blocks_attempt_dispatch_and_registration(session_factory):

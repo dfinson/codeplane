@@ -601,6 +601,9 @@ class TranscriptPayload(CamelModel):
     timestamp: datetime
     kind: str  # dotted TF event kind (e.g. "message.assistant", "tool.call.completed")
     content: str
+    admission_status: str | None = None
+    execution_status: str | None = None
+    operator_content: str | None = None
     # Optional rich fields — only present for specific kinds
     title: str | None = None  # annotation title on agent messages
     turn_id: str | None = None  # groups reasoning + tool_calls + message
@@ -1064,7 +1067,8 @@ class StepPayload(CamelModel):
     tool_count: int = 0
     agent_message: str | None = None
     duration_ms: int | None = None
-    started_at: datetime
+    started_at: datetime | None = None
+    timing_source: Literal["legacy_unrecorded", "live", "source"] = "legacy_unrecorded"
     completed_at: datetime | None = None
     files_read: list[str] | None = None
     files_written: list[str] | None = None

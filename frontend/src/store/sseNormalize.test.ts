@@ -67,6 +67,23 @@ describe("normalizeTFEvent", () => {
     };
   }
 
+  it("keeps an admission receipt distinct from observed operator input", () => {
+    const result = normalizeTFEvent(ev({
+      kind: "message.user",
+      payload: {
+        content: "Coordinated operator admission receipt",
+        operator_content: "Instruction", admission_status: "accepted", execution_status: "unconfirmed",
+      },
+      metadata: { execution_token: "exact-target", run_id: "actual-session" },
+    }));
+    expect(result).toMatchObject({
+      admissionStatus: "accepted", executionStatus: "unconfirmed", operatorContent: "Instruction",
+      metadata: { execution_token: "exact-target", run_id: "actual-session" },
+    });
+    expect(result.turnId).toBeUndefined();
+    expect(deriveJobStateFrame("message.user", result)).toBeNull();
+  });
+
   it("injects jobId from the envelope session_id", () => {
     const out = normalizeTFEvent(ev({ payload: { tool_name: "grep" } }));
     expect(out.jobId).toBe("job-1");

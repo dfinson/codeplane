@@ -4,20 +4,26 @@ from __future__ import annotations
 
 from typing import Any, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.models.schemas.base import CamelModel
 from backend.models.session_event import CanonicalSessionEvent  # noqa: TC001 - Pydantic resolves at runtime.
+from backend.validators import INTEGRATION_BINDING_RE, validate_integration_binding_id
 
 
 class RegisterObservationRequest(CamelModel):
-    binding_id: str = Field(min_length=1, max_length=128)
+    binding_id: str = Field(min_length=1, max_length=128, pattern=INTEGRATION_BINDING_RE.pattern)
     project_id: str = Field(min_length=1, max_length=128)
     format_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     external_session_id: str = Field(min_length=1, max_length=512)
     title: str | None = Field(default=None, max_length=512)
     repo: str | None = Field(default=None, max_length=4096)
     base_ref: str | None = Field(default=None, max_length=256)
+
+    @field_validator("binding_id")
+    @classmethod
+    def addressable_binding(cls, value: str) -> str:
+        return validate_integration_binding_id(value)
 
 
 class ObservationRecordBatch(CamelModel):

@@ -133,3 +133,26 @@ async def test_whole_invalid_batch_and_oversized_body_write_nothing(client, sess
     )
     assert at_limit.status_code == 422  # Bounded, but not a JSON record batch.
     assert (await client.get("/api/integrations/invalid/events")).json()["events"] == []
+
+
+async def test_binding_ids_are_addressable_without_restricting_source_identities(client, session_factory):
+    async with session_factory() as session:
+        await ProjectRepository(session).create("observations", "Observations", [])
+        await session.commit()
+    body = {
+        "bindingId": "team/session", "projectId": "observations",
+        "formatId": "copilot", "externalSessionId": "vendor/session",
+    }
+    rejected = await client.post("/api/integrations/observations", json=body)
+    assert rejected.status_code == 422
+    created = await client.post("/api/integrations/observations", json={**body, "bindingId": "team_session"})
+    assert created.status_code == 201
+    accepted = await client.post("/api/integrations/team_session/records", json={
+        "sourceKey": "channel/with/slashes", "startIndex": 0,
+        "records": [{"type": "assistant.message", "data": {"content": "Retained"}}],
+    })
+    assert accepted.status_code == 200
+    retained = (await client.get("/api/integrations/team_session/events")).json()["events"]
+    message = next(event for event in retained if event["kind"] == "message.assistant")
+    assert message["metadata"]["run_id"] == "vendor/session"
+    assert message["payload"]["_codeplane_source"]["source_key"] == "channel/with/slashes"

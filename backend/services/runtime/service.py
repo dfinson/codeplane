@@ -92,14 +92,16 @@ from backend.services.runtime.verify import (
 from backend.validators import REF_PATTERN
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Mapping
 
+    from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
     from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+    from backend.services.runtime.execution_contracts import ExecutionContracts
     from backend.services.sidecar.dispatcher import SidecarDispatcher
     from backend.services.steps.tracker import StepTracker
     from backend.services.terminal.terminal_service import TerminalService
@@ -329,6 +331,7 @@ class RuntimeService:
         self._session_ids: dict[str, str] = {}
         self._policy_routers: dict[str, Any] = {}  # job_id → PolicyRouter
         self._repo_policies: dict[str, RepoPolicy] = {}
+        self._execution_contracts: ExecutionContracts | None = None
         self._policy_batchers: dict[str, Any] = {}  # job_id → ApprovalBatcher
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
@@ -2215,6 +2218,43 @@ class RuntimeService:
             binding = self._attempt_bindings.register(job_id, attempt_id, adapter, session_id, provider)
             return CurrentExecutionContext(job_id, binding.token)
 
+    def configure_execution_contracts(
+        self, *, available: Mapping[str, ExecutionContract], selected_for_new: str,
+    ) -> None:
+        """Trusted composition selects available implementations separately from new admission."""
+        from backend.persistence.execution_contract_repo import ExecutionContractRepository
+        from backend.services.runtime.execution_contracts import ExecutionContracts
+
+        self._execution_contracts = ExecutionContracts(
+            ExecutionContractRepository(self._session_factory),
+            available=available, selected_for_new=selected_for_new,
+        )
+
+    async def prepare_execution_contract(
+        self, job_id: str, admission_id: str, *, recovery: bool,
+    ) -> ExecutionContractPin | None:
+        """Persist fresh admission or retrieve recovery provenance before governed invocation."""
+        if self._execution_contracts is None:
+            raise RuntimeError("Execution contract implementations have not been configured")
+        if recovery:
+            return await self._execution_contracts.recover(job_id, admission_id)
+        return await self._execution_contracts.fresh(job_id, admission_id)
+
+    async def bind_attempt_contract(
+        self, pin: ExecutionContractPin, attempt_id: str, expected_execution: str,
+    ) -> None:
+        if self._execution_contracts is None:
+            raise RuntimeError("Execution contract implementations have not been configured")
+        async with self._execution_control.hold(pin.job_id):
+            await self._require_attempt_job(pin.job_id)
+            binding = self._attempt_bindings.get(pin.job_id, attempt_id)
+            if binding is None or binding.token != expected_execution or binding.cancel_requested:
+                raise AttemptBindingConflictError("Contract binding requires the current execution token")
+            await self._execution_contracts.bind_handle(
+                pin, sdk=str(binding.sdk), session_id=binding.session_id,
+                live_epoch=self._execution_epoch, execution_token=binding.token, attempt_id=attempt_id,
+            )
+
     async def attach_attempt_policy(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
         """Attach current Job policy to the exact live provider session without re-registering budgets."""
         from backend.services.adapters.contracts import SessionPolicyAdapter
@@ -2331,6 +2371,11 @@ class RuntimeService:
                 return CurrentExecutionDispatchResult(job_id, token, "conflict", reason)
             assert job is not None
             binding = self._attempt_bindings.get(job_id, attempt_id) if attempt_id is not None else None
+            target_session_id = (
+                binding.session_id if binding is not None
+                else self._agent_sessions[job_id].session_id if job.source == JobSource.managed
+                else job.external_session_id
+            )
             try:
                 IntegrationPolicy(self._config).require_enabled(binding.sdk if binding is not None else job.sdk)
                 async with asyncio.timeout(30):
@@ -2352,20 +2397,46 @@ class RuntimeService:
                 )
             except (TimeoutError, ConnectionError, OSError):
                 return CurrentExecutionDispatchResult(job_id, token, "uncertain", "delivery_unknown")
-            if attempt_id is None:
-                self._echo_suppress.setdefault(job_id, set()).add(content)
-        payload: dict[str, Any] = {"content": content, "dispatch": "coordinated"}
+        receipt_id = str(uuid.uuid4())
+        payload: dict[str, Any] = {
+            "content": (
+                f"Coordinated operator admission receipt {receipt_id}\n"
+                "Instruction admitted to the message channel. Execution unconfirmed.\n\n"
+                f"{content}"
+            ),
+            "operator_content": content, "dispatch": "coordinated",
+            "admission_status": "accepted", "execution_status": "unconfirmed",
+            "target_session_id": target_session_id,
+        }
         if attempt_id is not None:
             payload["attempt_id"] = attempt_id
         message = new_event(
             job_id,
             EventKind.message_user,
             payload,
-            metadata=EventMetadata(attempt_id=attempt_id, execution_epoch=self._execution_epoch)
-            if attempt_id is not None
-            else None,
+            event_id=receipt_id,
+            metadata=EventMetadata(
+                attempt_id=attempt_id, execution_epoch=self._execution_epoch,
+                execution_token=expected_execution, run_id=target_session_id,
+            ),
         )
-        await self._event_bus.publish(message)
+        from backend.persistence.database import serialized_write
+        from backend.persistence.event_repo import EventRepository
+
+        try:
+            async with serialized_write(self._session_factory) as session:
+                await EventRepository(session).append(message)
+        except DBAPIError:
+            log.error(
+                "coordinated_admission_receipt_persist_failed", job_id=job_id, receipt_id=message.id, exc_info=True,
+            )
+            return CurrentExecutionDispatchResult(job_id, token, "uncertain", "receipt_persistence_failed")
+        try:
+            await self._event_bus.publish(message)
+        except (DBAPIError, OSError, RuntimeError):
+            log.error(
+                "coordinated_admission_receipt_publish_failed", job_id=job_id, receipt_id=message.id, exc_info=True,
+            )
         return CurrentExecutionDispatchResult(job_id, token, "accepted", message_event_id=message.id)
 
     async def send_operator_message(self, job_id: str, content: str) -> bool:
