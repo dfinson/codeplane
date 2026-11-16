@@ -168,6 +168,12 @@ an exit status or a passing check.
 The compatibility graph builder keeps configured verification and self-review
 as agent steps, not command checks. Plan First retains an initial plan and at
 most five replans, each with a fresh approval of its exact plan and code inputs.
+Agent turn limits are ceilings, not a prescribed number of repeated prompts.
+A fulfilled output contract or explicit validated failure ends the attempt
+after retaining the completed-turn receipt. Only incomplete output contracts
+use remaining turns. Steps with no model-produced outputs, including code-ref-only
+steps, do not require an invented empty JSON response instead of a natural-language
+summary. Explicit structured failure still ends those steps unsuccessfully.
 `POST /api/recipes/resolve-default` validates and retains a content-addressed
 published revision of that actual configuration, without launching a Job.
 Repeated resolution reuses the same revision. A configuration change creates

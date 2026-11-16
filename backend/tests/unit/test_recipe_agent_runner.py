@@ -10,7 +10,7 @@ import pytest
 from backend.config import CPLConfig
 from backend.models.domain import SessionConfig
 from backend.models.events import EventMetadata, new_event
-from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition
+from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition, RecipeOutput
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.services.action_policy.classifier import RepoPolicy
@@ -23,9 +23,14 @@ from backend.tests.unit.test_recipe_runs import create_run, ready_attempt
 from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 
-async def agent_context(sessions, *, reuse=False):
+async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="string"):
     work = agent("work")
     work.runner.session = "reuse" if reuse else "new"
+    work.runner.max_turns = max_turns
+    if output_type is None:
+        work.outputs = {}
+    elif output_type == "code_ref":
+        work.outputs = {"code": RecipeOutput(type="code_ref")}
     run = await create_run(sessions, RecipeDefinition(name="Agent contract", entry_steps=["work"], steps=[work]))
     async with sessions() as session:
         attempt = await ready_attempt(session, run, "work")
@@ -90,6 +95,79 @@ async def agent_context(sessions, *, reuse=False):
         )
 
     return run, instance, attempt, adapter, configurations, runtime, emit
+
+
+@pytest.mark.parametrize(
+    "messages,expected_turns,expected_outcome,expected_outputs",
+    [
+        (['{"result":"done"}', '{"result":"unwanted extra work"}'], 1, "succeeded", {"result": "done"}),
+        (
+            ['{"outcome":"failed","outputs":{"result":"negative"}}', '{"result":"overwritten failure"}'],
+            1,
+            "failed",
+            {"result": "negative"},
+        ),
+        (['{"missing":"incomplete"}', '{"result":"done"}'], 2, "succeeded", {"result": "done"}),
+        (['{"missing":"incomplete"}'], 3, "failed", {}),
+    ],
+)
+async def test_turn_ceiling_stops_at_a_conclusive_contract(
+    sessions, messages, expected_turns, expected_outcome, expected_outputs
+):
+    run, instance, attempt, adapter, configurations, make_runtime, emit = await agent_context(sessions, max_turns=3)
+
+    async def stream(_session_id):
+        index = min(adapter.send_message.await_count - 1, len(messages) - 1)
+        yield emit("message.assistant", {"content": messages[index]})
+
+    adapter.stream_events = stream
+    host = make_runtime()
+    pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+    result, outputs = await AgentStepRunner(host).run(
+        run,
+        instance,
+        attempt,
+        SessionConfig(workspace_path="/repo/snapshot", prompt="Job request"),
+        contract_pin=pin,
+    )
+    assert len(configurations) == expected_turns
+    assert result.outcome == expected_outcome and outputs == expected_outputs
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        assert (await repository.agent_progress(attempt.id))[0] == expected_turns
+        assert len(await repository.list_attempts(instance.id)) == 1
+
+
+@pytest.mark.parametrize("output_type", [None, "code_ref"])
+@pytest.mark.parametrize(
+    "message,outcome",
+    [
+        ("Implemented the requested change.", "succeeded"),
+        ('{"outcome":"failed","outputs":{}}', "failed"),
+    ],
+)
+async def test_no_model_output_ports_accept_summary_but_preserve_explicit_failure(
+    sessions, output_type, message, outcome
+):
+    run, instance, attempt, adapter, configurations, make_runtime, emit = await agent_context(
+        sessions, max_turns=3, output_type=output_type
+    )
+
+    async def stream(_session_id):
+        yield emit("message.assistant", {"content": message})
+
+    adapter.stream_events = stream
+    host = make_runtime()
+    pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+    result, outputs = await AgentStepRunner(host).run(
+        run,
+        instance,
+        attempt,
+        SessionConfig(workspace_path="/repo/snapshot", prompt="Job request"),
+        contract_pin=pin,
+    )
+    assert result.outcome == outcome and outputs == {}
+    assert len(configurations) == 1
 
 
 async def test_agent_persists_real_handle_before_send_and_keeps_reported_model(sessions):

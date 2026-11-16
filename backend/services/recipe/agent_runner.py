@@ -58,30 +58,34 @@ def agent_prompt(instance: RecipeStepInstanceResponse, attempt: RecipeAttemptRes
     )
 
 
-def agent_outputs(instance: RecipeStepInstanceResponse, text: str | None) -> tuple[str, dict[str, JsonValue]]:
+def agent_outputs(instance: RecipeStepInstanceResponse, text: str | None) -> tuple[str | None, dict[str, JsonValue]]:
     ports = {name: port for name, port in instance.definition.outputs.items() if port.type != "code_ref"}
     if text is None:
-        return ("failed", {}) if ports else ("succeeded", {})
+        return (None, {}) if ports else ("succeeded", {})
     body = text.strip()
     if body.startswith("```") and body.endswith("```"):
         body = "\n".join(body.splitlines()[1:-1])
     try:
         value = json.loads(body)
     except json.JSONDecodeError:
+        if not ports:
+            return "succeeded", {}
         if len(ports) == 1 and next(iter(ports.values())).type == "string":
             return "succeeded", {next(iter(ports)): text}
-        return "failed", {}
+        return None, {}
+    if not ports and not (isinstance(value, dict) and set(value) == {"outcome", "outputs"}):
+        return "succeeded", {}
     outcome = "succeeded"
     if isinstance(value, dict) and set(value) == {"outcome", "outputs"}:
         if value["outcome"] not in {"succeeded", "failed"}:
-            return "failed", {}
+            return None, {}
         outcome, value = value["outcome"], value["outputs"]
     if not isinstance(value, dict) or any(name not in ports for name in value):
-        return "failed", {}
+        return None, {}
     if any(not value_matches(item, ports[name].type) for name, item in value.items()):
-        return "failed", {}
+        return None, {}
     if outcome == "succeeded" and value.keys() != ports.keys():
-        return "failed", {}
+        return None, {}
     return outcome, value
 
 
@@ -187,6 +191,7 @@ class AgentStepRunner:
                 if error:
                     break
                 dispatch_started = False
+                text = None
                 config = replace(
                     base,
                     sdk=provider,
@@ -308,10 +313,14 @@ class AgentStepRunner:
                         )
 
                 await _settle(asyncio.create_task(record_completion()))
+                if agent_outputs(instance, text)[0] is not None:
+                    break
                 if turn + 1 < runner.max_turns:
                     prompt = (
-                        instance.definition.instructions
-                        + "\nContinue the configured follow-up against the current code."
+                        agent_prompt(instance, attempt)
+                        + "\nThe previous turn did not fulfill the declared output contract. "
+                        "Complete only the remaining work and return the declared outputs. "
+                        "Do not repeat work already completed in this conversation."
                     )
         except asyncio.CancelledError:
             may_mutate = bool(set(attempt.capabilities) & {"write", "shell", "delegate", "external_access"})
@@ -327,8 +336,11 @@ class AgentStepRunner:
             uncertain = dispatch_started or self._host._attempt_bindings.get(run.job_id, attempt.id) is not None
             log.error("recipe_agent_execution_failed", attempt_id=attempt.id, exc_info=True)
         outcome, outputs = agent_outputs(instance, text)
-        if outcome == "failed" and error is None:
-            error = "The agent did not return a successful declared output contract."
+        if outcome is None:
+            outcome = "failed"
+            error = error or "The agent exhausted its turn allowance without fulfilling the declared output contract."
+        elif outcome == "failed" and error is None:
+            error = "The agent explicitly returned an unsuccessful declared output contract."
         if pending_tools:
             uncertain = True
             error = error or "Tool completion evidence is missing."
