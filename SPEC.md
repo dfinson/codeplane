@@ -227,6 +227,10 @@ never creates a Job or dispatches a runner. Draft writes and publication use an
 expected version, so a stale editor cannot overwrite another revision.
 
 `POST /api/recipes/validate` returns actionable field paths and error codes.
+The `/recipes` editor uses the same APIs for typed runner, capability, workspace,
+binding, dependency and outcome-route fields. It can insert pinned published
+blocks and copy published revisions into independent drafts. Invalid local JSON
+and invalid graphs cannot be published; neither authoring nor publication runs a Job.
 Publication rejects missing or mistyped bindings, unknown outcomes, unreachable
 nodes, dependency/route cycles, recursive block composition, unsafe parallel
 writers and invalid retry bounds. Outcome routes support fanout and explicit
