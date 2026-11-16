@@ -693,6 +693,7 @@ class SessionConfig:
     step_instance_id: str | None = None
     attempt_id: str | None = None
     execution_epoch: str | None = None
+    defer_start: bool = False
 
 
 @dataclass(frozen=True)

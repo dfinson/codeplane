@@ -44,6 +44,13 @@ partitions turn, pairing, activity, StepTracker and diff state. Closing an
 attempt cannot close or auto-commit another attempt. Read-only observation
 does not mutate the Git index while calculating a diff.
 
+`open_attempt_execution` owns deferred SDK creation, exact-handle registration
+and cleanup. With `SessionConfig.defer_start=True`, creation sends no initial
+prompt. The caller dispatches the pinned prompt only after registration and
+durable recipe admission. Registration failure or caller cancellation closes the
+owned session. Job cancellation signals the primary task and fences every
+attempt before awaiting any slow transport teardown.
+
 Text-only completion rejects tool attempts and reports provider errors, empty
 responses and output-limit failures explicitly. Returned typed usage distinguishes
 Copilot native cost units from verified USD and retains present zero values.

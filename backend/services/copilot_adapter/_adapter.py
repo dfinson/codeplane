@@ -806,7 +806,8 @@ class CopilotAdapter(BaseAgentAdapter):
             unsubscribe = session.on(_on_event)
             if callable(unsubscribe):
                 self._unsubscribe[session_id] = unsubscribe
-            await session.send(config.prompt, mode="immediate")
+            if not config.defer_start:
+                await session.send(config.prompt, mode="immediate")
         except BaseException:
             await self._finish_session(session_id)
             raise

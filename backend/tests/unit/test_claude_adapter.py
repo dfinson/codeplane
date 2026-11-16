@@ -639,7 +639,7 @@ class TestProcessAssistantMessage:
 
         await adapter._process_assistant_message(sid, msg)
 
-        assert "tool-1" in adapter._tool_buf
+        assert (sid, "tool-1") in adapter._tool_buf
 
     @pytest.mark.asyncio
     async def test_todo_write_emits_transcript(self, adapter: ClaudeAdapter) -> None:
@@ -653,7 +653,7 @@ class TestProcessAssistantMessage:
         await adapter._process_assistant_message(sid, msg)
 
         # TodoWrite should now be emitted as a transcript event (no longer hidden)
-        assert "tool-2" in adapter._tool_buf
+        assert (sid, "tool-2") in adapter._tool_buf
         assert not adapter._queues[sid].empty()
 
     @pytest.mark.asyncio
@@ -663,7 +663,7 @@ class TestProcessAssistantMessage:
         adapter._session_to_job[sid] = "job-1"
         adapter._schedule_db_write = lambda coro: coro.close()
         # Pre-populate tool metadata (simulates on_tool_start)
-        adapter._tool_buf["tool-1"] = {
+        adapter._tool_buf[sid, "tool-1"] = {
             "job_id": "job-1",
             "tool_name": "Bash",
             "arguments": None,
@@ -1110,7 +1110,11 @@ class TestSendMessage:
 
     @pytest.mark.asyncio
     async def test_send_to_missing_session(self, adapter: ClaudeAdapter) -> None:
-        await adapter.send_message("nonexistent", "hello")  # should not raise
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
+        with pytest.raises(NativeDeliveryError) as failure:
+            await adapter.send_message("nonexistent", "hello")
+        assert not failure.value.uncertain
 
     @pytest.mark.asyncio
     async def test_send_handles_exception(self, adapter: ClaudeAdapter) -> None:
@@ -1118,7 +1122,11 @@ class TestSendMessage:
         client.query = AsyncMock(side_effect=RuntimeError("send failed"))
         adapter._clients["sess-1"] = client
 
-        await adapter.send_message("sess-1", "oops")  # should not raise
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
+        with pytest.raises(NativeDeliveryError) as failure:
+            await adapter.send_message("sess-1", "oops")
+        assert failure.value.uncertain
 
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1230,32 @@ class TestComplete:
 
 
 class TestCreateSession:
+    async def test_cancelled_deferred_connect_releases_owned_client_and_state(self, adapter) -> None:
+        client = _FakeClaudeSDKClient()
+        client.connect = AsyncMock(side_effect=asyncio.CancelledError())
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"ClaudeSDKClient": lambda opts: client}),
+            patch("backend.services.claude_adapter._adapter._kill_sdk_subprocess") as release,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await adapter.create_session(_make_config(defer_start=True))
+        release.assert_called_once_with(client)
+        assert not adapter._queues and not adapter._clients
+        assert not adapter._stderr_files and not adapter._stderr_file_objects
+
+    async def test_deferred_attempt_connects_without_a_prompt(self, adapter) -> None:
+        fake_client = _FakeClaudeSDKClient()
+        fake_client.connect = AsyncMock()
+        fake_client.query = AsyncMock()
+        fake_client._messages = []
+        with patch.dict(sys.modules["claude_code_sdk"].__dict__, {"ClaudeSDKClient": lambda opts: fake_client}):
+            session_id = await adapter.create_session(_make_config(defer_start=True))
+        fake_client.connect.assert_awaited_once_with(None)
+        fake_client.query.assert_not_awaited()
+        await adapter.send_message(session_id, "pinned attempt prompt")
+        fake_client.query.assert_awaited_once_with("pinned attempt prompt")
+        await adapter.abort_session(session_id)
+
     @pytest.mark.asyncio
     async def test_create_session_success(self, adapter: ClaudeAdapter) -> None:
         config = _make_config()
@@ -1312,6 +1346,30 @@ class TestCreateSession:
 
 
 class TestToolResultTelemetry:
+    async def test_same_job_parallel_sessions_keep_tool_pairing_and_cleanup_isolated(self, adapter) -> None:
+        for session in ("first", "second"):
+            adapter._queues[session] = asyncio.Queue()
+            adapter.set_job_id(session, "job")
+        for session, name in (("first", "Read"), ("second", "Grep")):
+            block = _FakeToolUseBlock(id="shared", name=name)
+            block.input = {"path": session}
+            await adapter._process_assistant_message(
+                session,
+                _FakeAssistantMessage(content=[block]),
+            )
+        adapter._cleanup_session("first")
+        assert ("second", "shared") in adapter._tool_buf
+        await adapter._process_assistant_message(
+            "second", _FakeAssistantMessage(content=[_FakeToolResultBlock(tool_use_id="shared", content="result")])
+        )
+        events = []
+        while not adapter._queues["second"].empty():
+            events.append(adapter._queues["second"].get_nowait())
+        completed = [event for event in events if event.kind == EventKind.tool_call_completed]
+        assert len(completed) == 1
+        assert completed[0].payload["tool_name"] == "Grep"
+        assert completed[0].payload["arguments"]["path"] == "second"
+
     @pytest.mark.asyncio
     async def test_tool_result_records_telemetry_with_job(self) -> None:
         adapter = ClaudeAdapter()
@@ -1319,7 +1377,7 @@ class TestToolResultTelemetry:
         adapter._queues[sid] = asyncio.Queue()
         adapter._session_to_job[sid] = "job-1"
         adapter._schedule_db_write = lambda coro: coro.close()
-        adapter._tool_buf["tool-1"] = {
+        adapter._tool_buf[sid, "tool-1"] = {
             "job_id": "job-1",
             "tool_name": "Bash",
             "arguments": None,

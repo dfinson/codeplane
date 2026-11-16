@@ -1,9 +1,11 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from backend.config import CPLConfig
+from backend.models.domain import SessionConfig
 from backend.services.events.event_bus import EventBus
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
@@ -116,3 +118,88 @@ async def test_completed_owner_can_unregister_during_real_stop_without_deadlock(
     adapter.abort_session.side_effect = finish
     await runtime.cancel_attempt_execution("job-1", "first", context.execution_token)
     assert runtime._attempt_bindings.get("job-1", "first") is None
+
+
+async def test_owned_deferred_session_is_closed_when_registration_fails(session_factory):
+    runtime, adapter, approvals, _ = _runtime(session_factory)
+
+    async def create_session(config):
+        await approvals.create_request("job-1", "New gate during SDK creation", requires_explicit_approval=True)
+        return "inert-session"
+
+    adapter.create_session = AsyncMock(side_effect=create_session)
+    config = SessionConfig(workspace_path="/test", prompt="must not execute", job_id="job-1")
+    with pytest.raises(AttemptBindingConflictError):
+        async with runtime.open_attempt_execution("job-1", "attempt", config):
+            pytest.fail("A pending approval must prevent an attempt becoming dispatchable")
+    assert adapter.create_session.call_args.args[0].defer_start
+    adapter.send_message.assert_not_awaited()
+    adapter.abort_session.assert_awaited_once_with("inert-session")
+    assert runtime._attempt_bindings.get("job-1", "attempt") is None
+
+
+async def test_cancellation_after_registration_cleans_handle_and_refuses_late_dispatch(session_factory):
+    runtime, adapter, _, _ = _runtime(session_factory)
+    adapter.create_session = AsyncMock(return_value="inert-session")
+    config = SessionConfig(workspace_path="/test", prompt="must not execute", job_id="job-1")
+    registered = asyncio.Event()
+    token = None
+
+    async def open_and_wait():
+        nonlocal token
+        async with runtime.open_attempt_execution("job-1", "attempt", config) as execution:
+            token = execution.execution_token
+            registered.set()
+            await asyncio.Event().wait()
+            await runtime.dispatch_current_execution("job-1", token, config.prompt, attempt_id="attempt")
+
+    task = asyncio.create_task(open_and_wait())
+    await registered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    adapter.abort_session.assert_awaited_once_with("inert-session")
+    adapter.send_message.assert_not_awaited()
+    receipt = await runtime.dispatch_current_execution("job-1", token, config.prompt, attempt_id="attempt")
+    assert receipt.reason == "no_live_execution"
+
+
+async def test_hung_abort_cannot_delay_sibling_fences_or_primary_cancellation(session_factory):
+    runtime, adapter, _, _ = _runtime(session_factory)
+    first = await runtime.register_attempt_execution("job-1", "first", adapter, "session-first")
+    second = await runtime.register_attempt_execution("job-1", "second", adapter, "session-second")
+    primary_started, primary_cancelled = asyncio.Event(), asyncio.Event()
+    abort_entered, release_abort = asyncio.Event(), asyncio.Event()
+
+    async def primary():
+        primary_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            primary_cancelled.set()
+
+    async def abort(session_id):
+        if session_id == "session-first":
+            abort_entered.set()
+            await release_abort.wait()
+
+    task = asyncio.create_task(primary())
+    runtime._tasks["job-1"] = task
+    adapter.abort_session.side_effect = abort
+    await primary_started.wait()
+    cancel = asyncio.create_task(runtime.cancel("job-1"))
+    try:
+        await abort_entered.wait()
+        await asyncio.wait_for(primary_cancelled.wait(), timeout=1)
+        for attempt, token in (("first", first.execution_token), ("second", second.execution_token)):
+            binding = runtime._attempt_bindings.get("job-1", attempt)
+            assert binding is not None and binding.cancel_requested
+            receipt = await runtime.dispatch_current_execution("job-1", token, "late", attempt_id=attempt)
+            assert receipt.reason == "no_live_execution"
+        assert any(call.args == ("session-second",) for call in adapter.pause_tools.call_args_list)
+        assert not cancel.done()
+    finally:
+        release_abort.set()
+        await cancel
+        with pytest.raises(asyncio.CancelledError):
+            await task
