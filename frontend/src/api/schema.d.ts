@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__head"];
+        get: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__head"];
+        put: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__head"];
+        post: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__head"];
+        delete: operations["preview_proxy_api_preview__port___path__patch"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__head"];
+        head: operations["preview_proxy_api_preview__port___path__patch"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__head"];
+        patch: operations["preview_proxy_api_preview__port___path__patch"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -6163,7 +6163,7 @@ export interface components {
              * Started
              * @default true
              */
-            started: boolean;
+            started: boolean | null;
             stdoutArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
             stderrArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
             /** Stdoutpreview */
@@ -12114,7 +12114,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12144,7 +12144,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12174,7 +12174,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12204,7 +12204,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12234,7 +12234,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -12264,7 +12264,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__patch: {
         parameters: {
             query?: never;
             header?: never;

@@ -164,6 +164,13 @@ Command capture can retain immutable,
 checksummed artifact revisions instead of putting entire output streams into
 the run record. A process that never started records that fact without inventing
 an exit status or a passing check.
+On Windows, a trusted isolated bootstrap enrolls itself in a per-command Job
+Object before starting the exact user argv. Cleanup terminates that owned tree
+and checks its active-process count even after the leader exits. It does not
+reuse the tunnel service's global Job Object or infer tree termination from
+an exited PID. Unknown startup or containment remains interrupted, retains
+writer ownership and displays an unknown start status rather than a passing
+check or positive no-dispatch receipt.
 
 The compatibility graph builder keeps configured verification and self-review
 as agent steps, not command checks. Plan First retains an initial plan and at
@@ -174,6 +181,12 @@ after retaining the completed-turn receipt. Only incomplete output contracts
 use remaining turns. Steps with no model-produced outputs, including code-ref-only
 steps, do not require an invented empty JSON response instead of a natural-language
 summary. Explicit structured failure still ends those steps unsuccessfully.
+Recovery qualifies the last registered execution against its app-owned
+completed-turn receipt before dispatch. A conclusive retained contract can be
+finalized without opening another SDK session. New receipts retain the exact
+completion text; older receipts may use only a matching execution token,
+native session and epoch before that receipt's event boundary. A later
+uncompleted message is never substituted for completed output.
 `POST /api/recipes/resolve-default` validates and retains a content-addressed
 published revision of that actual configuration, without launching a Job.
 Repeated resolution reuses the same revision. A configuration change creates

@@ -28,7 +28,7 @@ function AttemptEvidence({ inspection }: { inspection: RecipeAttemptInspection }
     {"uncertain" in evidence && evidence.uncertain && <p role="status" className="rounded-lg border border-warning/40 p-3 text-sm">Effects are uncertain. This result is not a passing check or permission to retry.</p>}
     {evidence.kind === "command" && <>
       <dl className="divide-y divide-border">
-        <Fact label="Process started">{evidence.started === false ? "No" : "Yes"}</Fact>
+        <Fact label="Process started">{evidence.started == null ? "Unknown" : evidence.started ? "Yes" : "No"}</Fact>
         <Fact label="Exit status">{evidence.exitStatus ?? "Not recorded"}</Fact>
         <Fact label="Start code">{evidence.startCodeRef}</Fact>
         <Fact label="End code">{evidence.endCodeRef ?? "Not recorded"}</Fact>

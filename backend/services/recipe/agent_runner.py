@@ -158,8 +158,9 @@ class AgentStepRunner:
         provider = runner.provider or base.sdk
         resume_session, handoff = await self._resume_session(run, instance, attempt)
         async with self._host._session_factory() as session:
-            completed, retained, model_mismatch = await RecipeRunRepository(session).agent_progress(attempt.id)
-        text = retained.text
+            repository = RecipeRunRepository(session)
+            completed, retained, model_mismatch = await repository.agent_progress(attempt.id)
+            completed_execution, text = await repository.completed_execution_text(attempt.id)
         sessions = [execution.session_id for execution in attempt.executions]
         models = retained.actual_models
         pending_tools: set[str] = set()
@@ -167,6 +168,9 @@ class AgentStepRunner:
         token: str | None = None
         version = instance.version
         uncertain = False
+        if completed >= runner.max_turns and not completed_execution:
+            error = "The last execution has no qualified completed-turn receipt and no turns remain."
+            uncertain = True
         dispatch_started = False
         processor.register_attempt_worktree(
             run.job_id,
@@ -188,7 +192,7 @@ class AgentStepRunner:
             )
         try:
             for turn in range(completed, runner.max_turns):
-                if error:
+                if error or (completed_execution and agent_outputs(instance, text)[0] is not None):
                     break
                 dispatch_started = False
                 text = None
@@ -304,12 +308,13 @@ class AgentStepRunner:
                 if error:
                     break
 
-                async def record_completion() -> None:
+                async def record_completion(result_text: str | None = text) -> None:
                     async with serialized_write(self._host._session_factory) as session:
                         await RecipeRunRepository(session).finish_execution_turn(
                             attempt.id,
                             execution.execution_token,
                             execution_epoch=self._host.execution_epoch,
+                            result_text=result_text,
                         )
 
                 await _settle(asyncio.create_task(record_completion()))

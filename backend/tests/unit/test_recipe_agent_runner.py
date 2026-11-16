@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import select
 
 from backend.config import CPLConfig
+from backend.models.db import EventRow
 from backend.models.domain import SessionConfig
 from backend.models.events import EventMetadata, new_event
 from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition, RecipeOutput
@@ -90,6 +93,7 @@ async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="stri
                 step_instance_id=config.step_instance_id,
                 attempt_id=config.attempt_id,
                 execution_epoch=config.execution_epoch,
+                execution_token=adapter.attach_attempt_policy.call_args.kwargs["execution_token"],
                 run_id=config.resume_sdk_session_id or f"test-session-{len(configurations)}",
             ),
         )
@@ -168,6 +172,107 @@ async def test_no_model_output_ports_accept_summary_but_preserve_explicit_failur
     )
     assert result.outcome == outcome and outputs == {}
     assert len(configurations) == 1
+
+
+@pytest.mark.parametrize("first_outcome", ["succeeded", "failed", "incomplete"])
+@pytest.mark.parametrize("legacy_receipt", [False, True])
+async def test_recovery_uses_completed_token_not_a_later_uncompleted_message(
+    sessions, monkeypatch, first_outcome, legacy_receipt
+):
+    run, instance, attempt, adapter, configurations, make_runtime, emit = await agent_context(sessions, max_turns=3)
+    original_finish = RecipeRunRepository.finish_execution_turn
+
+    class SimulatedCrash(BaseException):
+        pass
+
+    async def crash_after_commit(repository, *args, **kwargs):
+        await original_finish(repository, *args, **kwargs)
+        await repository._session.commit()
+        raise SimulatedCrash
+
+    first_message = (
+        '{"result":"qualified completion"}'
+        if first_outcome == "succeeded"
+        else '{"outcome":"failed","outputs":{"result":"qualified failure"}}'
+        if first_outcome == "failed"
+        else '{"missing":"not a completed output contract"}'
+    )
+
+    async def original_stream(_session_id):
+        yield emit("message.assistant", {"content": first_message})
+
+    adapter.stream_events = original_stream
+    original_host = make_runtime()
+    pin = await original_host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+    monkeypatch.setattr(RecipeRunRepository, "finish_execution_turn", crash_after_commit)
+    with pytest.raises(SimulatedCrash):
+        await AgentStepRunner(original_host).run(
+            run,
+            instance,
+            attempt,
+            SessionConfig(workspace_path="/repo/snapshot", prompt="Original"),
+            contract_pin=pin,
+        )
+    monkeypatch.setattr(RecipeRunRepository, "finish_execution_turn", original_finish)
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        assert (await repository.agent_progress(attempt.id))[0] == 1
+        retained = await repository.get_attempt(attempt.id)
+        current = await repository.get_step(instance.id)
+        assert retained.result is None
+        if legacy_receipt:
+            receipt = await session.scalar(
+                select(EventRow).where(
+                    EventRow.event_id == f"recipe-execution-{retained.executions[-1].execution_token}"
+                )
+            )
+            payload = json.loads(receipt.payload)
+            del payload["result_text"]
+            receipt.payload = json.dumps(payload)
+        await EventRepository(session).append(
+            new_event(
+                run.job_id,
+                "message.assistant",
+                {"content": '{"result":"UNCOMPLETED MESSAGE MUST NOT WIN"}'},
+                metadata=EventMetadata(
+                    source_framework="copilot",
+                    recipe_run_id=run.id,
+                    step_instance_id=instance.id,
+                    attempt_id=attempt.id,
+                    execution_epoch="uncompleted-epoch",
+                    execution_token="uncompleted-token",
+                    run_id="uncompleted-session",
+                ),
+            )
+        )
+        await session.commit()
+
+    async def resumed_stream(_session_id):
+        yield emit("message.assistant", {"content": '{"result":"completed remaining work"}'})
+
+    adapter.stream_events = resumed_stream
+    restarted = make_runtime()
+    recovered_pin = await restarted.prepare_execution_contract(run.job_id, run.id, recovery=True)
+    result, outputs = await AgentStepRunner(restarted).run(
+        run,
+        current,
+        retained,
+        SessionConfig(workspace_path="/repo/snapshot", prompt="Recovery"),
+        contract_pin=recovered_pin,
+    )
+    assert len(configurations) == (2 if first_outcome == "incomplete" else 1)
+    assert result.outcome == ("failed" if first_outcome == "failed" else "succeeded")
+    assert outputs == {
+        "result": {
+            "succeeded": "qualified completion",
+            "failed": "qualified failure",
+            "incomplete": "completed remaining work",
+        }[first_outcome]
+    }
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        assert instance.id in await repository.admit_controller(run.id)
+        assert len(await repository.list_attempts(instance.id)) == 1
 
 
 async def test_agent_persists_real_handle_before_send_and_keeps_reported_model(sessions):

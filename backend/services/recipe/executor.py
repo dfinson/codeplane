@@ -443,7 +443,7 @@ class RecipeExecutor:
         if (
             self._host._shutting_down
             and isinstance(result.evidence, RecipeCommandResult)
-            and not result.evidence.started
+            and result.evidence.started is False
         ):
             await self._cancel_claimed(run, instance, attempt)
             raise asyncio.CancelledError

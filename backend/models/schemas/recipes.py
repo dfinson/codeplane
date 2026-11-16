@@ -270,7 +270,7 @@ class RecipeCommandResult(RecipeModel):
     start_code_ref: str
     end_code_ref: str | None
     uncertain: bool = False
-    started: bool = True
+    started: bool | None = True
     stdout_artifact: RecipeArtifactReceipt | None = None
     stderr_artifact: RecipeArtifactReceipt | None = None
     stdout_preview: str | None = None

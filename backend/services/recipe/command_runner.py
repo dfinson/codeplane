@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from backend.models.schemas.recipes import RecipeAttemptResponse, RecipeRunResponse, RecipeStepInstanceResponse
+    from backend.services.recipe.windows_process import WindowsCommandJob
     from backend.services.runtime.service import RuntimeService
 
 log = structlog.get_logger()
@@ -69,28 +70,28 @@ async def _settle[T](task: asyncio.Task[T]) -> T:
     return task.result()
 
 
-async def _stop(process: asyncio.subprocess.Process) -> None:
+async def _stop(process: asyncio.subprocess.Process, windows_job: WindowsCommandJob | None = None) -> None:
     async with asyncio.timeout(10):
-        await _stop_owned_process(process)
+        await _stop_owned_process(process, windows_job)
 
 
-async def _stop_owned_process(process: asyncio.subprocess.Process) -> None:
+async def _stop_owned_process(
+    process: asyncio.subprocess.Process, windows_job: WindowsCommandJob | None = None
+) -> None:
     if os.name == "posix":
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-    elif process.returncode is None:
-        killer = await asyncio.create_subprocess_exec(
-            "taskkill",
-            "/PID",
-            str(process.pid),
-            "/T",
-            "/F",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, error = await killer.communicate()
-        if killer.returncode and process.returncode is None:
-            raise RuntimeError(f"Command stop was not confirmed: {error.decode(errors='replace')}")
+    else:
+        if windows_job is None:
+            raise RuntimeError("No owned Windows process tree is available to confirm termination.")
+        # Stop the bootstrap first so it cannot enroll or spawn after the tree check.
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+        await process.wait()
+        windows_job.terminate()
+        while windows_job.active_processes():
+            await asyncio.sleep(0.02)
     await process.wait()
 
 
@@ -180,6 +181,7 @@ class CommandStepRunner:
         if git is None:
             raise StateConflictError("Command evidence requires the Git service.")
         process: asyncio.subprocess.Process | None = None
+        windows_job: WindowsCommandJob | None = None
         pumps: list[asyncio.Task[None]] = []
         reason: str | None = None
         uncertain = False
@@ -195,9 +197,15 @@ class CommandStepRunner:
             with stdout_path.open("xb") as stdout_file, stderr_path.open("xb") as stderr_file:
                 try:
                     await self._authorize(run, attempt, argv)
+                    process_argv = argv
+                    if os.name == "nt":
+                        from backend.services.recipe.windows_process import WindowsCommandJob
+
+                        windows_job = WindowsCommandJob()
+                        process_argv = windows_job.launch_argv(argv)
                     creation = asyncio.create_task(
                         asyncio.create_subprocess_exec(
-                            *argv,
+                            *process_argv,
                             cwd=attempt.workspace.path,
                             stdin=asyncio.subprocess.DEVNULL,
                             stdout=asyncio.subprocess.PIPE,
@@ -229,13 +237,22 @@ class CommandStepRunner:
                 finally:
                     if process is not None:
                         try:
-                            await _settle(asyncio.create_task(_stop(process)))
+                            await _settle(asyncio.create_task(_stop(process, windows_job)))
                             stop_confirmed = True
                         except (OSError, RuntimeError, TimeoutError) as exc:
                             uncertain = True
                             capture_complete = False
                             reason = f"Command stop is unconfirmed: {exc}"
                             log.error("recipe_command_stop_unconfirmed", attempt_id=attempt.id, exc_info=True)
+                    if windows_job is not None:
+                        try:
+                            windows_job.close()
+                        except OSError as exc:
+                            uncertain = True
+                            capture_complete = False
+                            stop_confirmed = False
+                            reason = f"Windows command ownership could not be closed: {exc}"
+                            log.error("recipe_command_ownership_unconfirmed", attempt_id=attempt.id, exc_info=True)
                     for pump in pumps:
                         if not pump.done():
                             pump.cancel()
@@ -285,10 +302,21 @@ class CommandStepRunner:
                         uncertain = True
                         reason = f"Final command code reference is unrecorded: {exc}"
                         log.error("recipe_command_code_unrecorded", attempt_id=attempt.id, exc_info=True)
+        started = process is not None if windows_job is None else windows_job.command_started
+        if windows_job is not None and process is None:
+            started = False
+        exit_status = process.returncode if process is not None else None
+        if windows_job is not None and (started is not True or not capture_complete):
+            exit_status = None
+        if started is None:
+            uncertain = True
+            reason = reason or "Whether the Windows command started is unconfirmed."
+        elif started is False:
+            reason = reason or "The command did not start."
         evidence = RecipeCommandResult(
             argv=argv,
-            started=process is not None,
-            exit_status=process.returncode if process else None,
+            started=started,
+            exit_status=exit_status,
             stdout=None,
             stderr=None,
             stdout_artifact=stdout_receipt,
@@ -300,7 +328,7 @@ class CommandStepRunner:
             end_code_ref=end_code,
             uncertain=uncertain,
         )
-        outcome = "interrupted" if uncertain else "succeeded" if process and process.returncode == 0 else "failed"
+        outcome = "interrupted" if uncertain else "succeeded" if started and exit_status == 0 else "failed"
         if outcome == "succeeded" and runner.reconciles and end_code is not None:
             for step_id in runner.reconciles:
                 references = [
@@ -334,8 +362,8 @@ class CommandStepRunner:
                 )
             elif port.type == "object":
                 outputs[name] = evidence.model_dump(mode="json")
-            elif name == "exit_status" and port.type == "integer" and process and process.returncode is not None:
-                outputs[name] = process.returncode
+            elif name == "exit_status" and port.type == "integer" and exit_status is not None:
+                outputs[name] = exit_status
         return RecipeAttemptResult(
             outcome=outcome,
             evidence=evidence,
