@@ -36,6 +36,10 @@ boundary. Source termination or `endSession: true` closes the segment without
 claiming a managed execution outcome. An empty batch is valid only to declare
 that end explicitly. Acquisition occurrences keep distinct event identities
 even when their text and record indexes match.
+Authoritative operator messages are deduplicated by canonical event identity,
+never equal text across sessions or attempts. The composer settles only its own
+local placeholder when submission finishes; a receipt does not invent an
+observed transcript event or remove a real echo.
 
 `tool.call.failed` remains a distinct wire kind, pairs by source-qualified call
 identity, and renders a failed tool outcome without terminating its Job or

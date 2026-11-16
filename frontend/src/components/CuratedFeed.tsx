@@ -783,12 +783,6 @@ export function CuratedFeed({
         await sendOperatorMessage(jobId, text);
       }
     } catch (err) {
-      // Rollback optimistic entry on failure
-      const cur = useStore.getState();
-      const curEntries = cur.transcript[jobId] ?? [];
-      useStore.setState({
-        transcript: { ...cur.transcript, [jobId]: curEntries.filter((e) => e !== optimisticEntry) },
-      });
       setMsg(text);
       const detail =
         err instanceof ApiError
@@ -799,6 +793,13 @@ export function CuratedFeed({
       toast.error(`Failed to send: ${detail}`);
       console.error("Failed to send message:", err);
     } finally {
+      // The receipt confirms submission, not transcript identity. Keep any
+      // authoritative echo and remove only this local submission placeholder.
+      const cur = useStore.getState();
+      const curEntries = cur.transcript[jobId] ?? [];
+      useStore.setState({
+        transcript: { ...cur.transcript, [jobId]: curEntries.filter((e) => e !== optimisticEntry) },
+      });
       setSending(false);
     }
   }, [msg, jobId, sending, isReview, isTerminal, navigate]);

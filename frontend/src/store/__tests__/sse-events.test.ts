@@ -100,6 +100,19 @@ it("retains distinct observed operator occurrences with identical text", () => {
 
 type HydratedSnapshot = Parameters<AppState["hydrateJob"]>[0];
 
+it("retains identical prompt text from two authoritative sibling attempts", () => {
+  for (const attempt of ["first", "second"]) {
+    useStore.getState().dispatchSSEEvent("message.user", normalizeTFEvent({
+      id: `event-${attempt}`, kind: "message.user", session_id: "job-1",
+      payload: { content: "Identical prompt" },
+      metadata: { attempt_id: attempt, run_id: `session-${attempt}`, execution_epoch: "epoch" },
+    }));
+  }
+  expect(useStore.getState().transcript["job-1"]?.map((entry) => entry.eventId)).toEqual([
+    "event-first", "event-second",
+  ]);
+});
+
 function makeHydratedSnapshot(job: JobSummary, overrides: Partial<HydratedSnapshot> = {}): HydratedSnapshot {
   return {
     job,
