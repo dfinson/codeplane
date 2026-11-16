@@ -10,6 +10,12 @@ import type {
   CreateJobRequest,
   CreateJobResponse,
   CreateSidecarTemplateRequest,
+  RecipeDefinition,
+  RecipeDraft,
+  RecipeRevision,
+  RecipeDraftList,
+  RecipeRevisionList,
+  RecipeValidationResult,
   ApprovalRequest,
   DiffFileModel,
   GenerateSidecarResponse,
@@ -256,6 +262,50 @@ export function fetchJobSnapshot(jobId: string): Promise<{
   turnSummaries?: Array<Record<string, unknown>>;
 }> {
   return request(`/jobs/${encodeURIComponent(jobId)}/snapshot`);
+}
+
+export function fetchRecipes(after = 0, highWater?: number): Promise<RecipeDraftList> {
+  const query = new URLSearchParams({ after: String(after), limit: "30" });
+  if (highWater !== undefined) query.set("highWater", String(highWater));
+  return request(`/recipes?${query}`);
+}
+
+export function fetchRecipe(id: string): Promise<RecipeDraft> {
+  return request(`/recipes/${encodeURIComponent(id)}`);
+}
+
+export function fetchRecipeRevisions(id: string, after = 0, highWater?: number): Promise<RecipeRevisionList> {
+  const query = new URLSearchParams({ after: String(after), limit: "30" });
+  if (highWater !== undefined) query.set("highWater", String(highWater));
+  return request(`/recipes/${encodeURIComponent(id)}/revisions?${query}`);
+}
+
+export function fetchRecipeRevision(id: string): Promise<RecipeRevision> {
+  return request(`/recipes/revisions/${encodeURIComponent(id)}`);
+}
+
+export function createRecipeDraft(definition: RecipeDefinition): Promise<RecipeDraft> {
+  return request("/recipes", { method: "POST", body: JSON.stringify(definition) });
+}
+
+export function saveRecipeDraft(id: string, expectedVersion: number, definition: RecipeDefinition): Promise<RecipeDraft> {
+  return request(`/recipes/${encodeURIComponent(id)}`, {
+    method: "PUT", body: JSON.stringify({ expectedVersion, definition }),
+  });
+}
+
+export function validateRecipe(definition: RecipeDefinition): Promise<RecipeValidationResult> {
+  return request("/recipes/validate", { method: "POST", body: JSON.stringify(definition) });
+}
+
+export function publishRecipe(id: string, expectedVersion: number): Promise<RecipeRevision> {
+  return request(`/recipes/${encodeURIComponent(id)}/publish`, {
+    method: "POST", body: JSON.stringify({ expectedVersion }),
+  });
+}
+
+export function copyRecipeRevision(id: string, name: string): Promise<RecipeDraft> {
+  return request(`/recipes/revisions/${encodeURIComponent(id)}/copy`, { method: "POST", body: JSON.stringify({ name }) });
 }
 
 export function createJob(body: CreateJobRequest): Promise<CreateJobResponse> {

@@ -37,8 +37,8 @@ class RecipeValidationError(CodePlaneError):
 def revision_checksum(definition: RecipeDefinition, blocks: dict[str, RecipePinnedBlock]) -> str:
     return content_checksum(
         {
-            "definition": definition.model_dump(mode="json"),
-            "blocks": {key: block.model_dump(mode="json") for key, block in blocks.items()},
+            "definition": definition.model_dump(mode="json", exclude_unset=True),
+            "blocks": {key: block.model_dump(mode="json", exclude_unset=True) for key, block in blocks.items()},
         }
     )
 

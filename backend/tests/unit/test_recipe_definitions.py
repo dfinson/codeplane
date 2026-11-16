@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,7 @@ from backend.models.domain import StateConflictError
 from backend.models.schemas.recipes import (
     RecipeAgentRunner,
     RecipeBlockRunner,
+    RecipeCommandArgument,
     RecipeCommandRunner,
     RecipeDefinition,
     RecipeDependency,
@@ -40,7 +42,7 @@ from backend.services.recipe.definition_service import (
     RecipeDefinitionService,
     RecipeValidationError,
 )
-from backend.services.recipe.validation import validate_definition
+from backend.services.recipe.validation import content_checksum, validate_definition
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -176,6 +178,37 @@ def test_parallel_writer_policy_requires_isolation_and_exact_reconciliation() ->
     assert validate_definition(definition).valid
 
 
+def test_exclusive_decision_branches_can_share_a_writer_workspace_but_cannot_join():
+    gate = RecipeStep(
+        id="decision",
+        title="Decision",
+        runner=RecipeHumanRunner(proposed_action="Choose the next action"),
+        workspace=RecipeWorkspacePolicy(mode="none"),
+        routes={"approved": RecipeRoute(next_steps=["implement"]), "rejected": RecipeRoute(next_steps=["revise"])},
+    )
+    implement, revise = agent("implement"), agent("revise")
+    for step, outcome in ((implement, "approved"), (revise, "rejected")):
+        step.capabilities = ["read", "write"]
+        step.workspace.mode = "mutable"
+        step.depends_on = [RecipeDependency(step_id="decision", outcomes=[outcome])]
+    definition = RecipeDefinition(name="Exclusive", entry_steps=["decision"], steps=[gate, implement, revise])
+    assert validate_definition(definition).valid
+    join = agent("join")
+    join.depends_on = [RecipeDependency(step_id="implement"), RecipeDependency(step_id="revise")]
+    implement.routes["succeeded"] = RecipeRoute(next_steps=["join"])
+    revise.routes["succeeded"] = RecipeRoute(next_steps=["join"])
+    definition.steps.append(join)
+    assert "impossible_join" in issue_codes(definition)
+
+
+def test_retry_exhaustion_does_not_make_an_unused_failure_route_reachable():
+    work, unreachable = agent("work"), agent("unused")
+    work.routes["failed"] = RecipeRoute(next_steps=["unused"])
+    work.retry = RecipeRetryPolicy(max_attempts=2, retry_on=["failed"], exhaustion=RecipeRoute(terminal="failed"))
+    definition = RecipeDefinition(name="Repair", entry_steps=["work"], steps=[work, unreachable])
+    assert "unreachable" in issue_codes(definition)
+
+
 def test_attempt_bounds_and_runner_outcomes_are_not_prose() -> None:
     with pytest.raises(ValidationError):
         RecipeRetryPolicy(max_attempts=0)
@@ -188,6 +221,22 @@ def test_attempt_bounds_and_runner_outcomes_are_not_prose() -> None:
     assert validate_definition(definition).valid
     definition.steps[0].routes["looks_good"] = RecipeRoute(terminal="succeeded")
     assert "unknown_outcome" in issue_codes(definition)
+
+
+def test_command_arguments_and_workspace_bind_exact_typed_inputs() -> None:
+    definition = simple_recipe()
+    step = definition.steps[0]
+    step.inputs["code"] = RecipeInput(
+        type="code_ref",
+        binding=RecipeLiteralBinding(value={"workspace": "/repo", "commit": "a" * 40}),
+    )
+    step.runner = RecipeCommandRunner(argv=["git", "show", RecipeCommandArgument(input="code", field="commit")])
+    step.capabilities = ["read", "shell"]
+    step.workspace.source_input = "code"
+    assert validate_definition(definition).valid
+    step.workspace.source_input = "missing"
+    step.runner.argv[2] = RecipeCommandArgument(input="code")
+    assert {"invalid_workspace_source", "invalid_command_input"} <= issue_codes(definition)
 
 
 async def test_draft_save_has_no_execution_and_invalid_publish_is_rejected(store) -> None:
@@ -230,6 +279,25 @@ async def test_stale_save_and_publish_cannot_overwrite_a_new_revision(store) -> 
     with pytest.raises(StateConflictError):
         await service.publish(draft.id, expected_version=1)
     assert len((await service.list_revisions(draft.id)).items) == 1
+
+
+async def test_new_optional_schema_fields_do_not_rewrite_older_revision_receipts(store) -> None:
+    service, session = store
+    draft = await service.create(simple_recipe())
+    revision = await service.publish(draft.id, expected_version=1)
+    row = await session.scalar(select(RecipeRevisionRow).where(RecipeRevisionRow.id == revision.id))
+    original_definition = json.loads(row.definition_json)
+    original_definition["steps"][0]["workspace"].pop("source_input")
+    original_checksum = content_checksum({"definition": original_definition, "blocks": {}})
+    row.definition_json = json.dumps(original_definition)
+    row.checksum = original_checksum
+    await session.commit()
+    retained = await service.get_revision(revision.id)
+    assert retained.checksum == original_checksum
+    assert retained.definition.model_dump(mode="json", exclude_unset=True) == original_definition
+    copied = await service.copy_revision(revision.id, "Independent current-schema copy")
+    assert copied.id != revision.definition_id
+    assert (await service.get_revision(revision.id)).checksum == original_checksum
 
 
 async def test_transitive_block_revisions_are_pinned_and_recursion_is_rejected(store) -> None:

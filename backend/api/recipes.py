@@ -50,7 +50,7 @@ async def validate_recipe(
     return await service.validate(body)
 
 
-@router.get("/revisions/{revision_id}", response_model=RecipeRevisionResponse)
+@router.get("/revisions/{revision_id}", response_model=RecipeRevisionResponse, response_model_exclude_unset=True)
 async def get_recipe_revision(revision_id: str, service: FromDishka[RecipeDefinitionService]) -> RecipeRevisionResponse:
     return await service.get_revision(revision_id)
 
@@ -84,7 +84,12 @@ async def save_recipe(
     return draft
 
 
-@router.post("/{definition_id}/publish", response_model=RecipeRevisionResponse, status_code=201)
+@router.post(
+    "/{definition_id}/publish",
+    response_model=RecipeRevisionResponse,
+    status_code=201,
+    response_model_exclude_unset=True,
+)
 async def publish_recipe(
     definition_id: str,
     body: PublishRecipeRequest,
@@ -96,7 +101,7 @@ async def publish_recipe(
     return revision
 
 
-@router.get("/{definition_id}/revisions", response_model=RecipeRevisionListResponse)
+@router.get("/{definition_id}/revisions", response_model=RecipeRevisionListResponse, response_model_exclude_unset=True)
 async def list_recipe_revisions(
     definition_id: str,
     service: FromDishka[RecipeDefinitionService],

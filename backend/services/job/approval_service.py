@@ -212,7 +212,9 @@ class ApprovalService:
         except (ValueError, TypeError):
             return False
         return isinstance(data, dict) and (
-            data.get("kind") == "spawn_task" or data.get("action") in ("comment", "transition") or "operationId" in data
+            data.get("kind") in ("spawn_task", "recipe_gate")
+            or data.get("action") in ("comment", "transition")
+            or "operationId" in data
         )
 
     async def retire_execution_requests(self, job_id: str, reason: str) -> int:

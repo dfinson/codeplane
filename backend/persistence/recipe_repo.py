@@ -109,8 +109,8 @@ class RecipeRepository(BaseRepository):
             id=revision_id,
             definition_id=draft.id,
             revision=number,
-            definition_json=draft.definition.model_dump_json(),
-            blocks_json=_BLOCKS.dump_json(blocks).decode(),
+            definition_json=draft.definition.model_dump_json(exclude_unset=True),
+            blocks_json=_BLOCKS.dump_json(blocks, exclude_unset=True).decode(),
             checksum=checksum,
             published_at=now,
         )

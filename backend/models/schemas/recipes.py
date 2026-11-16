@@ -83,6 +83,7 @@ class RecipeRetryPolicy(RecipeModel):
 class RecipeWorkspacePolicy(RecipeModel):
     mode: Literal["none", "snapshot", "mutable", "isolated"] = "snapshot"
     key: str = Field(default="job", min_length=1, max_length=80)
+    source_input: RecipeIdentifier | None = None
 
 
 class RecipeAgentRunner(RecipeModel):
@@ -93,9 +94,14 @@ class RecipeAgentRunner(RecipeModel):
     session: Literal["new", "reuse"] = "new"
 
 
+class RecipeCommandArgument(RecipeModel):
+    input: RecipeIdentifier
+    field: Literal["workspace", "commit"] | None = None
+
+
 class RecipeCommandRunner(RecipeModel):
     kind: Literal["command"] = "command"
-    argv: list[str] = Field(default_factory=list, max_length=256)
+    argv: list[str | RecipeCommandArgument] = Field(default_factory=list, max_length=256)
     timeout_seconds: int = Field(default=300, ge=1, le=3600)
     reconciles: list[str] = Field(default_factory=list, max_length=128)
 
@@ -103,7 +109,7 @@ class RecipeCommandRunner(RecipeModel):
 class RecipeHumanRunner(RecipeModel):
     kind: Literal["human"] = "human"
     proposed_action: str = ""
-    decisions: list[str] = Field(default_factory=lambda: ["approved", "rejected"], max_length=16)
+    decisions: list[Literal["approved", "rejected"]] = Field(default=["approved", "rejected"], max_length=2)
 
 
 class RecipeBlockRunner(RecipeModel):
@@ -205,3 +211,139 @@ class RecipeRevisionListResponse(RecipeModel):
     items: list[RecipeRevisionResponse]
     next_cursor: int | None
     high_water: int
+
+
+class RecipeSelection(RecipeModel):
+    revision_id: str
+    parameters: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
+
+
+class RecipeInputReceipt(RecipeModel):
+    type: RecipeValueType
+    present: bool
+    value: JsonValue = None
+    receipt_id: str | None = None
+    producing_attempt_id: str | None = None
+    producer_outcome: str | None = None
+    checksum: str | None = None
+    degraded_reason: str | None = None
+
+
+class RecipeOutputReceipt(RecipeModel):
+    id: str
+    attempt_id: str
+    name: str
+    type: RecipeValueType
+    value: JsonValue
+    checksum: str
+    created_at: datetime
+
+
+class RecipeAttemptExecution(RecipeModel):
+    execution_token: str
+    session_id: str
+    provider: str
+    model: str | None
+    started_at: datetime
+
+
+class RecipeCommandResult(RecipeModel):
+    kind: Literal["command"] = "command"
+    argv: list[str]
+    exit_status: int | None
+    stdout: str | None
+    stderr: str | None
+    workspace: str
+    start_code_ref: str
+    end_code_ref: str | None
+    uncertain: bool = False
+
+
+class RecipeAgentResult(RecipeModel):
+    kind: Literal["agent"] = "agent"
+    session_ids: list[str]
+    text: str | None
+    uncertain: bool = False
+
+
+class RecipeHumanResult(RecipeModel):
+    kind: Literal["human"] = "human"
+    approval_id: str
+    decision: str
+    input_checksum: str
+
+
+class RecipeGateProposal(RecipeModel):
+    kind: Literal["recipe_gate"] = "recipe_gate"
+    recipe_run_id: str
+    step_instance_id: str
+    attempt_id: str
+    input_checksum: str
+    proposed_action: str
+    next_steps: dict[str, list[str]]
+
+
+class RecipeBlockResult(RecipeModel):
+    kind: Literal["block"] = "block"
+    revision_id: str
+    child_attempt_ids: list[str]
+
+
+RecipeEvidence = Annotated[
+    RecipeCommandResult | RecipeAgentResult | RecipeHumanResult | RecipeBlockResult, Field(discriminator="kind")
+]
+
+
+class RecipeAttemptResult(RecipeModel):
+    outcome: str
+    evidence: RecipeEvidence
+    reason: str | None
+    completed_at: datetime
+
+
+class RecipeResolvedWorkspace(RecipeModel):
+    path: str
+    code_ref: str
+    policy: RecipeWorkspacePolicy
+
+
+class RecipeAttemptResponse(RecipeModel):
+    id: str
+    step_instance_id: str
+    number: int
+    inputs: dict[str, RecipeInputReceipt]
+    runner: RecipeRunner
+    capabilities: list[RecipeCapability]
+    workspace: RecipeResolvedWorkspace
+    dispatch_intent_at: datetime
+    result: RecipeAttemptResult | None
+    executions: list[RecipeAttemptExecution]
+    outputs: list[RecipeOutputReceipt]
+
+
+class RecipeStepInstanceResponse(RecipeModel):
+    id: str
+    run_id: str
+    step_path: str
+    definition: RecipeStep
+    state: RecipeState
+    reason: str | None
+    current_attempt_id: str | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecipeRunResponse(RecipeModel):
+    id: str
+    job_id: str
+    revision_id: str
+    snapshot: RecipeRevisionResponse
+    snapshot_checksum: str
+    inputs: dict[str, JsonValue]
+    state: RecipeState
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    cancel_requested_at: datetime | None
+    completed_at: datetime | None
