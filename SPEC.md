@@ -65,6 +65,23 @@ Legacy numeric completion fields remain available during migration. The strict
 `cp-action-v1` evidence schema and deterministic credential filters are local
 primitives, not themselves permission authority or a claim of PII detection.
 
+The standalone assessment service binds its exact source fields to the local
+action digest, allows one provider attempt, and limits concurrency to two
+globally and one per Job. At most 32 requests wait for admission for up to two
+seconds. The 20-second decision deadline includes queueing and liveness checks.
+Canceled provider cleanup retains its concurrency slot until it actually ends,
+without delaying the caller's unavailable result. Redacted semantics, stale
+bindings and invalid evidence cannot become automatic permission.
+
+The AGT policy component uses the pinned core package's `PolicyEngine` with
+explicit `priority_first_match` priorities and no evaluation-time rate limits.
+Its standalone ledger uses separate storage with atomic executed-call identity
+and counters, marks missing call IDs unaccountable, and sums only verified USD.
+The metadata-only export projection excludes raw prompts, arguments, results,
+paths and rationale and keys external identities before any exporter queue.
+These components are introduced ahead of runtime cutover and full integration
+qualification; their presence is not a claim that TraceForge retirement is done.
+
 ### Recipe definitions and publication
 
 Recipes describe configurable intra-Job work. They are distinct from the legacy
