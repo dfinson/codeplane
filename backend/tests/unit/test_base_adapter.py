@@ -225,6 +225,28 @@ class TestScheduleDbWrite:
 
 
 class TestEvaluatePermission:
+    async def test_attempt_checkpoint_and_policy_use_trusted_session_workspace(self) -> None:
+        from backend.models.domain import SessionConfig
+        from backend.services.auth.permission_policy import PermissionRequest
+
+        adapter = _make_adapter()
+        router = MagicMock()
+        router.route = AsyncMock(return_value=MagicMock(proceed=True, classification=None))
+        adapter._policy_router["job"] = router
+        adapter._worktree_paths["job"] = "/primary"
+        adapter.set_session_metadata(
+            "attempt-session", SessionConfig(
+                workspace_path="/attempt", prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+            ),
+        )
+        decision = await adapter._evaluate_permission(
+            "attempt-session", "job", PermissionRequest(kind="read", workspace_path="/untrusted"),
+            tool_name="Read",
+        )
+        assert decision == PermissionDecision.allow
+        assert router.route.call_args.kwargs["cwd"] == "/attempt"
+        assert router.route.call_args.args[0].workspace_path == "/attempt"
+
     @pytest.mark.asyncio
     async def test_paused_session_denied(self) -> None:
         adapter = _make_adapter()

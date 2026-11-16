@@ -21,6 +21,15 @@ from backend.services.adapters.agent_adapter import AgentAdapterInterface
 
 
 class TestAdapterRegistry:
+    def test_descriptors_and_capabilities_remain_registered_while_disabled(self) -> None:
+        from backend.services.adapters.contracts import Capability
+
+        registry = AdapterRegistry()
+        assert {descriptor.id for descriptor in registry.list_descriptors()} == {"copilot", "claude"}
+        assert Capability.write in registry.supported_capabilities("claude")
+        assert not registry.policy.enabled("claude")
+        assert registry._adapters == {}, "Metadata discovery must not construct an SDK client"
+
     """Tests for the AdapterRegistry factory."""
 
     def test_get_adapter_copilot_returns_interface(self) -> None:
