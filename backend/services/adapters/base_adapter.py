@@ -432,17 +432,18 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def attach_attempt_policy(
         self, session_id: str, job_id: str, attempt_id: str, epoch: str,
-        router: PolicyRouter, policy: RepoPolicy,
+        router: PolicyRouter, policy: RepoPolicy, *, execution_token: str,
     ) -> None:
         metadata = self._session_metadata.get(session_id)
         if (
             self._session_to_job.get(session_id) != job_id
             or metadata is None or metadata.attempt_id != attempt_id or metadata.execution_epoch != epoch
-            or not self._session_workspaces.get(session_id)
+            or not self._session_workspaces.get(session_id) or not execution_token
         ):
             raise ValueError("Policy attachment requires the exact attributed session and trusted workspace")
         self._policy_router[job_id] = router
         self._repo_policies[job_id] = policy
+        self._session_metadata[session_id] = metadata.model_copy(update={"execution_token": execution_token})
 
     def cleanup_job_policy(self, job_id: str) -> None:
         """Remove per-job policy state.  Called at end-of-job by RuntimeService."""

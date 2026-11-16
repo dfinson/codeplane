@@ -73,7 +73,7 @@ def export_metadata(
         "event_id": _opaque(identity_key, "event", event.id),
     }
     identifiers = {
-        "execution_id": metadata.execution_epoch,
+        "execution_id": metadata.execution_token or metadata.execution_epoch,
         "source_id": metadata.integration_binding_id,
         "turn_id": metadata.turn_id or event.payload.get("turn_id"),
         "tool_call_id": event.payload.get("tool_call_id"),

@@ -131,7 +131,7 @@ class TextCompletionProvider(Protocol):
 class SessionPolicyAdapter(Protocol):
     def attach_attempt_policy(
         self, session_id: str, job_id: str, attempt_id: str, epoch: str,
-        router: PolicyRouter, policy: RepoPolicy,
+        router: PolicyRouter, policy: RepoPolicy, *, execution_token: str,
     ) -> None:
         """Reuse Job policy on an existing, attributed session without changing primary defaults."""
         ...

@@ -81,6 +81,7 @@ class EventMetadata(_FrozenModel):
     governance: dict[str, Any] | None = None
     integration_binding_id: str | None = None
     execution_epoch: str | None = None
+    execution_token: str | None = None
     recipe_run_id: str | None = None
     recipe_revision: int | None = None
     step_instance_id: str | None = None

@@ -111,6 +111,9 @@ never replace the primary Job model/default or another attempt's verification.
 Actual provider reports are retained for attributed attempts even when the SDK
 selected the default model or the session has a preflight role. With no requested
 model, requested identity and match status remain unknown, not synthetic matches.
+Managed `metadata.run_id` is the real SDK session ID. Policy attachment adds
+the exact registered `execution_token` for subsequent events, distinguishing
+reused native IDs within an attempt/epoch. Earlier events keep an unknown token.
 
 For attributed attempts, permission routing and savepoints use the trusted
 session workspace, never the primary Job workspace. Adapter description and

@@ -21,7 +21,7 @@ export function toolCallIdentity(entry: ToolIdentity): string | null {
   const namespace = meta?.namespace?.[0] === "observation-source" ? meta.namespace.slice(2) : meta?.namespace ?? [];
   return JSON.stringify([
     entry.jobId, meta?.integration_binding_id ?? null, meta?.run_id ?? null,
-    meta?.execution_epoch ?? null, meta?.attempt_id ?? null, namespace,
+    meta?.execution_epoch ?? null, meta?.attempt_id ?? null, meta?.execution_token ?? null, namespace,
     scoped ? null : entry.turnId ?? null, entry.toolCallId,
   ]);
 }

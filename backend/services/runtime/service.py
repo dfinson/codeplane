@@ -2232,6 +2232,7 @@ class RuntimeService:
                 raise AttemptBindingConflictError("The selected execution adapter cannot attach Job policy")
             binding.adapter.attach_attempt_policy(
                 binding.session_id, job_id, attempt_id, self._execution_epoch, router, policy,
+                execution_token=binding.token,
             )
 
     async def unregister_attempt_execution(self, job_id: str, attempt_id: str, expected_execution: str) -> None:

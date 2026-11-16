@@ -159,6 +159,7 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
     ):
         sid = f"session-{attempt}"
         adapter.set_job_id(sid, "job-1")
+        adapter._queues[sid] = asyncio.Queue()
         adapter.set_session_metadata(sid, SessionConfig(
             workspace_path=workspace, prompt="", job_id="job-1",
             attempt_id=attempt, execution_epoch=runtime.execution_epoch,
@@ -167,6 +168,10 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
         await runtime.attach_attempt_policy("job-1", attempt, context.execution_token)
         assert adapter._policy_router["job-1"] is router
         assert adapter._repo_policies["job-1"] is policy
+        adapter._verify_and_set_model(sid, "job-1", f"actual-{attempt}", "")
+        observed = adapter._queues[sid].get_nowait()
+        assert observed.metadata.run_id == sid
+        assert observed.metadata.execution_token == context.execution_token
         await adapter._evaluate_with_policy_router(
             sid, "job-1", PermissionRequest(kind="write", workspace_path="/untrusted", file_name="file"),
             tool_name="write", tool_input={"path": "file"},

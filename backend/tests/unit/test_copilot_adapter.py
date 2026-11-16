@@ -1962,6 +1962,7 @@ class TestScoutAccounting:
             "model_match": False if requested_model else None,
         }
         assert observed[0].metadata.attempt_id == "attempt"
+        assert observed[0].metadata.run_id == sid
         assert adapter.get_reported_model(sid) == "reported-model"
         assert adapter._job_main_models["job-1"] == "job-default"
 

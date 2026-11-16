@@ -32,7 +32,7 @@ class ToolPairing:
             namespace = namespace[2:]
         scope = json.dumps([
             metadata.integration_binding_id, metadata.run_id, metadata.execution_epoch,
-            metadata.attempt_id, namespace, call_id,
+            metadata.attempt_id, metadata.execution_token, namespace, call_id,
         ], separators=(",", ":"))
         return event.session_id, scope
 
