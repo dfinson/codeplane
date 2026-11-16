@@ -96,6 +96,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
         self._session_metadata: dict[str, EventMetadata] = {}
         self._session_workspaces: dict[str, str] = {}
+        self._permission_generations: dict[str, object] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
         self._event_bus = event_bus
@@ -165,6 +166,8 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def set_job_id(self, session_id: str, job_id: str) -> None:
         """Associate a session with a job for telemetry routing."""
+        if self._session_to_job.get(session_id) != job_id:
+            self._permission_generations[session_id] = object()
         self._session_to_job[session_id] = job_id
         self._job_start_times.setdefault(job_id, time.monotonic())
 
@@ -173,6 +176,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds[session_id] = kind
 
     def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        self._permission_generations[session_id] = object()
         self._session_workspaces[session_id] = config.workspace_path
         self._session_metadata[session_id] = EventMetadata(
             recipe_run_id=config.recipe_run_id, recipe_revision=config.recipe_revision,
@@ -190,6 +194,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
     def pause_tools(self, session_id: str) -> None:
         self._paused_sessions.add(session_id)
+        self._permission_generations[session_id] = object()
 
     def resume_tools(self, session_id: str) -> None:
         self._paused_sessions.discard(session_id)
@@ -215,6 +220,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._paused_sessions.discard(session_id)
         self._session_kinds.pop(session_id, None)
         self._session_metadata.pop(session_id, None)
+        self._permission_generations.pop(session_id, None)
         self._session_workspaces.pop(session_id, None)
         self._session_models.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
@@ -443,6 +449,8 @@ class BaseAgentAdapter(AgentAdapterInterface):
             raise ValueError("Policy attachment requires the exact attributed session and trusted workspace")
         self._policy_router[job_id] = router
         self._repo_policies[job_id] = policy
+        if metadata.execution_token != execution_token:
+            self._permission_generations[session_id] = object()
         self._session_metadata[session_id] = metadata.model_copy(update={"execution_token": execution_token})
 
     def cleanup_job_policy(self, job_id: str) -> None:
@@ -489,6 +497,11 @@ class BaseAgentAdapter(AgentAdapterInterface):
         # Paused — immediately deny
         if session_id in self._paused_sessions:
             return PermissionDecision.deny
+        owner = self._session_to_job.get(session_id)
+        if owner is not None and owner != job_id:
+            log.error("permission_session_owner_mismatch", session_id=session_id, job_id=job_id)
+            return PermissionDecision.deny
+        generation = self._permission_generations.setdefault(session_id, object())
 
         # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
         # reset --hard, force-push) always reach the operator — this pre-check
@@ -507,11 +520,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 shell_cmd,
                 tool_input,
             )
-            return PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
+            decision = (
+                PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
+            )
 
         # --- Action policy router ---
-        if job_id and job_id in self._policy_router:
-            return await self._evaluate_with_policy_router(
+        elif job_id and job_id in self._policy_router:
+            decision = await self._evaluate_with_policy_router(
                 session_id,
                 job_id,
                 request,
@@ -519,13 +534,19 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 tool_input=tool_input,
             )
 
-        log.error(
-            "no_policy_router_for_job",
-            job_id=job_id,
-            session_id=session_id,
-            tool_name=tool_name,
-        )
-        return PermissionDecision.deny
+        else:
+            log.error(
+                "no_policy_router_for_job", job_id=job_id, session_id=session_id, tool_name=tool_name,
+            )
+            return PermissionDecision.deny
+        if (
+            session_id in self._paused_sessions
+            or self._permission_generations.get(session_id) is not generation
+            or self._session_to_job.get(session_id) != owner
+        ):
+            log.warning("permission_decision_stale", job_id=job_id, session_id=session_id, tool_name=tool_name)
+            return PermissionDecision.deny
+        return decision
 
     async def _evaluate_with_policy_router(
         self,

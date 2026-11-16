@@ -235,6 +235,105 @@ async def test_attempt_policy_attachment_rejects_stale_tokens_and_missing_job_po
     adapter.attach_attempt_policy.assert_not_called()
 
 
+@pytest.mark.parametrize("hard_gate", [False, True])
+async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort_waits(session_factory, hard_gate):
+    from backend.models.domain import ApprovalResolution
+    from backend.services.adapters.base_adapter import PermissionDecision
+
+    runtime, _, _, _ = _runtime(session_factory)
+    adapter = CopilotAdapter()
+    runtime._adapter_registry.get_adapter.return_value = adapter
+    sid = "controlled-session"
+    adapter.set_job_id(sid, "job-1")
+    adapter.set_session_metadata(sid, SessionConfig(
+        workspace_path="/test", prompt="", job_id="job-1",
+        attempt_id="attempt", execution_epoch=runtime.execution_epoch,
+    ))
+    adapter._queues[sid] = asyncio.Queue()
+    deciding, decide, aborting, finish_abort = (asyncio.Event() for _ in range(4))
+
+    async def pending_decision(*args, **kwargs):
+        deciding.set()
+        await decide.wait()
+        return ApprovalResolution.approved if hard_gate else SimpleNamespace(proceed=True, classification=None)
+
+    if hard_gate:
+        adapter._hard_block_approval = AsyncMock(side_effect=pending_decision)
+    else:
+        adapter._policy_router["job-1"] = SimpleNamespace(route=AsyncMock(side_effect=pending_decision))
+
+    async def slow_abort():
+        aborting.set()
+        await finish_abort.wait()
+
+    adapter._sessions[sid] = SimpleNamespace(abort=slow_abort)
+    context = await runtime.register_attempt_execution("job-1", "attempt", adapter, sid)
+    permission = asyncio.create_task(adapter._evaluate_permission(
+        sid, "job-1", PermissionRequest(
+            kind="shell" if hard_gate else "read", workspace_path="/test",
+            full_command_text="git reset --hard HEAD" if hard_gate else None,
+        ),
+        tool_name="Bash" if hard_gate else "Read",
+    ))
+    await asyncio.wait_for(deciding.wait(), timeout=2)
+    cancellation = asyncio.create_task(runtime.cancel_attempt_execution("job-1", "attempt", context.execution_token))
+    try:
+        await asyncio.wait_for(aborting.wait(), timeout=2)
+        assert not cancellation.done()
+        decide.set()
+        assert await permission == PermissionDecision.deny
+    finally:
+        decide.set()
+        finish_abort.set()
+        await asyncio.gather(permission, cancellation, return_exceptions=True)
+
+
+@pytest.mark.parametrize("hard_gate", [False, True])
+@pytest.mark.parametrize("transition", ["replacement", "pause_resume", "new_token"])
+async def test_reused_session_identity_does_not_inherit_a_pending_permission(hard_gate, transition):
+    from backend.models.domain import ApprovalResolution
+    from backend.services.adapters.base_adapter import PermissionDecision
+
+    adapter = CopilotAdapter()
+    config = SessionConfig(
+        workspace_path="/test", prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+    )
+    adapter.set_job_id("same-id", "job")
+    adapter.set_session_metadata("same-id", config)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def wait_for_decision(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return ApprovalResolution.approved if hard_gate else SimpleNamespace(proceed=True, classification=None)
+
+    if hard_gate:
+        adapter._hard_block_approval = AsyncMock(side_effect=wait_for_decision)
+    else:
+        adapter._policy_router["job"] = SimpleNamespace(route=AsyncMock(side_effect=wait_for_decision))
+    request = PermissionRequest(
+        kind="shell" if hard_gate else "read", workspace_path="/test",
+        full_command_text="git reset --hard HEAD" if hard_gate else None,
+    )
+    pending = asyncio.create_task(adapter._evaluate_permission("same-id", "job", request, tool_name="Read"))
+    await asyncio.wait_for(entered.wait(), timeout=2)
+    if transition == "replacement":
+        adapter._cleanup_session_state("same-id")
+        adapter.set_job_id("same-id", "job")
+        adapter.set_session_metadata("same-id", config)
+    elif transition == "pause_resume":
+        adapter.pause_tools("same-id")
+        adapter.resume_tools("same-id")
+    else:
+        adapter.attach_attempt_policy(
+            "same-id", "job", "attempt", "epoch", adapter._policy_router.get("job", MagicMock()), RepoPolicy(),
+            execution_token="new-execution",
+        )
+    release.set()
+    assert await pending == PermissionDecision.deny
+    assert await adapter._evaluate_permission("same-id", "job", request, tool_name="Read") == PermissionDecision.allow
+
+
 async def test_cancellation_after_registration_cleans_handle_and_refuses_late_dispatch(session_factory):
     runtime, adapter, _, _ = _runtime(session_factory)
     adapter.create_session = AsyncMock(return_value="inert-session")

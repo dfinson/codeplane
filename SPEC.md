@@ -113,6 +113,10 @@ existing Job router and current policy to that exact provider session. It does
 not register another budget or replace the primary session's workspace. The
 adapter validates the attempt/epoch and uses its trusted SessionConfig workspace.
 Cross-provider runners attach this policy before admitting their first prompt.
+Pending permissions retain the session's ownership generation. Pause/cancellation,
+session replacement or a newly attached execution token invalidates that generation.
+Both router and hard-gate approvals recheck it before returning permission, even
+when transport abort is still draining or the same native session ID is reused.
 Strict dispatch publishes a durable admission receipt with the exact target
 session/token and accepted/unconfirmed markers, not an observed operator input.
 Receipts remain visible without feeding title, step or sidecar input processing.
