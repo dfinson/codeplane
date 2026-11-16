@@ -462,11 +462,13 @@ class CopilotAdapter(BaseAgentAdapter):
             au = cast("AssistantUsageData", data) if data else None
             if au:
                 actual_model = au.model or ""
+                metadata = self._session_metadata.get(session_id)
+                is_attempt = metadata is not None and metadata.attempt_id is not None
 
                 # Model verification (first call only)
-                if not model_verified[0] and requested_model and actual_model:
+                if not model_verified[0] and actual_model and (requested_model or is_attempt):
                     model_verified[0] = True
-                    if self.get_session_kind(session_id) == "preflight":
+                    if self.get_session_kind(session_id) == "preflight" and not is_attempt:
                         log.info(
                             "preflight_model_observed",
                             job_id=job_id,
@@ -546,8 +548,11 @@ class CopilotAdapter(BaseAgentAdapter):
 
         elif kind_str == "session.model_change":
             mc = cast("SessionModelChangeData", data) if data else None
-            if mc and mc.new_model and self.get_session_kind(session_id) != "preflight":
-                metadata = self._session_metadata.get(session_id)
+            metadata = self._session_metadata.get(session_id)
+            if mc and mc.new_model and (
+                self.get_session_kind(session_id) != "preflight"
+                or (metadata is not None and metadata.attempt_id is not None)
+            ):
                 if metadata is not None and metadata.attempt_id is not None:
                     self._verify_and_set_model(session_id, job_id, mc.new_model, requested_model)
                 else:

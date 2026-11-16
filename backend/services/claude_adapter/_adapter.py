@@ -343,12 +343,12 @@ class ClaudeAdapter(BaseAgentAdapter):
         content_blocks = getattr(message, "content", []) or []
         model = getattr(message, "model", "") or ""
         job_id = self._session_to_job.get(session_id)
+        metadata = self._session_metadata.get(session_id)
+        is_attempt = metadata is not None and metadata.attempt_id is not None
 
         # Lock in the main model from the first AssistantMessage that carries one
-        if job_id and model and self.get_session_kind(session_id) != "preflight":
+        if job_id and model and (self.get_session_kind(session_id) != "preflight" or is_attempt):
             requested = self._requested_models.get(session_id, "")
-            metadata = self._session_metadata.get(session_id)
-            is_attempt = metadata is not None and metadata.attempt_id is not None
             if not getattr(message, "parent_tool_use_id", None) and (
                 is_attempt or not self._model_verified.get(session_id)
             ):

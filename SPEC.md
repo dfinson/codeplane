@@ -62,6 +62,9 @@ Attempt model reports are session-qualified `model.observed` events carrying
 requested/actual identities and match status, with recipe, attempt and epoch
 metadata. A mismatch keeps that scope on `model.downgraded`. Attempt reports
 never replace the primary Job model/default or another attempt's verification.
+Actual provider reports are retained for attributed attempts even when the SDK
+selected the default model or the session has a preflight role. With no requested
+model, requested identity and match status remain unknown, not synthetic matches.
 
 For attributed attempts, permission routing and savepoints use the trusted
 session workspace, never the primary Job workspace. Adapter description and

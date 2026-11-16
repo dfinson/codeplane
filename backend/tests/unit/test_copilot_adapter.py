@@ -1931,6 +1931,40 @@ async def accounting_sessions(adapter: CopilotAdapter) -> AsyncIterator[tuple[st
 
 
 class TestScoutAccounting:
+    @pytest.mark.parametrize("role", ["job", "preflight"])
+    @pytest.mark.parametrize("requested_model", ["", "requested-model"])
+    @pytest.mark.parametrize("event_kind", ["assistant.usage", "session.model_change"])
+    async def test_attempt_model_is_recorded_from_provider_event(
+        self, adapter, role, requested_model, event_kind
+    ) -> None:
+        sid = "actual-session"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter._accepting_events.add(sid)
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, role)
+        adapter.set_session_metadata(sid, _make_config(attempt_id="attempt", execution_epoch="epoch"))
+        adapter._job_main_models["job-1"] = "job-default"
+        await adapter._process_sdk_event_inner(
+            _FakeSdkSessionEvent(event_kind, _FakeEventData(
+                model="reported-model", new_model="reported-model",
+                input_tokens=1, output_tokens=1, cache_read_tokens=0,
+                cache_write_tokens=0, cost=0, duration=1, quota_snapshots=None,
+            )),
+            sid, "job-1", requested_model, [False], adapter._queues[sid],
+        )
+        events = []
+        while not adapter._queues[sid].empty():
+            events.append(adapter._queues[sid].get_nowait())
+        observed = [event for event in events if event and event.kind == EventKind.model_observed]
+        assert len(observed) == 1
+        assert observed[0].payload == {
+            "requested_model": requested_model or None, "actual_model": "reported-model",
+            "model_match": False if requested_model else None,
+        }
+        assert observed[0].metadata.attempt_id == "attempt"
+        assert adapter.get_reported_model(sid) == "reported-model"
+        assert adapter._job_main_models["job-1"] == "job-default"
+
     @pytest.mark.asyncio
     async def test_scout_usage_keeps_primary_model_unset_until_primary_usage(
         self, adapter: CopilotAdapter, accounting_sessions: tuple[str, str]
