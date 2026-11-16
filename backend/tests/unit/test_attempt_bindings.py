@@ -6,6 +6,10 @@ import pytest
 
 from backend.config import CPLConfig
 from backend.models.domain import SessionConfig
+from backend.services.action_policy.classifier import Preset, RepoPolicy
+from backend.services.auth.permission_policy import PermissionRequest
+from backend.services.claude_adapter import ClaudeAdapter
+from backend.services.copilot_adapter import CopilotAdapter
 from backend.services.events.event_bus import EventBus
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
@@ -136,6 +140,53 @@ async def test_owned_deferred_session_is_closed_when_registration_fails(session_
     adapter.send_message.assert_not_awaited()
     adapter.abort_session.assert_awaited_once_with("inert-session")
     assert runtime._attempt_bindings.get("job-1", "attempt") is None
+
+
+async def test_attempt_policy_reuses_job_router_across_providers_without_workspace_or_budget_reset(session_factory):
+    runtime, _, _, _ = _runtime(session_factory)
+    runtime._config.runtime.copilot_only = False
+    copilot, claude = CopilotAdapter(), ClaudeAdapter()
+    runtime._adapter_registry.get_adapter.side_effect = lambda sdk: copilot if str(sdk) == "copilot" else claude
+    router = SimpleNamespace(route=AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None)))
+    policy = RepoPolicy(preset=Preset.supervised)
+    runtime._policy_routers["job-1"] = router
+    runtime._repo_policies["job-1"] = policy
+    runtime._governance_decider = MagicMock()
+    copilot.set_policy_router(router, policy, "job-1", "/primary")
+    for provider, adapter, attempt, workspace in (
+        ("copilot", copilot, "first", "/worktree-first"),
+        ("claude", claude, "second", "/worktree-second"),
+    ):
+        sid = f"session-{attempt}"
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_metadata(sid, SessionConfig(
+            workspace_path=workspace, prompt="", job_id="job-1",
+            attempt_id=attempt, execution_epoch=runtime.execution_epoch,
+        ))
+        context = await runtime.register_attempt_execution("job-1", attempt, adapter, sid, sdk=provider)
+        await runtime.attach_attempt_policy("job-1", attempt, context.execution_token)
+        assert adapter._policy_router["job-1"] is router
+        assert adapter._repo_policies["job-1"] is policy
+        await adapter._evaluate_with_policy_router(
+            sid, "job-1", PermissionRequest(kind="write", workspace_path="/untrusted", file_name="file"),
+            tool_name="write", tool_input={"path": "file"},
+        )
+        action = router.route.call_args.args[0]
+        assert action.workspace_path == workspace
+        assert router.route.call_args.kwargs["cwd"] == workspace
+    assert copilot._worktree_paths["job-1"] == "/primary"
+    assert "job-1" not in claude._worktree_paths
+    runtime._governance_decider.register_job.assert_not_called()
+
+
+async def test_attempt_policy_attachment_rejects_stale_tokens_and_missing_job_policy(session_factory):
+    runtime, adapter, _, _ = _runtime(session_factory)
+    context = await runtime.register_attempt_execution("job-1", "attempt", adapter, "session")
+    with pytest.raises(AttemptBindingConflictError, match="current execution token"):
+        await runtime.attach_attempt_policy("job-1", "attempt", "stale")
+    with pytest.raises(AttemptBindingConflictError, match="not been configured"):
+        await runtime.attach_attempt_policy("job-1", "attempt", context.execution_token)
+    adapter.attach_attempt_policy.assert_not_called()
 
 
 async def test_cancellation_after_registration_cleans_handle_and_refuses_late_dispatch(session_factory):

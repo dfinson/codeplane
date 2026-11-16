@@ -94,6 +94,12 @@ durable recipe admission. Registration failure or caller cancellation closes the
 owned session. Job cancellation signals the primary task and fences every
 attempt before awaiting any slow transport teardown.
 
+`attach_attempt_policy(job_id, attempt_id, expected_execution)` attaches the
+existing Job router and current policy to that exact provider session. It does
+not register another budget or replace the primary session's workspace. The
+adapter validates the attempt/epoch and uses its trusted SessionConfig workspace.
+Cross-provider runners attach this policy before admitting their first prompt.
+
 Attempt model reports are session-qualified `model.observed` events carrying
 requested/actual identities and match status, with recipe, attempt and epoch
 metadata. A mismatch keeps that scope on `model.downgraded`. Attempt reports

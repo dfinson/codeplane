@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
     from backend.models.session_event import SessionEvent
+    from backend.services.action_policy.classifier import RepoPolicy
+    from backend.services.action_policy.router import PolicyRouter
     from backend.services.adapters.agent_adapter import CompletionResult
 
 
@@ -123,3 +125,13 @@ class TextCompletionProvider(Protocol):
         system_message: str | None = None,
         excluded_tools: list[str] | None = None,
     ) -> CompletionResult: ...
+
+
+@runtime_checkable
+class SessionPolicyAdapter(Protocol):
+    def attach_attempt_policy(
+        self, session_id: str, job_id: str, attempt_id: str, epoch: str,
+        router: PolicyRouter, policy: RepoPolicy,
+    ) -> None:
+        """Reuse Job policy on an existing, attributed session without changing primary defaults."""
+        ...

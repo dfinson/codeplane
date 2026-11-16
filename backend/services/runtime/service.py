@@ -94,6 +94,7 @@ from backend.validators import REF_PATTERN
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
@@ -327,6 +328,7 @@ class RuntimeService:
         self._waiting_for_approval: set[str] = set()
         self._session_ids: dict[str, str] = {}
         self._policy_routers: dict[str, Any] = {}  # job_id → PolicyRouter
+        self._repo_policies: dict[str, RepoPolicy] = {}
         self._policy_batchers: dict[str, Any] = {}  # job_id → ApprovalBatcher
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
@@ -1259,6 +1261,7 @@ class RuntimeService:
         adapter = self._resolve_adapter(config.sdk)
         adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         self._policy_routers[job_id] = router
+        self._repo_policies[job_id] = policy
         self._policy_batchers[job_id] = batcher
 
         log.info(
@@ -1321,6 +1324,7 @@ class RuntimeService:
                     batch_window_seconds=db_config["batch_window_seconds"],
                     mcp_configs=mcp_configs,
                 )
+                self._repo_policies[job_id] = new_policy
 
                 # Re-bind the job's preset on the shared decider (it may have
                 # changed), so subsequent decisions select the right pipeline.
@@ -1379,6 +1383,7 @@ class RuntimeService:
         self._session_ids.pop(job_id, None)
         # Clean up action policy router state
         router = self._policy_routers.pop(job_id, None)
+        self._repo_policies.pop(job_id, None)
         if router is not None:
             router.cleanup_job(job_id)
         # Unbind the job from the shared governance decider so a finished job's
@@ -2209,6 +2214,25 @@ class RuntimeService:
                 raise AttemptBindingConflictError("The primary execution cannot also belong to an attempt")
             binding = self._attempt_bindings.register(job_id, attempt_id, adapter, session_id, provider)
             return CurrentExecutionContext(job_id, binding.token)
+
+    async def attach_attempt_policy(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
+        """Attach current Job policy to the exact live provider session without re-registering budgets."""
+        from backend.services.adapters.contracts import SessionPolicyAdapter
+
+        async with self._execution_control.hold(job_id):
+            await self._require_attempt_job(job_id)
+            binding = self._attempt_bindings.get(job_id, attempt_id)
+            if binding is None or binding.token != expected_execution or binding.cancel_requested:
+                raise AttemptBindingConflictError("Attempt policy attachment requires a current execution token")
+            router = self._policy_routers.get(job_id)
+            policy = self._repo_policies.get(job_id)
+            if router is None or policy is None:
+                raise AttemptBindingConflictError("Job policy has not been configured")
+            if not isinstance(binding.adapter, SessionPolicyAdapter):
+                raise AttemptBindingConflictError("The selected execution adapter cannot attach Job policy")
+            binding.adapter.attach_attempt_policy(
+                binding.session_id, job_id, attempt_id, self._execution_epoch, router, policy,
+            )
 
     async def unregister_attempt_execution(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
         """Forget only the exact completed/stopped session supplied by its owner."""
