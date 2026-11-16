@@ -21,6 +21,8 @@ import structlog
 from sqlalchemy.exc import DBAPIError
 
 from backend.models.domain import (
+    ApprovalAlreadyResolvedError,
+    ApprovalNotFoundError,
     ApprovalResolution,
 )
 from backend.models.events import EventKind, SessionEvent, new_event
@@ -138,16 +140,19 @@ class BaseAgentAdapter(AgentAdapterInterface):
         dotted CodePlane ``EventKind`` and *payload*/*metadata* carry TF-native
         fields consumed by ``EventProcessor`` and downstream consumers.
         """
-        metadata = self._session_metadata.get(session_id, EventMetadata()).model_copy(
+        metadata = self._event_metadata(session_id).model_copy(
             update={
-                "source_framework": self._source_framework,
-                "run_id": session_id,
                 "duration_ms": duration_ms,
                 "motivation": motivation,
                 "partial": partial,
             }
         )
         self._enqueue(session_id, new_event(session_id=job_id, kind=kind, payload=payload, metadata=metadata))
+
+    def _event_metadata(self, session_id: str) -> EventMetadata:
+        return self._session_metadata.get(session_id, EventMetadata()).model_copy(
+            update={"source_framework": self._source_framework, "run_id": session_id},
+        )
 
     def _emit_log_line(self, session_id: str, job_id: str, message: str, level: str = "info") -> None:
         """Emit a native ``log`` event (re-homed from EventPipeline._emit_log)."""
@@ -598,8 +603,8 @@ class BaseAgentAdapter(AgentAdapterInterface):
         )
 
         cwd = self._worktree_paths.get(job_id)
-        metadata = self._session_metadata.get(session_id)
-        if metadata is not None and metadata.attempt_id is not None:
+        metadata = self._event_metadata(session_id)
+        if metadata.attempt_id is not None:
             cwd = self._session_workspaces.get(session_id)
             if not cwd:
                 log.error("attempt_permission_workspace_missing", job_id=job_id, session_id=session_id)
@@ -617,6 +622,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
                     session_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=EventKind.action_classified,
+                    metadata=metadata,
                     payload={
                         "recommendedAction": decision.recommended_action.value,
                         "reasonCode": cls.reason_code,
@@ -646,6 +652,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.error("hard_gated_command_blocked_no_infra", command=shell_cmd)
             return ApprovalResolution.rejected
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         description = f"⚠️ Hard-gated command (§18.2) — requires operator approval: {shell_cmd}"
         proposed = json.dumps(tool_input, default=str) if tool_input else shell_cmd
         approval = await self._approval_service.create_request(
@@ -654,11 +664,14 @@ class BaseAgentAdapter(AgentAdapterInterface):
             proposed_action=proposed,
             requires_explicit_approval=True,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed,
@@ -673,7 +686,25 @@ class BaseAgentAdapter(AgentAdapterInterface):
             job_id=job_id,
             command=shell_cmd,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
+
+    async def _retire_approval_if_stale(
+        self, session_id: str, fence: tuple[str | None, object], approval_id: str,
+    ) -> bool:
+        if self._permission_fence_is_current(session_id, fence):
+            return False
+        assert self._approval_service is not None
+        try:
+            await self._approval_service.resolve(
+                approval_id, ApprovalResolution.rejected,
+                notes="Originating execution changed before permission release",
+            )
+        except (ApprovalAlreadyResolvedError, ApprovalNotFoundError):
+            log.info("stale_permission_approval_already_retired", session_id=session_id, approval_id=approval_id)
+        return True
 
     async def _route_to_operator(
         self,
@@ -687,16 +718,23 @@ class BaseAgentAdapter(AgentAdapterInterface):
             log.warning("permission_ask_no_infra")
             return ApprovalResolution.approved
 
+        fence = self._capture_permission_fence(session_id)
+        metadata = self._event_metadata(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
+            return ApprovalResolution.rejected
         approval = await self._approval_service.create_request(
             job_id=job_id,
             description=description,
             proposed_action=proposed_action,
         )
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
         self._enqueue(
             session_id,
             new_event(
                 session_id=job_id,
                 kind=EventKind.approval_requested,
+                metadata=metadata,
                 payload={
                     "description": description,
                     "proposed_action": proposed_action,
@@ -709,7 +747,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
             approval_id=approval.id,
             description=description,
         )
-        return await self._approval_service.wait_for_resolution(approval.id)
+        resolution = await self._approval_service.wait_for_resolution(approval.id)
+        if await self._retire_approval_if_stale(session_id, fence, approval.id):
+            return ApprovalResolution.rejected
+        return resolution
 
     @staticmethod
     def _build_permission_description(

@@ -437,6 +437,141 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
         await adapter.abort_session(sid)
 
 
+def _scoped_permission_adapter(session_factory, *, event_bus=None):
+    approvals = ApprovalService(session_factory)
+    adapter = CopilotAdapter(approval_service=approvals, event_bus=event_bus)
+    config = SessionConfig(
+        workspace_path="/test", prompt="", job_id="job-1", recipe_run_id="recipe-run",
+        recipe_revision=1, step_instance_id="step-instance", attempt_id="attempt", execution_epoch="epoch",
+    )
+    adapter.set_job_id("same-session", "job-1")
+    adapter.set_session_metadata("same-session", config)
+    adapter.attach_attempt_policy(
+        "same-session", "job-1", "attempt", "epoch", MagicMock(), RepoPolicy(), execution_token="original-token",
+    )
+    adapter._queues["same-session"] = asyncio.Queue()
+    return adapter, approvals, config
+
+
+@pytest.mark.parametrize("hard_gate", [False, True])
+async def test_permission_request_event_retains_originating_attempt_metadata(session_factory, hard_gate):
+    from backend.models.domain import ApprovalResolution
+
+    adapter, approvals, _ = _scoped_permission_adapter(session_factory)
+    call = (
+        adapter._hard_block_approval("same-session", "job-1", "git reset --hard HEAD")
+        if hard_gate else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
+    )
+    pending = asyncio.create_task(call)
+    try:
+        event = await asyncio.wait_for(adapter._queues["same-session"].get(), timeout=2)
+        assert event.kind == EventKind.approval_requested
+        assert event.metadata.recipe_run_id == "recipe-run"
+        assert event.metadata.step_instance_id == "step-instance"
+        assert event.metadata.attempt_id == "attempt"
+        assert event.metadata.execution_epoch == "epoch"
+        assert event.metadata.execution_token == "original-token"
+        assert event.metadata.run_id == "same-session"
+        await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
+        assert await asyncio.wait_for(pending, timeout=2) == ApprovalResolution.approved
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("hard_gate", [False, True])
+@pytest.mark.parametrize("transition", ["replacement", "pause_resume"])
+async def test_stale_approval_creation_is_retired_without_publishing_to_replacement(
+    session_factory, monkeypatch, hard_gate, transition,
+):
+    from backend.models.domain import ApprovalResolution
+
+    adapter, approvals, config = _scoped_permission_adapter(session_factory)
+    create = approvals.create_request
+    entered, release = asyncio.Event(), asyncio.Event()
+    created = []
+
+    async def delayed(*args, **kwargs):
+        approval = await create(*args, **kwargs)
+        created.append(approval.id)
+        entered.set()
+        await release.wait()
+        return approval
+
+    monkeypatch.setattr(approvals, "create_request", delayed)
+    call = (
+        adapter._hard_block_approval("same-session", "job-1", "git reset --hard HEAD")
+        if hard_gate else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
+    )
+    pending = asyncio.create_task(call)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        if transition == "replacement":
+            adapter.set_session_metadata("same-session", config)
+        else:
+            adapter.pause_tools("same-session")
+            adapter.resume_tools("same-session")
+        release.set()
+        assert await asyncio.wait_for(pending, timeout=2) == ApprovalResolution.rejected
+        assert adapter._queues["same-session"].empty()
+        assert await approvals.list_pending("job-1") == []
+        retired = await approvals.get(created[0])
+        assert retired.resolution == ApprovalResolution.rejected
+        assert "Originating execution changed" in retired.notes
+    finally:
+        release.set()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_classification_keeps_original_scope_across_policy_wait_and_replacement(session_factory):
+    from backend.services.action_policy.classifier import Classification, RecommendedAction
+    from backend.services.adapters.base_adapter import PermissionDecision
+
+    events = EventBus()
+    observed = []
+
+    async def record(event):
+        observed.append(event)
+
+    events.subscribe(record)
+    adapter, _, config = _scoped_permission_adapter(session_factory, event_bus=events)
+    entered, release = asyncio.Event(), asyncio.Event()
+    classification = Classification(
+        RecommendedAction.ALLOW, "known_read", 0, "unknown", "read_only", "file", "Read",
+    )
+
+    async def delayed(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(proceed=True, classification=classification,
+                               recommended_action=RecommendedAction.ALLOW, checkpoint_ref=None)
+
+    adapter._policy_router["job-1"] = SimpleNamespace(route=AsyncMock(side_effect=delayed))
+    pending = asyncio.create_task(adapter._evaluate_permission(
+        "same-session", "job-1", PermissionRequest(kind="read", workspace_path="/test"), tool_name="Read",
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        adapter.set_session_metadata("same-session", config)
+        adapter.attach_attempt_policy(
+            "same-session", "job-1", "attempt", "epoch", adapter._policy_router["job-1"], RepoPolicy(),
+            execution_token="replacement-token",
+        )
+        release.set()
+        assert await asyncio.wait_for(pending, timeout=2) == PermissionDecision.deny
+        event, = observed
+        assert event.kind == EventKind.action_classified
+        assert event.metadata.execution_token == "original-token"
+        assert event.metadata.recipe_run_id == "recipe-run"
+        assert event.metadata.attempt_id == "attempt"
+        assert event.metadata.run_id == "same-session"
+    finally:
+        release.set()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
 async def test_cancellation_after_registration_cleans_handle_and_refuses_late_dispatch(session_factory):
     runtime, adapter, _, _ = _runtime(session_factory)
     adapter.create_session = AsyncMock(return_value="inert-session")
