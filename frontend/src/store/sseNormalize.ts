@@ -111,6 +111,7 @@ export function normalizeTFEvent(ev: TFSessionEvent): Record<string, unknown> {
     ["step_instance_id", "stepInstanceId"],
     ["attempt_id", "attemptId"],
     ["execution_epoch", "executionEpoch"],
+    ["execution_token", "executionToken"],
   ] as const) {
     if (metadata?.[source] != null) payload[target] = metadata[source];
   }
@@ -163,6 +164,7 @@ export function deriveJobStateFrame(
   kind: string,
   payload: Record<string, unknown>,
 ): Record<string, unknown> | null {
+  if (typeof payload.attemptId === "string") return null;
   const base = { jobId: payload.jobId, timestamp: payload.timestamp };
 
   if (kind === "permission.requested") {

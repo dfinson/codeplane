@@ -103,6 +103,174 @@ async def test_list_queries_are_bounded_and_responses_keep_frozen_highwater(clie
     assert (await client.get("/api/recipes", params={"limit": 101})).status_code == 422
 
 
+async def test_job_creation_pins_selected_revision_and_request_before_background_setup(
+    client,
+    session_factory,
+    mock_runtime_service,
+):
+    from backend.persistence.project_repo import ProjectRepository
+
+    async with session_factory() as session:
+        await ProjectRepository(session).create("project", "Recipe project", ["/test/repo"])
+        await session.commit()
+    body = {
+        "name": "Pinned launch",
+        "parameters": {"request": {"type": "string"}},
+        "entrySteps": ["work"],
+        "steps": [
+            {
+                "id": "work",
+                "title": "Work",
+                "instructions": "Original pinned instructions",
+                "runner": {"kind": "agent"},
+                "capabilities": ["read"],
+                "inputs": {"request": {"type": "string", "binding": {"source": "parameter", "parameter": "request"}}},
+                "routes": {"succeeded": {"terminal": "succeeded"}, "failed": {"terminal": "failed"}},
+            }
+        ],
+    }
+    draft = (await client.post("/api/recipes", json=body)).json()
+    publication = await client.post(f"/api/recipes/{draft['id']}/publish", json={"expectedVersion": 1})
+    assert publication.status_code == 201, publication.text
+    revision = publication.json()
+    response = await client.post(
+        "/api/jobs",
+        json={
+            "repo": "/test/repo",
+            "projectId": "project",
+            "prompt": "Actual launch request",
+            "title": "Pinned launch",
+            "branch": "recipe-launch",
+            "worktreeName": "recipe-launch",
+            "recipe": {"revisionId": revision["id"]},
+        },
+    )
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+    async with session_factory() as session:
+        run = await RecipeRunRepository(session).get_for_job(job_id)
+        assert run.revision_id == revision["id"]
+        assert run.inputs == {"request": "Actual launch request"}
+        assert run.snapshot.definition.steps[0].instructions == "Original pinned instructions"
+        assert await session.scalar(select(func.count()).select_from(RecipeRunRow)) == 1
+    body["steps"][0]["instructions"] = "Later draft edit must not affect the run"
+    saved = await client.put(f"/api/recipes/{draft['id']}", json={"expectedVersion": 2, "definition": body})
+    assert saved.status_code == 200, saved.text
+    async with session_factory() as session:
+        assert (await RecipeRunRepository(session).get_for_job(job_id)).snapshot.definition.steps[0].instructions == (
+            "Original pinned instructions"
+        )
+
+
+async def test_invalid_recipe_launch_inputs_leave_no_job_or_run(client, session_factory, mock_runtime_service):
+    body = {
+        "name": "Typed launch",
+        "parameters": {"count": {"type": "integer"}},
+        "entrySteps": ["work"],
+        "steps": [
+            {
+                "id": "work",
+                "title": "Work",
+                "instructions": "Read the supplied count and return the requested work.",
+                "runner": {"kind": "agent"},
+                "capabilities": ["read"],
+                "inputs": {
+                    "count": {"type": "integer", "binding": {"source": "parameter", "parameter": "count"}},
+                },
+                "routes": {"succeeded": {"terminal": "succeeded"}, "failed": {"terminal": "failed"}},
+            }
+        ],
+    }
+    draft = (await client.post("/api/recipes", json=body)).json()
+    publication = await client.post(f"/api/recipes/{draft['id']}/publish", json={"expectedVersion": 1})
+    assert publication.status_code == 201, publication.text
+    revision = publication.json()
+    response = await client.post(
+        "/api/jobs",
+        json={
+            "repo": "/test/repo",
+            "prompt": "Must not start",
+            "recipe": {"revisionId": revision["id"], "parameters": {"count": True}},
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert any(issue["code"] == "type_mismatch" for issue in response.json()["detail"]["issues"])
+    mock_runtime_service.setup_and_start.assert_not_awaited()
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(JobRow)) == 0
+        assert await session.scalar(select(func.count()).select_from(RecipeRunRow)) == 0
+
+
+async def test_recipe_naming_failure_keeps_explicit_recipe_ownership_without_starting(
+    client,
+    session_factory,
+    mock_runtime_service,
+    monkeypatch,
+):
+    from backend.persistence.project_repo import ProjectRepository
+    from backend.services.completers.naming_service import NamingError
+    from backend.services.job.job_service import JobService
+
+    async with session_factory() as session:
+        await ProjectRepository(session).create("project", "Recipe project", ["/test/repo"])
+        await session.commit()
+    draft = (await client.post("/api/recipes", json=definition())).json()
+    publication = await client.post(f"/api/recipes/{draft['id']}/publish", json={"expectedVersion": 1})
+    assert publication.status_code == 201, publication.text
+    ownership = []
+    persist = JobService.persist_prepared_job
+
+    async def record_owner(service, prepared, **kwargs):
+        ownership.append(kwargs.get("recipe_admission"))
+        return await persist(service, prepared, **kwargs)
+
+    monkeypatch.setattr(JobService, "persist_prepared_job", record_owner)
+    monkeypatch.setattr(JobService, "_resolve_job_name", AsyncMock(side_effect=NamingError("Naming unavailable")))
+    response = await client.post(
+        "/api/jobs",
+        json={
+            "repo": "/test/repo",
+            "projectId": "project",
+            "prompt": "Retain recipe ownership",
+            "recipe": {"revisionId": publication.json()["id"]},
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["state"] == "failed"
+    assert ownership == [True]
+    async with session_factory() as session:
+        repository = RecipeRunRepository(session)
+        run = await repository.get_for_job(response.json()["id"])
+        assert run is not None and run.revision_id == publication.json()["id"]
+        assert run.code_ref is None and not await repository.has_attempts(run.id)
+    mock_runtime_service.setup_and_start.assert_not_awaited()
+
+
+async def test_explicit_resume_response_retains_the_exact_run_receipt(client, session_factory, mock_runtime_service):
+    run = await create_run(session_factory, simple_recipe())
+    async with session_factory() as session:
+        job = await JobRepository(session).get(run.job_id)
+    mock_runtime_service.resume_recipe_run.return_value = (job, run)
+    response = await client.post(
+        f"/api/jobs/{job.id}/resume",
+        json={
+            "instruction": "Explicit next instruction",
+            "expectedRunId": run.id,
+            "startRequestKey": "request-key",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["recipeRun"]["id"] == run.id
+    mock_runtime_service.resume_recipe_run.assert_awaited_once_with(
+        job.id,
+        "Explicit next instruction",
+        expected_run_id=run.id,
+        start_request_key="request-key",
+        selection=None,
+    )
+    mock_runtime_service.resume_job.assert_not_awaited()
+
+
 @pytest.mark.parametrize("channel", ["rest", "mcp"])
 @pytest.mark.parametrize("case", ["active", "completed", "unexpected_primary"])
 async def test_legacy_messages_cannot_start_or_unpause_a_recipe_primary(

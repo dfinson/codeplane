@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from backend.models.api_schemas import ArtifactType, ExecutionPhase
+    from backend.models.schemas.recipes import RecipeSelection
 
 
 class JobState(StrEnum):
@@ -737,6 +738,7 @@ class JobSpec:
     parent_job_id: str | None = None
     parent_job_context: str | None = None
     mode: JobMode = JobMode.standard
+    recipe: RecipeSelection | None = None
 
 
 @dataclass
@@ -890,6 +892,7 @@ class Job:
     version: int = 1
     parent_job_id: str | None = None
     source: str = "managed"
+    observation_only: bool = False
     external_session_id: str | None = None
     integration_binding_id: str | None = None
     observation_only: bool = False

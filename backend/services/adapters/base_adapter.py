@@ -184,8 +184,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._permission_generations[session_id] = object()
         self._session_workspaces[session_id] = config.workspace_path
         self._session_metadata[session_id] = EventMetadata(
-            recipe_run_id=config.recipe_run_id, recipe_revision=config.recipe_revision,
-            step_instance_id=config.step_instance_id, attempt_id=config.attempt_id,
+            recipe_run_id=config.recipe_run_id,
+            recipe_revision=config.recipe_revision,
+            step_instance_id=config.step_instance_id,
+            attempt_id=config.attempt_id,
             execution_epoch=config.execution_epoch,
         )
 

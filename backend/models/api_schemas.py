@@ -85,6 +85,7 @@ class CreateJobRequest(CamelModel):
     enable_plan_tracking: bool | None = None
     session_token: str | None = Field(None, max_length=64)
     mode: JobMode | None = None
+    recipe: RecipeSelection | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -110,6 +111,15 @@ class SendMessageRequest(CamelModel):
 
 class ResumeJobRequest(CamelModel):
     instruction: str | None = Field(default=None, max_length=50_000)
+    expected_run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    start_request_key: str | None = Field(default=None, min_length=1, max_length=128)
+    recipe: RecipeSelection | None = None
+
+    @model_validator(mode="after")
+    def _require_recipe_target(self) -> ResumeJobRequest:
+        if (self.start_request_key is not None or self.recipe is not None) and self.expected_run_id is None:
+            raise ValueError("Recipe continuation requires the expected run identity.")
+        return self
 
 
 class ResolveGateRequest(CamelModel):
@@ -356,6 +366,10 @@ class JobResponse(CamelModel):
             mode=JobMode(job.mode) if isinstance(job.mode, str) else JobMode.standard,
             **overrides,
         )
+
+
+class RecipeResumeResponse(JobResponse):
+    recipe_run: RecipeRunResponse
 
 
 class JobListResponse(CamelModel):

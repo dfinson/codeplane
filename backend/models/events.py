@@ -25,6 +25,7 @@ __all__ = [
     "EventPayload",
     "SessionEvent",
     "new_event",
+    "is_admission_receipt",
 ]
 
 
@@ -108,6 +109,8 @@ class EventKind(StrEnum):
     telemetry_updated = "telemetry.updated"
     artifacts_updated = "artifacts.updated"
     tracker_operation_updated = "tracker.operation_updated"
+    recipe_updated = "recipe.updated"
+    review_recorded = "review.recorded"
     # --- Steps / plan ---
     step_started = "step.started"
     step_completed = "step.completed"

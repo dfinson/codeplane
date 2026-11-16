@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import delete, exists, func, select, update
+from sqlalchemy import case, delete, exists, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 
 from backend.models.db import (
@@ -29,11 +29,14 @@ from backend.models.db import (
 )
 from backend.models.domain import StateConflictError
 from backend.models.schemas.recipes import (
+    RecipeAgentResult,
+    RecipeAgentRunner,
     RecipeAttemptExecution,
     RecipeAttemptResponse,
     RecipeAttemptResult,
     RecipeCodeReference,
     RecipeCommandResult,
+    RecipeCommandRunner,
     RecipeDefinition,
     RecipeGateBinding,
     RecipeGateProposal,
@@ -138,6 +141,46 @@ class RecipeRunRepository(BaseRepository):
             select(RecipeRunRow).where(RecipeRunRow.id == run_id).execution_options(populate_existing=True)
         )
         return self._run(row) if row else None
+
+    async def get_by_start_key(self, request_key: str) -> RecipeRunResponse | None:
+        row = await self._session.scalar(
+            select(RecipeRunRow)
+            .where(
+                RecipeRunRow.start_request_key == request_key,
+            )
+            .execution_options(populate_existing=True)
+        )
+        return self._run(row) if row else None
+
+    async def has_attempts(self, run_id: str) -> bool:
+        return bool(
+            await self._session.scalar(
+                select(
+                    exists(
+                        select(RecipeAttemptRow.id)
+                        .join(
+                            RecipeStepInstanceRow,
+                            RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id,
+                        )
+                        .where(RecipeStepInstanceRow.run_id == run_id)
+                    )
+                )
+            )
+        )
+
+    async def corresponding_step(self, run_id: str, step_path: str) -> RecipeStepInstanceResponse | None:
+        prefix = ""
+        components = step_path.split("/")
+        for index, component in enumerate(components):
+            name = component.split("@", 1)[0]
+            instance = await self.get_step_by_path(run_id, prefix + name)
+            if instance is None or index == len(components) - 1:
+                return instance
+            attempt = await self.get_attempt(instance.current_attempt_id) if instance.current_attempt_id else None
+            if attempt is None or attempt.runner.kind != "block":
+                return None
+            prefix = f"{instance.step_path}@{attempt.number}/"
+        return None
 
     async def create(
         self,
@@ -290,7 +333,16 @@ class RecipeRunRepository(BaseRepository):
             .where(RecipeStepInstanceRow.run_id == run_id)
             .limit(1)
         )
-        if active is not None or leased is not None:
+        uncertain = await self._session.scalar(
+            select(RecipeAttemptResultRow.attempt_id)
+            .join(RecipeStepInstanceRow, RecipeStepInstanceRow.current_attempt_id == RecipeAttemptResultRow.attempt_id)
+            .where(
+                RecipeStepInstanceRow.run_id == run_id,
+                func.json_extract(RecipeAttemptResultRow.evidence_json, "$.uncertain").is_(True),
+            )
+            .limit(1)
+        )
+        if active is not None or leased is not None or uncertain is not None:
             raise StateConflictError("Execution or an uncertain workspace effect remains unresolved.")
         pending = await self._session.scalar(
             select(RecipeStepInstanceRow.id)
@@ -476,6 +528,41 @@ class RecipeRunRepository(BaseRepository):
             )
         )
 
+    async def find_gate_request(self, proposal: RecipeGateProposal) -> str | None:
+        run = await self.get(proposal.recipe_run_id)
+        if run is None:
+            raise StateConflictError("The gate's owning run is missing.")
+        document = case(
+            (func.json_valid(ApprovalRow.proposed_action), ApprovalRow.proposed_action),
+            else_="{}",
+        )
+        rows = list(
+            await self._session.scalars(
+                select(ApprovalRow)
+                .where(
+                    ApprovalRow.job_id == run.job_id,
+                    func.coalesce(
+                        func.json_extract(document, "$.attempt_id"),
+                        func.json_extract(document, "$.attemptId"),
+                    )
+                    == proposal.attempt_id,
+                )
+                .limit(2)
+            )
+        )
+        if len(rows) > 1:
+            raise StateConflictError("More than one authority record claims this human attempt.")
+        if not rows:
+            return None
+        approval = rows[0]
+        try:
+            recorded = RecipeGateProposal.model_validate_json(approval.proposed_action or "{}")
+        except ValidationError as exc:
+            raise StateConflictError("The retained human proposal is invalid.") from exc
+        if not approval.requires_explicit_approval or recorded != proposal:
+            raise StateConflictError("The retained human proposal differs from the exact pinned inputs and action.")
+        return approval.id
+
     async def interrupt_attempt(
         self,
         attempt_id: str,
@@ -486,6 +573,7 @@ class RecipeRunRepository(BaseRepository):
         execution_epoch: str,
         expected_execution: str | None,
         expected_instance_version: int,
+        dispatch_started: bool | None = None,
     ) -> None:
         attempt = await self.get_attempt(attempt_id)
         if attempt is None or attempt.result is not None:
@@ -533,6 +621,7 @@ class RecipeRunRepository(BaseRepository):
                     "stop_confirmed": stop_confirmed,
                     "resume_safe": stop_confirmed and resume_safe,
                     "execution_token": attempt.executions[-1].execution_token if attempt.executions else None,
+                    "dispatch_started": dispatch_started,
                 },
                 metadata=EventMetadata(
                     source_framework="codeplane.recipe",
@@ -553,8 +642,8 @@ class RecipeRunRepository(BaseRepository):
         if instance.state != "interrupted" or instance.current_attempt_id is None:
             raise StateConflictError("Step has no interrupted execution to resume.")
         attempt = await self.get_attempt(instance.current_attempt_id)
-        if attempt is None or attempt.result is not None or attempt.runner.kind != "agent":
-            raise StateConflictError("Only an unfinished agent execution can resume without another attempt.")
+        if attempt is None or attempt.result is not None or attempt.runner.kind not in {"agent", "command"}:
+            raise StateConflictError("Only an unfinished execution can resume without another attempt.")
         run = await self.get(instance.run_id)
         if run is None or run.resolved_at is not None or run.cancel_requested_at is not None:
             raise StateConflictError("Run no longer admits interrupted execution recovery.")
@@ -572,6 +661,10 @@ class RecipeRunRepository(BaseRepository):
             .limit(1)
         )
         evidence = json.loads(proof.payload) if proof is not None else {}
+        if attempt.runner.kind == "command" and evidence.get("dispatch_started") is not False:
+            raise StateConflictError(
+                "A command can resume only when its dispatch is positively recorded as not started."
+            )
         if (
             evidence.get("stop_confirmed") is not True
             or evidence.get("resume_safe") is not True
@@ -625,6 +718,48 @@ class RecipeRunRepository(BaseRepository):
         if changed is None:
             raise StateConflictError("Interrupted execution was already resumed.")
         return attempt
+
+    async def admit_controller(self, run_id: str) -> set[str]:
+        """Retain completed nodes and fence any unfinished execution before dispatch."""
+        run = await self.get(run_id)
+        if run is None or run.resolved_at is not None or run.cancel_requested_at is not None:
+            raise StateConflictError("This run does not admit recovery.")
+        rows = await self._session.scalars(
+            select(RecipeStepInstanceRow).where(
+                RecipeStepInstanceRow.run_id == run_id,
+                RecipeStepInstanceRow.state.in_(("running", "interrupted")),
+            )
+        )
+        resumed: set[str] = set()
+        for row in rows:
+            instance = self._step(row)
+            if instance.definition.runner.kind in {"human", "block"} and instance.state == "running":
+                continue
+            if instance.state != "interrupted":
+                raise StateConflictError(
+                    "A retained execution has no confirmed stop receipt. Reconcile it before recovery."
+                )
+            await self.resume_interrupted(instance)
+            resumed.add(instance.id)
+        admitted = await self._session.scalar(
+            update(RecipeRunRow)
+            .where(
+                RecipeRunRow.id == run_id,
+                RecipeRunRow.resolved_at.is_(None),
+                RecipeRunRow.cancel_requested_at.is_(None),
+                exists(select(JobRow.id).where(JobRow.id == run.job_id, JobRow.state == "running")),
+            )
+            .values(
+                state="running",
+                reason=None,
+                updated_at=datetime.now(UTC),
+                version=RecipeRunRow.version + 1,
+            )
+            .returning(RecipeRunRow.id)
+        )
+        if admitted is None:
+            raise StateConflictError("The owning Job no longer admits recovery.")
+        return resumed
 
     async def list_steps(self, run_id: str, *, after: str = "", limit: int = 100) -> list[RecipeStepInstanceResponse]:
         if not 1 <= limit <= 128:
@@ -826,6 +961,32 @@ class RecipeRunRepository(BaseRepository):
         )
         if admitted_run is None:
             raise StateConflictError("The run or owning Job no longer admits execution.")
+        published_runner = instance.definition.runner
+        expected_runner = published_runner
+        if isinstance(published_runner, RecipeCommandRunner):
+            from backend.services.recipe.run_service import resolve_command_arguments
+
+            expected_runner = published_runner.model_copy(
+                update={
+                    "argv": resolve_command_arguments(published_runner, inputs),
+                }
+            )
+        elif isinstance(published_runner, RecipeAgentRunner):
+            job = await self._session.get(JobRow, run.job_id)
+            assert job is not None
+            provider = published_runner.provider or job.sdk
+            expected_runner = published_runner.model_copy(
+                update={
+                    "provider": provider,
+                    "model": published_runner.model
+                    if published_runner.model is not None
+                    else job.model
+                    if provider == job.sdk
+                    else None,
+                }
+            )
+        if runner != expected_runner:
+            raise StateConflictError("Resolved runner settings differ from the published contract and launch defaults.")
         number = (
             await self._session.scalar(
                 select(func.max(RecipeAttemptRow.number)).where(RecipeAttemptRow.step_instance_id == instance.id)
@@ -978,6 +1139,90 @@ class RecipeRunRepository(BaseRepository):
         self._session.add(RecipeAttemptExecutionRow(attempt_id=attempt_id, **execution.model_dump()))
         await self._session.flush()
 
+    async def finish_execution_turn(self, attempt_id: str, execution_token: str, *, execution_epoch: str) -> None:
+        from backend.models.events import EventMetadata, new_event
+        from backend.persistence.event_repo import EventRepository
+
+        attempt = await self.get_attempt(attempt_id)
+        if (
+            attempt is None
+            or attempt.result is not None
+            or not attempt.executions
+            or attempt.executions[-1].execution_token != execution_token
+        ):
+            raise StateConflictError("Execution completion does not name the current unfinished attempt.")
+        instance = await self.get_step(attempt.step_instance_id)
+        run = await self.get(instance.run_id) if instance else None
+        if run is None or run.resolved_at is not None or instance is None or instance.state != "running":
+            raise StateConflictError("The selected execution no longer accepts completion.")
+        await EventRepository(self._session).append(
+            new_event(
+                run.job_id,
+                "recipe.execution.completed",
+                {
+                    "attempt_id": attempt.id,
+                    "execution_token": execution_token,
+                    "native_session_id": attempt.executions[-1].session_id,
+                },
+                event_id=f"recipe-execution-{execution_token}",
+                metadata=EventMetadata(
+                    source_framework="codeplane.recipe",
+                    recipe_run_id=run.id,
+                    recipe_revision=run.snapshot.revision,
+                    step_instance_id=instance.id,
+                    attempt_id=attempt.id,
+                    execution_epoch=execution_epoch,
+                ),
+            )
+        )
+
+    async def agent_progress(self, attempt_id: str) -> tuple[int, RecipeAgentResult, bool]:
+        attempt = await self.get_attempt(attempt_id)
+        instance = await self.get_step(attempt.step_instance_id) if attempt else None
+        run = await self.get(instance.run_id) if instance else None
+        if attempt is None or run is None or attempt.runner.kind != "agent":
+            raise StateConflictError("Agent progress requires an admitted agent attempt.")
+        scope = (
+            EventRow.job_id == run.job_id,
+            func.json_extract(EventRow.event_metadata, "$.attempt_id") == attempt.id,
+            func.json_extract(EventRow.event_metadata, "$.recipe_run_id") == run.id,
+            func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+        )
+        completed = await self._session.scalar(
+            select(func.count(EventRow.id)).where(
+                *scope,
+                EventRow.kind == "recipe.execution.completed",
+                func.json_extract(EventRow.event_metadata, "$.source_framework") == "codeplane.recipe",
+                func.json_extract(EventRow.payload, "$.execution_token").in_(
+                    [execution.execution_token for execution in attempt.executions]
+                ),
+            )
+        )
+        last_message = await self._session.scalar(
+            select(EventRow).where(*scope, EventRow.kind == "message.assistant").order_by(EventRow.id.desc()).limit(1)
+        )
+        observed = await self._session.scalars(
+            select(EventRow).where(*scope, EventRow.kind == "model.observed").order_by(EventRow.id).limit(1000)
+        )
+        models: list[str] = []
+        mismatch = False
+        for row in observed:
+            payload = json.loads(row.payload)
+            model = payload.get("actual_model")
+            if isinstance(model, str) and model and model not in models:
+                models.append(model)
+            mismatch = mismatch or payload.get("model_match") is False
+        text = json.loads(last_message.payload).get("content") if last_message else None
+        return (
+            completed or 0,
+            RecipeAgentResult(
+                session_ids=[execution.session_id for execution in attempt.executions],
+                text=text if isinstance(text, str) else None,
+                actual_models=models,
+            ),
+            mismatch,
+        )
+
     async def bind_gate(self, proposal: RecipeGateProposal, approval_id: str) -> None:
         attempt = await self.get_attempt(proposal.attempt_id)
         instance = await self.get_step(proposal.step_instance_id)
@@ -1114,9 +1359,9 @@ class RecipeRunRepository(BaseRepository):
                 raise StateConflictError(
                     "Command evidence belongs to a different invocation or code/workspace reference."
                 )
-            if not command_evidence.started:
+            if not command_evidence.started and result.outcome == "succeeded":
                 result = result.model_copy(update={"outcome": "failed"})
-            elif (
+            elif command_evidence.started and (
                 command_evidence.exit_status is None
                 or (
                     command_evidence.stdout is None
@@ -1199,4 +1444,16 @@ class RecipeRunRepository(BaseRepository):
             update(RecipeRunRow)
             .where(RecipeRunRow.id == run_id, RecipeRunRow.state.in_(_ACTIVE_RUN_STATES + ("interrupted",)))
             .values(state="canceled", cancel_requested_at=now, updated_at=now, version=RecipeRunRow.version + 1)
+        )
+
+    async def mark_interrupted(self, run_id: str, reason: str) -> None:
+        await self._session.execute(
+            update(RecipeRunRow)
+            .where(RecipeRunRow.id == run_id, RecipeRunRow.resolved_at.is_(None))
+            .values(
+                state=case((RecipeRunRow.cancel_requested_at.is_not(None), "canceled"), else_="interrupted"),
+                reason=reason,
+                updated_at=datetime.now(UTC),
+                version=RecipeRunRow.version + 1,
+            )
         )

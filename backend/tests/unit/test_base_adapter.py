@@ -267,12 +267,19 @@ class TestEvaluatePermission:
         adapter._policy_router["job"] = router
         adapter._worktree_paths["job"] = "/primary"
         adapter.set_session_metadata(
-            "attempt-session", SessionConfig(
-                workspace_path="/attempt", prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+            "attempt-session",
+            SessionConfig(
+                workspace_path="/attempt",
+                prompt="",
+                job_id="job",
+                attempt_id="attempt",
+                execution_epoch="epoch",
             ),
         )
         decision = await adapter._evaluate_permission(
-            "attempt-session", "job", PermissionRequest(kind="read", workspace_path="/untrusted"),
+            "attempt-session",
+            "job",
+            PermissionRequest(kind="read", workspace_path="/untrusted"),
             tool_name="Read",
         )
         assert decision == PermissionDecision.allow

@@ -253,14 +253,14 @@ class StepTracker:
 
     async def on_transcript_event(self, job_id: str, event: SessionEvent) -> None:
         """Process a TranscriptUpdated event."""
+        if is_admission_receipt(event):
+            return
         if self._metadata is None and event.metadata.attempt_id is not None:
             tracker = self._attempt_tracker(job_id, event.metadata)
             tracker._metadata = event.metadata
             await tracker.on_transcript_event(job_id, event)
             return
         payload = event.payload
-        if is_admission_receipt(event):
-            return
         content = str(payload.get("content", "") or "")
         turn_id = payload.get("turn_id") or ""
         motivation = getattr(event.metadata, "motivation", None)

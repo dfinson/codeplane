@@ -67,9 +67,9 @@ class ActivityProjection:
         return " ".join(filter_credentials(line).text.split())[:80] or fallback
 
     async def push(self, event: SessionEvent, *, replay: bool = False) -> None:
-        if event.kind not in TRANSCRIPT_KINDS:
-            return
         if is_admission_receipt(event):
+            return
+        if event.kind not in TRANSCRIPT_KINDS:
             return
         key = self._key(event)
         current = self._active.get(key)

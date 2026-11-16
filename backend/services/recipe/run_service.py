@@ -101,6 +101,20 @@ class RecipeRunService:
     async def get_for_job(self, job_id: str) -> RecipeRunResponse | None:
         return await self._runs.get_for_job(job_id)
 
+    async def prepare_job_selection(
+        self, selection: RecipeSelection, prompt: str
+    ) -> tuple[RecipeRevisionResponse, dict[str, JsonValue]]:
+        revision = await self._definitions.get_revision(selection.revision_id)
+        parameter = revision.definition.parameters.get("request")
+        if parameter is not None and parameter.type == "string" and "request" not in selection.parameters:
+            selection = selection.model_copy(update={"parameters": {**selection.parameters, "request": prompt}})
+        return await self.prepare_selection(selection)
+
+    async def admit_job(
+        self, job_id: str, revision: RecipeRevisionResponse, parameters: dict[str, JsonValue]
+    ) -> RecipeRunResponse:
+        return await self._runs.create(job_id, revision, parameters)
+
     async def get_step(self, job_id: str, step_instance_id: str) -> RecipeStepInstanceResponse:
         run = await self._runs.get_for_job(job_id)
         step = await self._runs.get_step(step_instance_id)

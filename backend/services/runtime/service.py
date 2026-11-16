@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -95,6 +96,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
     from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
+    from backend.models.schemas.recipes import RecipeRunResponse, RecipeSelection
     from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.events.event_processor import EventProcessor
@@ -339,6 +341,7 @@ class RuntimeService:
         self._job_contract_pins: dict[str, ExecutionContractPin] = {}
         self._legacy_recoveries: dict[str, object] = {}
         self._legacy_handoffs: dict[str, PendingHandoff] = {}
+        self._recipe_contract_pins: dict[str, ExecutionContractPin | None] = {}
         self._policy_batchers: dict[str, Any] = {}  # job_id → ApprovalBatcher
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
@@ -620,6 +623,7 @@ class RuntimeService:
             if self.running_count < self.max_concurrent:
                 await self._start_job(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
                 return
+
             if job.state != JobState.queued:
                 self._pending_starts[job.id] = (override_prompt, resume_sdk_session_id)
                 log.info("job_waiting_for_capacity", job_id=job.id, state=job.state, running=self.running_count)
@@ -696,6 +700,26 @@ class RuntimeService:
         instruction: str = _SERVER_RESTART_RECOVERY_INSTRUCTION,
     ) -> Job:
         """Restart an active job after backend restart without marking it failed."""
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+        async with self._session_factory() as session:
+            run = await RecipeRunRepository(session).get_for_job(job_id)
+            if run is not None:
+                repository = JobRepository(session)
+                job = await repository.get(job_id)
+                if job is None:
+                    raise JobNotFoundError(f"Job {job_id} no longer exists.")
+                if job.state not in {JobState.running, JobState.waiting_for_approval}:
+                    raise StateConflictError("Only an active recipe Job can be recovered.")
+                await repository.reset_for_recovery(job_id, job.session_count)
+                await session.commit()
+                job = await repository.get(job_id)
+                assert job is not None
+        if run is not None:
+            if job is None:
+                raise JobNotFoundError(f"Job {job_id} no longer exists.")
+            await self.start_or_enqueue(job, override_prompt=instruction)
+            return job
         return await _recover_active_job_impl(self, job_id, instruction=instruction)
 
     async def _rollback_recovery(self, job_id: str, snapshot: RecoverySnapshot) -> None:
@@ -738,8 +762,11 @@ class RuntimeService:
         # DB-level compare-and-swap: prevents double-start if recovery and
         # an HTTP request race on the same job.  Only the winner proceeds.
         async with self._session_factory() as session:
+            from backend.persistence.recipe_run_repo import RecipeRunRepository
+
             repo = JobRepository(session)
             claimed = await repo.claim_for_start(job.id)
+            recipe_run = await RecipeRunRepository(session).get_for_job(job.id)
             await session.commit()
         if not claimed:
             log.warning("job_start_claim_lost", job_id=job.id)
@@ -758,6 +785,8 @@ class RuntimeService:
             await self._publish_state_event(job.id, job.state, JobState.running)
 
         try:
+            if recipe_run is not None and (not job.worktree_path or not Path(job.worktree_path).is_dir()):
+                raise StateConflictError("Recipe execution requires the Job's existing prepared worktree.")
             session_config = build_session_config(
                 job,
                 self._config,
@@ -766,12 +795,25 @@ class RuntimeService:
                 session_config = dataclass_replace(session_config, prompt=override_prompt)
             if resume_sdk_session_id is not None:
                 session_config = dataclass_replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
+            if recipe_run is not None:
+                async with self._session_factory() as session:
+                    recovering = await RecipeRunRepository(session).has_attempts(recipe_run.id)
+                self._recipe_contract_pins[job.id] = await self.prepare_execution_contract(
+                    job.id,
+                    recipe_run.id,
+                    recovery=recovering,
+                )
 
             if self._execution_contracts is not None:
                 await self._prepare_legacy_execution_contract(job.id)
 
             # Plan mode: wrap the prompt for the planning session
-            if job.mode == JobMode.plan and override_prompt is None and resume_sdk_session_id is None:
+            if (
+                recipe_run is None
+                and job.mode == JobMode.plan
+                and override_prompt is None
+                and resume_sdk_session_id is None
+            ):
                 from backend.services.runtime.plan_mode import build_planning_prompt
 
                 session_config = dataclass_replace(
@@ -795,7 +837,7 @@ class RuntimeService:
                 await self._activate_job_sidecars(job)
 
             await self._emit_setup_progress(job.id, "exploring_codebase")
-            if self._preflight_curator is not None:
+            if recipe_run is None and self._preflight_curator is not None:
                 async with self._session_factory() as session:
                     before_scout = await JobRepository(session).get(job.id)
                 if before_scout and before_scout.state in TERMINAL_STATES:
@@ -829,6 +871,7 @@ class RuntimeService:
                 name=f"job-{job.id}",
             )
         except asyncio.CancelledError:
+            self._recipe_contract_pins.pop(job.id, None)
             self._agent_sessions.pop(job.id, None)
             self._starting_tasks.pop(job.id, None)
             if self._approval_service is not None:
@@ -840,6 +883,7 @@ class RuntimeService:
             # Task creation failed after the DB CAS set state to running.
             # Revert to the pre-claim state so the job isn't orphaned.
             self._agent_sessions.pop(job.id, None)
+            self._recipe_contract_pins.pop(job.id, None)
             self._starting_tasks.pop(job.id, None)
             log.error("job_start_task_creation_failed", job_id=job.id, exc_info=True)
             async with self._session_factory() as session:
@@ -871,9 +915,32 @@ class RuntimeService:
         """Wrapper that guarantees ``_cleanup_job_state`` runs even when
         ``CancelledError`` hits before the inner try/except in ``_run_job``."""
         try:
-            await self._recipe_runner_slots.acquire()
-            self._legacy_runner_slots.add(job_id)
-            await self._run_job(job_id, agent_session, config, session_number=session_number)
+            from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+            async with self._session_factory() as session:
+                recipe_run = await RecipeRunRepository(session).get_for_job(job_id)
+            if recipe_run is not None:
+                from backend.services.recipe.executor import RecipeExecutor
+
+                job = await self._get_job(job_id)
+                if job is None:
+                    raise JobNotFoundError(f"Job {job_id} no longer exists.")
+                try:
+                    if job.id not in self._recipe_contract_pins:
+                        raise StateConflictError("Recipe execution has no prepared admission contract.")
+                    await RecipeExecutor(
+                        self,
+                        job,
+                        config,
+                        contract_pin=self._recipe_contract_pins[job.id],
+                    ).execute()
+                except Exception as exc:
+                    log.error("recipe_execution_failed", job_id=job_id, exc_info=True)
+                    await self._fail_job(job_id, str(exc))
+            else:
+                await self._recipe_runner_slots.acquire()
+                self._legacy_runner_slots.add(job_id)
+                await self._run_job(job_id, agent_session, config, session_number=session_number)
         except asyncio.CancelledError:
             if self._shutting_down:
                 log.info("shutdown_task_cancelled", job_id=job_id)
@@ -1414,6 +1481,7 @@ class RuntimeService:
         self._job_contract_pins.pop(job_id, None)
         self._legacy_recoveries.pop(job_id, None)
         self._legacy_handoffs.pop(job_id, None)
+        self._recipe_contract_pins.pop(job_id, None)
         # Last-resort guard: if the job is still non-terminal after all error
         # handlers have run, force it to failed so it doesn't stay stuck.
         await self._ensure_terminal_state(job_id)
@@ -3057,7 +3125,35 @@ class RuntimeService:
 
     async def resume_job(self, job_id: str, instruction: str | None = None) -> Job:
         """Resume a terminal or review job in-place."""
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.continuation import resume_recipe_job
+
+        async with self._session_factory() as session:
+            run = await RecipeRunRepository(session).get_for_job(job_id)
+        if run is not None:
+            job, _ = await resume_recipe_job(self, job_id, instruction, expected_run_id=run.id)
+            return job
         return await _resume_job_impl(self, job_id, instruction)
+
+    async def resume_recipe_run(
+        self,
+        job_id: str,
+        instruction: str | None,
+        *,
+        expected_run_id: str,
+        start_request_key: str | None = None,
+        selection: RecipeSelection | None = None,
+    ) -> tuple[Job, RecipeRunResponse]:
+        from backend.services.recipe.continuation import resume_recipe_job
+
+        return await resume_recipe_job(
+            self,
+            job_id,
+            instruction,
+            expected_run_id=expected_run_id,
+            start_request_key=start_request_key,
+            selection=selection,
+        )
 
     async def _cleanup_job_worktree(self, job: Job) -> None:
         """Remove the secondary worktree for a finished job (failed/canceled).

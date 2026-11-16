@@ -100,6 +100,30 @@ it("retains distinct observed operator occurrences with identical text", () => {
 
 type HydratedSnapshot = Parameters<AppState["hydrateJob"]>[0];
 
+it.each([
+  "job.failed", "job.completed", "job.review", "job.state_changed",
+  "permission.requested", "permission.resolved", "model.downgraded",
+])("keeps %s from an attributed attempt out of Job-level state", (kind) => {
+  const job = makeJob({ model: "chosen-model" });
+  const sibling: ApprovalRequest = {
+    id: "sibling", jobId: job.id, description: "Other pending decision", proposedAction: null,
+    requestedAt: "2026-01-01T00:00:00Z", resolvedAt: null, resolution: null,
+    requiresExplicitApproval: true, notes: null,
+  };
+  useStore.setState({ jobs: { [job.id]: job }, approvals: { sibling } });
+  useStore.getState().dispatchSSEEvent(kind, normalizeTFEvent({
+    id: `scoped-${kind}`, kind, session_id: job.id, timestamp: "2026-01-01T00:00:00Z",
+    payload: {
+      reason: "Attempt outcome", new_state: "failed", resolution: "rejected",
+      approval_id: "attempt-gate", description: "Scoped decision",
+      requested_model: "chosen-model", actual_model: "reported-model",
+    },
+    metadata: { attempt_id: "attempt", recipe_run_id: "run", execution_epoch: "epoch" },
+  }));
+  expect(useStore.getState().jobs[job.id]).toBe(job);
+  expect(useStore.getState().approvals.sibling).toBe(sibling);
+});
+
 it("retains identical prompt text from two authoritative sibling attempts", () => {
   for (const attempt of ["first", "second"]) {
     useStore.getState().dispatchSSEEvent("message.user", normalizeTFEvent({

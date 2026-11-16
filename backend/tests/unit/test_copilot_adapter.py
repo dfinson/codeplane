@@ -249,9 +249,12 @@ class TestRuntimeContract:
         client, session = self._client()
 
         async def send(*args, **kwargs):
-            session.fire_event(_FakeSdkSessionEvent(
-                "assistant.usage", _FakeEventData(model="approved-model", inputTokens=0, outputTokens=5, cost=0),
-            ))
+            session.fire_event(
+                _FakeSdkSessionEvent(
+                    "assistant.usage",
+                    _FakeEventData(model="approved-model", inputTokens=0, outputTokens=5, cost=0),
+                )
+            )
             session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="text")))
             session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
 
@@ -1920,9 +1923,7 @@ async def accounting_sessions(adapter: CopilotAdapter) -> AsyncIterator[tuple[st
         scout_id = await adapter.create_session(
             _make_config(job_id="job-accounting", session_kind="preflight", model="gpt-4o-mini")
         )
-        primary_id = await adapter.create_session(
-            _make_config(job_id="job-accounting", model="primary-heavy-model")
-        )
+        primary_id = await adapter.create_session(_make_config(job_id="job-accounting", model="primary-heavy-model"))
     try:
         yield scout_id, primary_id
     finally:

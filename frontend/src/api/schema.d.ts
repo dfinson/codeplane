@@ -3818,6 +3818,7 @@ export interface components {
             /** Sessiontoken */
             sessionToken?: string | null;
             mode?: components["schemas"]["JobMode"] | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {
@@ -6007,6 +6008,13 @@ export interface components {
             /** Revisionid */
             revisionId: string;
         };
+        /** RecipeCodeReference */
+        RecipeCodeReference: {
+            /** Workspace */
+            workspace: string;
+            /** Commit */
+            commit: string;
+        };
         /** RecipeCommandArgument */
         RecipeCommandArgument: {
             /** Input */
@@ -6220,6 +6228,96 @@ export interface components {
             checksum: string;
             definition: components["schemas"]["RecipeDefinition"];
         };
+        /** RecipeResumeResponse */
+        RecipeResumeResponse: {
+            /** Id */
+            id: string;
+            /** Repo */
+            repo: string;
+            /** Prompt */
+            prompt: string;
+            /** Projectid */
+            projectId?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Description */
+            description?: string | null;
+            state: components["schemas"]["JobState"];
+            /** Baseref */
+            baseRef: string;
+            /** Worktreepath */
+            worktreePath: string | null;
+            /** Branch */
+            branch: string | null;
+            preset?: components["schemas"]["Preset"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Completedat */
+            completedAt: string | null;
+            /** Prurl */
+            prUrl?: string | null;
+            mergeStatus?: components["schemas"]["GitMergeOutcome"] | null;
+            resolution?: components["schemas"]["Resolution"] | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Failurereason */
+            failureReason?: string | null;
+            /** Progressheadline */
+            progressHeadline?: string | null;
+            /** Progresssummary */
+            progressSummary?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Sdk
+             * @default copilot
+             */
+            sdk: string;
+            /** Worktreename */
+            worktreeName?: string | null;
+            /** Verify */
+            verify?: boolean | null;
+            /** Selfreview */
+            selfReview?: boolean | null;
+            /** Maxturns */
+            maxTurns?: number | null;
+            /** Verifyprompt */
+            verifyPrompt?: string | null;
+            /** Selfreviewprompt */
+            selfReviewPrompt?: string | null;
+            /** Enablestalldetection */
+            enableStallDetection?: boolean | null;
+            /** Enableplantracking */
+            enablePlanTracking?: boolean | null;
+            /** Parentjobid */
+            parentJobId?: string | null;
+            /**
+             * Source
+             * @default managed
+             */
+            source: string;
+            /** Externalsessionid */
+            externalSessionId?: string | null;
+            /** @default standard */
+            mode: components["schemas"]["JobMode"];
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Totaltokens */
+            totalTokens?: number | null;
+            /** Inputtokens */
+            inputTokens?: number | null;
+            /** Outputtokens */
+            outputTokens?: number | null;
+            recipeRun: components["schemas"]["RecipeRunResponse"];
+        };
         /** RecipeRetryPolicy */
         RecipeRetryPolicy: {
             /**
@@ -6267,6 +6365,65 @@ export interface components {
             nextSteps?: string[];
             /** Terminal */
             terminal?: ("succeeded" | "failed" | "canceled") | null;
+        };
+        /** RecipeRunResponse */
+        RecipeRunResponse: {
+            /** Id */
+            id: string;
+            /** Jobid */
+            jobId: string;
+            /** Runnumber */
+            runNumber: number;
+            /** Startrequestkey */
+            startRequestKey: string;
+            /** Continuationofid */
+            continuationOfId: string | null;
+            /** Instruction */
+            instruction: string | null;
+            codeRef: components["schemas"]["RecipeCodeReference"] | null;
+            /** Reason */
+            reason: string | null;
+            /** Revisionid */
+            revisionId: string;
+            snapshot: components["schemas"]["RecipeRevisionResponse"];
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted";
+            /** Version */
+            version: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Cancelrequestedat */
+            cancelRequestedAt: string | null;
+            /** Completedat */
+            completedAt: string | null;
+            /** Resolvedat */
+            resolvedAt: string | null;
+        };
+        /** RecipeSelection */
+        RecipeSelection: {
+            /** Revisionid */
+            revisionId: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /** RecipeStep */
         RecipeStep: {
@@ -6619,6 +6776,11 @@ export interface components {
         ResumeJobRequest: {
             /** Instruction */
             instruction?: string | null;
+            /** Expectedrunid */
+            expectedRunId?: string | null;
+            /** Startrequestkey */
+            startRequestKey?: string | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** RetryCostResponse */
         RetryCostResponse: {
@@ -9112,7 +9274,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobResponse"];
+                    "application/json": components["schemas"]["RecipeResumeResponse"] | components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */
