@@ -41,6 +41,7 @@ from backend.models.domain import (
     Resolution,
     ServiceInitError,
     SessionConfig,
+    StateConflictError,
 )
 from backend.models.events import (
     TRANSCRIPT_KINDS,
@@ -2461,10 +2462,18 @@ class RuntimeService:
         Publishes the transcript event locally for immediate UI feedback and
         suppresses the SDK echo to avoid showing the message twice.
 
-        If no live agent session exists (e.g. after a server restart or when the
-        UI has a stale job state), the job is automatically resumed with the
-        message as the instruction so the operator message is never silently lost.
+        Legacy non-recipe Jobs may resume when their primary session is absent.
+        Recipe messages require the selected attempt's exact execution handle.
         """
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+        async with self._session_factory() as session:
+            recipe_run = await RecipeRunRepository(session).get_for_job(job_id)
+        if recipe_run is not None:
+            raise StateConflictError(
+                "Recipe Jobs require a selected attempt and its current execution token. "
+                "Use explicit Resume to continue a finished run."
+            )
         agent_session = self._agent_sessions.get(job_id)
         if agent_session is None:
             job = await self._get_job(job_id)

@@ -1,8 +1,21 @@
 """Definition API wiring and nonexecution guarantees."""
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from sqlalchemy import func, select
 
+from backend.config import CPLConfig
 from backend.models.db import JobRow, RecipeRunRow
+from backend.models.domain import JobState
+from backend.persistence.job_repo import JobRepository
+from backend.persistence.recipe_run_repo import RecipeRunRepository
+from backend.services.adapters.adapter_registry import AdapterRegistry
+from backend.services.events.event_bus import EventBus
+from backend.services.runtime import RuntimeService
+from backend.tests.unit.test_recipe_definitions import simple_recipe
+from backend.tests.unit.test_recipe_runs import agent_result, create_run, ready_attempt
 
 
 def definition():
@@ -88,3 +101,60 @@ async def test_list_queries_are_bounded_and_responses_keep_frozen_highwater(clie
         "Draft 2",
     ]
     assert (await client.get("/api/recipes", params={"limit": 101})).status_code == 422
+
+
+@pytest.mark.parametrize("channel", ["rest", "mcp"])
+@pytest.mark.parametrize("case", ["active", "completed", "unexpected_primary"])
+async def test_legacy_messages_cannot_start_or_unpause_a_recipe_primary(
+    client,
+    session_factory,
+    mock_runtime_service,
+    approval_service,
+    mock_merge_service,
+    channel,
+    case,
+):
+    run = await create_run(session_factory, simple_recipe())
+    if case == "completed":
+        async with session_factory() as session:
+            repo = RecipeRunRepository(session)
+            attempt = await ready_attempt(session, run, "context")
+            await repo.finish_attempt(attempt.id, agent_result(), {"result": "Retained completion"})
+            await repo.resolve_run(run.id, "succeeded")
+            await JobRepository(session).update_state(run.job_id, JobState.completed, datetime.now(UTC))
+            await session.commit()
+    actual = RuntimeService(
+        session_factory=session_factory,
+        event_bus=EventBus(),
+        adapter_registry=AdapterRegistry(),
+        config=CPLConfig(),
+    )
+    actual._resume_orphaned = AsyncMock(return_value=False)
+    primary = MagicMock()
+    primary.send_message = AsyncMock()
+    if case == "unexpected_primary":
+        actual._agent_sessions[run.job_id] = primary
+    mock_runtime_service.send_operator_message.side_effect = actual.send_operator_message
+    if channel == "rest":
+        response = await client.post(f"/api/jobs/{run.job_id}/messages", json={"content": "Do not resume implicitly"})
+        assert response.status_code == 409, response.text
+        assert "selected attempt" in response.text
+    else:
+        from backend.mcp.server import create_mcp_server
+
+        server = create_mcp_server(
+            session_factory=session_factory,
+            runtime_service=actual,
+            approval_service=approval_service,
+            merge_service=mock_merge_service,
+        )
+        result = await server._tool_manager._tools["codeplane_job"].fn(
+            action="message",
+            job_id=run.job_id,
+            content="Do not resume implicitly",
+        )
+        assert "selected attempt" in result["error"]
+    actual._resume_orphaned.assert_not_awaited()
+    primary.send_message.assert_not_awaited()
+    primary.resume_tools.assert_not_called()
+    assert not actual._tasks
