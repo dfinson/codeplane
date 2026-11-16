@@ -250,30 +250,31 @@ function ValueTypeSelect({
   );
 }
 
-function commandText(
-  argv: NonNullable<Extract<RecipeRunner, { kind: "command" }>["argv"]>,
-): string {
-  return argv
-    .map((item) =>
-      typeof item === "string"
-        ? /^@[A-Za-z][\w-]*(?:\.(?:commit|workspace))?$/.test(item)
-          ? `\\${item}`
-          : item
-        : `@${item.input}${item.field ? `.${item.field}` : ""}`,
+function commandArguments(value: unknown): (string | RecipeCommandArgument)[] {
+  if (!Array.isArray(value))
+    throw new Error("Command arguments must be a JSON array.");
+  return value.map((item: unknown) => {
+    if (typeof item === "string") return item;
+    if (
+      !item ||
+      typeof item !== "object" ||
+      Array.isArray(item) ||
+      !("input" in item) ||
+      typeof item.input !== "string" ||
+      Object.keys(item).some((key) => key !== "input" && key !== "field")
     )
-    .join("\n");
-}
-
-function commandArguments(text: string): (string | RecipeCommandArgument)[] {
-  return text.split("\n").map((line) => {
-    if (line.startsWith("\\@")) return line.slice(1);
-    const match = /^@([A-Za-z][\w-]*)(?:\.(commit|workspace))?$/.exec(line);
-    if (!match?.[1]) return line;
-    return {
-      input: match[1],
-      field:
-        match[2] === "commit" || match[2] === "workspace" ? match[2] : null,
-    };
+      throw new Error(
+        'Each argument must be a literal string or an {"input": "...", "field": "..."} reference.',
+      );
+    if (!("field" in item)) return { input: item.input };
+    if (
+      item.field !== null &&
+      item.field !== "commit" &&
+      item.field !== "workspace"
+    ) {
+      throw new Error("A code reference field must be commit or workspace.");
+    }
+    return { input: item.input, field: item.field };
   });
 }
 
@@ -294,6 +295,10 @@ export function RecipeDefinitionEditor() {
   const [definition, setDefinition] = useState<RecipeDefinition | null>(null);
   const [revisions, setRevisions] = useState<RecipeRevisionList | null>(null);
   const [publishedId, setPublishedId] = useState("");
+  const [publication, setPublication] = useState<RecipeRevision | null>(null);
+  const [publicationReadError, setPublicationReadError] = useState<
+    string | null
+  >(null);
   const [copyName, setCopyName] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -316,6 +321,7 @@ export function RecipeDefinitionEditor() {
   const blockRequest = useRef(0);
   const libraryRequest = useRef(0);
   const revisionRequest = useRef(0);
+  const publicationRef = useRef<RecipeRevision | null>(null);
 
   const selectStep = useCallback((id: string) => {
     selectedRef.current = id;
@@ -375,8 +381,17 @@ export function RecipeDefinitionEditor() {
 
   useEffect(() => {
     const request = ++owner.current;
+    const retained =
+      publicationRef.current?.definitionId === definitionId
+        ? publicationRef.current
+        : null;
     setError(null);
-    setPublishedId("");
+    if (!retained) {
+      publicationRef.current = null;
+      setPublication(null);
+    }
+    setPublishedId(retained?.id ?? "");
+    setPublicationReadError(null);
     setRevisions(null);
     revisionRequest.current += 1;
     if (!definitionId) {
@@ -386,7 +401,7 @@ export function RecipeDefinitionEditor() {
         owner.current += 1;
       };
     }
-    setDefinition(null);
+    setDefinition(retained?.definition ?? null);
     setBusy(true);
     Promise.all([fetchRecipe(definitionId), fetchRecipeRevisions(definitionId)])
       .then(([loaded, history]) => {
@@ -403,10 +418,12 @@ export function RecipeDefinitionEditor() {
         setRevisions(history);
       })
       .catch((failure) => {
-        if (owner.current === request)
-          setError(
-            failure instanceof Error ? failure.message : String(failure),
-          );
+        if (owner.current === request) {
+          const message =
+            failure instanceof Error ? failure.message : String(failure);
+          if (retained) setPublicationReadError(message);
+          else setError(message);
+        }
       })
       .finally(() => {
         if (owner.current === request) setBusy(false);
@@ -415,6 +432,46 @@ export function RecipeDefinitionEditor() {
       owner.current += 1;
     };
   }, [definitionId, adoptDraft]);
+
+  async function refreshPublication(receipt: RecipeRevision): Promise<boolean> {
+    const generation = owner.current;
+    const request = ++revisionRequest.current;
+    const isCurrent = () =>
+      owner.current === generation &&
+      revisionRequest.current === request &&
+      publicationRef.current?.id === receipt.id;
+    setBusy(true);
+    setPublicationReadError(null);
+    try {
+      const [current, history] = await Promise.all([
+        fetchRecipe(receipt.definitionId),
+        fetchRecipeRevisions(receipt.definitionId),
+      ]);
+      if (!isCurrent()) return false;
+      if (
+        current.id !== receipt.definitionId ||
+        history.items.some((item) => item.definitionId !== receipt.definitionId)
+      ) {
+        throw new Error("Draft refresh returned another definition.");
+      }
+      adoptDraft(current);
+      setRevisions(history);
+      setPublishedId(receipt.id);
+      if (!definitionId)
+        navigate(`/recipes/${encodeURIComponent(receipt.definitionId)}`, {
+          replace: true,
+        });
+      return true;
+    } catch (failure) {
+      if (isCurrent())
+        setPublicationReadError(
+          failure instanceof Error ? failure.message : String(failure),
+        );
+      return false;
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
+  }
 
   function change(next: RecipeDefinition) {
     setDefinition(next);
@@ -495,7 +552,13 @@ export function RecipeDefinitionEditor() {
   }
 
   async function persist(publish: boolean) {
-    if (!definition || busy || Object.keys(jsonErrors).length) return;
+    if (
+      !definition ||
+      busy ||
+      publicationReadError ||
+      Object.keys(jsonErrors).length
+    )
+      return;
     const request = owner.current;
     revisionRequest.current += 1;
     setBusy(true);
@@ -521,23 +584,12 @@ export function RecipeDefinitionEditor() {
           throw new Error(
             "Publication response belongs to another definition.",
           );
+        publicationRef.current = revision;
+        setPublication(revision);
         setPublishedId(revision.id);
-        const [current, history] = await Promise.all([
-          fetchRecipe(saved.id),
-          fetchRecipeRevisions(saved.id),
-        ]);
-        if (owner.current !== request) return;
-        if (
-          current.id !== saved.id ||
-          history.items.some((item) => item.definitionId !== saved.id)
-        ) {
-          throw new Error(
-            "Published successfully, but the draft refresh returned another definition.",
-          );
-        }
-        adoptDraft(current);
-        setRevisions(history);
-        setPublishedId(revision.id);
+        void loadLibrary();
+        await refreshPublication(revision);
+        return;
       }
       void loadLibrary();
       if (!definitionId)
@@ -590,7 +642,15 @@ export function RecipeDefinitionEditor() {
       return;
     }
     navigate(id ? `/recipes/${encodeURIComponent(id)}` : "/recipes");
-    if (!id && !definitionId) adoptDraft(null);
+    if (!id && !definitionId) {
+      owner.current += 1;
+      publicationRef.current = null;
+      setPublication(null);
+      setPublicationReadError(null);
+      setPublishedId("");
+      setRevisions(null);
+      adoptDraft(null);
+    }
   }
 
   async function browseBlock(id: string, after = 0, highWater?: number) {
@@ -665,6 +725,10 @@ export function RecipeDefinitionEditor() {
   const steps = definition?.steps ?? [];
   const selected = steps.find((item) => item.id === selectedId);
   const invalidJson = Object.keys(jsonErrors).length > 0;
+  const currentPublication =
+    publication?.definitionId === (draft?.id ?? definitionId)
+      ? publication
+      : null;
   const errorBanner = error && (
     <div
       role="alert"
@@ -702,29 +766,61 @@ export function RecipeDefinitionEditor() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">
-            {draft ? `Draft version ${draft.version}` : "New draft"}
+            {publicationReadError
+              ? "Published; draft refresh needed"
+              : draft
+                ? `Draft version ${draft.version}`
+                : "New draft"}
             {dirty ? " / unsaved" : ""}
           </span>
           <Button
             variant="outline"
-            disabled={busy || invalidJson}
+            disabled={busy || invalidJson || Boolean(publicationReadError)}
             onClick={() => void persist(false)}
           >
             Save draft
           </Button>
           <Button
-            disabled={busy || invalidJson}
+            disabled={busy || invalidJson || Boolean(publicationReadError)}
             onClick={() => void persist(true)}
           >
             Publish revision
           </Button>
         </div>
       </header>
+      {currentPublication && (
+        <div
+          role="status"
+          aria-label="Publication receipt"
+          className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
+        >
+          Published revision {currentPublication.revision}. Checksum{" "}
+          {currentPublication.checksum.slice(0, 12)}.
+        </div>
+      )}
+      {currentPublication && publicationReadError && (
+        <div
+          role="alert"
+          className="space-y-2 rounded-md border border-border p-3 text-sm"
+        >
+          <p>
+            Publication succeeded. Draft/history refresh failed:{" "}
+            {publicationReadError}
+          </p>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => void refreshPublication(currentPublication)}
+          >
+            Retry publication read
+          </Button>
+        </div>
+      )}
       {errorBanner}
       {error && (dirty || invalidJson) && (
         <Button
           variant="secondary"
-          disabled={busy}
+          disabled={busy || Boolean(publicationReadError)}
           onClick={() => {
             adoptDraft(draft);
             setError(null);
@@ -778,7 +874,7 @@ export function RecipeDefinitionEditor() {
         )}
       </div>
       <fieldset
-        disabled={busy}
+        disabled={busy || Boolean(publicationReadError)}
         className="min-w-0 space-y-4 [&_input]:min-w-0 [&_.font-mono]:break-all"
       >
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
@@ -887,6 +983,7 @@ export function RecipeDefinitionEditor() {
                         kind !== "block"
                       )
                         return;
+                      forgetJson(`${selected.id}.argv`);
                       updateStep({
                         ...selected,
                         runner: newRunner(kind),
@@ -1010,26 +1107,28 @@ export function RecipeDefinitionEditor() {
                 )}
                 {selected.runner.kind === "command" && (
                   <Row label="Command runner">
-                    <textarea
-                      aria-label="Command arguments"
-                      rows={4}
-                      className={`${inputStyle} font-mono text-xs`}
-                      value={commandText(selected.runner.argv ?? [])}
-                      onChange={(event) => {
+                    {jsonField(
+                      `${selected.id}.argv`,
+                      selected.runner.argv ?? [],
+                      (value) => {
+                        const argv = commandArguments(value);
                         if (selected.runner.kind === "command")
                           updateStep({
                             ...selected,
                             runner: {
                               ...selected.runner,
-                              argv: commandArguments(event.target.value),
+                              argv,
                             },
                           });
-                      }}
-                    />
+                      },
+                      "Command arguments",
+                    )}
                     <p className="text-xs text-muted-foreground">
-                      One argument per line. @input.commit or @input.workspace
-                      binds an exact code reference. No shell interpolation. No
-                      agent model or session is created.
+                      JSON array of exact argument strings and typed input
+                      references, for example{" "}
+                      {'{"input":"code","field":"commit"}'}. Newlines and
+                      backslashes remain inside their argument. No shell
+                      interpolation or agent session is created.
                     </p>
                     <Input
                       aria-label="Command timeout seconds"
@@ -2091,7 +2190,7 @@ export function RecipeDefinitionEditor() {
                 ))}
           </div>
         )}
-        {revisions && (
+        {(revisions || currentPublication) && (
           <div className="flex flex-wrap items-center gap-2">
             <select
               aria-label="Published revision"
@@ -2100,7 +2199,16 @@ export function RecipeDefinitionEditor() {
               onChange={(event) => setPublishedId(event.target.value)}
             >
               <option value="">Choose published revision...</option>
-              {revisions.items.map((item) => (
+              {currentPublication &&
+                !revisions?.items.some(
+                  (item) => item.id === currentPublication.id,
+                ) && (
+                  <option value={currentPublication.id}>
+                    Revision {currentPublication.revision} /{" "}
+                    {currentPublication.checksum.slice(0, 12)}
+                  </option>
+                )}
+              {revisions?.items.map((item) => (
                 <option key={item.id} value={item.id}>
                   Revision {item.revision} / {item.checksum.slice(0, 12)}
                 </option>
@@ -2121,7 +2229,7 @@ export function RecipeDefinitionEditor() {
             >
               <Copy size={13} /> Copy to independent draft
             </Button>
-            {revisions.nextCursor != null && draft && (
+            {revisions?.nextCursor != null && draft && (
               <Button
                 variant="ghost"
                 disabled={busy}
