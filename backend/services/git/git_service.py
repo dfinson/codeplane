@@ -237,7 +237,7 @@ class GitService:
         if not snapshot_ref.startswith("refs/codeplane/recipe-inputs/"):
             raise GitError("Recipe snapshots require an internal reference namespace")
         await self._run_git("check-ref-format", snapshot_ref, cwd=cwd)
-        existing = await self._run_git("for-each-ref", "--format=%(objectname)", snapshot_ref, cwd=cwd)
+        existing = await self._read_exact_ref(snapshot_ref, cwd=cwd)
         if existing:
             return existing
         head = await self.rev_parse("HEAD", cwd=cwd)
@@ -265,7 +265,7 @@ class GitService:
         try:
             await self._run_git("update-ref", snapshot_ref, captured, "0" * len(captured), cwd=cwd)
         except GitError:
-            winner = await self._run_git("for-each-ref", "--format=%(objectname)", snapshot_ref, cwd=cwd)
+            winner = await self._read_exact_ref(snapshot_ref, cwd=cwd)
             if not winner:
                 raise
             if await self.rev_parse(f"{winner}^{{tree}}", cwd=cwd) != await self.rev_parse(
@@ -274,6 +274,14 @@ class GitService:
                 raise GitError("A concurrent input snapshot captured different code") from None
             return winner
         return captured
+
+    async def _read_exact_ref(self, ref: str, *, cwd: str | Path) -> str | None:
+        listing = await self._run_git("for-each-ref", "--format=%(refname)\t%(objectname)", ref, cwd=cwd)
+        for line in listing.splitlines():
+            name, object_id = line.split("\t", 1)
+            if name == ref:
+                return object_id
+        return None
 
     def recipe_worktree_path(self, repo_path: str, name: str) -> str:
         self._validate_worktree_name(name)
