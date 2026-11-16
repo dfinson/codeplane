@@ -35,7 +35,7 @@ async def prepare_workspace(
         if parent_workspace
         else run.code_ref
     )
-    root_path = parent_workspace.path if parent_workspace else job.worktree_path or job.repo
+    root_path = parent_workspace.path if parent_workspace else job.execution_workspace
     if policy.source_input is not None:
         receipt = inputs.get(policy.source_input)
         if receipt is None or not receipt.present:
@@ -63,7 +63,7 @@ async def prepare_workspace(
     if policy.mode == "snapshot":
         key = hashlib.sha256(f"{policy.key}:{source.commit}".encode()).hexdigest()[:16]
         name = f"recipe-{run.id}-{key}"
-    path = git.recipe_worktree_path(job.repo, name)
+    path = git.recipe_worktree_path(job.execution_repo, name)
 
     async def prepare() -> RecipeResolvedWorkspace:
         if Path(path).exists():
@@ -75,7 +75,7 @@ async def prepare_workspace(
             ):
                 raise StateConflictError("The prepared recipe worktree differs from its pinned snapshot.")
         else:
-            await git.create_worktree(job.repo, name, source.commit, f"codeplane/recipe/{name}")
+            await git.create_worktree(job.execution_repo, name, source.commit, f"codeplane/recipe/{name}")
         return RecipeResolvedWorkspace(path=str(Path(path).resolve()), code_ref=source.commit, policy=policy)
 
     if policy.mode == "snapshot":

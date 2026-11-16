@@ -111,7 +111,7 @@ async def resume_recipe_job(
                 git = host._git_service
                 if git is None:
                     raise StateConflictError("Continuation requires an exact current-code snapshot.")
-                path = job.worktree_path or job.repo
+                path = job.execution_workspace
                 identity = hashlib.sha256(f"{job_id}:{request_key}".encode()).hexdigest()
                 commit = await git.capture_worktree_commit(
                     cwd=path,

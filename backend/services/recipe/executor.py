@@ -95,7 +95,7 @@ class RecipeExecutor:
         if run is None:
             raise StateConflictError("The Job has no pinned recipe run.")
         if run.code_ref is None:
-            workspace = self._job.worktree_path or self._job.repo
+            workspace = self._job.execution_workspace
             code = await git.capture_worktree_commit(
                 cwd=workspace,
                 snapshot_ref=f"refs/codeplane/recipe-inputs/{run.id}",
