@@ -318,6 +318,9 @@ class RuntimeService:
         self._governance_decider: GovernanceDecider | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._recipe_runner_slots = asyncio.Semaphore(config.runtime.max_concurrent_jobs)
+        self._legacy_runner_slots: set[str] = set()
+        self._queued_session_tokens: dict[str, str] = {}
         self._scout_tasks: dict[str, asyncio.Task[SessionConfig]] = {}
         self._agent_sessions: dict[str, AgentSession] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
@@ -605,6 +608,26 @@ class RuntimeService:
             raise StateConflictError("Observation-only history cannot enter the execution scheduler")
         IntegrationPolicy(self._config).require_enabled(job.sdk)
 
+        if self._shutting_down:
+            raise StateConflictError("The runtime is shutting down and cannot start another Job.")
+        if session_token is not None:
+            self._queued_session_tokens[job.id] = session_token
+        async with self._dequeue_lock:
+            if self.running_count < self.max_concurrent:
+                await self._start_job(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
+                return
+            if job.state != JobState.queued:
+                self._pending_starts[job.id] = (override_prompt, resume_sdk_session_id)
+                log.info("job_waiting_for_capacity", job_id=job.id, state=job.state, running=self.running_count)
+                return
+            if override_prompt is not None:
+                self._queued_override_prompts[job.id] = override_prompt
+            if resume_sdk_session_id is not None:
+                self._queued_resume_session_ids[job.id] = resume_sdk_session_id
+            log.info("job_enqueued", job_id=job.id, running=self.running_count)
+
+    async def _activate_job_sidecars(self, job: Job) -> None:
+        session_token = self._queued_session_tokens.pop(job.id, None)
         # Open the built-in sidecar sessions for this job
         if self._sidecar_sessions is not None:
             from backend.models.domain import SIDECAR_ARBITER, SIDECAR_ENRICHER, SIDECAR_PLANNER
@@ -618,26 +641,6 @@ class RuntimeService:
         # Activate custom sidecar templates from the library
         if self._sidecar_dispatcher is not None:
             await self._activate_custom_sidecars(job)
-
-        if self._shutting_down:
-            log.warning("job_rejected_shutting_down", job_id=job.id)
-            return
-        async with self._dequeue_lock:
-            if self.running_count < self.max_concurrent:
-                await self._start_job(job, override_prompt=override_prompt, resume_sdk_session_id=resume_sdk_session_id)
-                return
-
-            # At capacity — queue the job
-            if job.state != JobState.queued:
-                self._pending_starts[job.id] = (override_prompt, resume_sdk_session_id)
-                log.info("job_waiting_for_capacity", job_id=job.id, state=job.state, running=self.running_count)
-                return
-
-            if override_prompt is not None:
-                self._queued_override_prompts[job.id] = override_prompt
-            if resume_sdk_session_id is not None:
-                self._queued_resume_session_ids[job.id] = resume_sdk_session_id
-            log.info("job_enqueued", job_id=job.id, running=self.running_count)
 
     async def _activate_custom_sidecars(self, job: Job) -> None:
         """Load custom sidecar templates from the DB and activate them via the dispatcher."""
@@ -698,6 +701,25 @@ class RuntimeService:
     async def _start_job(
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
     ) -> None:
+        if self._shutting_down:
+            raise StateConflictError("The runtime is shutting down and cannot start another Job.")
+        current = asyncio.current_task()
+        async with self._execution_control.hold(job.id):
+            if job.id in self._tasks or job.id in self._starting_tasks:
+                return
+            if current is None:
+                raise RuntimeError("Job admission requires an owning asyncio task.")
+            self._starting_tasks[job.id] = current
+        try:
+            await self._start_reserved_job(job, override_prompt, resume_sdk_session_id)
+        finally:
+            if self._starting_tasks.get(job.id) is current:
+                self._starting_tasks.pop(job.id, None)
+            self._queued_session_tokens.pop(job.id, None)
+
+    async def _start_reserved_job(
+        self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
+    ) -> None:
         """Create an asyncio task to execute the job."""
         IntegrationPolicy(self._config).require_enabled(job.sdk)
         if job.id in self._tasks:
@@ -755,6 +777,8 @@ class RuntimeService:
                 job_prompt=job.prompt or "",
                 repo=job.execution_repo,
             )
+            async with self._recipe_runner_slots:
+                await self._activate_job_sidecars(job)
 
             await self._emit_setup_progress(job.id, "exploring_codebase")
             if self._preflight_curator is not None:
@@ -763,7 +787,12 @@ class RuntimeService:
                 if before_scout and before_scout.state in TERMINAL_STATES:
                     self._agent_sessions.pop(job.id, None)
                     return
-                scout_task = asyncio.create_task(self._run_preflight_curator(job, session_config))
+
+                async def scoped_scout() -> SessionConfig:
+                    async with self._recipe_runner_slots:
+                        return await self._run_preflight_curator(job, session_config)
+
+                scout_task = asyncio.create_task(scoped_scout())
                 self._scout_tasks[job.id] = scout_task
                 try:
                     session_config = await scout_task
@@ -828,6 +857,8 @@ class RuntimeService:
         """Wrapper that guarantees ``_cleanup_job_state`` runs even when
         ``CancelledError`` hits before the inner try/except in ``_run_job``."""
         try:
+            await self._recipe_runner_slots.acquire()
+            self._legacy_runner_slots.add(job_id)
             await self._run_job(job_id, agent_session, config, session_number=session_number)
         except asyncio.CancelledError:
             if self._shutting_down:
@@ -1362,6 +1393,10 @@ class RuntimeService:
 
     async def _cleanup_job_state(self, job_id: str) -> None:
         """Remove all per-job in-memory state and trigger post-job hooks."""
+        if job_id in self._legacy_runner_slots:
+            self._legacy_runner_slots.remove(job_id)
+            self._recipe_runner_slots.release()
+        self._queued_session_tokens.pop(job_id, None)
         # Last-resort guard: if the job is still non-terminal after all error
         # handlers have run, force it to failed so it doesn't stay stuck.
         await self._ensure_terminal_state(job_id)
@@ -2522,6 +2557,7 @@ class RuntimeService:
         by the service layer (JobService.cancel_job). This method only
         interacts with in-memory runtime tasks.
         """
+        self._queued_session_tokens.pop(job_id, None)
         task = self._tasks.get(job_id)
         starting = self._starting_tasks.get(job_id)
         if starting is not None and starting is not asyncio.current_task():
@@ -3141,6 +3177,7 @@ class RuntimeService:
         tasks = list(set(self._tasks.values()) | set(self._starting_tasks.values()) | set(self._scout_tasks.values()))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._queued_session_tokens.clear()
 
     # -- Preflight context curation ------------------------------------------
 

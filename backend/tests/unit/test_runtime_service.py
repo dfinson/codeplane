@@ -237,14 +237,8 @@ async def runtime(
         config=config,
     )
     yield service
-    # Force-cancel all tasks then wait briefly — avoid slow teardown on CI.
-    for task in list(service._tasks.values()):
-        task.cancel()
-    for task in list(service._heartbeat_tasks.values()):
-        task.cancel()
-    all_tasks = list(service._tasks.values()) + list(service._heartbeat_tasks.values())
-    if all_tasks:
-        await asyncio.gather(*all_tasks, return_exceptions=True)
+    # Fence dequeueing before cancellation so cleanup cannot start another job.
+    await service.shutdown()
     # Allow aiosqlite background threads to drain so they don't
     # encounter a closed event-loop after the engine is disposed.
     await asyncio.sleep(0.05)
