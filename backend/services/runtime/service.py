@@ -2281,13 +2281,15 @@ class RuntimeService:
     def execution_epoch(self) -> str:
         return self._execution_epoch
 
-    async def _require_attempt_job(self, job_id: str) -> Job:
+    async def _require_attempt_job(self, job_id: str, attempt_id: str) -> Job:
         job = await self._get_job(job_id)
         if job is None or job.observation_only or job.state != JobState.running or self._shutting_down:
             raise AttemptBindingConflictError("Attempt admission requires a live running Job")
         if self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
             raise AttemptBindingConflictError("Job execution is gated")
-        if self._approval_service is not None and await self._approval_service.list_pending(job_id):
+        if self._approval_service is not None and await self._approval_service.has_blocking_approvals(
+            job_id, attempt_id=attempt_id,
+        ):
             raise AttemptBindingConflictError("Job has a pending approval")
         return job
 
@@ -2297,7 +2299,7 @@ class RuntimeService:
     ) -> AsyncIterator[AttemptExecution]:
         """Own an inert SDK session from creation through registration and cleanup."""
         async with self._execution_control.hold(job_id):
-            await self._require_attempt_job(job_id)
+            await self._require_attempt_job(job_id, attempt_id)
             adapter = self._adapter_registry.get_adapter(config.sdk)
         deferred = dataclass_replace(
             config,
@@ -2335,7 +2337,7 @@ class RuntimeService:
     ) -> CurrentExecutionContext:
         """Register an already-created session without replacing the Job's primary."""
         async with self._execution_control.hold(job_id):
-            job = await self._require_attempt_job(job_id)
+            job = await self._require_attempt_job(job_id, attempt_id)
             provider = IntegrationPolicy(self._config).require_enabled(sdk or job.sdk)
             if adapter is not self._adapter_registry.get_adapter(provider):
                 raise AttemptBindingConflictError("Attempt adapter is not the admitted provider binding")
@@ -2412,7 +2414,7 @@ class RuntimeService:
         if self._execution_contracts is None:
             raise RuntimeError("Execution contract implementations have not been configured")
         async with self._execution_control.hold(pin.job_id):
-            await self._require_attempt_job(pin.job_id)
+            await self._require_attempt_job(pin.job_id, attempt_id)
             binding = self._attempt_bindings.get(pin.job_id, attempt_id)
             if binding is None or binding.token != expected_execution or binding.cancel_requested:
                 raise AttemptBindingConflictError("Contract binding requires the current execution token")
@@ -2426,7 +2428,7 @@ class RuntimeService:
         from backend.services.adapters.contracts import SessionPolicyAdapter
 
         async with self._execution_control.hold(job_id):
-            await self._require_attempt_job(job_id)
+            await self._require_attempt_job(job_id, attempt_id)
             binding = self._attempt_bindings.get(job_id, attempt_id)
             if binding is None or binding.token != expected_execution or binding.cancel_requested:
                 raise AttemptBindingConflictError("Attempt policy attachment requires a current execution token")
@@ -2529,7 +2531,9 @@ class RuntimeService:
                 reason = "no_live_execution"
             elif token != expected_execution:
                 reason = "stale_execution"
-            elif self._approval_service is not None and await self._approval_service.list_pending(job_id):
+            elif self._approval_service is not None and await self._approval_service.has_blocking_approvals(
+                job_id, attempt_id=attempt_id,
+            ):
                 reason = "approval_pending"
             elif self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
                 reason = "gate_active"

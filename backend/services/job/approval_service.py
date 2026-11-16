@@ -183,6 +183,10 @@ class ApprovalService:
             repo = self._make_repo(session)
             return await repo.list_pending(job_id)
 
+    async def has_blocking_approvals(self, job_id: str, *, attempt_id: str | None = None) -> bool:
+        async with self._session_factory() as session:
+            return await self._make_repo(session).has_blocking_approvals(job_id, attempt_id=attempt_id)
+
     async def cleanup_job(self, job_id: str, *, preserve_pending: bool = False) -> None:
         """Cancel any pending futures for a job (e.g. on job cancel/fail).
 

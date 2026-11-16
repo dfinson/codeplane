@@ -124,6 +124,12 @@ Strict dispatch publishes a durable admission receipt with the exact target
 session/token and accepted/unconfirmed markers, not an observed operator input.
 Receipts remain visible without feeding title, step or sidecar input processing.
 Uncorrelated SDK observations are retained separately.
+Attempt open/registration, contract/policy attachment and dispatch share the
+same approval-scope guard. A positively bound sibling gate does not block an
+independent attempt. Unscoped, stale or conflicting provenance remains Job-wide.
+Recipe human ownership comes from its durable gate binding; SDK ownership requires
+the persisted permission event and matching recorded execution. Tool arguments
+cannot declare their own authority scope.
 
 Internal `execution.contract.pinned` records bind an immutable implementation
 selection to a durable application admission ID and the carried Job budget ID.
