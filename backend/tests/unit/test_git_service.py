@@ -107,6 +107,44 @@ class TestIsRemoteUrl:
 
 
 class TestRunGit:
+    @pytest.mark.parametrize("phase", ["initial", "collision"])
+    async def test_recipe_snapshot_does_not_reuse_a_descendant_ref(self, git_service, tmp_path, monkeypatch, phase):
+        await git_service.run_git("init", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recipe test", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recipe@example.invalid", cwd=tmp_path)
+        source = tmp_path / "source.txt"
+        source.write_text("committed\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit("Initial fixture", cwd=tmp_path)
+        head = await git_service.rev_parse("HEAD", cwd=tmp_path)
+        source.write_text("staged\n")
+        await git_service.add_all(cwd=tmp_path)
+        source.write_text("unstaged\n")
+        index = await git_service.run_git("write-tree", cwd=tmp_path)
+        status = await git_service.run_git("status", "--porcelain", cwd=tmp_path)
+        parent = "refs/codeplane/recipe-inputs/parent"
+        descendant = f"{parent}/child"
+        original = git_service._run_git
+        if phase == "initial":
+            await git_service.update_ref(descendant, head, cwd=tmp_path)
+        else:
+
+            async def insert_descendant(*args, **kwargs):
+                if args[:2] == ("update-ref", parent):
+                    await original("update-ref", descendant, head, cwd=tmp_path)
+                return await original(*args, **kwargs)
+
+            monkeypatch.setattr(git_service, "_run_git", insert_descendant)
+        with pytest.raises(GitError):
+            await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=parent)
+        assert await git_service.rev_parse(descendant, cwd=tmp_path) == head
+        with pytest.raises(GitError):
+            await git_service.run_git("show-ref", "--verify", parent, cwd=tmp_path)
+        assert await git_service.rev_parse("HEAD", cwd=tmp_path) == head
+        assert await git_service.run_git("write-tree", cwd=tmp_path) == index
+        assert await git_service.run_git("status", "--porcelain", cwd=tmp_path) == status
+        assert source.read_text() == "unstaged\n"
+
     @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cancellation")
     async def test_cancellation_reaps_the_owned_git_process(self, git_service, tmp_path, monkeypatch):
         spawn = asyncio.create_subprocess_exec

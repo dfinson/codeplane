@@ -901,7 +901,7 @@ export function pauseJob(jobId: string): Promise<void> {
 export function continueJob(
   jobId: string,
   instruction: string,
-): Promise<{ id: string; state: string; branch: string | null; worktreePath: string | null; createdAt: string }> {
+): Promise<CreateJobResponse> {
   return request(`/jobs/${encodeURIComponent(jobId)}/continue`, {
     method: "POST",
     body: JSON.stringify({ instruction }),

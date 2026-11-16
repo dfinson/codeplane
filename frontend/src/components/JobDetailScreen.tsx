@@ -691,6 +691,7 @@ export function JobDetailScreen() {
             {/* §7.2 — Structural warnings accumulated during execution */}
             <div className="h-[calc(100dvh-92px)] md:h-full min-h-[22rem]">
               <CuratedFeed
+                key={jobId}
                 jobId={jobId}
                 sdk={job.sdk}
                 interactive

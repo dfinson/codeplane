@@ -11,7 +11,7 @@
  * - Minimal visual weight, muted colors
  */
 
-import { useRef, useEffect, useState, useCallback, useMemo, memo, createContext, useContext } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, memo, createContext, useContext } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useNavigate } from "react-router-dom";
 import {
@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore, selectJobTranscript, selectApprovals, selectBatchApprovals, selectJobPlan, selectSecondarySessions, selectContextHandoffs } from "../store";
 import type { TranscriptEntry, ApprovalRequest, BatchApproval, PlanStep } from "../store";
-import { sendOperatorMessage, continueJob, resumeJob, pauseJob, resolveApproval, resolveBatch, trustJob, ApiError } from "../api/client";
+import { sendOperatorMessage, continueJob, pauseJob, resolveApproval, resolveBatch, trustJob, ApiError } from "../api/client";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { SdkIcon } from "./SdkBadge";
 import { MicButton } from "./VoiceButton";
@@ -743,12 +743,35 @@ export function CuratedFeed({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const waveformContainerRef = useRef<HTMLDivElement>(null);
+  const composerTarget = useRef({ jobId, active: false, sending: false, operation: 0, draftVersion: 0 });
+
+  useLayoutEffect(() => {
+    const target = { jobId, active: true, sending: false, operation: 0, draftVersion: 0 };
+    composerTarget.current = target;
+    setMsg("");
+    setSending(false);
+    setPausing(false);
+    return () => { target.active = false; };
+  }, [jobId]);
+
+  const updateDraft = useCallback((value: React.SetStateAction<string>) => {
+    const target = composerTarget.current;
+    if (!target.active || target.jobId !== jobId) return;
+    target.draftVersion += 1;
+    setMsg(value);
+  }, [jobId]);
 
   const isReview = jobState === "review";
   const isTerminal = ["completed", "failed", "canceled"].includes(jobState ?? "");
 
   const handleSend = useCallback(async () => {
-    if (!msg.trim() || !jobId || sending) return;
+    const target = composerTarget.current;
+    if (!msg.trim() || !jobId || sending || target.sending || !target.active || target.jobId !== jobId) return;
+    const operation = ++target.operation;
+    const draftVersion = ++target.draftVersion;
+    const submittedDraft = msg;
+    const isCurrent = () => composerTarget.current === target && target.active && target.operation === operation;
+    target.sending = true;
     const text = msg.trim();
     setMsg("");
     setSending(true);
@@ -769,28 +792,23 @@ export function CuratedFeed({
     try {
       if (isTerminal) {
         const followup = await continueJob(jobId, text);
-        toast.success("Follow-up job started");
-        navigate(`/jobs/${followup.id}`);
-      } else if (isReview) {
-        try {
-          await sendOperatorMessage(jobId, text);
-        } catch {
-          await resumeJob(jobId, text);
-          toast.success("Job resumed");
+        if (isCurrent()) {
+          toast.success("Follow-up job started");
+          navigate(`/jobs/${followup.id}`);
         }
       } else {
         await sendOperatorMessage(jobId, text);
       }
     } catch (err) {
-      setMsg(text);
+      if (isCurrent() && target.draftVersion === draftVersion) setMsg(submittedDraft);
       const detail =
         err instanceof ApiError
           ? err.detail
           : err instanceof Error
             ? err.message
             : "Unknown error";
-      toast.error(`Failed to send: ${detail}`);
-      console.error("Failed to send message:", err);
+      if (isCurrent()) toast.error(`Failed to send: ${detail}`);
+      console.error("Failed to send message:", jobId, err);
     } finally {
       // The receipt confirms submission, not transcript identity. Keep any
       // authoritative echo and remove only this local submission placeholder.
@@ -799,21 +817,24 @@ export function CuratedFeed({
       useStore.setState({
         transcript: { ...cur.transcript, [jobId]: curEntries.filter((e) => e !== optimisticEntry) },
       });
-      setSending(false);
+      target.sending = false;
+      if (isCurrent()) setSending(false);
     }
-  }, [msg, jobId, sending, isReview, isTerminal, navigate]);
+  }, [msg, jobId, sending, isTerminal, navigate]);
 
   const handlePause = useCallback(async () => {
     if (!jobId) return;
+    const target = composerTarget.current;
+    const isCurrent = () => composerTarget.current === target && target.active;
     setPausing(true);
     try {
       await pauseJob(jobId);
-      toast.info("Agent paused");
+      if (isCurrent()) toast.info("Agent paused");
     } catch (err) {
-      toast.error("Failed to pause");
+      if (isCurrent()) toast.error("Failed to pause");
       console.error("Failed to pause job:", err);
     } finally {
-      setPausing(false);
+      if (isCurrent()) setPausing(false);
     }
   }, [jobId]);
 
@@ -1065,7 +1086,7 @@ export function CuratedFeed({
             <div className="flex-1 relative">
               <textarea
                 value={msg}
-                onChange={(e) => setMsg(e.target.value)}
+                onChange={(e) => updateDraft(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   jobState === "waiting_for_approval" ? "The agent needs your decision above \u2191" :
@@ -1084,7 +1105,7 @@ export function CuratedFeed({
               <MicButton
                 onStateChange={() => {}}
                 waveformContainerRef={waveformContainerRef}
-                onTranscript={(text: string) => setMsg((prev: string) => prev + text)}
+                onTranscript={(text: string) => updateDraft((prev: string) => prev + text)}
               />
               {pausable && isJobLive && jobState === "running" && (
                 <Tooltip content="Pause the agent after the current step">

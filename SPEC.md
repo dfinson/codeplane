@@ -10,6 +10,10 @@ Authoritative operator messages are deduplicated by canonical event identity,
 never equal text across sessions or attempts. The composer settles only its own
 local placeholder when submission finishes; a receipt does not invent an
 observed transcript event or remove a real echo.
+Composer completion effects remain scoped to the originating Job and operation.
+Changing Jobs invalidates old navigation, draft restoration and sending-state
+updates. A message error is not permission to perform a different operation,
+such as Resume; existing successful legacy message admission remains unchanged.
 
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
@@ -131,7 +135,9 @@ Delayed stop callbacks cannot interrupt a subsequently resumed execution.
 An unconfirmed stop remains interrupted and retains its writer lease.
 
 Input snapshots use private Git refs and an alternate index, preserving HEAD,
-the user's index and working files. Command capture can retain immutable,
+the user's index and working files. Snapshot lookup requires an exact ref name;
+a descendant ref is not an existing snapshot or a concurrent winner.
+Command capture can retain immutable,
 checksummed artifact revisions instead of putting entire output streams into
 the run record. A process that never started records that fact without inventing
 an exit status or a passing check.
