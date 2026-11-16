@@ -115,6 +115,8 @@ class RecipeRunService:
         if run.snapshot_checksum != content_checksum(run.snapshot.model_dump(mode="json", exclude_unset=True)):
             raise StateConflictError("The run snapshot failed its content integrity check.")
         inputs: dict[str, RecipeInputReceipt] = {}
+        scope = instance.step_path.rsplit("/", 1)[0] if "/" in instance.step_path else ""
+        parent_attempt, block = await self._runs.resolve_block_scope(run, scope) if scope else (None, None)
         for name, port in instance.definition.inputs.items():
             binding = port.binding
             if binding is None:
@@ -122,11 +124,41 @@ class RecipeRunService:
             if isinstance(binding, RecipeLiteralBinding):
                 value = binding.value
             elif isinstance(binding, RecipeParameterBinding):
+                if scope:
+                    if parent_attempt is None or block is None:
+                        raise StateConflictError("Block parameter scope is not pinned to an active caller.")
+                    inherited = parent_attempt.inputs.get(binding.parameter)
+                    if inherited is not None and inherited.present:
+                        inputs[name] = inherited.model_copy(
+                            update={
+                                "type": port.type,
+                                "scope_attempt_id": parent_attempt.id,
+                                "parameter_name": binding.parameter,
+                            }
+                        )
+                        continue
+                    parameter = block.parameters.get(binding.parameter)
+                    if parameter is None or parameter.required:
+                        raise StateConflictError(f"Required block parameter '{binding.parameter}' is missing.")
+                    value = parameter.default
+                    if not value_matches(value, port.type):
+                        raise StateConflictError(f"Block parameter '{binding.parameter}' has the wrong type.")
+                    inputs[name] = RecipeInputReceipt(
+                        type=port.type,
+                        present=True,
+                        value=value,
+                        checksum=content_checksum(value),
+                        scope_attempt_id=parent_attempt.id,
+                        parameter_name=binding.parameter,
+                    )
+                    continue
                 if binding.parameter not in run.inputs:
                     raise StateConflictError(f"Run parameter '{binding.parameter}' was not pinned.")
                 value = run.inputs[binding.parameter]
             else:
-                source = await self._runs.get_step_by_path(run.id, binding.step_id)
+                source = await self._runs.get_step_by_path(
+                    run.id, f"{scope}/{binding.step_id}" if scope else binding.step_id
+                )
                 attempt = (
                     await self._runs.get_attempt(source.current_attempt_id)
                     if source is not None

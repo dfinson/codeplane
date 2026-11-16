@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -105,6 +107,65 @@ class TestIsRemoteUrl:
 
 
 class TestRunGit:
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cancellation")
+    async def test_cancellation_reaps_the_owned_git_process(self, git_service, tmp_path, monkeypatch):
+        spawn = asyncio.create_subprocess_exec
+        started = asyncio.Event()
+        processes = []
+
+        async def record_process(*args, **kwargs):
+            process = await spawn(*args, **kwargs)
+            processes.append(process)
+            started.set()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", record_process)
+        task = asyncio.create_task(
+            git_service.run_git("-c", "alias.recipe-wait=!sleep 60", "recipe-wait", cwd=tmp_path)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+            assert processes[0].returncode is not None
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_recipe_snapshot_retains_code_without_changing_head_or_index(self, git_service, tmp_path):
+        await git_service.run_git("init", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recipe test", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recipe@example.invalid", cwd=tmp_path)
+        tracked = tmp_path / "tracked.txt"
+        tracked.write_text("original\n")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit("Initial fixture", cwd=tmp_path)
+        head = await git_service.rev_parse("HEAD", cwd=tmp_path)
+        tracked.write_text("staged\n")
+        await git_service.run_git("add", "tracked.txt", cwd=tmp_path)
+        tracked.write_text("current unstaged\n")
+        (tmp_path / "untracked.txt").write_text("new input\n")
+        (tmp_path / "ignored.txt").write_text("not an input\n")
+        index = await git_service.run_git("write-tree", cwd=tmp_path)
+        before = await git_service.run_git("status", "--porcelain", cwd=tmp_path)
+
+        ref = "refs/codeplane/recipe-inputs/run-one"
+        captured = await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=ref)
+        assert captured != head
+        assert await git_service.rev_parse("HEAD", cwd=tmp_path) == head
+        assert await git_service.run_git("write-tree", cwd=tmp_path) == index
+        assert await git_service.run_git("status", "--porcelain", cwd=tmp_path) == before
+        assert await git_service.run_git("show", f"{captured}:tracked.txt", cwd=tmp_path) == "current unstaged"
+        assert await git_service.run_git("show", f"{captured}:untracked.txt", cwd=tmp_path) == "new input"
+        assert "ignored.txt" not in await git_service.run_git("ls-tree", "--name-only", captured, cwd=tmp_path)
+        tracked.write_text("later edits\n")
+        assert await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=ref) == captured
+        with pytest.raises(GitError, match="internal reference"):
+            await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref="refs/heads/main")
+
     @pytest.mark.asyncio
     async def test_run_git_success(self, git_service: GitService) -> None:
         mock_proc = _mock_subprocess(stdout="output\n")

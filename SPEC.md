@@ -113,6 +113,28 @@ Human decisions bind the existing ApprovalService record to the exact input
 checksum, action and next steps. Nonzero command status cannot become success
 through a runner claim, and missing command capture remains interrupted.
 
+Nested block instances are scoped to the exact wrapper attempt, such as
+`checks@2/lint`. A block retry creates independent child instances rather than
+inheriting completed children. Parameter handoffs retain the caller's exact
+source receipt, including explicitly degraded diagnostic provenance, while
+typed defaults have no fictional producing attempt.
+
+An unfinished agent can resume within its existing attempt only after an
+app-owned confirmed-safe stop receipt. Recovery checks the current execution
+token, instance version, owning Job, cancellation state and workspace lease.
+Delayed stop callbacks cannot interrupt a subsequently resumed execution.
+An unconfirmed stop remains interrupted and retains its writer lease.
+
+Input snapshots use private Git refs and an alternate index, preserving HEAD,
+the user's index and working files. Command capture can retain immutable,
+checksummed artifact revisions instead of putting entire output streams into
+the run record. A process that never started records that fact without inventing
+an exit status or a passing check.
+
+The compatibility graph builder keeps configured verification and self-review
+as agent steps, not command checks. Plan First retains an initial plan and at
+most five replans, each with a fresh approval of its exact plan and code inputs.
+
 Migration 0078 retains multiple historical runs on the same Job and permits only
 one unresolved run, including canceled runs with uncertain execution effects.
 Explicit terminal continuation pins a new run with the instruction and current
