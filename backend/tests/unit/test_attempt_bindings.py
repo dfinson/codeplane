@@ -334,6 +334,109 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
     assert await adapter._evaluate_permission("same-id", "job", request, tool_name="Read") == PermissionDecision.allow
 
 
+@pytest.mark.parametrize("provider", ["copilot", "claude"])
+@pytest.mark.parametrize("boundary", ["permission", "hard_gate", "pre_tool"])
+@pytest.mark.parametrize("transition", ["pause_resume", "replacement", "new_token"])
+async def test_sdk_callback_ownership_spans_capability_parser_wait(
+    tmp_path, monkeypatch, provider, boundary, transition,
+):
+    from backend.models.domain import ApprovalResolution
+    from backend.services.action_policy.syntax import analyze_syntax
+    from backend.services.adapters import capability_guard
+
+    adapter = CopilotAdapter() if provider == "copilot" else ClaudeAdapter()
+    command = "git reset --hard HEAD" if boundary == "hard_gate" else "echo test"
+    adapter._hard_block_approval = AsyncMock(return_value=ApprovalResolution.approved)
+    config = SessionConfig(
+        workspace_path=str(tmp_path), prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+        defer_start=True, execution_capabilities=frozenset({"read", "write", "shell", "external_access"}),
+    )
+    client = MagicMock()
+    client.stop = AsyncMock()
+    client.force_stop = AsyncMock()
+    client.interrupt = AsyncMock()
+    client._transport = None
+    if provider == "copilot":
+        session = MagicMock(session_id="same-id")
+        session.abort = AsyncMock()
+        client.create_session = AsyncMock(return_value=session)
+        sid = await adapter._create_owned_session(client, "lease", config)
+        callbacks = client.create_session.call_args.kwargs
+
+        async def invoke():
+            if boundary == "pre_tool":
+                return await callbacks["hooks"]["on_pre_tool_use"](
+                    {"toolName": "bash", "toolArgs": {"command": command},
+                     "cwd": str(tmp_path), "timestamp": 0},
+                    {"session_id": sid},
+                )
+            return await callbacks["on_permission_request"](
+                SimpleNamespace(
+                    kind=SimpleNamespace(value="shell"), tool_name="bash", full_command_text=command,
+                    file_name=None, path=None, possible_paths=None, read_only=False,
+                ),
+                {"session_id": sid},
+            )
+
+        def denied(result):
+            return result is not None and (
+                result.get("permissionDecision") == "deny" if boundary == "pre_tool" else result.kind == "reject"
+            )
+    else:
+        import claude_code_sdk
+
+        client.connect = AsyncMock()
+        factory = MagicMock(return_value=client)
+        monkeypatch.setattr(claude_code_sdk, "ClaudeSDKClient", factory)
+        monkeypatch.setattr(adapter, "_consume_messages", AsyncMock())
+        sid = await adapter.create_session(config)
+        options = factory.call_args.args[0]
+
+        async def invoke():
+            if boundary == "pre_tool":
+                return await options.hooks["PreToolUse"][0].hooks[0](
+                    {"tool_name": "Bash", "tool_input": {"command": command}}, "call", {},
+                )
+            return await options.can_use_tool("Bash", {"command": command}, None)
+
+        def denied(result):
+            if boundary == "pre_tool":
+                return result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+            return isinstance(result, claude_code_sdk.PermissionResultDeny)
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def pending_parser(command, dialect):
+        entered.set()
+        await release.wait()
+        return analyze_syntax(command, dialect)
+
+    monkeypatch.setattr(capability_guard, "analyze_syntax_async", pending_parser)
+    router = SimpleNamespace(route=AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None)))
+    adapter._policy_router["job"] = router
+    pending = asyncio.create_task(invoke())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        if transition == "pause_resume":
+            adapter.pause_tools(sid)
+            adapter.resume_tools(sid)
+        elif transition == "replacement":
+            adapter.set_session_metadata(sid, config)
+        else:
+            adapter.attach_attempt_policy(
+                sid, "job", "attempt", "epoch", router, RepoPolicy(), execution_token="replacement",
+            )
+        release.set()
+        assert denied(await asyncio.wait_for(pending, timeout=2))
+        router.route.assert_not_awaited()
+        adapter._hard_block_approval.assert_not_awaited()
+        assert not denied(await invoke()), "A new callback on the current execution must still proceed"
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await adapter.abort_session(sid)
+
+
 async def test_cancellation_after_registration_cleans_handle_and_refuses_late_dispatch(session_factory):
     runtime, adapter, _, _ = _runtime(session_factory)
     adapter.create_session = AsyncMock(return_value="inert-session")

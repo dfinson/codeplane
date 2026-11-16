@@ -199,6 +199,20 @@ class BaseAgentAdapter(AgentAdapterInterface):
     def resume_tools(self, session_id: str) -> None:
         self._paused_sessions.discard(session_id)
 
+    def _capture_permission_fence(self, session_id: str) -> tuple[str | None, object]:
+        return self._session_to_job.get(session_id), self._permission_generations.setdefault(session_id, object())
+
+    def _permission_fence_is_current(self, session_id: str, fence: tuple[str | None, object]) -> bool:
+        owner, generation = fence
+        current = (
+            session_id not in self._paused_sessions
+            and self._permission_generations.get(session_id) is generation
+            and self._session_to_job.get(session_id) == owner
+        )
+        if not current:
+            log.warning("permission_decision_stale", job_id=owner, session_id=session_id)
+        return current
+
     # Per-job tracking dicts cleaned up together in _cleanup_session_state.
     # NOTE: _policy_router, _repo_policies, _worktree_paths are intentionally
     # excluded — they are per-job (not per-session) and must survive across
@@ -485,6 +499,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         *,
         tool_name: str = "",
         tool_input: dict[str, Any] | None = None,
+        fence: tuple[str | None, object] | None = None,
     ) -> PermissionDecision:
         """Evaluate a tool permission request against CodePlane's policy.
 
@@ -494,14 +509,13 @@ class BaseAgentAdapter(AgentAdapterInterface):
         policy router via ``traceforge.governance``
         (RecommendedAction ALLOW / WARN / ESCALATE / DENY / TRANSFORM).
         """
-        # Paused — immediately deny
-        if session_id in self._paused_sessions:
+        fence = fence if fence is not None else self._capture_permission_fence(session_id)
+        if not self._permission_fence_is_current(session_id, fence):
             return PermissionDecision.deny
-        owner = self._session_to_job.get(session_id)
+        owner, _ = fence
         if owner is not None and owner != job_id:
             log.error("permission_session_owner_mismatch", session_id=session_id, job_id=job_id)
             return PermissionDecision.deny
-        generation = self._permission_generations.setdefault(session_id, object())
 
         # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
         # reset --hard, force-push) always reach the operator — this pre-check
@@ -539,12 +553,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 "no_policy_router_for_job", job_id=job_id, session_id=session_id, tool_name=tool_name,
             )
             return PermissionDecision.deny
-        if (
-            session_id in self._paused_sessions
-            or self._permission_generations.get(session_id) is not generation
-            or self._session_to_job.get(session_id) != owner
-        ):
-            log.warning("permission_decision_stale", job_id=job_id, session_id=session_id, tool_name=tool_name)
+        if not self._permission_fence_is_current(session_id, fence):
             return PermissionDecision.deny
         return decision
 

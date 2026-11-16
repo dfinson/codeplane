@@ -191,6 +191,9 @@ class CopilotAdapter(BaseAgentAdapter):
 
         kind_val = request.kind.value if request.kind else "unknown"
         sid = invocation.get("session_id", "")
+        fence = self._capture_permission_fence(sid)
+        if not self._permission_fence_is_current(sid, fence):
+            return _Result(kind="reject")
 
         # Collect path candidates for policy evaluation
         candidate_paths: list[str] = []
@@ -241,10 +244,11 @@ class CopilotAdapter(BaseAgentAdapter):
             return _Result(kind="reject")
         decision = await self._evaluate_permission(
             sid,
-            self._session_to_job.get(sid),
+            fence[0],
             perm_request,
             tool_name=request.tool_name or "",
             tool_input=tool_input or None,
+            fence=fence,
         )
         if decision == PermissionDecision.allow:
             return _Result(kind="approve-once")
@@ -655,7 +659,11 @@ class CopilotAdapter(BaseAgentAdapter):
 
             if config.execution_capabilities is None:
                 return None
+            sid = invocation.get("session_id", "")
+            fence = self._capture_permission_fence(sid)
             try:
+                if not self._permission_fence_is_current(sid, fence):
+                    raise CapabilityDeniedError("Tool callback no longer owns the current execution")
                 arguments = request.get("toolArgs")
                 if not isinstance(arguments, dict):
                     raise CapabilityDeniedError("Tool arguments are unavailable for capability enforcement")
@@ -666,6 +674,8 @@ class CopilotAdapter(BaseAgentAdapter):
                     arguments=arguments,
                     dialect="powershell" if request["toolName"] == "powershell" else None,
                 )
+                if not self._permission_fence_is_current(sid, fence):
+                    raise CapabilityDeniedError("Tool callback no longer owns the current execution")
             except CapabilityDeniedError as exc:
                 log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
                 return {"permissionDecision": "deny", "permissionDecisionReason": str(exc)}

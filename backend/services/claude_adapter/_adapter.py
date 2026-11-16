@@ -142,7 +142,10 @@ class ClaudeAdapter(BaseAgentAdapter):
             input_data: dict[str, Any],
             context: object,
         ) -> PermissionResultAllow | PermissionResultDeny:
-            job_id = self._session_to_job.get(session_id)
+            fence = self._capture_permission_fence(session_id)
+            if not self._permission_fence_is_current(session_id, fence):
+                return PermissionResultDeny(message="Tool callback no longer owns the current execution")
+            job_id = fence[0]
             tool_kind = _claude_tool_kind.get(tool_name, "custom-tool")
             full_cmd = str(input_data.get("command", "")) if tool_name == "Bash" else None
             file_name = str(input_data.get("file_path", "") or input_data.get("path", "")) or None
@@ -184,6 +187,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                 ),
                 tool_name=tool_name,
                 tool_input=input_data,
+                fence=fence,
             )
             if decision == PermissionDecision.allow:
                 return PermissionResultAllow()
@@ -621,7 +625,10 @@ class ClaudeAdapter(BaseAgentAdapter):
                 from backend.services.adapters.capability_guard import enforce_invocation_capabilities
                 from backend.services.adapters.contracts import CapabilityDeniedError
 
+                fence = self._capture_permission_fence(session_id)
                 try:
+                    if not self._permission_fence_is_current(session_id, fence):
+                        raise CapabilityDeniedError("Tool callback no longer owns the current execution")
                     tool_name = request.get("tool_name")
                     arguments = request.get("tool_input")
                     if not isinstance(tool_name, str) or not isinstance(arguments, dict):
@@ -634,6 +641,8 @@ class ClaudeAdapter(BaseAgentAdapter):
                         arguments=arguments,
                         dialect="bash" if tool_name == "Bash" else None,
                     )
+                    if not self._permission_fence_is_current(session_id, fence):
+                        raise CapabilityDeniedError("Tool callback no longer owns the current execution")
                 except CapabilityDeniedError as exc:
                     log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
                     return {
