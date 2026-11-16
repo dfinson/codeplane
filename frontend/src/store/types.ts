@@ -5,48 +5,27 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse } from "../api/types";
+import type { DiffFileModel, Job, SDKInfo, StoryResponse, TrackerOperationResponse } from "../api/types";
 
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
 
 /** Minimal job shape matching JobResponse from the backend. */
-export interface JobSummary {
-  id: string;
-  repo: string;
-  prompt: string;
-  projectId?: string | null;
-  title?: string | null;
-  description?: string | null;
+export interface JobSummary extends Omit<Job, "state" | "mode" | "resolution" | "mergeStatus" | "sdk" | "source" | "observationOnly"> {
   state: string;
-  baseRef: string;
-  worktreePath: string | null;
-  branch: string | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  prUrl?: string | null;
   resolution?: string | null;
-  archivedAt?: string | null;
   mergeStatus?: string | null;
-  worktreeName?: string | null;
   conflictFiles?: string[] | null;
   resolutionError?: string | null;
-  failureReason?: string | null;
-  progressHeadline?: string | null;
-  progressSummary?: string | null;
-  model?: string | null;
   modelDowngraded?: boolean;
   requestedModel?: string | null;
   actualModel?: string | null;
-  sdk?: string;
   /** Current setup step for jobs in 'preparing' state (e.g. "creating_workspace"). */
   setupStep?: string | null;
-  totalCostUsd?: number | null;
-  totalTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
   mode?: string;
+  sdk?: Job["sdk"];
+  source?: Job["source"];
+  observationOnly?: Job["observationOnly"];
 }
 
 export interface ApprovalRequest {

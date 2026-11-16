@@ -3080,6 +3080,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Observation */
+        post: operations["register_observation_api_integrations_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3387,7 +3404,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            collectionStatus: "pending" | "collecting" | "completed" | "failed";
+            collectionStatus: "pending" | "collecting" | "completed" | "failed" | "not_applicable";
             /** Collectionerror */
             collectionError?: string | null;
             /** Collectionupdatedat */
@@ -4551,7 +4568,7 @@ export interface components {
             /** Id */
             id: string;
             /** Repo */
-            repo: string;
+            repo: string | null;
             /** Prompt */
             prompt: string;
             /** Projectid */
@@ -4562,7 +4579,7 @@ export interface components {
             description?: string | null;
             state: components["schemas"]["JobState"];
             /** Baseref */
-            baseRef: string;
+            baseRef: string | null;
             /** Worktreepath */
             worktreePath: string | null;
             /** Branch */
@@ -4624,6 +4641,13 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Integrationbindingid */
+            integrationBindingId?: string | null;
+            /**
+             * Observationonly
+             * @default false
+             */
+            observationOnly: boolean;
             /** @default standard */
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
@@ -6039,6 +6063,23 @@ export interface components {
             resolution: "applied" | "not_applied";
             /** Evidence */
             evidence: string;
+        };
+        /** RegisterObservationRequest */
+        RegisterObservationRequest: {
+            /** Bindingid */
+            bindingId: string;
+            /** Projectid */
+            projectId: string;
+            /** Formatid */
+            formatId: string;
+            /** Externalsessionid */
+            externalSessionId: string;
+            /** Title */
+            title?: string | null;
+            /** Repo */
+            repo?: string | null;
+            /** Baseref */
+            baseRef?: string | null;
         };
         /** RegisterRepoRequest */
         RegisterRepoRequest: {
@@ -13717,6 +13758,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeRevisionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_observation_api_integrations_observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */

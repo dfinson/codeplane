@@ -215,7 +215,11 @@ async def _build_diff(
     diff_service: DiffService,
 ) -> list[DiffFileModel]:
     diff: list[DiffFileModel] = []
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        getattr(job, "observation_only", False) is not True
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path and job.base_ref
+    ):
         with contextlib.suppress(GitError, OSError):
             diff = await diff_service.calculate_diff(job.worktree_path, job.base_ref)
     if not diff:

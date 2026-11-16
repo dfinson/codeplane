@@ -41,6 +41,17 @@ beforeEach(() => {
 });
 
 describe("JobCard", () => {
+  it("renders nullable observation history without a fictional running agent or branch", () => {
+    render(<MemoryRouter><JobCard job={makeJob({
+      repo: null, baseRef: null, worktreePath: null, branch: null,
+      observationOnly: true, source: "integration", sdk: "native:copilot",
+    })} /></MemoryRouter>);
+    expect(screen.getByText("External observation")).toBeInTheDocument();
+    expect(screen.getByText("Observation")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(screen.queryByText("main")).not.toBeInTheDocument();
+  });
+
   it("renders job title when present", () => {
     render(
       <MemoryRouter>

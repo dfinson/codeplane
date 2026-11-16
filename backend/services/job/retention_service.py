@@ -139,10 +139,10 @@ class RetentionService:
 
             count = 0
             for job in terminal_jobs:
-                if job.worktree_path is None:
+                if job.observation_only or job.worktree_path is None:
                     continue
                 wt_path = Path(job.worktree_path).resolve()
-                repo_worktrees_dir = (Path(job.repo) / self._worktrees_dirname).resolve()
+                repo_worktrees_dir = (Path(job.execution_repo) / self._worktrees_dirname).resolve()
                 if not str(wt_path).startswith(str(repo_worktrees_dir) + "/"):
                     log.warning("retention_worktree_outside_dir", path=str(wt_path))
                     continue

@@ -306,17 +306,11 @@ def test_migration_matches_recipe_models_and_preserves_legacy_rows(tmp_path: Pat
                     id="project", name="Existing", repo_paths='["/repo"]', created_at=now, updated_at=now
                 )
             )
-            connection.execute(
-                JobRow.__table__.insert().values(
-                    id="legacy",
-                    project_id="project",
-                    repo="/repo",
-                    prompt="Existing job",
-                    state="completed",
-                    base_ref="main",
-                    created_at=now,
-                    updated_at=now,
-                )
+            connection.exec_driver_sql(
+                """INSERT INTO jobs
+                   (id,project_id,repo,prompt,state,base_ref,permission_mode,session_count,sdk,created_at,updated_at)
+                   VALUES('legacy','project','/repo','Existing job','completed','main','full_auto',1,'copilot',?,?)""",
+                (now, now),
             )
             connection.execute(
                 ApprovalRow.__table__.insert().values(

@@ -404,7 +404,7 @@ class JobService:
         explicitly supplied non-task branches retain their existing behavior.
         """
         if revalidate_project:
-            await self._resolve_job_project_id(prepared.repo, prepared.project_id)
+            await self._resolve_job_project_id(prepared.execution_repo, prepared.project_id)
         job = prepared
         if await self._job_repo.get(job.id) is not None:
             existing_ids = await self._job_repo.list_ids()
@@ -446,6 +446,7 @@ class JobService:
             raise JobNotFoundError(f"Job {job_id} does not exist.")
         if job.state != JobState.preparing:
             raise StateConflictError(f"Job {job_id} is in state {job.state!r}, expected 'preparing'.")
+        repo_path, base_ref = job.execution_repo, job.execution_base_ref
 
         async def _emit_progress(step: str) -> None:
             if self._event_bus is not None:
@@ -462,9 +463,9 @@ class JobService:
 
         try:
             worktree_path, branch_name = await self._git.create_worktree(
-                repo_path=job.repo,
+                repo_path=repo_path,
                 job_id=job.worktree_name or job_id,
-                base_ref=job.base_ref,
+                base_ref=base_ref,
                 branch=job.branch,
             )
         except GitError as exc:
@@ -592,9 +593,9 @@ class JobService:
         original = await self.get_job(job_id)
         return await self.create_job(
             JobSpec(
-                repo=original.repo,
+                repo=original.execution_repo,
                 prompt=original.prompt,
-                base_ref=original.base_ref,
+                base_ref=original.execution_base_ref,
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,
@@ -782,11 +783,11 @@ class JobService:
 
         # Clean up worktree and branch immediately rather than waiting for
         # the daily retention sweep — the UI promises this happens on archive.
-        if self._git and job.worktree_path and job.worktree_path != job.repo:
+        if self._git and not job.observation_only and job.worktree_path and job.worktree_path != job.repo:
             # (only for abandoned jobs — merged jobs are handled by merge_index)
 
             try:
-                await self._git.remove_worktree(job.repo, job.worktree_path)
+                await self._git.remove_worktree(job.execution_repo, job.worktree_path)
                 log.info("archive_worktree_removed", job_id=job_id, worktree=job.worktree_path)
             except (GitError, OSError):
                 log.warning("archive_worktree_cleanup_failed", job_id=job_id, exc_info=True)

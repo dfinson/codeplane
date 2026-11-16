@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from backend.models.db import ApprovalRow, JobRow, ProjectRow
+from backend.models.db import ApprovalRow, ProjectRow
 
 
 def test_0077_retains_job_approval_and_recipe_history_and_only_relaxes_observations(tmp_path) -> None:
@@ -27,17 +27,11 @@ def test_0077_retains_job_approval_and_recipe_history_and_only_relaxes_observati
                     updated_at=now,
                 )
             )
-            connection.execute(
-                JobRow.__table__.insert().values(
-                    id="job",
-                    project_id="project",
-                    repo="/repo",
-                    prompt="Retain exactly",
-                    state="completed",
-                    base_ref="main",
-                    created_at=now,
-                    updated_at=now,
-                )
+            connection.exec_driver_sql(
+                """INSERT INTO jobs
+                   (id,project_id,repo,prompt,state,base_ref,permission_mode,session_count,sdk,created_at,updated_at)
+                   VALUES('job','project','/repo','Retain exactly','completed','main','full_auto',1,'copilot',?,?)""",
+                (now, now),
             )
             connection.execute(
                 ApprovalRow.__table__.insert().values(

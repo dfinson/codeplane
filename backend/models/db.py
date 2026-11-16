@@ -218,13 +218,13 @@ class JobRow(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    repo: Mapped[str] = mapped_column(String, nullable=False)
+    repo: Mapped[str | None] = mapped_column(String, nullable=True)
     # A Job never exists without an owning Project — the atomic unit is a
     # Project (AD-5); repos and jobs do not exist independently of one.
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(String, nullable=False)
-    base_ref: Mapped[str] = mapped_column(String, nullable=False)
+    base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     branch: Mapped[str | None] = mapped_column(String, nullable=True)
     worktree_path: Mapped[str | None] = mapped_column(String, nullable=True)
     session_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -256,6 +256,10 @@ class JobRow(Base):
     parent_job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.id"), nullable=True)
     source: Mapped[str] = mapped_column(String, nullable=False, default="managed", server_default="managed")
     external_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    integration_binding_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("integration_bindings.id", name="fk_jobs_integration_binding"), nullable=True
+    )
+    observation_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     tail_offset: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     ingest_checkpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="standard", server_default="standard")
@@ -269,6 +273,74 @@ class JobRow(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     artifact_collection_updated_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("observation_only = 0 OR source = 'integration'", name="ck_jobs_observation_source"),
+        CheckConstraint(
+            "(source = 'integration' AND observation_only = 1) OR (repo IS NOT NULL AND base_ref IS NOT NULL)",
+            name="ck_jobs_workspace_identity",
+        ),
+    )
+
+
+class IntegrationBindingRow(Base):
+    __tablename__ = "integration_bindings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True)
+    adapter_id: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    credential_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("mode IN ('observation','execution')", name="ck_integration_binding_mode"),
+        CheckConstraint("version >= 1", name="ck_integration_binding_version"),
+        Index("ix_integration_bindings_project", "project_id"),
+        Index("ix_integration_bindings_job", "job_id"),
+    )
+
+
+class IntegrationSourceCheckpointRow(Base):
+    __tablename__ = "integration_source_checkpoints"
+
+    binding_id: Mapped[str] = mapped_column(String, ForeignKey("integration_bindings.id"), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String, primary_key=True)
+    parser_revision: Mapped[str] = mapped_column(String, primary_key=True)
+    record_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    prefix_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    buffer_json: Mapped[str] = mapped_column(Text, nullable=False)
+    legacy_checkpoint_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("record_count >= 0 AND version >= 1", name="ck_integration_checkpoint_progress"),
+        CheckConstraint("state IN ('accepted','reconciliation_required')", name="ck_integration_checkpoint_state"),
+    )
+
+
+class IntegrationIdentityRow(Base):
+    __tablename__ = "integration_identities"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    document_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    pinned_key_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    endpoint: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
 
 
 class ProjectRow(Base):

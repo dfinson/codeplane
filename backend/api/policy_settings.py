@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.models.events import EventKind, new_event
 from backend.models.schemas.base import CamelModel
 from backend.persistence.policy_repo import PolicyRepository
-from backend.services.action_policy.preset_profiles import PROFILES, profile_for
 from backend.services.events.event_bus import EventBus
 
 router = APIRouter(prefix="/settings/policy", tags=["policy"], route_class=DishkaRoute)
@@ -111,6 +110,8 @@ class PolicyImportRequest(CamelModel):
 
 def _effective_ceilings(overrides: dict[str, tuple[float | None, float | None]]) -> dict[str, UsdCeilingEntry]:
     """Merge stored per-preset overrides over each profile's baked default ceiling."""
+    from backend.services.action_policy.preset_profiles import PROFILES, profile_for
+
     out: dict[str, UsdCeilingEntry] = {}
     for preset in PROFILES:
         profile = profile_for(preset)

@@ -629,7 +629,7 @@ def _register_workspace_tool(mcp: FastMCP, mcp_state: MCPState) -> None:
             except JobNotFoundError as exc:
                 return {"error": str(exc)}
 
-        worktree = Path(job.worktree_path or job.repo).resolve()
+        worktree = Path(job.execution_workspace).resolve()
 
         if action == "list":
             if not worktree.is_dir():

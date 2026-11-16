@@ -39,7 +39,7 @@ function filterJobs(jobs: JobSummary[], query: string): JobSummary[] {
     (j) =>
       (j.title ?? "").toLowerCase().includes(q) ||
       j.id.toLowerCase().includes(q) ||
-      j.repo.toLowerCase().includes(q) ||
+      (j.repo ?? "").toLowerCase().includes(q) ||
       (j.branch ?? "").toLowerCase().includes(q) ||
       j.prompt.toLowerCase().includes(q),
   );

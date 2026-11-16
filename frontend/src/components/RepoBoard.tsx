@@ -22,7 +22,7 @@ import { KANBAN_COLUMNS } from "../constants/kanban";
 function lifecycleSignature(jobs: Record<string, JobSummary>, repoPaths: string[]): string {
   const memberRepos = new Set(repoPaths);
   return Object.values(jobs)
-    .filter((job) => memberRepos.has(job.repo))
+    .filter((job) => job.repo !== null && memberRepos.has(job.repo))
     .map((job) => `${job.id}:${job.state}`)
     .sort()
     .join("|");

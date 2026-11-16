@@ -6,6 +6,13 @@
 
 ### Standalone interoperability transition
 
+`POST /api/integrations/observations` registers a binding-owned history Job
+without launching an SDK, creating a workspace or attaching runtime sidecars.
+Repeated registration of the same binding/source returns the same Job. These
+Jobs expose `observationOnly` and `integrationBindingId`, may have null `repo`
+and `baseRef`, and cannot enter managed execution, workspace or instruction
+paths. Artifact collection is `not_applicable`, not a fabricated success.
+
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
 `ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during

@@ -641,9 +641,9 @@ def build_session_config(
     """Build a SessionConfig from a Job record and resolved config."""
     from backend.models.domain import SessionConfig
 
-    workspace = job.worktree_path or job.repo
-    mcp_servers = discover_mcp_servers(job.repo, config)
-    protected_paths = resolve_protected_paths(job.repo)
+    workspace = job.execution_workspace
+    mcp_servers = discover_mcp_servers(job.execution_repo, config)
+    protected_paths = resolve_protected_paths(job.execution_repo)
 
     return SessionConfig(
         workspace_path=workspace,

@@ -24,6 +24,7 @@ from backend.models.domain import (  # noqa: TC001 — Pydantic resolves annotat
 # Domain-grouped sub-modules — canonical definitions for base types and telemetry.
 # Re-exported here for backward compatibility.
 from backend.models.schemas.base import *  # noqa: E402,F401,F403
+from backend.models.schemas.integrations import *  # noqa: E402,F401,F403
 from backend.models.schemas.metrics import *  # noqa: E402,F401,F403
 from backend.models.schemas.recipes import *  # noqa: E402,F401,F403
 from backend.models.schemas.telemetry import *  # noqa: E402,F401,F403
@@ -256,13 +257,13 @@ class CreateJobResponse(CamelModel):
 
 class JobResponse(CamelModel):
     id: str
-    repo: str
+    repo: str | None
     prompt: str
     project_id: str | None = None
     title: str | None = None
     description: str | None = None
     state: JobState
-    base_ref: str
+    base_ref: str | None
     worktree_path: str | None
     branch: str | None
     preset: Preset | None = None
@@ -291,6 +292,8 @@ class JobResponse(CamelModel):
     parent_job_id: str | None = None
     source: str = "managed"
     external_session_id: str | None = None
+    integration_binding_id: str | None = None
+    observation_only: bool = False
     mode: JobMode = JobMode.standard
     total_cost_usd: float | None = None
     total_tokens: int | None = None
@@ -347,6 +350,8 @@ class JobResponse(CamelModel):
             parent_job_id=job.parent_job_id,
             source=job.source,
             external_session_id=job.external_session_id,
+            integration_binding_id=job.integration_binding_id,
+            observation_only=job.observation_only,
             mode=JobMode(job.mode) if isinstance(job.mode, str) else JobMode.standard,
             **overrides,
         )
@@ -396,7 +401,7 @@ class ArtifactResponse(CamelModel):
 
 class ArtifactListResponse(CamelModel):
     items: list[ArtifactResponse]
-    collection_status: Literal["pending", "collecting", "completed", "failed"] = "pending"
+    collection_status: Literal["pending", "collecting", "completed", "failed", "not_applicable"] = "pending"
     collection_error: str | None = None
     collection_updated_at: datetime | None = None
 

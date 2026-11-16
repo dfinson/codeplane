@@ -21,6 +21,7 @@ from backend.persistence.chat_repo import ChatRepository
 from backend.persistence.cost_attribution_repo import CostAttributionRepository
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.file_access_repo import FileAccessRepository
+from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.latency_attribution_repo import LatencyAttributionRepository
 from backend.persistence.project_repo import ProjectRepository
@@ -46,6 +47,7 @@ from backend.services.events.ingest_service import IngestService
 from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
 from backend.services.ingest.claude_source import ClaudeSessionStateWatcher
+from backend.services.ingest.history_registration import HistoryRegistration
 from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
@@ -158,6 +160,16 @@ class RequestProvider(Provider):
     """REQUEST-scoped dependencies — created fresh per HTTP request."""
 
     scope = Scope.REQUEST
+
+    @provide
+    def integration_repo(self, session: AsyncSession) -> IntegrationRepository:
+        return IntegrationRepository(session)
+
+    @provide
+    def history_registration(
+        self, bindings: IntegrationRepository, jobs: JobRepository, projects: ProjectRepository,
+    ) -> HistoryRegistration:
+        return HistoryRegistration(bindings, jobs, projects)
 
     @provide
     async def session(

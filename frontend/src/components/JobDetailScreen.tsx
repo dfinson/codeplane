@@ -96,7 +96,7 @@ export function JobDetailScreen() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
-  const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
+  const hasWorktree = !!job?.worktreePath && !job?.observationOnly && !job?.archivedAt;
   const hasArtifacts = true;
   const [artifactCount, setArtifactCount] = useState(0);
   const artifactVersion = useStore((s) => jobId ? (s.artifactVersions[jobId] ?? 0) : 0);
@@ -531,9 +531,9 @@ export function JobDetailScreen() {
     );
   }
 
-  const canCancel = ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
-  const canResume = job.state === "failed";
-  const isRunning = job.state === "running";
+  const canCancel = !job.observationOnly && ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
+  const canResume = !job.observationOnly && job.state === "failed";
+  const isRunning = !job.observationOnly && job.state === "running";
   const isPreparing = job.state === "preparing";
 
   const hasMergeConflict =
@@ -542,7 +542,7 @@ export function JobDetailScreen() {
     job.mergeStatus === "conflict" ||
     ((job.conflictFiles?.length ?? 0) > 0));
   const needsResolution =
-    job.state === "review" &&
+    !job.observationOnly && job.state === "review" &&
     (job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution);
   const isResolved =
     job.state === "completed" &&
@@ -558,12 +558,12 @@ export function JobDetailScreen() {
           <>
             <Link to={projectBoardUrl} className="hover:text-foreground">{owningProject.name}</Link>
             <span>/</span>
-            <Link
+            {job.repo && !job.observationOnly ? <Link
               to={`/projects/id/${encodeURIComponent(owningProject.id)}/repos/${encodeURIComponent(job.repo)}/jobs`}
               className="hover:text-foreground"
             >
               {pathBasename(job.repo) || job.repo}
-            </Link>
+            </Link> : <span>External observation</span>}
             <span>/</span>
             {taskLink && (
               <>
@@ -693,7 +693,7 @@ export function JobDetailScreen() {
               <CuratedFeed
                 jobId={jobId}
                 sdk={job.sdk}
-                interactive
+                interactive={!job.observationOnly}
                 jobState={job.state}
                 pausable={isRunning}
                 prompt={job.prompt}
@@ -716,7 +716,7 @@ export function JobDetailScreen() {
 
 
 
-      {tab === "files" && (
+      {tab === "files" && hasWorktree && (
         <TabErrorBoundary>
           <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
             <WorkspaceBrowser jobId={jobId} />

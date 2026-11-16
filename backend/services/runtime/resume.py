@@ -81,7 +81,7 @@ async def ensure_resumable_worktree(host: RuntimeService, job_repo: JobRepositor
 
     git = GitService(host._config)
     try:
-        new_wt = await git.reattach_worktree(job.repo, job.id, job.branch)
+        new_wt = await git.reattach_worktree(job.execution_repo, job.id, job.branch)
         await job_repo.update_worktree_path(job.id, new_wt)
         job.worktree_path = new_wt
         log.info("worktree_reattached", job_id=job.id, path=new_wt)
@@ -531,9 +531,9 @@ async def create_followup_job(host: RuntimeService, job_id: str, instruction: st
         )
         followup = await svc.create_job(
             JobSpec(
-                repo=original.repo,
+                repo=original.execution_repo,
                 prompt=normalized_instruction,
-                base_ref=original.base_ref,
+                base_ref=original.execution_base_ref,
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,

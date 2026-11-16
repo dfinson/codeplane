@@ -41,6 +41,7 @@ from backend.models.domain import (
     Resolution,
     ServiceInitError,
     SessionConfig,
+    StateConflictError,
 )
 from backend.models.events import (
     TRANSCRIPT_KINDS,
@@ -595,6 +596,8 @@ class RuntimeService:
         session_token: str | None = None,
     ) -> None:
         """Start the job if capacity allows, otherwise keep it queued."""
+        if job.observation_only:
+            raise StateConflictError("Observation-only history cannot enter the execution scheduler")
         IntegrationPolicy(self._config).require_enabled(job.sdk)
 
         # Open the built-in sidecar sessions for this job
@@ -742,10 +745,10 @@ class RuntimeService:
             await self._setup_action_policy(
                 job.id,
                 session_config,
-                job.worktree_path or job.repo,
+                job.execution_workspace,
                 job_preset=job.preset or "supervised",
                 job_prompt=job.prompt or "",
-                repo=job.repo,
+                repo=job.execution_repo,
             )
 
             await self._emit_setup_progress(job.id, "exploring_codebase")
@@ -905,8 +908,8 @@ class RuntimeService:
                 svc = self._make_job_service(session)
                 job = await svc.get_job(job_id)
             if job is not None:
-                worktree_path = job.worktree_path or job.repo
-                base_ref = job.base_ref
+                worktree_path = job.execution_workspace
+                base_ref = job.execution_base_ref
                 post_conflict_merge_requested = job.merge_status == GitMergeOutcome.conflict
         except DBAPIError:
             log.warning("diff_job_lookup_failed", job_id=job_id, exc_info=True)
@@ -1589,6 +1592,9 @@ class RuntimeService:
 
         Called by watchers after job creation or re-attachment.
         """
+        job = await self._get_job(job_id)
+        if job is not None and job.observation_only:
+            raise StateConflictError("Observation-only history cannot attach execution infrastructure")
         self._last_activity[job_id] = time.monotonic()
         self._external_generations[job_id] = uuid.uuid4().hex
 
@@ -1818,7 +1824,7 @@ class RuntimeService:
                 await self._persist_sdk_session_id(job_id, session_id)
 
             # Model downgrade: publish event, abort session, signal caller
-            if session_event.kind == EventKind.model_downgraded:
+            if session_event.kind == EventKind.model_downgraded and session_event.metadata.attempt_id is None:
                 requested = str(session_event.payload.get("requested_model", ""))
                 actual = str(session_event.payload.get("actual_model", ""))
                 log.warning(
@@ -2142,7 +2148,7 @@ class RuntimeService:
 
     async def _require_attempt_job(self, job_id: str) -> Job:
         job = await self._get_job(job_id)
-        if job is None or job.state != JobState.running or self._shutting_down:
+        if job is None or job.observation_only or job.state != JobState.running or self._shutting_down:
             raise AttemptBindingConflictError("Attempt admission requires a live running Job")
         if self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
             raise AttemptBindingConflictError("Job execution is gated")
@@ -2255,7 +2261,7 @@ class RuntimeService:
     async def _execution_token(self, job: Job | None, *, attempt_id: str | None = None) -> str | None:
         import hashlib
 
-        if job is None or job.state != JobState.running:
+        if job is None or job.observation_only or job.state != JobState.running:
             return None
         if attempt_id is not None:
             binding = self._attempt_bindings.get(job.id, attempt_id)
@@ -2341,6 +2347,8 @@ class RuntimeService:
         job = await self._get_job(job_id)
         if job is None:
             raise JobNotFoundError(f"Job {job_id} does not exist")
+        if job.observation_only:
+            raise StateConflictError("Observation-only history has no instruction channel")
         IntegrationPolicy(self._config).require_enabled(job.sdk)
         if job.source == JobSource.managed:
             return await self.send_message(job_id, content)
@@ -2853,13 +2861,13 @@ class RuntimeService:
         import contextlib
 
         worktree_path = job.worktree_path
-        if not worktree_path or worktree_path == job.repo:
+        if job.observation_only or not worktree_path or worktree_path == job.repo:
             return  # main worktree — leave it alone
         from backend.services.git.git_service import GitError, GitService
 
         git = GitService(self._config)
         with contextlib.suppress(GitError, OSError):
-            await git.remove_worktree(job.repo, worktree_path)
+            await git.remove_worktree(job.execution_repo, worktree_path)
             log.info("worktree_cleaned_up", job_id=job.id, worktree=worktree_path)
 
     async def _try_create_pr(self, job_id: str) -> str | None:
@@ -2879,11 +2887,11 @@ class RuntimeService:
         if not REF_PATTERN.match(job.branch):
             log.warning("pr_creation_invalid_branch", job_id=job_id)
             return None
-        if not REF_PATTERN.match(job.base_ref):
+        if job.observation_only or not job.base_ref or not REF_PATTERN.match(job.base_ref):
             log.warning("pr_creation_invalid_base_ref", job_id=job_id)
             return None
 
-        adapter = await self._platform_registry.get_adapter(job.repo)
+        adapter = await self._platform_registry.get_adapter(job.execution_repo)
         pr_result = await adapter.create_pr(
             cwd=job.worktree_path,
             head=job.branch,
@@ -3327,7 +3335,7 @@ class RuntimeService:
         from backend.persistence.secondary_session_repo import SecondarySessionRepository
         from backend.services.tools.preflight_curator import PreflightReport
 
-        worktree_path = worktree_override or job.worktree_path or job.repo
+        worktree_path = worktree_override or job.execution_workspace
 
         if self._preflight_curator is None:
             log.debug("preflight_curator.not_configured", job_id=job.id)

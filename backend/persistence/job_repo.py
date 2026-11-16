@@ -100,6 +100,8 @@ class JobRepository(BaseRepository):
             parent_job_id=row.parent_job_id,
             source=row.source or "managed",
             external_session_id=row.external_session_id,
+            integration_binding_id=row.integration_binding_id,
+            observation_only=row.observation_only,
             tail_offset=row.tail_offset or 0,
             mode=JobMode(row.mode) if row.mode else JobMode.standard,
             artifact_collection_status=row.artifact_collection_status or "pending",
@@ -146,6 +148,8 @@ class JobRepository(BaseRepository):
             parent_job_id=job.parent_job_id,
             source=job.source,
             external_session_id=job.external_session_id,
+            integration_binding_id=job.integration_binding_id,
+            observation_only=job.observation_only,
             tail_offset=job.tail_offset,
             mode=job.mode,
             artifact_collection_status=job.artifact_collection_status,
@@ -169,6 +173,8 @@ class JobRepository(BaseRepository):
         row = result.scalar_one_or_none()
         if row is None:
             raise JobNotFoundError(f"Job {job_id!r} not found")
+        if row.observation_only:
+            return None
         if row.state not in {
             JobState.review.value,
             JobState.completed.value,
@@ -214,6 +220,7 @@ class JobRepository(BaseRepository):
         """Return terminal jobs without a completed current-session collection."""
         stmt = (
             select(JobRow.id)
+            .where(JobRow.observation_only.is_(False))
             .where(
                 JobRow.state.in_(
                     [

@@ -16,10 +16,6 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 import yaml
-from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
-from traceforge.config.mappings import resolve_mapping_path
-from traceforge.preprocessors import get_preprocessor
-from traceforge.sources.file_watch import FileWatchSource
 
 from backend.models.domain import JobState
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
@@ -49,6 +45,10 @@ def _advance_prefix(prefix: bytes, canonical: bytes) -> bytes:
 
 class _NativeIdentity:
     def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
+        from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
+        from traceforge.config.mappings import resolve_mapping_path
+        from traceforge.preprocessors import get_preprocessor
+
         resolved_mapping = resolve_mapping_path(framework)
         if resolved_mapping is None:
             raise ValueError(f"No native event mapping for framework {framework}")
@@ -233,6 +233,8 @@ class TraceForgeIngestBase:
         initial_skip_count: int,
         finalize_on_raw: Callable[[dict[str, Any]], tuple[bool, str | None]] | None,
     ) -> None:
+        from traceforge.sources.file_watch import FileWatchSource
+
         from backend.persistence.database import serialized_write
         from backend.persistence.event_repo import EventRepository
         from backend.persistence.job_repo import JobRepository

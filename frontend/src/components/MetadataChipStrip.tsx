@@ -133,16 +133,19 @@ function CostChip({ job, onCostClick }: { job: JobSummary; onCostClick?: () => v
 
 export function MetadataChipStrip({ job, hasMergeConflict, className, onCostClick }: MetadataChipStripProps) {
   const isPreparing = job.state === "preparing";
-  const repoName = pathBasename(job.repo) || job.repo;
+  const repoName = pathBasename(job.repo) || job.repo || "External observation";
   const navigate = useNavigate();
 
   return (
     <div className={cn("flex items-center gap-1.5 overflow-x-auto scrollbar-none", className)}>
       <Chip
-        className="cursor-pointer hover:bg-muted/80"
-        onClick={(e: React.MouseEvent) => { e.stopPropagation(); navigate(`/projects/${encodeURIComponent(job.repo)}`); }}
+        className={job.repo && !job.observationOnly ? "cursor-pointer hover:bg-muted/80" : undefined}
+        onClick={job.repo && !job.observationOnly ? (e: React.MouseEvent) => {
+          e.stopPropagation();
+          if (job.repo) navigate(`/projects/${encodeURIComponent(job.repo)}`);
+        } : undefined}
       ><FolderGit2 size={10} />{repoName}</Chip>
-      {job.branch && (
+      {job.branch && !job.observationOnly && (
         <Chip>{job.branch} → {job.baseRef}</Chip>
       )}
       {job.model && <Chip>{job.model}</Chip>}

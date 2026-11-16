@@ -54,7 +54,7 @@ function ResolutionBadge({ resolution }: { resolution: string }) {
 
 export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const navigate = useNavigate();
-  const repoName = pathBasename(job.repo) || job.repo;
+  const repoName = pathBasename(job.repo) || job.repo || "External observation";
   const transcript = useStore(selectJobTranscript(job.id));
   const lastSeenSeq = useViewStateStore((s) => s.lastSeenSeq[job.id]);
   const hasUnread = lastSeenSeq != null && transcript.some((e) => (e.sequence ?? 0) > lastSeenSeq);
@@ -81,22 +81,22 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
             </Tooltip>
           )}
           {job.resolution && !(job.state === "review" && job.resolution === "unresolved") && <ResolutionBadge resolution={job.resolution} />}
-          <StateBadge state={job.state} />
+          <StateBadge state={job.observationOnly ? "observing" : job.state} />
         </div>
       </div>
 
       <div className="flex items-center gap-1 mb-1">
         <FolderGit2 size={11} className="text-muted-foreground/60 shrink-0" />
-        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo}>{repoName}</span>
+        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo ?? undefined}>{repoName}</span>
       </div>
 
       <div className="flex items-center gap-2 mb-1">
-        <div className="flex items-center gap-1 min-w-0">
+        {!job.observationOnly && <div className="flex items-center gap-1 min-w-0">
           <GitBranch size={12} className="text-muted-foreground shrink-0" />
-          <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo}>
+          <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo ?? undefined}>
             {job.branch ?? repoName}
           </span>
-        </div>
+        </div>}
         <SdkBadge sdk={job.sdk} size="sm" />
       </div>
 

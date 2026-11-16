@@ -141,7 +141,11 @@ async def get_job_diff(
     files: list[DiffFileModel] = []
 
     # For active jobs with a worktree, calculate a fresh diff
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        not job.observation_only
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path and job.base_ref
+    ):
         try:
             files = await diff_service.calculate_diff(job.worktree_path, job.base_ref)
         except (GitError, OSError):
@@ -191,7 +195,11 @@ async def get_job_diff_file(
 
     file: DiffFileModel | None = None
 
-    if job.state in (JobState.running, JobState.waiting_for_approval) and job.worktree_path:
+    if (
+        not job.observation_only
+        and job.state in (JobState.running, JobState.waiting_for_approval)
+        and job.worktree_path and job.base_ref
+    ):
         try:
             file = await diff_service.calculate_diff_single_file(job.worktree_path, job.base_ref, path)
         except (GitError, OSError):

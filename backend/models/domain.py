@@ -208,6 +208,7 @@ class JobSource(StrEnum):
     managed = "managed"
     copilot_cli = "copilot_cli"
     claude_cli = "claude_cli"
+    integration = "integration"
 
 
 class InvalidStateTransitionError(CodePlaneError):
@@ -851,13 +852,13 @@ class Job:
     """
 
     id: str
-    repo: str
+    repo: str | None
     project_id: str
     """The Project that owns this repo (AD-5) — never null; a Job cannot
     exist without an owning Project."""
     prompt: str
     state: JobState
-    base_ref: str
+    base_ref: str | None
     branch: str | None
     worktree_path: str | None
     session_id: str | None
@@ -890,12 +891,31 @@ class Job:
     parent_job_id: str | None = None
     source: str = "managed"
     external_session_id: str | None = None
+    integration_binding_id: str | None = None
+    observation_only: bool = False
     tail_offset: int = 0
     mode: JobMode = JobMode.standard
     artifact_collection_status: str = "pending"
     artifact_collection_error: str | None = None
     artifact_collection_session_count: int = 0
     artifact_collection_updated_at: datetime | None = None
+
+    @property
+    def execution_repo(self) -> str:
+        if self.observation_only or not self.repo:
+            raise StateConflictError("Observation history has no executable repository")
+        return self.repo
+
+    @property
+    def execution_base_ref(self) -> str:
+        if self.observation_only or not self.base_ref:
+            raise StateConflictError("Observation history has no executable base reference")
+        return self.base_ref
+
+    @property
+    def execution_workspace(self) -> str:
+        repo = self.execution_repo
+        return self.worktree_path or repo
 
 
 @dataclass
