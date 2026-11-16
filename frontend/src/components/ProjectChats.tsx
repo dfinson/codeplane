@@ -51,6 +51,7 @@ export function ProjectChats() {
   const sendRequest = useRef(0);
   const messageReadRequest = useRef(0);
   const createRequest = useRef(0);
+  const activeChatId = useRef<string | null>(null);
   const drafts = useRef(new Map<string, { text: string; version: number }>());
   const draftGeneration = useRef(0);
   const invalidateSelection = useCallback(() => {
@@ -59,6 +60,7 @@ export function ProjectChats() {
     sendRequest.current += 1;
     messageReadRequest.current += 1;
     createRequest.current += 1;
+    activeChatId.current = null;
   }, []);
 
   useEffect(() => setNewChatProjectId(projectId ?? ""), [projectId]);
@@ -81,6 +83,7 @@ export function ProjectChats() {
 
   const selectChat = useCallback(async (chat: Chat) => {
     const request = ++selectionRequest.current;
+    activeChatId.current = chat.id;
     actionRequest.current += 1;
     sendRequest.current += 1;
     setSelected(chat);
@@ -218,8 +221,11 @@ export function ProjectChats() {
       if (turn.userMessage.chatId !== selectedChatId || (turn.assistantMessage && turn.assistantMessage.chatId !== selectedChatId)) {
         throw new Error("The response belongs to another Chat. Reload this conversation.");
       }
-      if (turn.state !== "error" && drafts.current.get(selectedChatId)?.version === draftVersion) {
+      const submittedDraft = drafts.current.get(selectedChatId);
+      if (turn.state !== "error" && submittedDraft && submittedDraft.version === draftVersion) {
         drafts.current.delete(selectedChatId);
+        setMessage((visible) => activeChatId.current === selectedChatId
+          && !drafts.current.has(selectedChatId) && visible === submittedDraft.text ? "" : visible);
       }
       if (!isCurrent()) return;
       setMessages((items) => [

@@ -89,6 +89,42 @@ beforeEach(() => {
 });
 
 describe("ProjectChats", () => {
+  it.each([false, true])("reconciles a submitted draft after returning before completion, newer edit=%s", async (newerEdit) => {
+    const other = { ...chat, id: "chat-2", title: "Other conversation" };
+    vi.mocked(fetchChats).mockResolvedValue({ items: [chat, other] });
+    let finish!: (value: Awaited<ReturnType<typeof sendChatTurn>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof sendChatTurn>>>((resolve) => { finish = resolve; });
+    vi.mocked(sendChatTurn).mockReturnValueOnce(pending);
+    renderChats();
+    const first = await screen.findByPlaceholderText("Write a message…");
+    await waitFor(() => expect(first).toBeEnabled());
+    fireEvent.change(first, { target: { value: "Submitted draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(sendChatTurn).toHaveBeenCalledWith("chat-1", "Submitted draft"));
+    fireEvent.click(screen.getByRole("link", { name: /Other conversation/i }));
+    await screen.findByRole("heading", { name: "Other conversation" });
+    fireEvent.click(screen.getByRole("link", { name: /Architecture/i }));
+    await screen.findByRole("heading", { name: "Architecture" });
+    const returned = screen.getByPlaceholderText("Write a message…");
+    await waitFor(() => expect(returned).toBeEnabled());
+    expect(returned).toHaveValue("Submitted draft");
+    if (newerEdit) {
+      fireEvent.change(returned, { target: { value: "Newer edit" } });
+      fireEvent.change(returned, { target: { value: "Submitted draft" } });
+    }
+    await act(async () => {
+      finish({
+        userMessage: { id: "sent-1", chatId: "chat-1", role: "user", content: "Submitted draft", createdAt: chat.createdAt },
+        assistantMessage: { id: "reply-1", chatId: "chat-1", role: "assistant", content: "Old assistant reply", createdAt: chat.createdAt },
+        state: "assistant", error: null,
+      });
+      await pending;
+    });
+    expect(returned).toHaveValue(newerEdit ? "Submitted draft" : "");
+    expect(screen.queryByText("Old assistant reply")).not.toBeInTheDocument();
+    expect(screen.queryByText("Assistant replied")).not.toBeInTheDocument();
+  });
+
   it("does not let a delayed attachment replace the newly selected Chat", async () => {
     const other = { ...chat, id: "chat-2", title: "Other conversation" };
     vi.mocked(fetchChats).mockResolvedValue({ items: [chat, other] });
