@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -64,7 +65,15 @@ class RecipeRunRow(Base):
     __tablename__ = "recipe_runs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    run_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    start_request_key: Mapped[str] = mapped_column(String, nullable=False)
+    continuation_of_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("recipe_runs.id", name="fk_recipe_run_continuation")
+    )
+    instruction: Mapped[str | None] = mapped_column(Text)
+    code_ref_json: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
     revision_id: Mapped[str] = mapped_column(String, ForeignKey("recipe_revisions.id"), nullable=False)
     snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
     snapshot_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -75,8 +84,16 @@ class RecipeRunRow(Base):
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     completed_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    resolved_at: Mapped[datetime | None] = mapped_column(TZDateTime)
 
     __table_args__ = (
+        UniqueConstraint("job_id", "run_number", name="uq_recipe_job_run_number"),
+        UniqueConstraint("start_request_key", name="uq_recipe_runs_start_request_key"),
+        CheckConstraint("run_number >= 1", name="ck_recipe_run_number"),
+        Index(
+            "uq_recipe_job_unresolved_run", "job_id", unique=True,
+            sqlite_where=text("resolved_at IS NULL"),
+        ),
         CheckConstraint(
             "state IN ('blocked','ready','running','needs_decision','succeeded',"
             "'failed','skipped','canceled','interrupted')",

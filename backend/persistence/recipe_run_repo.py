@@ -31,6 +31,7 @@ from backend.models.schemas.recipes import (
     RecipeAttemptExecution,
     RecipeAttemptResponse,
     RecipeAttemptResult,
+    RecipeCodeReference,
     RecipeCommandResult,
     RecipeGateProposal,
     RecipeHumanResult,
@@ -42,6 +43,7 @@ from backend.models.schemas.recipes import (
     RecipeParameterBinding,
     RecipeResolvedWorkspace,
     RecipeRevisionResponse,
+    RecipeRunListResponse,
     RecipeRunner,
     RecipeRunResponse,
     RecipeStepInstanceResponse,
@@ -67,6 +69,12 @@ class RecipeRunRepository(BaseRepository):
             {
                 "id": row.id,
                 "job_id": row.job_id,
+                "run_number": row.run_number,
+                "start_request_key": row.start_request_key,
+                "continuation_of_id": row.continuation_of_id,
+                "instruction": row.instruction,
+                "code_ref": json.loads(row.code_ref_json) if row.code_ref_json is not None else None,
+                "reason": row.reason,
                 "revision_id": row.revision_id,
                 "snapshot": json.loads(row.snapshot_json),
                 "snapshot_checksum": row.snapshot_checksum,
@@ -77,6 +85,7 @@ class RecipeRunRepository(BaseRepository):
                 "updated_at": row.updated_at,
                 "cancel_requested_at": row.cancel_requested_at,
                 "completed_at": row.completed_at,
+                "resolved_at": row.resolved_at,
             }
         )
 
@@ -113,7 +122,11 @@ class RecipeRunRepository(BaseRepository):
 
     async def get_for_job(self, job_id: str) -> RecipeRunResponse | None:
         row = await self._session.scalar(
-            select(RecipeRunRow).where(RecipeRunRow.job_id == job_id).execution_options(populate_existing=True)
+            select(RecipeRunRow)
+            .where(RecipeRunRow.job_id == job_id)
+            .order_by(RecipeRunRow.resolved_at.is_(None).desc(), RecipeRunRow.run_number.desc())
+            .limit(1)
+            .execution_options(populate_existing=True)
         )
         return self._run(row) if row else None
 
@@ -124,16 +137,65 @@ class RecipeRunRepository(BaseRepository):
         return self._run(row) if row else None
 
     async def create(
-        self, job_id: str, snapshot: RecipeRevisionResponse, inputs: dict[str, JsonValue]
+        self,
+        job_id: str,
+        snapshot: RecipeRevisionResponse,
+        inputs: dict[str, JsonValue],
+        *,
+        start_request_key: str | None = None,
+        continuation_of_id: str | None = None,
+        instruction: str | None = None,
+        code_ref: RecipeCodeReference | None = None,
+        allow_revision_change: bool = False,
     ) -> RecipeRunResponse:
-        now = datetime.now(UTC)
+        request_key = start_request_key or f"initial:{job_id}"
         checksum = content_checksum(snapshot.model_dump(mode="json", exclude_unset=True))
+        existing = await self._session.scalar(
+            select(RecipeRunRow)
+            .where(RecipeRunRow.start_request_key == request_key)
+            .execution_options(populate_existing=True)
+        )
+        if existing is not None:
+            result = self._run(existing)
+            if (
+                result.job_id != job_id
+                or result.snapshot_checksum != checksum
+                or result.inputs != inputs
+                or result.continuation_of_id != continuation_of_id
+                or result.instruction != instruction
+                or result.code_ref != code_ref
+            ):
+                raise StateConflictError("This run-start request already identifies different inputs or ownership.")
+            return result
+        current = await self.get_for_job(job_id)
+        if current is not None:
+            if current.resolved_at is None:
+                raise StateConflictError("The Job's current run is unresolved. Reconcile it before another run.")
+            if current.id != continuation_of_id:
+                raise StateConflictError("Only explicit Resume of the current resolved run can create its successor.")
+            if not start_request_key or not instruction or not instruction.strip() or code_ref is None:
+                raise StateConflictError(
+                    "Continuation requires an explicit request identity, instruction and code snapshot."
+                )
+            if snapshot.id != current.revision_id and not allow_revision_change:
+                raise StateConflictError(
+                    "Resume retains the selected revision unless a replacement is explicitly selected."
+                )
+        elif continuation_of_id is not None:
+            raise StateConflictError("The preceding run does not belong to this Job.")
+        now = datetime.now(UTC)
         run_id = str(uuid4())
+        run_number = (current.run_number if current else 0) + 1
         created = await self._session.scalar(
             insert(RecipeRunRow)
             .values(
                 id=run_id,
                 job_id=job_id,
+                run_number=run_number,
+                start_request_key=request_key,
+                continuation_of_id=continuation_of_id,
+                instruction=instruction,
+                code_ref_json=code_ref.model_dump_json() if code_ref is not None else None,
                 revision_id=snapshot.id,
                 snapshot_json=snapshot.model_dump_json(exclude_unset=True),
                 snapshot_checksum=checksum,
@@ -143,7 +205,7 @@ class RecipeRunRepository(BaseRepository):
                 created_at=now,
                 updated_at=now,
             )
-            .on_conflict_do_nothing(index_elements=["job_id"])
+            .on_conflict_do_nothing()
             .returning(RecipeRunRow.id)
         )
         if created is not None:
@@ -161,10 +223,132 @@ class RecipeRunRepository(BaseRepository):
                     )
                 )
             await self._session.flush()
-        result = await self.get_for_job(job_id)
+        stored = await self._session.scalar(select(RecipeRunRow).where(RecipeRunRow.start_request_key == request_key))
+        if stored is None:
+            raise StateConflictError("Another run start was admitted concurrently for this Job.")
+        return self._run(stored)
+
+    async def list_runs(
+        self, job_id: str, *, after: int = 0, limit: int = 30, high_water: int | None = None
+    ) -> RecipeRunListResponse:
+        if after < 0 or not 1 <= limit <= 100 or (high_water is not None and high_water < after):
+            raise StateConflictError("Invalid run history page.")
+        if high_water is None:
+            high_water = (
+                await self._session.scalar(
+                    select(func.max(RecipeRunRow.run_number)).where(RecipeRunRow.job_id == job_id)
+                )
+                or 0
+            )
+        rows = list(
+            await self._session.scalars(
+                select(RecipeRunRow)
+                .where(
+                    RecipeRunRow.job_id == job_id,
+                    RecipeRunRow.run_number > after,
+                    RecipeRunRow.run_number <= high_water,
+                )
+                .order_by(RecipeRunRow.run_number)
+                .limit(limit + 1)
+            )
+        )
+        return RecipeRunListResponse(
+            items=[self._run(row) for row in rows[:limit]],
+            next_cursor=rows[limit - 1].run_number if len(rows) > limit else None,
+            high_water=high_water,
+        )
+
+    async def resolve_run(self, run_id: str, state: RecipeState, *, reason: str | None = None) -> RecipeRunResponse:
+        if state not in {"succeeded", "failed", "skipped", "canceled"}:
+            raise StateConflictError("Only a terminal, reconciled run can be resolved.")
+        run = await self.get(run_id)
+        if run is None:
+            raise StateConflictError("Run does not exist.")
+        if run.resolved_at is not None:
+            if run.state != state:
+                raise StateConflictError("A resolved run's outcome is immutable.")
+            return run
+        active = await self._session.scalar(
+            select(RecipeStepInstanceRow.id)
+            .where(
+                RecipeStepInstanceRow.run_id == run_id,
+                RecipeStepInstanceRow.state.in_(("running", "needs_decision", "interrupted")),
+            )
+            .limit(1)
+        )
+        leased = await self._session.scalar(
+            select(RecipeWorkspaceLeaseRow.attempt_id)
+            .join(RecipeAttemptRow, RecipeAttemptRow.id == RecipeWorkspaceLeaseRow.attempt_id)
+            .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+            .where(RecipeStepInstanceRow.run_id == run_id)
+            .limit(1)
+        )
+        if active is not None or leased is not None:
+            raise StateConflictError("Execution or an uncertain workspace effect remains unresolved.")
+        pending = await self._session.scalar(
+            select(RecipeStepInstanceRow.id)
+            .where(RecipeStepInstanceRow.run_id == run_id, RecipeStepInstanceRow.state.in_(("ready", "blocked")))
+            .limit(1)
+        )
+        if state == "succeeded" and pending is not None:
+            raise StateConflictError("Unfinished steps cannot become a successful run.")
+        if state == "succeeded":
+            from backend.services.recipe.run_state import completed_run_state
+
+            roots = await self._session.scalars(
+                select(RecipeStepInstanceRow).where(
+                    RecipeStepInstanceRow.run_id == run_id,
+                    RecipeStepInstanceRow.step_path.in_([step.id for step in run.snapshot.definition.steps]),
+                )
+            )
+            instances = {row.step_path: self._step(row) for row in roots}
+            attempts = {}
+            for path, instance in instances.items():
+                if instance.current_attempt_id:
+                    attempt = await self.get_attempt(instance.current_attempt_id)
+                    if attempt is not None:
+                        attempts[path] = attempt
+            if completed_run_state(run.snapshot.definition, instances, attempts) != "succeeded":
+                raise StateConflictError("Recorded outcome routes do not permit a successful run.")
+            for name, export in run.snapshot.definition.outputs.items():
+                source = instances.get(export.binding.step_id)
+                producer = attempts.get(export.binding.step_id)
+                if (
+                    source is None
+                    or source.state != "succeeded"
+                    or producer is None
+                    or not any(
+                        output.name == export.binding.output
+                        and output.type == export.type
+                        and output.checksum == content_checksum(output.value)
+                        for output in producer.outputs
+                    )
+                ):
+                    raise StateConflictError(f"Required run output '{name}' is unavailable.")
+        now = datetime.now(UTC)
+        if pending is not None:
+            await self._session.execute(
+                update(RecipeStepInstanceRow)
+                .where(RecipeStepInstanceRow.run_id == run_id, RecipeStepInstanceRow.state.in_(("ready", "blocked")))
+                .values(
+                    state="canceled" if state == "canceled" else "skipped",
+                    reason="Run ended before dispatch.",
+                    updated_at=now,
+                    version=RecipeStepInstanceRow.version + 1,
+                )
+            )
+        changed = await self._session.scalar(
+            update(RecipeRunRow)
+            .where(RecipeRunRow.id == run_id, RecipeRunRow.version == run.version, RecipeRunRow.resolved_at.is_(None))
+            .values(
+                state=state, reason=reason, completed_at=now, resolved_at=now, updated_at=now, version=run.version + 1
+            )
+            .returning(RecipeRunRow.id)
+        )
+        if changed is None:
+            raise StateConflictError("Run changed before final resolution.")
+        result = await self.get(run_id)
         assert result is not None
-        if result.snapshot_checksum != checksum or result.inputs != inputs:
-            raise StateConflictError("This Job already owns a different pinned recipe run.")
         return result
 
     async def get_step(self, step_instance_id: str) -> RecipeStepInstanceResponse | None:
@@ -206,6 +390,11 @@ class RecipeRunRepository(BaseRepository):
                 RecipeStepInstanceRow.id == instance.id,
                 RecipeStepInstanceRow.version == instance.version,
                 RecipeStepInstanceRow.state.in_(("blocked", "failed", "ready")),
+                exists(
+                    select(RecipeRunRow.id).where(
+                        RecipeRunRow.id == RecipeStepInstanceRow.run_id, RecipeRunRow.resolved_at.is_(None)
+                    )
+                ),
             )
             .values(state=state, reason=reason, version=instance.version + 1, updated_at=datetime.now(UTC))
             .returning(RecipeStepInstanceRow)
@@ -335,6 +524,7 @@ class RecipeRunRepository(BaseRepository):
             .where(
                 RecipeRunRow.id == instance.run_id,
                 RecipeRunRow.state.in_(_ACTIVE_RUN_STATES),
+                RecipeRunRow.resolved_at.is_(None),
                 RecipeRunRow.cancel_requested_at.is_(None),
                 live_job,
             )
@@ -466,6 +656,10 @@ class RecipeRunRepository(BaseRepository):
         attempt = await self.get_attempt(attempt_id)
         if attempt is None or attempt.runner.kind != "agent" or attempt.result is not None:
             raise StateConflictError("Only a live agent attempt can register an SDK execution.")
+        instance = await self.get_step(attempt.step_instance_id)
+        run = await self.get(instance.run_id) if instance else None
+        if instance is None or run is None or run.resolved_at is not None or instance.current_attempt_id != attempt_id:
+            raise StateConflictError("The selected attempt no longer belongs to an unresolved run.")
         if len(attempt.executions) >= 100:
             raise StateConflictError("The attempt's retained execution limit is exhausted.")
         self._session.add(RecipeAttemptExecutionRow(attempt_id=attempt_id, **execution.model_dump()))
@@ -585,6 +779,8 @@ class RecipeRunRepository(BaseRepository):
             raise StateConflictError("The selected attempt is no longer current.")
         run = await self.get(instance.run_id)
         assert run is not None
+        if run.resolved_at is not None:
+            raise StateConflictError("A resolved run cannot accept another attempt outcome.")
         allowed_outcomes = set(instance.definition.routes) | {"failed", "interrupted", "canceled"}
         if result.outcome not in allowed_outcomes:
             raise StateConflictError("The runner returned an undeclared outcome.")
