@@ -7,6 +7,7 @@ import contextlib
 import time
 import uuid
 from datetime import UTC, datetime
+from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
@@ -86,22 +87,40 @@ class CopilotAdapter(BaseAgentAdapter):
             session_factory=session_factory,
         )
         self._sessions: dict[str, CopilotSession] = {}
+        self._cleanup_tasks: dict[str, asyncio.Task[None]] = {}
 
         # Tool-call buffer: tool_call_id -> {job_id, tool_name, arguments, intent, title, start}
         # Populated on tool.execution_start, drained on tool.execution_complete to
         # compute duration_ms and carry start-time context (re-homed from EventPipeline).
         self._tool_buf: dict[str, dict[str, Any]] = {}
 
-    def _cleanup_session(self, session_id: str) -> None:
-        """Remove session and queue references for a completed/aborted session.
+    async def _cleanup_session(self, session_id: str) -> None:
+        """Retain session ownership until cancellation-safe client closure finishes."""
+        task = self._cleanup_tasks.get(session_id)
+        if task is None:
+            task = asyncio.create_task(self._close_session(session_id), name=f"copilot-cleanup-{session_id}")
+            self._cleanup_tasks[session_id] = task
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            while True:
+                try:
+                    await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError as exc:
+                    if task.cancelled():
+                        raise
+                    cancelled = exc
+        finally:
+            if task.done():
+                self._cleanup_tasks.pop(session_id, None)
+        if cancelled is not None:
+            raise cancelled
 
-        Also stops the CopilotClient that owns the backing CLI server process
-        to prevent leaked child processes from accumulating over time.
-        """
-        self._sessions.pop(session_id, None)
+    async def _close_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)
         if client is not None:
-            asyncio.ensure_future(self._stop_client(client))
+            await self._stop_client(client)
+        self._sessions.pop(session_id, None)
         # Drop any un-drained tool-buffer entries for this job.
         job_id = self._session_to_job.get(session_id)
         if job_id:
@@ -114,17 +133,25 @@ class CopilotAdapter(BaseAgentAdapter):
     async def _stop_client(client: CopilotClient) -> None:
         """Stop a CopilotClient, terminating its CLI server process."""
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
+        from copilot.client import StopError
 
         try:
             await asyncio.wait_for(client.stop(), timeout=CLIENT_STOP_TIMEOUT_S)
+            return
         except TimeoutError:
             log.warning("copilot_client_stop_timeout_forcing")
-            with contextlib.suppress(ProcessExitedError, JsonRpcError, OSError):
-                await client.force_stop()
         except (ProcessExitedError, JsonRpcError, OSError):
             log.warning("copilot_client_stop_failed", exc_info=True)
-            with contextlib.suppress(ProcessExitedError, JsonRpcError, OSError):
-                await client.force_stop()
+        except ExceptionGroup as exc:
+            _, unexpected = exc.split(StopError)
+            if unexpected is not None:
+                raise
+            log.warning("copilot_client_stop_failed", exc_info=True)
+        try:
+            await asyncio.wait_for(client.force_stop(), timeout=CLIENT_STOP_TIMEOUT_S)
+        except (TimeoutError, TimeoutExpired, ProcessExitedError, JsonRpcError, OSError):
+            log.error("copilot_client_force_stop_failed", exc_info=True)
+            raise
 
     async def _handle_permission_request(
         self,
@@ -665,7 +692,7 @@ class CopilotAdapter(BaseAgentAdapter):
         try:
             await session.send(config.prompt, mode="immediate")
         except BaseException:
-            self._cleanup_session(session_id)
+            await self._cleanup_session(session_id)
             raise
         log.info("copilot_session_created", session_id=session_id)
         return str(session_id)
@@ -691,7 +718,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     return
                 yield event
         finally:
-            self._cleanup_session(session_id)
+            await self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
@@ -721,14 +748,13 @@ class CopilotAdapter(BaseAgentAdapter):
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
         session = self._sessions.get(session_id)
-        if session is None:
-            return
         try:
-            await session.abort()
-        except (JsonRpcError, ProcessExitedError):
+            if session is not None:
+                await asyncio.wait_for(session.abort(), timeout=CLIENT_STOP_TIMEOUT_S)
+        except (TimeoutError, JsonRpcError, ProcessExitedError):
             log.warning("copilot_abort_failed", session_id=session_id, exc_info=True)
         finally:
-            self._cleanup_session(session_id)
+            await self._cleanup_session(session_id)
 
     async def complete(
         self,
@@ -832,10 +858,4 @@ class CopilotAdapter(BaseAgentAdapter):
             log.error("complete_failed", prompt_len=len(prompt), exc_info=True)
             return CompletionResult()
         finally:
-            try:
-                cleanup_session = self._sessions.get(tmp_session_id)
-                if cleanup_session:
-                    await cleanup_session.abort()
-            except (JsonRpcError, ProcessExitedError):
-                log.warning("copilot_complete_cleanup_failed", session_id=tmp_session_id, exc_info=True)
-            self._cleanup_session(tmp_session_id)
+            await self.abort_session(tmp_session_id)

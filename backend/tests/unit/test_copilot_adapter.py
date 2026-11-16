@@ -112,6 +112,12 @@ class _FakeCopilotClient:
         self._sessions.append(session)
         return session
 
+    async def stop(self) -> None:
+        pass
+
+    async def force_stop(self) -> None:
+        pass
+
 
 def _build_fake_copilot_module() -> ModuleType:
     mod = ModuleType("copilot")
@@ -264,20 +270,201 @@ class TestSetJobId:
 
 
 class TestCleanupSession:
-    def test_cleanup_removes_all_state(self, adapter: CopilotAdapter) -> None:
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_all_state(self, adapter: CopilotAdapter) -> None:
         sid = "sess-1"
         adapter._sessions[sid] = MagicMock()
         adapter._queues[sid] = asyncio.Queue()
         adapter._session_to_job[sid] = "job-1"
 
-        adapter._cleanup_session(sid)
+        await adapter._cleanup_session(sid)
 
         assert sid not in adapter._sessions
         assert sid not in adapter._queues
         assert sid not in adapter._session_to_job
 
-    def test_cleanup_missing_session_noop(self, adapter: CopilotAdapter) -> None:
-        adapter._cleanup_session("nonexistent")  # should not raise
+    @pytest.mark.asyncio
+    async def test_cleanup_missing_session_noop(self, adapter: CopilotAdapter) -> None:
+        await adapter._cleanup_session("nonexistent")  # should not raise
+
+
+@pytest.fixture()
+async def closing_client() -> AsyncIterator[tuple[_FakeCopilotClient, asyncio.Event, asyncio.Event, asyncio.Event]]:
+    client = _FakeCopilotClient()
+    started, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def stop() -> None:
+        started.set()
+        await release.wait()
+        closed.set()
+
+    client.stop = AsyncMock(side_effect=stop)
+    client.force_stop = AsyncMock()
+    try:
+        yield client, started, release, closed
+    finally:
+        release.set()
+
+
+class TestOwnedClientShutdown:
+    @pytest.mark.asyncio
+    async def test_scout_cancellation_waits_for_client_shutdown(
+        self, adapter: CopilotAdapter, tmp_path: Path, closing_client: Any
+    ) -> None:
+        from backend.services.tools.preflight_curator import PreflightCurator
+
+        client, started, release, closed = closing_client
+        streaming = asyncio.Event()
+        original_stream = adapter.stream_events
+
+        async def observed_stream(session_id: str) -> AsyncIterator[SessionEvent]:
+            streaming.set()
+            async for event in original_stream(session_id):
+                yield event
+
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(adapter, "stream_events", observed_stream),
+        ):
+            task = asyncio.create_task(
+                PreflightCurator(adapter, model="utility-model").curate(
+                    "Inspect the code", repo=str(tmp_path), worktree=str(tmp_path)
+                )
+            )
+            try:
+                await asyncio.wait_for(streaming.wait(), timeout=5)
+                task.cancel()
+                await asyncio.wait_for(started.wait(), timeout=5)
+                await asyncio.sleep(0)
+                assert not task.done()
+                assert client in adapter._clients.values()
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert closed.is_set()
+                assert client not in adapter._clients.values()
+            finally:
+                release.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.wait_for(closed.wait(), timeout=5)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("operation", ["send_failure", "abort", "complete"])
+    async def test_other_teardown_paths_await_client_shutdown(
+        self, adapter: CopilotAdapter, closing_client: Any, operation: str
+    ) -> None:
+        client, started, release, closed = closing_client
+        session = _FakeCopilotSession()
+        client.create_session = AsyncMock(return_value=session)
+
+        async def send(*args: Any, **kwargs: Any) -> None:
+            if operation == "send_failure":
+                raise RuntimeError("initial send failed")
+            if operation == "complete":
+                session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="done")))
+
+        session.send = AsyncMock(side_effect=send)
+
+        async def run() -> None:
+            if operation == "complete":
+                await adapter.complete("hello")
+            else:
+                session_id = await adapter.create_session(_make_config())
+                await adapter.abort_session(session_id)
+
+        with patch("copilot.CopilotClient", return_value=client):
+            task = asyncio.create_task(run())
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+                assert not task.done()
+                assert client in adapter._clients.values()
+                release.set()
+                if operation == "send_failure":
+                    with pytest.raises(RuntimeError, match="initial send failed"):
+                        await task
+                else:
+                    await task
+                assert closed.is_set()
+                assert client not in adapter._clients.values()
+            finally:
+                release.set()
+                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.wait_for(closed.wait(), timeout=5)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_abort_and_repeated_cancellation_share_owned_shutdown(
+        self, adapter: CopilotAdapter, closing_client: Any
+    ) -> None:
+        client, started, release, closed = closing_client
+        adapter._sessions["session"] = _FakeCopilotSession()
+        adapter._clients["session"] = client
+        tasks = [asyncio.create_task(adapter.abort_session("session"))]
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            tasks[0].cancel()
+            await asyncio.sleep(0)
+            tasks[0].cancel()
+            await asyncio.sleep(0)
+            tasks.append(asyncio.create_task(adapter.abort_session("session")))
+            await asyncio.sleep(0)
+            assert all(not task.done() for task in tasks)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await tasks[0]
+            await tasks[1]
+            assert closed.is_set()
+            client.stop.assert_awaited_once()
+            assert "session" not in adapter._clients
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.wait_for(closed.wait(), timeout=5)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stop_failure", ["timeout", "sdk_error_group"])
+    async def test_failed_graceful_stop_forces_shutdown(self, adapter: CopilotAdapter, stop_failure: str) -> None:
+        client = _FakeCopilotClient()
+        if stop_failure == "timeout":
+            client.stop = AsyncMock(side_effect=asyncio.Event().wait)
+        else:
+            client.stop = AsyncMock(
+                side_effect=ExceptionGroup("SDK stop failed", [_fake_copilot_client_mod.StopError("detach failed")])
+            )
+        client.force_stop = AsyncMock()
+        adapter._sessions["session"] = _FakeCopilotSession()
+        adapter._clients["session"] = client
+        with patch("backend.services.copilot_adapter._adapter.CLIENT_STOP_TIMEOUT_S", 0.01):
+            await asyncio.wait_for(adapter.abort_session("session"), timeout=5)
+        client.force_stop.assert_awaited_once()
+        assert "session" not in adapter._clients
+
+    @pytest.mark.asyncio
+    async def test_hung_forced_stop_is_visible_and_keeps_client_owned(self, adapter: CopilotAdapter) -> None:
+        client = _FakeCopilotClient()
+        client.stop = AsyncMock(side_effect=OSError("graceful stop failed"))
+        client.force_stop = AsyncMock(side_effect=asyncio.Event().wait)
+        adapter._sessions["session"] = _FakeCopilotSession()
+        adapter._clients["session"] = client
+        with (
+            patch("backend.services.copilot_adapter._adapter.CLIENT_STOP_TIMEOUT_S", 0.01),
+            pytest.raises(TimeoutError),
+        ):
+            await adapter.abort_session("session")
+        assert adapter._clients["session"] is client
+
+    @pytest.mark.asyncio
+    async def test_hung_abort_still_closes_client(self, adapter: CopilotAdapter) -> None:
+        client = _FakeCopilotClient()
+        client.stop = AsyncMock()
+        session = _FakeCopilotSession()
+        session.abort = AsyncMock(side_effect=asyncio.Event().wait)
+        adapter._sessions["session"] = session
+        adapter._clients["session"] = client
+        with patch("backend.services.copilot_adapter._adapter.CLIENT_STOP_TIMEOUT_S", 0.01):
+            await asyncio.wait_for(adapter.abort_session("session"), timeout=5)
+        client.stop.assert_awaited_once()
+        assert "session" not in adapter._clients
 
 
 # ---------------------------------------------------------------------------
@@ -1333,7 +1520,7 @@ class TestComplete:
 
         with (
             patch("copilot.CopilotClient", return_value=_TimeoutClient()),
-            patch("asyncio.wait_for", side_effect=TimeoutError),
+            patch("backend.services.copilot_adapter._adapter.COMPLETION_TIMEOUT_S", 0.01),
         ):
             result = await adapter.complete("test prompt")
 
@@ -2008,11 +2195,12 @@ class TestPauseTools:
         )
         assert result.kind == "approve-once"
 
-    def test_cleanup_clears_paused_state(self) -> None:
+    @pytest.mark.asyncio
+    async def test_cleanup_clears_paused_state(self) -> None:
         """_cleanup_session removes the session from the paused set."""
         adapter = CopilotAdapter()
         adapter.pause_tools(self._SESSION_ID)
         assert self._SESSION_ID in adapter._paused_sessions
 
-        adapter._cleanup_session(self._SESSION_ID)
+        await adapter._cleanup_session(self._SESSION_ID)
         assert self._SESSION_ID not in adapter._paused_sessions
