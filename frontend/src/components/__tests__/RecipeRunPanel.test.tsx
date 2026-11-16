@@ -77,3 +77,21 @@ it("fences a delayed current-run response after changing Jobs", async () => {
   expect(useStore.getState().recipeCurrentRuns["old-job"]).toBeUndefined();
   expect(useStore.getState().recipeCurrentRuns["new-job"]?.id).toBe("new-job-run-2");
 });
+
+it("never displays the current definition for a pending or failed historical selection", async () => {
+  let rejectHistory: (error: Error) => void = () => { throw new Error("No historical read"); };
+  const delayed = new Promise<RecipeRun>((_resolve, reject) => { rejectHistory = reject; });
+  vi.mocked(fetchRecipeRun).mockImplementation((_job, id) => id.endsWith("1") ? delayed : Promise.resolve(run(2)));
+  render(<RecipeRunPanel jobId="job" />);
+  await screen.findByText("View pinned definition");
+  fireEvent.change(screen.getByLabelText("Recipe run history"), { target: { value: "job-run-1" } });
+  await screen.findByText("Reading selected historical run...");
+  expect(screen.queryByText("View pinned definition")).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Pinned recipe" })).not.toBeInTheDocument();
+  await act(async () => { rejectHistory(new Error("Historical record unavailable")); });
+  await screen.findByText("Selected run unavailable.");
+  expect(screen.getByRole("alert")).toHaveTextContent("Historical record unavailable");
+  expect(screen.queryByText("View pinned definition")).not.toBeInTheDocument();
+  expect(useStore.getState().recipeCurrentRuns.job?.id).toBe("job-run-2");
+  expect(resumeJob).not.toHaveBeenCalled();
+});

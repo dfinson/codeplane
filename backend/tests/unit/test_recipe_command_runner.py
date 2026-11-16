@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import select
 
 from backend.config import CPLConfig
+from backend.models.db import RecipeWorkspaceLeaseRow
 from backend.models.domain import ApprovalResolution, JobState, SessionConfig, StateConflictError
 from backend.models.execution_contracts import ExecutionContract, ImplementationPin
 from backend.models.schemas.recipes import (
@@ -65,6 +67,29 @@ def configure_test_contract(runtime):
         title=implementation,
     )
     runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
+
+
+async def test_unknown_command_start_cannot_succeed_or_release_the_writer(sessions, tmp_path, monkeypatch):
+    host, _, run, instance, attempt = await command_context(sessions, tmp_path, monkeypatch, "printf checked")
+    result, outputs = await CommandStepRunner(host).run(run, instance, attempt)
+    evidence = result.evidence.model_copy(update={"started": None})
+    result = result.model_copy(update={"evidence": evidence})
+    outputs["receipt"] = evidence.model_dump(mode="json")
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        await repository.finish_attempt(attempt.id, result, outputs)
+        await session.commit()
+        retained = await repository.get_attempt(attempt.id)
+        assert retained.result.outcome == "interrupted"
+        assert retained.result.evidence.uncertain
+        assert (
+            await session.scalar(
+                select(RecipeWorkspaceLeaseRow.attempt_id).where(RecipeWorkspaceLeaseRow.attempt_id == attempt.id)
+            )
+            == attempt.id
+        )
+        with pytest.raises(StateConflictError):
+            await repository.resolve_run(run.id, "succeeded")
 
 
 async def test_parallel_snapshot_preparation_reuses_one_complete_worktree(sessions, tmp_path, monkeypatch):

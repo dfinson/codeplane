@@ -6295,7 +6295,7 @@ export interface components {
              * Started
              * @default true
              */
-            started: boolean;
+            started: boolean | null;
             stdoutArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
             stderrArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
             /** Stdoutpreview */

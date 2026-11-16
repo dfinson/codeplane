@@ -52,6 +52,7 @@ function RecipeRunBrowser({ jobId, current }: { jobId: string; current: RecipeRu
   const [runError, setRunError] = useState<string | null>(null);
   const runId = selectedRunId ?? current.id;
   const selected = useStore((state) => state.recipeRuns[runId]);
+  const displayed = selected ?? (runId === current.id ? current : undefined);
   const historyKey = JSON.stringify([jobId, historyPage.after, historyPage.highWater]);
   const history = useStore((state) => state.recipeRunHistoryPages[historyKey]);
   useEffect(() => {
@@ -75,12 +76,14 @@ function RecipeRunBrowser({ jobId, current }: { jobId: string; current: RecipeRu
   }, [jobId, runId, refresh]);
   return <div className="space-y-4">
     <header className="space-y-2">
-      <h3 className="text-lg font-semibold">{(selected ?? current).snapshot.definition.name}</h3>
-      <p className="text-xs text-muted-foreground">Pinned run {(selected ?? current).runNumber} / revision {(selected ?? current).snapshot.revision}</p>
-      <details className="rounded-lg border border-border bg-card p-3">
-        <summary className="cursor-pointer text-sm font-medium">View pinned definition</summary>
-        <pre className="mt-3 whitespace-pre-wrap break-words text-xs">{JSON.stringify((selected ?? current).snapshot, null, 2)}</pre>
-      </details>
+      {displayed ? <>
+        <h3 className="text-lg font-semibold">{displayed.snapshot.definition.name}</h3>
+        <p className="text-xs text-muted-foreground">Pinned run {displayed.runNumber} / revision {displayed.snapshot.revision}</p>
+        <details className="rounded-lg border border-border bg-card p-3">
+          <summary className="cursor-pointer text-sm font-medium">View pinned definition</summary>
+          <pre className="mt-3 whitespace-pre-wrap break-words text-xs">{JSON.stringify(displayed.snapshot, null, 2)}</pre>
+        </details>
+      </> : <p role="status" className="text-sm text-muted-foreground">{runError ? "Selected run unavailable." : "Reading selected historical run..."}</p>}
     </header>
     <div className="flex flex-wrap items-end gap-3">
       <label className="min-w-0 flex-1 text-xs text-muted-foreground">Run history
@@ -101,7 +104,7 @@ function RecipeRunBrowser({ jobId, current }: { jobId: string; current: RecipeRu
       {selected.id !== current.id && <p className="rounded-md border border-border bg-card p-3 text-sm">Historical run. Current instructions, approvals and completion are not inherited from this record.</p>}
       {selected.instruction && <p className="whitespace-pre-wrap text-sm">{selected.instruction}</p>}
       <RunSteps key={selected.id} jobId={jobId} run={selected} />
-    </> : <p role="status" className="text-sm text-muted-foreground">Reading selected run...</p>}
+    </> : null}
   </div>;
 }
 

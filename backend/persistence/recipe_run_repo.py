@@ -736,6 +736,14 @@ class RecipeRunRepository(BaseRepository):
             instance = self._step(row)
             if instance.definition.runner.kind in {"human", "block"} and instance.state == "running":
                 continue
+            if (
+                instance.state == "running"
+                and instance.definition.runner.kind == "agent"
+                and instance.current_attempt_id is not None
+                and (await self.completed_execution_text(instance.current_attempt_id))[0]
+            ):
+                resumed.add(instance.id)
+                continue
             if instance.state != "interrupted":
                 raise StateConflictError(
                     "A retained execution has no confirmed stop receipt. Reconcile it before recovery."
@@ -1156,7 +1164,9 @@ class RecipeRunRepository(BaseRepository):
         self._session.add(RecipeAttemptExecutionRow(attempt_id=attempt_id, **execution.model_dump()))
         await self._session.flush()
 
-    async def finish_execution_turn(self, attempt_id: str, execution_token: str, *, execution_epoch: str) -> None:
+    async def finish_execution_turn(
+        self, attempt_id: str, execution_token: str, *, execution_epoch: str, result_text: str | None = None
+    ) -> None:
         from backend.models.events import EventMetadata, new_event
         from backend.persistence.event_repo import EventRepository
 
@@ -1180,6 +1190,7 @@ class RecipeRunRepository(BaseRepository):
                     "attempt_id": attempt.id,
                     "execution_token": execution_token,
                     "native_session_id": attempt.executions[-1].session_id,
+                    "result_text": result_text,
                 },
                 event_id=f"recipe-execution-{execution_token}",
                 metadata=EventMetadata(
@@ -1192,6 +1203,60 @@ class RecipeRunRepository(BaseRepository):
                 ),
             )
         )
+
+    async def completed_execution_text(self, attempt_id: str) -> tuple[bool, str | None]:
+        """Read only the last registered execution's app-owned completion boundary."""
+        attempt = await self.get_attempt(attempt_id)
+        if attempt is None or attempt.runner.kind != "agent" or not attempt.executions:
+            return False, None
+        instance = await self.get_step(attempt.step_instance_id)
+        run = await self.get(instance.run_id) if instance else None
+        if instance is None or run is None:
+            raise StateConflictError("Completed execution ownership is missing.")
+        execution = attempt.executions[-1]
+        receipt = await self._session.scalar(
+            select(EventRow).where(EventRow.event_id == f"recipe-execution-{execution.execution_token}")
+        )
+        if receipt is None:
+            return False, None
+        metadata = json.loads(receipt.event_metadata)
+        payload = json.loads(receipt.payload)
+        if (
+            receipt.job_id != run.job_id
+            or receipt.kind != "recipe.execution.completed"
+            or metadata.get("source_framework") != "codeplane.recipe"
+            or metadata.get("integration_binding_id") is not None
+            or metadata.get("recipe_run_id") != run.id
+            or metadata.get("step_instance_id") != instance.id
+            or metadata.get("attempt_id") != attempt.id
+            or payload.get("attempt_id") != attempt.id
+            or payload.get("execution_token") != execution.execution_token
+            or payload.get("native_session_id") != execution.session_id
+        ):
+            raise StateConflictError("The completed-turn receipt has conflicting execution ownership.")
+        if "result_text" in payload:
+            text = payload["result_text"]
+            if text is not None and not isinstance(text, str):
+                raise StateConflictError("The completed-turn output snapshot is invalid.")
+            return True, text
+        message = await self._session.scalar(
+            select(EventRow)
+            .where(
+                EventRow.job_id == run.job_id,
+                EventRow.kind == "message.assistant",
+                EventRow.id < receipt.id,
+                func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+                func.json_extract(EventRow.event_metadata, "$.recipe_run_id") == run.id,
+                func.json_extract(EventRow.event_metadata, "$.attempt_id") == attempt.id,
+                func.json_extract(EventRow.event_metadata, "$.execution_token") == execution.execution_token,
+                func.json_extract(EventRow.event_metadata, "$.execution_epoch") == metadata.get("execution_epoch"),
+                func.json_extract(EventRow.event_metadata, "$.run_id") == execution.session_id,
+            )
+            .order_by(EventRow.id.desc())
+            .limit(1)
+        )
+        text = json.loads(message.payload).get("content") if message else None
+        return True, text if isinstance(text, str) else None
 
     async def agent_progress(self, attempt_id: str) -> tuple[int, RecipeAgentResult, bool]:
         attempt = await self.get_attempt(attempt_id)
@@ -1376,7 +1441,14 @@ class RecipeRunRepository(BaseRepository):
                 raise StateConflictError(
                     "Command evidence belongs to a different invocation or code/workspace reference."
                 )
-            if not command_evidence.started and result.outcome == "succeeded":
+            if command_evidence.started is None:
+                result = result.model_copy(
+                    update={
+                        "evidence": command_evidence.model_copy(update={"uncertain": True}),
+                        "reason": "Whether the command started is unconfirmed.",
+                    }
+                )
+            elif command_evidence.started is False and result.outcome == "succeeded":
                 result = result.model_copy(update={"outcome": "failed"})
             elif command_evidence.started and (
                 command_evidence.exit_status is None

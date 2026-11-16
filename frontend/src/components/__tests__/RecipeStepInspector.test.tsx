@@ -99,6 +99,20 @@ describe("RecipeStepInspector", () => {
     expect(fetchRecipeAttempt).not.toHaveBeenCalledWith("new-job", "run", "new", "old-2");
   });
 
+  it("labels unconfirmed command startup as unknown", async () => {
+    const value = attempt();
+    if (!value.attempt.result || value.attempt.result.evidence.kind !== "command") throw new Error("Command fixture missing");
+    value.attempt.result.evidence.started = null;
+    value.attempt.result.evidence.uncertain = true;
+    value.attempt.result.outcome = "interrupted";
+    vi.mocked(fetchRecipeAttempt).mockResolvedValue(value);
+    render(<RecipeStepInspector jobId="job" runId="run" stepId="check" />);
+    await screen.findByText("Check check");
+    fireEvent.click(screen.getByText("Output", { selector: "span" }));
+    expect(await screen.findByText("Unknown")).toBeInTheDocument();
+    expect(screen.getByText(/Effects are uncertain/)).toBeInTheDocument();
+  });
+
   it("retries only the selected read after an error and refreshes from recipe events", async () => {
     vi.mocked(fetchRecipeStep).mockRejectedValueOnce(new Error("Snapshot unavailable"));
     render(<RecipeStepInspector jobId="job" runId="run" stepId="check" />);
