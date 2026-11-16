@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -50,13 +51,23 @@ def value_matches(value: JsonValue, expected: RecipeValueType) -> bool:
         return isinstance(value, list)
     if expected == "object":
         return isinstance(value, dict)
+    if not isinstance(value, dict):
+        return False
+    workspace = value.get("workspace")
+    commit = value.get("commit")
     return (
-        isinstance(value, dict)
-        and isinstance(value.get("workspace"), str)
-        and bool(value["workspace"])
-        and isinstance(value.get("commit"), str)
-        and bool(value["commit"])
+        isinstance(workspace, str)
+        and bool(workspace)
+        and isinstance(commit, str)
+        and re.fullmatch(r"[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", commit) is not None
     )
+
+
+def outcome_routes(step: RecipeStep) -> dict[str, RecipeRoute]:
+    routes = dict(step.routes)
+    if "failed" in step.retry.retry_on:
+        routes["failed"] = step.retry.exhaustion
+    return routes
 
 
 def validate_definition(
@@ -93,13 +104,16 @@ def validate_definition(
         if route:
             route_edges[source].add(target)
 
-    def check_route(step: RecipeStep, route: RecipeRoute, path: str) -> None:
+    def check_route(step: RecipeStep, route: RecipeRoute, path: str, *, active: bool = True) -> None:
         if bool(route.next_steps) == bool(route.terminal):
             error(path, "invalid_route", "Choose successor steps or a terminal outcome, not both or neither.")
         if len(route.next_steps) != len(set(route.next_steps)):
             error(path, "duplicate_target", "Route targets must be unique.")
         for target in route.next_steps:
-            connect(step.id, target, path, route=True)
+            if active:
+                connect(step.id, target, path, route=True)
+            elif target not in steps:
+                error(path, "unknown_step", f"Step '{target}' does not exist.")
 
     for entry in definition.entry_steps:
         if entry not in steps:
@@ -120,8 +134,18 @@ def validate_definition(
         if set(step.routes) - outcomes:
             error(f"{path}.routes", "unknown_outcome", "Routes must use runner outcomes, not titles or prose.")
         for outcome, route in step.routes.items():
-            check_route(step, route, f"{path}.routes.{outcome}")
-        check_route(step, step.retry.exhaustion, f"{path}.retry.exhaustion")
+            check_route(
+                step,
+                route,
+                f"{path}.routes.{outcome}",
+                active=outcome != "failed" or "failed" not in step.retry.retry_on,
+            )
+        check_route(
+            step,
+            step.retry.exhaustion,
+            f"{path}.retry.exhaustion",
+            active="failed" in step.retry.retry_on,
+        )
         if step.retry.max_attempts > 1 and not step.retry.retry_on:
             error(f"{path}.retry", "missing_retry_condition", "Bounded retries need explicit retry conditions.")
         if isinstance(runner, RecipeHumanRunner):
@@ -140,10 +164,41 @@ def validate_definition(
         if isinstance(runner, RecipeAgentRunner) and not step.instructions.strip():
             error(f"{path}.instructions", "missing_instructions", "Agent steps need explicit instructions.")
         if isinstance(runner, RecipeCommandRunner):
-            if not runner.argv or any(not arg or "\x00" in arg for arg in runner.argv):
+            if (
+                not runner.argv
+                or not isinstance(runner.argv[0], str)
+                or not runner.argv[0]
+                or any("\x00" in arg for arg in runner.argv if isinstance(arg, str))
+            ):
                 error(f"{path}.runner.argv", "missing_command", "Supply an executable and exact argument list.")
+            for index, argument in enumerate(runner.argv):
+                if isinstance(argument, str):
+                    continue
+                argument_input = step.inputs.get(argument.input)
+                if argument_input is None or argument_input.optional:
+                    error(
+                        f"{path}.runner.argv.{index}",
+                        "missing_command_input",
+                        "Command arguments must bind a required declared input.",
+                    )
+                elif (argument.field is not None and argument_input.type != "code_ref") or (
+                    argument.field is None and argument_input.type in {"code_ref", "object", "array"}
+                ):
+                    error(
+                        f"{path}.runner.argv.{index}",
+                        "invalid_command_input",
+                        "Use a scalar input or select the workspace/commit field of a code reference.",
+                    )
             if "shell" not in step.capabilities:
                 error(f"{path}.capabilities", "missing_capability", "Command steps require the shell capability.")
+        if step.workspace.source_input is not None:
+            workspace_input = step.inputs.get(step.workspace.source_input)
+            if workspace_input is None or workspace_input.type != "code_ref" or workspace_input.optional:
+                error(
+                    f"{path}.workspace.sourceInput",
+                    "invalid_workspace_source",
+                    "Bind the workspace source to a required code_ref input.",
+                )
         if "write" in step.capabilities and step.workspace.mode not in {"mutable", "isolated"}:
             error(f"{path}.workspace", "write_workspace", "Writers need a mutable or isolated workspace.")
         if step.workspace.mode == "none" and step.capabilities:
@@ -177,6 +232,31 @@ def validate_definition(
                 queue.append(target)
     if len(visited) != len(steps):
         error("steps", "cycle", "Dependencies and outcome routes must be acyclic. Use a bounded retry policy.")
+
+    # Mandatory branch conditions prove exclusion; the runtime lease remains
+    # authoritative even when two conditional paths cannot be selected together.
+    conditions: dict[str, dict[str, set[str]]] = {key: {} for key in steps}
+    for key in visited:
+        candidates: list[dict[str, set[str]]] = []
+        if key in definition.entry_steps:
+            candidates.append({})
+        for source_id, source_step in steps.items():
+            selected = {outcome for outcome, route in outcome_routes(source_step).items() if key in route.next_steps}
+            if selected:
+                candidate = {name: set(values) for name, values in conditions[source_id].items()}
+                candidate[source_id] = selected
+                candidates.append(candidate)
+        if candidates:
+            common = set.intersection(*(set(candidate) for candidate in candidates))
+            conditions[key] = {name: set.union(*(candidate[name] for candidate in candidates)) for name in common}
+        for dependency in steps[key].depends_on:
+            if dependency.step_id not in conditions:
+                continue
+            required = {**conditions[dependency.step_id], dependency.step_id: set(dependency.outcomes)}
+            for source_id, allowed in required.items():
+                conditions[key][source_id] = conditions[key].get(source_id, set(allowed)) & allowed
+                if not conditions[key][source_id]:
+                    error(f"steps.{key}", "impossible_join", "Required branch decisions are mutually exclusive.")
 
     reachable: set[str] = set()
     queue = deque(key for key in definition.entry_steps if key in steps)
@@ -217,10 +297,19 @@ def validate_definition(
                 error(path, "type_mismatch", f"Output is {output.type}, input requires {port.type}.")
             if binding.step_id not in ancestors[step.id]:
                 error(path, "unordered_input", "The producing step must precede this consumer.")
+            producing_outcomes = (
+                set(source.runner.decisions)
+                if source is not None and isinstance(source.runner, RecipeHumanRunner)
+                else {"succeeded"}
+            )
             if not port.optional and not any(
-                dep.step_id == binding.step_id and dep.outcomes == ["succeeded"] for dep in step.depends_on
+                dep.step_id == binding.step_id and set(dep.outcomes) <= producing_outcomes for dep in step.depends_on
             ):
-                error(path, "unprotected_input", "Required outputs need an explicit successful producer dependency.")
+                error(
+                    path,
+                    "unprotected_input",
+                    "Required outputs need a successful producer or explicit human decision dependency.",
+                )
 
     for step in definition.steps:
         for name, port in step.inputs.items():
@@ -275,6 +364,11 @@ def validate_definition(
     for index, left in enumerate(writers):
         for right in writers[index + 1 :]:
             if left.id in ancestors[right.id] or right.id in ancestors[left.id]:
+                continue
+            if any(
+                not (conditions[left.id][source_id] & conditions[right.id][source_id])
+                for source_id in conditions[left.id].keys() & conditions[right.id].keys()
+            ):
                 continue
             if left.workspace.mode != "isolated" or right.workspace.mode != "isolated":
                 error(

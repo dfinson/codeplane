@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__head"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__head"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__head"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__head"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__head"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__head"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -5718,6 +5718,13 @@ export interface components {
             /** Revisionid */
             revisionId: string;
         };
+        /** RecipeCommandArgument */
+        RecipeCommandArgument: {
+            /** Input */
+            input: string;
+            /** Field */
+            field?: ("workspace" | "commit") | null;
+        };
         /** RecipeCommandRunner */
         RecipeCommandRunner: {
             /**
@@ -5726,7 +5733,7 @@ export interface components {
              */
             kind: "command";
             /** Argv */
-            argv?: string[];
+            argv?: (string | components["schemas"]["RecipeCommandArgument"])[];
             /**
              * Timeoutseconds
              * @default 300
@@ -5823,8 +5830,14 @@ export interface components {
              * @default
              */
             proposedAction: string;
-            /** Decisions */
-            decisions?: string[];
+            /**
+             * Decisions
+             * @default [
+             *       "approved",
+             *       "rejected"
+             *     ]
+             */
+            decisions: ("approved" | "rejected")[];
         };
         /** RecipeInput */
         RecipeInput: {
@@ -6027,6 +6040,8 @@ export interface components {
              * @default job
              */
             key: string;
+            /** Sourceinput */
+            sourceInput?: string | null;
         };
         /** ReconcileTrackerOperationRequest */
         ReconcileTrackerOperationRequest: {
@@ -11319,7 +11334,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11349,7 +11364,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11379,7 +11394,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11409,7 +11424,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11439,7 +11454,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11469,7 +11484,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__head: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;

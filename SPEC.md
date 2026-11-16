@@ -82,6 +82,19 @@ output-receipt, workspace-lease and review storage. Recipe gates reference
 existing approval records. Existing Jobs and transcript steps are not backfilled
 with invented recipe identities.
 
+Attempt admission persists the exact typed inputs and dispatch identity before
+runner start. Retries retain their earlier inputs, results and output checksums
+and cannot exceed the published total-attempt bound. Writer and shell attempts
+hold a canonical workspace lease. Uncertain effects retain that lease and
+remain interrupted rather than entering a blind retry.
+
+Successful dependency joins require their declared outcomes. An explicitly
+degraded input can retain a known failed diagnostic receipt, its producing
+attempt, original outcome and reason without treating it as successful output.
+Human decisions bind the existing ApprovalService record to the exact input
+checksum, action and next steps. Nonzero command status cannot become success
+through a runner claim, and missing command capture remains interrupted.
+
 ### Existing runtime guarantees
 
 `runtime.copilot_only` defaults to true. This restricts CodePlane-managed
