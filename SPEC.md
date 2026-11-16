@@ -113,6 +113,14 @@ Human decisions bind the existing ApprovalService record to the exact input
 checksum, action and next steps. Nonzero command status cannot become success
 through a runner claim, and missing command capture remains interrupted.
 
+Migration 0078 retains multiple historical runs on the same Job and permits only
+one unresolved run, including canceled runs with uncertain execution effects.
+Explicit terminal continuation pins a new run with the instruction and current
+code reference, retaining the selected revision unless a replacement was
+explicitly selected. Old attempts, results and approvals are not copied. Run
+numbers provide a deterministic current-run selector and bounded history cursor;
+exact historical run and step identities remain addressable.
+
 ### Existing runtime guarantees
 
 `runtime.copilot_only` defaults to true. This restricts CodePlane-managed

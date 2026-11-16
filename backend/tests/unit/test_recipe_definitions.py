@@ -11,11 +11,11 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from pydantic import ValidationError
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from alembic import command
-from backend.models.db import ApprovalRow, Base, JobRow, ProjectRow, RecipeRevisionRow, RecipeRunRow
+from backend.models.db import ApprovalRow, Base, JobRow, RecipeRevisionRow, RecipeRunRow
 from backend.models.domain import StateConflictError
 from backend.models.schemas.recipes import (
     RecipeAgentRunner,
@@ -369,13 +369,17 @@ def test_migration_matches_recipe_models_and_preserves_legacy_rows(tmp_path: Pat
         now = datetime.now(UTC)
         with engine.begin() as connection:
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            old_metadata = MetaData()
+            old_projects = Table("projects", old_metadata, autoload_with=connection)
+            old_jobs = Table("jobs", old_metadata, autoload_with=connection)
+            old_approvals = Table("approvals", old_metadata, autoload_with=connection)
             connection.execute(
-                ProjectRow.__table__.insert().values(
+                old_projects.insert().values(
                     id="project", name="Existing", repo_paths='["/repo"]', created_at=now, updated_at=now
                 )
             )
             connection.execute(
-                JobRow.__table__.insert().values(
+                old_jobs.insert().values(
                     id="legacy",
                     project_id="project",
                     repo="/repo",
@@ -384,14 +388,24 @@ def test_migration_matches_recipe_models_and_preserves_legacy_rows(tmp_path: Pat
                     base_ref="main",
                     created_at=now,
                     updated_at=now,
+                    permission_mode="full_auto",
+                    session_count=1,
+                    preset="supervised",
+                    sdk="copilot",
+                    source="managed",
+                    version=1,
+                    mode="standard",
+                    tail_offset=0,
+                    artifact_collection_status="pending",
+                    artifact_collection_session_count=0,
                 )
             )
             connection.execute(
-                ApprovalRow.__table__.insert().values(
+                old_approvals.insert().values(
                     id="approval", job_id="legacy", description="Pending tracker action", requested_at=now
                 )
             )
-        command.upgrade(config, "0076")
+        command.upgrade(config, "0078")
         with engine.connect() as connection:
             context = MigrationContext.configure(
                 connection,

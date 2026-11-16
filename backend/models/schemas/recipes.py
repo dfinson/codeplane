@@ -307,6 +307,11 @@ class RecipeResolvedWorkspace(RecipeModel):
     policy: RecipeWorkspacePolicy
 
 
+class RecipeCodeReference(RecipeModel):
+    workspace: str = Field(min_length=1)
+    commit: str = Field(pattern=r"^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$")
+
+
 class RecipeAttemptResponse(RecipeModel):
     id: str
     step_instance_id: str
@@ -337,6 +342,12 @@ class RecipeStepInstanceResponse(RecipeModel):
 class RecipeRunResponse(RecipeModel):
     id: str
     job_id: str
+    run_number: int
+    start_request_key: str
+    continuation_of_id: str | None
+    instruction: str | None
+    code_ref: RecipeCodeReference | None
+    reason: str | None
     revision_id: str
     snapshot: RecipeRevisionResponse
     snapshot_checksum: str
@@ -347,3 +358,10 @@ class RecipeRunResponse(RecipeModel):
     updated_at: datetime
     cancel_requested_at: datetime | None
     completed_at: datetime | None
+    resolved_at: datetime | None
+
+
+class RecipeRunListResponse(RecipeModel):
+    items: list[RecipeRunResponse]
+    next_cursor: int | None
+    high_water: int
