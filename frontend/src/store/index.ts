@@ -331,6 +331,13 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  recipeCurrentRuns: {},
+  recipeRuns: {},
+  recipeRunHistoryPages: {},
+  recipeStepPages: {},
+  recipeStepInspections: {},
+  recipeAttemptInspections: {},
+  recipeVersions: {},
   trackerOperations: {},
   trackerOperationLoads: {},
   jobs: {},

@@ -26,6 +26,7 @@ interface ViewTabBarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   hasChanges?: boolean;
+  hasRecipe?: boolean;
   hasArtifacts?: boolean;
   artifactCount?: number;
   hasWorktree?: boolean;
@@ -52,6 +53,7 @@ export function ViewTabBar({
   activeTab,
   onTabChange,
   hasChanges = false,
+  hasRecipe = false,
   hasArtifacts = false,
   artifactCount = 0,
   hasWorktree = false,
@@ -72,9 +74,9 @@ export function ViewTabBar({
         return true;
       }).map((tab) => ({
         id: tab.id,
-        label: tab.label,
+        label: tab.id === "live" && hasRecipe ? "Run" : tab.label,
         icon: tab.icon,
-        tip: tab.tip,
+        tip: tab.id === "live" && hasRecipe ? "Pinned recipe steps, attempts and evidence" : tab.tip,
         badgeCount: tab.id === "artifacts" ? artifactCount : undefined,
       }));
 

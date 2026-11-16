@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import TypeAdapter
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.sqlite import insert
 
 from backend.models.db import RecipeDefinitionRow, RecipeRevisionRow
 from backend.models.domain import StateConflictError
@@ -121,6 +122,41 @@ class RecipeRepository(BaseRepository):
     async def get_revision(self, revision_id: str) -> RecipeRevisionResponse | None:
         row = await self._session.scalar(select(RecipeRevisionRow).where(RecipeRevisionRow.id == revision_id))
         return self._revision(row) if row is not None else None
+
+    async def ensure_configured_revision(
+        self, definition: RecipeDefinition, checksum: str, *, now: datetime
+    ) -> RecipeRevisionResponse:
+        definition_id = f"configured-{checksum}"
+        revision_id = f"{definition_id}-1"
+        await self._session.execute(
+            insert(RecipeDefinitionRow)
+            .values(
+                id=definition_id,
+                definition_json=definition.model_dump_json(exclude_unset=True),
+                version=2,
+                latest_revision=1,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        await self._session.execute(
+            insert(RecipeRevisionRow)
+            .values(
+                id=revision_id,
+                definition_id=definition_id,
+                revision=1,
+                definition_json=definition.model_dump_json(exclude_unset=True),
+                blocks_json="{}",
+                checksum=checksum,
+                published_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        revision = await self.get_revision(revision_id)
+        if revision is None or revision.checksum != checksum:
+            raise StateConflictError("The configured recipe publication is missing or has conflicting content.")
+        return revision
 
     async def list_drafts(self, *, after: int, limit: int, high_water: int | None) -> RecipeDraftListResponse:
         maximum = high_water

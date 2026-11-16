@@ -106,6 +106,7 @@ export function useSSE(jobId?: string): { reconnect: () => void } {
         "job.resolved",
         "job.archived",
         "job.title_updated",
+        "recipe.updated",
         "model.downgraded",
         "merge.completed",
         "merge.conflict",

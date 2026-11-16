@@ -28,6 +28,7 @@ import { pathBasename } from "../lib/paths";
 
 import { JobHeaderCard } from "./JobHeaderCard";
 import { MobileBottomNav, MobileFooterActions } from "./JobDetailMobile";
+import { RecipeRunPanel } from "./RecipeRunPanel";
 
 const WorkspaceBrowser = lazyRetry(() => import("./WorkspaceBrowser"));
 const ArtifactViewer = lazyRetry(() => import("./ArtifactViewer"));
@@ -64,6 +65,7 @@ export function JobDetailScreen() {
   const navigate = useNavigate();
   const jobs = useStore(selectJobs);
   const job: JobSummary | undefined = jobId ? jobs[jobId] : undefined;
+  const recipeRun = useStore((state) => jobId ? state.recipeCurrentRuns[jobId] : undefined);
   const [loading, setLoading] = useState(!job);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -221,7 +223,7 @@ export function JobDetailScreen() {
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2 || dt > 400) return;
 
     // Activity overlay: swipe right (dx>0) on Live opens it; swipe left (dx<0) when open closes it
-    if (dx > 0 && tab === "live" && !mobileActivityOpen) {
+    if (dx > 0 && tab === "live" && recipeRun === null && !mobileActivityOpen) {
       setMobileActivityOpen(true);
       return;
     }
@@ -242,7 +244,7 @@ export function JobDetailScreen() {
     setSlideDir(null);
     requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
     handleTabChange(nextTab);
-  }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable]);
+  }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable, recipeRun]);
 
   const handleViewStepChanges = useCallback((filePaths: string[], label: string, seq?: number, turnId?: string) => {
     setStepFilter({ filePaths, label, scrollToSeq: seq, turnId });
@@ -617,6 +619,7 @@ export function JobDetailScreen() {
 
       {/* ── Desktop: View tab bar ── */}
       <ViewTabBar
+        hasRecipe={Boolean(recipeRun)}
         activeTab={tab}
         onTabChange={handleTabChange}
         hasChanges={hasChanges}
@@ -644,7 +647,10 @@ export function JobDetailScreen() {
       >
         {/* ── Content panel ── */}
         <div className="flex-1 min-w-0 md:flex md:flex-col md:overflow-hidden">
-      {tab === "live" && (
+      <div className={cn("min-h-0 flex-1 overflow-auto pt-3", (tab !== "live" || recipeRun === null) && "hidden")}>
+        <RecipeRunPanel jobId={jobId} />
+      </div>
+      {tab === "live" && recipeRun === null && (
         <div className="flex flex-row relative md:h-full md:min-h-0">
           {/* ── Activity panel — part of the Live view ── */}
           <ActivityPanel
@@ -773,6 +779,7 @@ export function JobDetailScreen() {
 
       {/* ── Mobile bottom tab bar (iOS-style) ── */}
       <MobileBottomNav
+        hasRecipe={Boolean(recipeRun)}
         tab={tab}
         handleTabChange={handleTabChange}
         hasChanges={hasChanges}

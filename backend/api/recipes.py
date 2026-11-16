@@ -6,6 +6,7 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import CPLConfig
 from backend.models.api_schemas import (
     CopyRecipeRequest,
     PublishRecipeRequest,
@@ -15,6 +16,7 @@ from backend.models.api_schemas import (
     RecipeRevisionListResponse,
     RecipeRevisionResponse,
     RecipeValidationResult,
+    ResolveDefaultRecipeRequest,
     SaveRecipeDraftRequest,
 )
 from backend.services.recipe.definition_service import RecipeDefinitionService
@@ -48,6 +50,18 @@ async def validate_recipe(
     body: RecipeDefinition, service: FromDishka[RecipeDefinitionService]
 ) -> RecipeValidationResult:
     return await service.validate(body)
+
+
+@router.post("/resolve-default", response_model=RecipeRevisionResponse, response_model_exclude_unset=True)
+async def resolve_default_recipe(
+    body: ResolveDefaultRecipeRequest,
+    service: FromDishka[RecipeDefinitionService],
+    config: FromDishka[CPLConfig],
+    session: FromDishka[AsyncSession],
+) -> RecipeRevisionResponse:
+    revision = await service.resolve_default(config, plan_first=body.plan_first)
+    await session.commit()
+    return revision
 
 
 @router.get("/revisions/{revision_id}", response_model=RecipeRevisionResponse, response_model_exclude_unset=True)

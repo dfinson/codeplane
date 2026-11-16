@@ -218,6 +218,10 @@ class RecipeSelection(RecipeModel):
     parameters: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
 
 
+class ResolveDefaultRecipeRequest(RecipeModel):
+    plan_first: bool = False
+
+
 class RecipeInputReceipt(RecipeModel):
     type: RecipeValueType
     present: bool
@@ -397,3 +401,37 @@ class RecipeRunListResponse(RecipeModel):
     items: list[RecipeRunResponse]
     next_cursor: int | None
     high_water: int
+
+
+class RecipeCurrentRunResponse(RecipeModel):
+    run: RecipeRunResponse | None
+
+
+class RecipeStepListResponse(RecipeModel):
+    items: list[RecipeStepInstanceResponse]
+    next_cursor: str | None
+
+
+class RecipeAttemptSummary(RecipeModel):
+    id: str
+    number: int
+    dispatch_intent_at: datetime
+    outcome: str | None
+    completed_at: datetime | None
+
+
+class RecipeStepInspection(RecipeModel):
+    step: RecipeStepInstanceResponse
+    attempts: list[RecipeAttemptSummary]
+
+
+class RecipeGateInspection(RecipeModel):
+    binding: RecipeGateBinding
+    resolution: str | None
+    notes: str | None
+    resolved_at: datetime | None
+
+
+class RecipeAttemptInspection(RecipeModel):
+    attempt: RecipeAttemptResponse
+    gate: RecipeGateInspection | None

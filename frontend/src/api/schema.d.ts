@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__delete"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__delete"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__delete"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__delete"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__delete"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__delete"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -2994,6 +2994,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recipes/resolve-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Default Recipe */
+        post: operations["resolve_default_recipe_api_recipes_resolve_default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/recipes/revisions/{revision_id}": {
         parameters: {
             query?: never;
@@ -3123,6 +3140,108 @@ export interface paths {
         };
         /** Get Observation Events */
         get: operations["get_observation_events_api_integrations__binding_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Run */
+        get: operations["current_run_api_jobs__job_id__recipe_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run History */
+        get: operations["run_history_api_jobs__job_id__recipe_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_api_jobs__job_id__recipe_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Steps */
+        get: operations["list_steps_api_jobs__job_id__recipe_runs__run_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Step */
+        get: operations["inspect_step_api_jobs__job_id__recipe_runs__run_id__steps__step_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Attempt */
+        get: operations["inspect_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5975,6 +6094,25 @@ export interface components {
             /** Expectedversion */
             expectedVersion: number;
         };
+        /** RecipeAgentResult */
+        RecipeAgentResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "agent";
+            /** Sessionids */
+            sessionIds: string[];
+            /** Text */
+            text: string | null;
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+            /** Actualmodels */
+            actualModels?: string[];
+        };
         /** RecipeAgentRunner */
         RecipeAgentRunner: {
             /**
@@ -5997,6 +6135,111 @@ export interface components {
              * @enum {string}
              */
             session: "new" | "reuse";
+        };
+        /** RecipeArtifactReceipt */
+        RecipeArtifactReceipt: {
+            /** Artifactid */
+            artifactId: string;
+            /** Checksum */
+            checksum: string;
+            /** Sizebytes */
+            sizeBytes: number;
+            /**
+             * Complete
+             * @default true
+             */
+            complete: boolean;
+        };
+        /** RecipeAttemptExecution */
+        RecipeAttemptExecution: {
+            /** Executiontoken */
+            executionToken: string;
+            /** Sessionid */
+            sessionId: string;
+            /** Provider */
+            provider: string;
+            /** Model */
+            model: string | null;
+            /**
+             * Startedat
+             * Format: date-time
+             */
+            startedAt: string;
+        };
+        /** RecipeAttemptInspection */
+        RecipeAttemptInspection: {
+            attempt: components["schemas"]["RecipeAttemptResponse"];
+            gate: components["schemas"]["RecipeGateInspection"] | null;
+        };
+        /** RecipeAttemptResponse */
+        RecipeAttemptResponse: {
+            /** Id */
+            id: string;
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Number */
+            number: number;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["RecipeInputReceipt"];
+            };
+            /** Runner */
+            runner: components["schemas"]["RecipeAgentRunner"] | components["schemas"]["RecipeCommandRunner"] | components["schemas"]["RecipeHumanRunner"] | components["schemas"]["RecipeBlockRunner"];
+            /** Capabilities */
+            capabilities: ("read" | "write" | "shell" | "delegate" | "external_access")[];
+            workspace: components["schemas"]["RecipeResolvedWorkspace"];
+            /**
+             * Dispatchintentat
+             * Format: date-time
+             */
+            dispatchIntentAt: string;
+            result: components["schemas"]["RecipeAttemptResult"] | null;
+            /** Executions */
+            executions: components["schemas"]["RecipeAttemptExecution"][];
+            /** Outputs */
+            outputs: components["schemas"]["RecipeOutputReceipt"][];
+        };
+        /** RecipeAttemptResult */
+        RecipeAttemptResult: {
+            /** Outcome */
+            outcome: string;
+            /** Evidence */
+            evidence: components["schemas"]["RecipeCommandResult"] | components["schemas"]["RecipeAgentResult"] | components["schemas"]["RecipeHumanResult"] | components["schemas"]["RecipeBlockResult"];
+            /** Reason */
+            reason: string | null;
+            /**
+             * Completedat
+             * Format: date-time
+             */
+            completedAt: string;
+        };
+        /** RecipeAttemptSummary */
+        RecipeAttemptSummary: {
+            /** Id */
+            id: string;
+            /** Number */
+            number: number;
+            /**
+             * Dispatchintentat
+             * Format: date-time
+             */
+            dispatchIntentAt: string;
+            /** Outcome */
+            outcome: string | null;
+            /** Completedat */
+            completedAt: string | null;
+        };
+        /** RecipeBlockResult */
+        RecipeBlockResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "block";
+            /** Revisionid */
+            revisionId: string;
+            /** Childattemptids */
+            childAttemptIds: string[];
         };
         /** RecipeBlockRunner */
         RecipeBlockRunner: {
@@ -6022,6 +6265,44 @@ export interface components {
             /** Field */
             field?: ("workspace" | "commit") | null;
         };
+        /** RecipeCommandResult */
+        RecipeCommandResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "command";
+            /** Argv */
+            argv: string[];
+            /** Exitstatus */
+            exitStatus: number | null;
+            /** Stdout */
+            stdout: string | null;
+            /** Stderr */
+            stderr: string | null;
+            /** Workspace */
+            workspace: string;
+            /** Startcoderef */
+            startCodeRef: string;
+            /** Endcoderef */
+            endCodeRef: string | null;
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+            /**
+             * Started
+             * @default true
+             */
+            started: boolean;
+            stdoutArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
+            stderrArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
+            /** Stdoutpreview */
+            stdoutPreview?: string | null;
+            /** Stderrpreview */
+            stderrPreview?: string | null;
+        };
         /** RecipeCommandRunner */
         RecipeCommandRunner: {
             /**
@@ -6038,6 +6319,10 @@ export interface components {
             timeoutSeconds: number;
             /** Reconciles */
             reconciles?: string[];
+        };
+        /** RecipeCurrentRunResponse */
+        RecipeCurrentRunResponse: {
+            run: components["schemas"]["RecipeRunResponse"] | null;
         };
         /** RecipeDefinition */
         RecipeDefinition: {
@@ -6115,6 +6400,50 @@ export interface components {
             description: string;
             binding: components["schemas"]["RecipeOutputBinding"];
         };
+        /** RecipeGateBinding */
+        RecipeGateBinding: {
+            /** Attemptid */
+            attemptId: string;
+            /** Approvalid */
+            approvalId: string;
+            /** Inputchecksum */
+            inputChecksum: string;
+            /** Proposedaction */
+            proposedAction: string;
+            /** Nextsteps */
+            nextSteps: {
+                [key: string]: string[];
+            };
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /** RecipeGateInspection */
+        RecipeGateInspection: {
+            binding: components["schemas"]["RecipeGateBinding"];
+            /** Resolution */
+            resolution: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Resolvedat */
+            resolvedAt: string | null;
+        };
+        /** RecipeHumanResult */
+        RecipeHumanResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "human";
+            /** Approvalid */
+            approvalId: string | null;
+            /** Decision */
+            decision: string | null;
+            /** Inputchecksum */
+            inputChecksum: string;
+        };
         /** RecipeHumanRunner */
         RecipeHumanRunner: {
             /**
@@ -6153,6 +6482,31 @@ export interface components {
             /** Degradedreason */
             degradedReason?: string | null;
         };
+        /** RecipeInputReceipt */
+        RecipeInputReceipt: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /** Present */
+            present: boolean;
+            value?: components["schemas"]["JsonValue"];
+            /** Receiptid */
+            receiptId?: string | null;
+            /** Producingattemptid */
+            producingAttemptId?: string | null;
+            /** Produceroutcome */
+            producerOutcome?: string | null;
+            /** Checksum */
+            checksum?: string | null;
+            /** Degradedreason */
+            degradedReason?: string | null;
+            /** Scopeattemptid */
+            scopeAttemptId?: string | null;
+            /** Parametername */
+            parameterName?: string | null;
+        };
         /** RecipeLiteralBinding */
         RecipeLiteralBinding: {
             /**
@@ -6186,6 +6540,28 @@ export interface components {
             stepId: string;
             /** Output */
             output: string;
+        };
+        /** RecipeOutputReceipt */
+        RecipeOutputReceipt: {
+            /** Id */
+            id: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            value: components["schemas"]["JsonValue"];
+            /** Checksum */
+            checksum: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
         };
         /** RecipeParameter */
         RecipeParameter: {
@@ -6228,12 +6604,20 @@ export interface components {
             checksum: string;
             definition: components["schemas"]["RecipeDefinition"];
         };
+        /** RecipeResolvedWorkspace */
+        RecipeResolvedWorkspace: {
+            /** Path */
+            path: string;
+            /** Coderef */
+            codeRef: string;
+            policy: components["schemas"]["RecipeWorkspacePolicy"];
+        };
         /** RecipeResumeResponse */
         RecipeResumeResponse: {
             /** Id */
             id: string;
             /** Repo */
-            repo: string;
+            repo: string | null;
             /** Prompt */
             prompt: string;
             /** Projectid */
@@ -6244,7 +6628,7 @@ export interface components {
             description?: string | null;
             state: components["schemas"]["JobState"];
             /** Baseref */
-            baseRef: string;
+            baseRef: string | null;
             /** Worktreepath */
             worktreePath: string | null;
             /** Branch */
@@ -6306,6 +6690,13 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Integrationbindingid */
+            integrationBindingId?: string | null;
+            /**
+             * Observationonly
+             * @default false
+             */
+            observationOnly: boolean;
             /** @default standard */
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
@@ -6365,6 +6756,15 @@ export interface components {
             nextSteps?: string[];
             /** Terminal */
             terminal?: ("succeeded" | "failed" | "canceled") | null;
+        };
+        /** RecipeRunListResponse */
+        RecipeRunListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeRunResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
         };
         /** RecipeRunResponse */
         RecipeRunResponse: {
@@ -6456,6 +6856,50 @@ export interface components {
                 [key: string]: components["schemas"]["RecipeRoute"];
             };
             retry?: components["schemas"]["RecipeRetryPolicy"];
+        };
+        /** RecipeStepInspection */
+        RecipeStepInspection: {
+            step: components["schemas"]["RecipeStepInstanceResponse"];
+            /** Attempts */
+            attempts: components["schemas"]["RecipeAttemptSummary"][];
+        };
+        /** RecipeStepInstanceResponse */
+        RecipeStepInstanceResponse: {
+            /** Id */
+            id: string;
+            /** Runid */
+            runId: string;
+            /** Steppath */
+            stepPath: string;
+            definition: components["schemas"]["RecipeStep"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted";
+            /** Reason */
+            reason: string | null;
+            /** Currentattemptid */
+            currentAttemptId: string | null;
+            /** Version */
+            version: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RecipeStepListResponse */
+        RecipeStepListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeStepInstanceResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
         };
         /** RecipeValidationIssue */
         RecipeValidationIssue: {
@@ -6728,6 +7172,14 @@ export interface components {
         ResolveBatchResponse: {
             /** Resolved */
             resolved: boolean;
+        };
+        /** ResolveDefaultRecipeRequest */
+        ResolveDefaultRecipeRequest: {
+            /**
+             * Planfirst
+             * @default false
+             */
+            planFirst: boolean;
         };
         /**
          * ResolveGateRequest
@@ -11822,7 +12274,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11852,7 +12304,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11882,7 +12334,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11912,7 +12364,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11942,7 +12394,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -11972,7 +12424,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -14031,6 +14483,39 @@ export interface operations {
             };
         };
     };
+    resolve_default_recipe_api_recipes_resolve_default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveDefaultRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_recipe_revision_api_recipes_revisions__revision_id__get: {
         parameters: {
             query?: never;
@@ -14322,6 +14807,206 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ObservationEventList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    current_run_api_jobs__job_id__recipe_current_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeCurrentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_history_api_jobs__job_id__recipe_runs_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_api_jobs__job_id__recipe_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_steps_api_jobs__job_id__recipe_runs__run_id__steps_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeStepListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_step_api_jobs__job_id__recipe_runs__run_id__steps__step_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeStepInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeAttemptInspection"];
                 };
             };
             /** @description Validation Error */
