@@ -674,6 +674,15 @@ class TestAbortSession:
 
 
 class TestCreateSession:
+    async def test_deferred_attempt_does_not_send_until_explicit_dispatch(self, adapter) -> None:
+        client, session = TestRuntimeContract._client()
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            session_id = await adapter.create_session(_make_config(defer_start=True))
+        assert session._send_calls == []
+        await adapter.send_message(session_id, "pinned attempt prompt")
+        assert session._send_calls == ["pinned attempt prompt"]
+        await adapter.abort_session(session_id)
+
     @pytest.mark.asyncio
     async def test_create_session_basic(self, adapter: CopilotAdapter) -> None:
         """Verify a basic session creation wires up queue and session."""

@@ -53,7 +53,7 @@ from backend.persistence.job_repo import JobRepository
 from backend.services.adapters.integration_policy import IntegrationDisabledError, IntegrationPolicy
 from backend.services.completers.copilot_steer import NativeDeliveryError
 from backend.services.job.job_service import JobService
-from backend.services.runtime.attempt_bindings import AttemptBindingConflictError, AttemptBindings
+from backend.services.runtime.attempt_bindings import AttemptBindingConflictError, AttemptBindings, AttemptExecution
 from backend.services.runtime.execution_control import ExecutionControl
 from backend.services.runtime.handoff import (
     build_followup_handoff_prompt_for_job,
@@ -2140,6 +2140,49 @@ class RuntimeService:
     def execution_epoch(self) -> str:
         return self._execution_epoch
 
+    async def _require_attempt_job(self, job_id: str) -> Job:
+        job = await self._get_job(job_id)
+        if job is None or job.state != JobState.running or self._shutting_down:
+            raise AttemptBindingConflictError("Attempt admission requires a live running Job")
+        if self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
+            raise AttemptBindingConflictError("Job execution is gated")
+        if self._approval_service is not None and await self._approval_service.list_pending(job_id):
+            raise AttemptBindingConflictError("Job has a pending approval")
+        return job
+
+    @contextlib.asynccontextmanager
+    async def open_attempt_execution(
+        self, job_id: str, attempt_id: str, config: SessionConfig
+    ) -> AsyncIterator[AttemptExecution]:
+        """Own an inert SDK session from creation through registration and cleanup."""
+        async with self._execution_control.hold(job_id):
+            await self._require_attempt_job(job_id)
+            adapter = self._adapter_registry.get_adapter(config.sdk)
+        deferred = dataclass_replace(
+            config,
+            job_id=job_id,
+            attempt_id=attempt_id,
+            execution_epoch=self._execution_epoch,
+            defer_start=True,
+        )
+        session_id: str | None = None
+        token: str | None = None
+        try:
+            session_id = await adapter.create_session(deferred)
+            context = await self.register_attempt_execution(job_id, attempt_id, adapter, session_id, sdk=config.sdk)
+            token = context.execution_token
+            assert token is not None
+            yield AttemptExecution(adapter, session_id, token)
+        finally:
+            if session_id is not None:
+                if token is None:
+                    async with asyncio.timeout(30):
+                        await adapter.abort_session(session_id)
+                else:
+                    binding = self._attempt_bindings.get(job_id, attempt_id)
+                    if binding is not None and binding.token == token:
+                        await self.cancel_attempt_execution(job_id, attempt_id, token)
+
     async def register_attempt_execution(
         self,
         job_id: str,
@@ -2151,13 +2194,7 @@ class RuntimeService:
     ) -> CurrentExecutionContext:
         """Register an already-created session without replacing the Job's primary."""
         async with self._execution_control.hold(job_id):
-            job = await self._get_job(job_id)
-            if job is None or job.state != JobState.running or self._shutting_down:
-                raise AttemptBindingConflictError("Attempt admission requires a live running Job")
-            if self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
-                raise AttemptBindingConflictError("Job execution is gated")
-            if self._approval_service is not None and await self._approval_service.list_pending(job_id):
-                raise AttemptBindingConflictError("Job has a pending approval")
+            job = await self._require_attempt_job(job_id)
             provider = IntegrationPolicy(self._config).require_enabled(sdk or job.sdk)
             if adapter is not self._adapter_registry.get_adapter(provider):
                 raise AttemptBindingConflictError("Attempt adapter is not the admitted provider binding")
@@ -2167,20 +2204,19 @@ class RuntimeService:
             binding = self._attempt_bindings.register(job_id, attempt_id, adapter, session_id, provider)
             return CurrentExecutionContext(job_id, binding.token)
 
-    async def unregister_attempt_execution(
-        self, job_id: str, attempt_id: str, expected_execution: str
-    ) -> None:
+    async def unregister_attempt_execution(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
         """Forget only the exact completed/stopped session supplied by its owner."""
         async with self._execution_control.hold(job_id):
             self._attempt_bindings.unregister(job_id, attempt_id, expected_execution)
 
-    async def cancel_attempt_execution(
-        self, job_id: str, attempt_id: str, expected_execution: str
-    ) -> None:
+    async def cancel_attempt_execution(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
         """Retain cancel-requested evidence until the real adapter confirms stop."""
         async with self._execution_control.hold(job_id):
             binding = self._attempt_bindings.request_cancel(job_id, attempt_id, expected_execution)
-            binding.adapter.pause_tools(binding.session_id)
+            try:
+                binding.adapter.pause_tools(binding.session_id)
+            except (OSError, RuntimeError):
+                log.error("attempt_pause_unconfirmed", job_id=job_id, attempt_id=attempt_id, exc_info=True)
         # The session owner may finalize and unregister while abort drains callbacks.
         async with asyncio.timeout(30):
             await binding.adapter.abort_session(binding.session_id)
@@ -2190,13 +2226,24 @@ class RuntimeService:
                 self._attempt_bindings.unregister(job_id, attempt_id, expected_execution)
 
     async def _stop_attempt_executions(self, job_id: str) -> None:
-        for binding in self._attempt_bindings.for_job(job_id):
+        # Fence every sibling before awaiting any potentially slow transport.
+        async with self._execution_control.hold(job_id):
+            bindings = self._attempt_bindings.for_job(job_id)
+            for binding in bindings:
+                current = self._attempt_bindings.get(job_id, binding.attempt_id)
+                if current is None or current.token != binding.token:
+                    continue
+                self._attempt_bindings.request_cancel(job_id, binding.attempt_id, binding.token)
+            for binding in bindings:
+                try:
+                    binding.adapter.pause_tools(binding.session_id)
+                except (OSError, RuntimeError):
+                    log.error("attempt_pause_unconfirmed", job_id=job_id, attempt_id=binding.attempt_id, exc_info=True)
+        for binding in bindings:
             try:
                 await self.cancel_attempt_execution(job_id, binding.attempt_id, binding.token)
             except (OSError, RuntimeError, TimeoutError):
-                log.error(
-                    "attempt_stop_unconfirmed", job_id=job_id, attempt_id=binding.attempt_id, exc_info=True
-                )
+                log.error("attempt_stop_unconfirmed", job_id=job_id, attempt_id=binding.attempt_id, exc_info=True)
 
     async def get_current_execution_context(
         self, job_id: str, *, attempt_id: str | None = None
@@ -2280,9 +2327,12 @@ class RuntimeService:
         if attempt_id is not None:
             payload["attempt_id"] = attempt_id
         message = new_event(
-            job_id, EventKind.message_user, payload,
+            job_id,
+            EventKind.message_user,
+            payload,
             metadata=EventMetadata(attempt_id=attempt_id, execution_epoch=self._execution_epoch)
-            if attempt_id is not None else None,
+            if attempt_id is not None
+            else None,
         )
         await self._event_bus.publish(message)
         return CurrentExecutionDispatchResult(job_id, token, "accepted", message_event_id=message.id)
@@ -2360,21 +2410,20 @@ class RuntimeService:
         by the service layer (JobService.cancel_job). This method only
         interacts with in-memory runtime tasks.
         """
-        await self._stop_attempt_executions(job_id)
         task = self._tasks.get(job_id)
         starting = self._starting_tasks.get(job_id)
         if starting is not None and starting is not asyncio.current_task():
             starting.cancel()
-            return
         if task is not None:
             task.cancel()
             log.info("job_cancel_requested", job_id=job_id)
-        else:
-            scout_task = self._scout_tasks.get(job_id)
-            if scout_task is not None:
-                # The request still owns its canceled-state transaction.
-                # Finalization writes through a separate session after it commits.
-                scout_task.cancel()
+        scout_task = self._scout_tasks.get(job_id)
+        if scout_task is not None:
+            scout_task.cancel()
+        await self._stop_attempt_executions(job_id)
+        if starting is not None and starting is not asyncio.current_task():
+            return
+        if task is None:
             # No task yet — job may still be in preflight curation.
             # Abort the agent session so the preflight curator's stream ends.
             agent_session = self._agent_sessions.get(job_id)
@@ -2947,8 +2996,6 @@ class RuntimeService:
         instead of marking them as canceled (which confused users).
         """
         self._shutting_down = True
-        for job_id in {binding.job_id for binding in self._attempt_bindings.all()}:
-            await self._stop_attempt_executions(job_id)
         for starting_task in tuple(self._starting_tasks.values()):
             if starting_task is not asyncio.current_task():
                 starting_task.cancel()
@@ -2960,6 +3007,16 @@ class RuntimeService:
         for job_id, scout_task in list(self._scout_tasks.items()):
             scout_task.cancel()
             log.info("shutdown_scout_cancelled", job_id=job_id)
+        for binding in self._attempt_bindings.all():
+            self._attempt_bindings.request_cancel(binding.job_id, binding.attempt_id, binding.token)
+            try:
+                binding.adapter.pause_tools(binding.session_id)
+            except (OSError, RuntimeError):
+                log.error(
+                    "attempt_pause_unconfirmed", job_id=binding.job_id, attempt_id=binding.attempt_id, exc_info=True
+                )
+        for job_id in {binding.job_id for binding in self._attempt_bindings.all()}:
+            await self._stop_attempt_executions(job_id)
         # Wait briefly for tasks to complete
         tasks = list(set(self._tasks.values()) | set(self._starting_tasks.values()) | set(self._scout_tasks.values()))
         if tasks:

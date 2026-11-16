@@ -69,10 +69,10 @@ class ClaudeAdapter(BaseAgentAdapter):
         # Stderr capture files for debugging failed sessions
         self._stderr_files: dict[str, str] = {}
         self._stderr_file_objects: dict[str, Any] = {}  # session_id → open file
-        # Tool-call buffer: tool_use_id -> {job_id, tool_name, arguments, start}
+        # Tool-call buffer: (session_id, tool_use_id) -> invocation context
         # Populated on ToolUseBlock, drained on ToolResultBlock to compute
         # duration_ms and carry start-time context (re-homed from EventPipeline).
-        self._tool_buf: dict[str, dict[str, Any]] = {}
+        self._tool_buf: dict[tuple[str, str], dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -92,12 +92,12 @@ class ClaudeAdapter(BaseAgentAdapter):
                 os.unlink(stderr_path)
         # Claude-specific model tracking
         job_id = self._session_to_job.get(session_id)
-        if job_id:
-            self._requested_models.pop(job_id, None)
-            self._model_verified.pop(job_id, None)
+        self._requested_models.pop(session_id, None)
+        self._model_verified.pop(session_id, None)
+        if job_id and not any(sid != session_id and owner == job_id for sid, owner in self._session_to_job.items()):
             self._log_seqs.pop(job_id, None)
-            for cid in [c for c, v in self._tool_buf.items() if v.get("job_id") == job_id]:
-                self._tool_buf.pop(cid, None)
+        for key in [key for key in self._tool_buf if key[0] == session_id]:
+            self._tool_buf.pop(key, None)
         super()._cleanup_session_state(session_id)
 
     def _read_session_stderr(self, session_id: str) -> str:
@@ -346,9 +346,9 @@ class ClaudeAdapter(BaseAgentAdapter):
 
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and self.get_session_kind(session_id) != "preflight":
-            requested = self._requested_models.get(job_id, "")
-            if not self._model_verified.get(job_id):
-                self._model_verified[job_id] = True
+            requested = self._requested_models.get(session_id, "")
+            if not self._model_verified.get(session_id):
+                self._model_verified[session_id] = True
                 self._verify_and_set_model(session_id, job_id, model, requested)
 
         if not job_id:
@@ -390,7 +390,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
-        self._tool_buf[tool_id] = {
+        self._tool_buf[session_id, tool_id] = {
             "job_id": job_id,
             "tool_name": tool_name,
             "arguments": arguments,
@@ -424,7 +424,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
-        buffered = self._tool_buf.pop(tool_use_id, {})
+        buffered = self._tool_buf.pop((session_id, tool_use_id), {})
         resolved_name = str(buffered.get("tool_name", "tool"))
 
         # Correct false failures for file-edit tools
@@ -570,7 +570,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if config.job_id:
             self.set_job_id(session_id, config.job_id)
             if config.model:
-                self._requested_models[config.job_id] = config.model
+                self._requested_models[session_id] = config.model
         if config.session_kind != "job":
             self.set_session_kind(session_id, config.session_kind)
 
@@ -665,10 +665,16 @@ class ClaudeAdapter(BaseAgentAdapter):
 
         # Create client and connect — the SDK requires an AsyncIterable prompt
         # when can_use_tool is set (streaming mode).
+        client = None
         try:
             client = ClaudeSDKClient(options)
-            await client.connect(_prompt_to_stream(config.prompt))
+            await client.connect(None if config.defer_start else _prompt_to_stream(config.prompt))
+        except asyncio.CancelledError:
+            _kill_sdk_subprocess(client)
+            self._cleanup_session(session_id)
+            raise
         except Exception:
+            _kill_sdk_subprocess(client)
             if options.resume:
                 # Resume failed — fall back to a fresh session (mirrors CopilotAdapter behaviour)
                 log.warning(
@@ -679,9 +685,14 @@ class ClaudeAdapter(BaseAgentAdapter):
                 options.resume = None
                 try:
                     client = ClaudeSDKClient(options)
-                    await client.connect(_prompt_to_stream(config.prompt))
+                    await client.connect(None if config.defer_start else _prompt_to_stream(config.prompt))
+                except asyncio.CancelledError:
+                    _kill_sdk_subprocess(client)
+                    self._cleanup_session(session_id)
+                    raise
                 except Exception:
                     log.error("claude_session_create_failed", exc_info=True)
+                    _kill_sdk_subprocess(client)
                     self._cleanup_session(session_id)
                     raise
             else:
@@ -748,15 +759,18 @@ class ClaudeAdapter(BaseAgentAdapter):
             self._cleanup_session(session_id)
 
     async def send_message(self, session_id: str, message: str) -> None:
+        from backend.services.completers.copilot_steer import NativeDeliveryError
+
         client = self._clients.get(session_id)
         if client is None:
             log.warning("claude_send_no_session", session_id=session_id)
-            return
+            raise NativeDeliveryError("Managed Claude session is no longer live")
         try:
             # Start a new turn on the existing session
             await client.query(message)
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as exc:
             log.warning("claude_send_message_failed", session_id=session_id, exc_info=True)
+            raise NativeDeliveryError("Managed Claude delivery is unknown", uncertain=True) from exc
 
     async def interrupt_session(self, session_id: str) -> None:
         client = self._clients.get(session_id)

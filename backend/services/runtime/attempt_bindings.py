@@ -26,6 +26,13 @@ class AttemptBinding:
     cancel_requested: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class AttemptExecution:
+    adapter: AgentAdapterInterface
+    session_id: str
+    execution_token: str
+
+
 class AttemptBindings:
     """No scheduler or invented session: trusted host code supplies the live handle."""
 
