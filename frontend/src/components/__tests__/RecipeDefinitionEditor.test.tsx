@@ -30,9 +30,9 @@ import { RecipeDefinitionEditor } from "../RecipeDefinitionEditor";
 const now = "2026-11-15T22:00:00Z";
 let savedDraft: RecipeDraft | null = null;
 
-function renderEditor() {
+function renderEditor(path = "/recipes") {
   return render(
-    <MemoryRouter initialEntries={["/recipes"]}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route
           path="/recipes/:definitionId?"
@@ -80,6 +80,25 @@ beforeEach(() => {
     }),
   );
   vi.mocked(validateRecipe).mockResolvedValue({ valid: true, issues: [] });
+  vi.mocked(publishRecipe).mockImplementation(async (id, expectedVersion) => {
+    if (
+      !savedDraft ||
+      savedDraft.id !== id ||
+      savedDraft.version !== expectedVersion
+    )
+      throw new Error("Unexpected publication version");
+    const definition = savedDraft.definition;
+    savedDraft = { ...savedDraft, version: expectedVersion + 1 };
+    return {
+      id: "published-1",
+      definitionId: id,
+      revision: 1,
+      definition,
+      blocks: {},
+      checksum: "b".repeat(64),
+      publishedAt: now,
+    };
+  });
 });
 
 describe("RecipeDefinitionEditor", () => {
@@ -105,9 +124,117 @@ describe("RecipeDefinitionEditor", () => {
     expect(createJob).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^Verify / }));
     expect(screen.getByLabelText("Command arguments")).toHaveValue(
-      "git\nshow\n--check\n@code.commit",
+      JSON.stringify(
+        ["git", "show", "--check", { input: "code", field: "commit" }],
+        null,
+        2,
+      ),
     );
     expect(screen.queryByLabelText("Step model")).not.toBeInTheDocument();
+  });
+
+  it("retains the successful publication receipt after canonical new-draft navigation", async () => {
+    renderEditor();
+    await screen.findByRole("heading", { name: "Step definition" });
+    fireEvent.click(screen.getByRole("button", { name: "Publish revision" }));
+    const receipt = await screen.findByLabelText("Publication receipt");
+    await screen.findByText("Draft version 2");
+    expect(receipt).toHaveTextContent("Published revision 1");
+    expect(screen.getByLabelText("Published revision")).toHaveValue(
+      "published-1",
+    );
+    expect(publishRecipe).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "New draft" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Publication receipt"),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps publish success visible when refresh fails and retries only the read", async () => {
+    vi.mocked(fetchRecipe).mockRejectedValueOnce(new Error("Refresh offline"));
+    renderEditor();
+    await screen.findByRole("heading", { name: "Step definition" });
+    fireEvent.click(screen.getByRole("button", { name: "Publish revision" }));
+    expect(
+      await screen.findByLabelText("Publication receipt"),
+    ).toHaveTextContent("Published revision 1");
+    expect(
+      await screen.findByText(
+        /Publication succeeded. Draft\/history refresh failed: Refresh offline/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Publish revision" }),
+    ).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry publication read" }),
+    );
+    await screen.findByText("Draft version 2");
+    expect(screen.getByLabelText("Published revision")).toHaveValue(
+      "published-1",
+    );
+    expect(publishRecipe).toHaveBeenCalledOnce();
+    expect(createRecipeDraft).toHaveBeenCalledOnce();
+    expect(saveRecipeDraft).not.toHaveBeenCalled();
+  });
+
+  it("round-trips multiline and backslash arguments with an actual typed input reference", async () => {
+    const argv = [
+      "runner",
+      "first line\nsecond line",
+      "\\@literal",
+      { input: "code", field: "commit" as const },
+    ];
+    savedDraft = {
+      id: "loaded",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+      definition: {
+        name: "Exact command",
+        description: "",
+        kind: "recipe",
+        entrySteps: ["check"],
+        steps: [
+          {
+            id: "check",
+            title: "Check",
+            instructions: "Run the exact command.",
+            runner: { kind: "command", argv, timeoutSeconds: 300 },
+          },
+        ],
+      },
+    };
+    renderEditor("/recipes/loaded");
+    const input = await screen.findByLabelText("Command arguments");
+    expect(input).toHaveValue(JSON.stringify(argv, null, 2));
+    fireEvent.change(input, {
+      target: { value: JSON.stringify(argv, null, 4) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(saveRecipeDraft).toHaveBeenCalledOnce());
+    const runner =
+      vi.mocked(saveRecipeDraft).mock.calls[0]?.[2].steps?.[0]?.runner;
+    expect(runner?.kind).toBe("command");
+    if (runner?.kind !== "command") throw new Error("Expected command runner");
+    expect(runner.argv).toEqual(argv);
+  });
+
+  it("retains structurally invalid argv edits without dispatch or an event-handler exception", async () => {
+    renderEditor();
+    await screen.findByRole("heading", { name: "Step definition" });
+    fireEvent.click(screen.getByRole("button", { name: /^Verify / }));
+    const input = screen.getByLabelText("Command arguments");
+    const invalid = '["runner", {"unexpected": true}]';
+    fireEvent.change(input, { target: { value: invalid } });
+    expect(input).toHaveValue(invalid);
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Publish revision" }),
+    ).toBeDisabled();
+    expect(createRecipeDraft).not.toHaveBeenCalled();
   });
 
   it("uses actionable server validation and does not publish an invalid graph", async () => {
