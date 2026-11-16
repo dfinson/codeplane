@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.models.domain import SIDECAR_ARBITER
+from backend.models.domain import SIDECAR_ARBITER, JobState, StateConflictError
+from backend.persistence.execution_contract_repo import ExecutionContractRepository
 from backend.persistence.job_repo import JobRepository
+from backend.tests.unit.test_execution_contracts import _contract
 from backend.tests.unit.test_runtime_service import _create_db_job, _make_job
 from backend.tests.unit.test_runtime_service import adapter as adapter
 from backend.tests.unit.test_runtime_service import config as config
@@ -111,3 +113,126 @@ async def test_concurrent_starts_reserve_before_the_database_await(runtime, sess
         release.set()
         await first
     await asyncio.wait_for(runtime._tasks[job.id], timeout=5)
+
+
+async def test_declared_pin_is_persisted_before_policy_and_preflight(runtime, session_factory, config):
+    phases = []
+    sidecars(runtime, phases)
+    contract = _contract("selected")
+    runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
+    job = _make_job(repo=config.repos[0])
+    await _create_db_job(session_factory, job)
+    async with session_factory() as session:
+        admission = await JobRepository(session).declare_initial_legacy_admission(job.id)
+        await session.commit()
+
+    async def policy(*args, **kwargs):
+        persisted = await ExecutionContractRepository(session_factory).get(job.id, admission.id)
+        assert persisted is not None and persisted == runtime._job_contract_pins[job.id]
+        assert persisted.contract == contract
+        phases.append("policy")
+
+    runtime._setup_action_policy = AsyncMock(side_effect=policy)
+    await runtime.start_or_enqueue(job)
+    await asyncio.wait_for(runtime._tasks[job.id], timeout=5)
+    assert phases == ["policy", "builtin", "builtin", "builtin", "preflight"]
+
+
+async def test_recovery_cannot_mint_missing_pin_before_preflight(runtime, session_factory, config):
+    manager = sidecars(runtime, [])
+    contract = _contract("selected")
+    runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
+    job = _make_job(repo=config.repos[0], state=JobState.running)
+    job.sdk_session_id = "retained-native-session"
+    await _create_db_job(session_factory, job)
+    async with session_factory() as session:
+        admission = await JobRepository(session).declare_initial_legacy_admission(job.id)
+        await session.commit()
+    with pytest.raises(StateConflictError, match="missing historical"):
+        await runtime._recover_active_job(job.id)
+    assert await ExecutionContractRepository(session_factory).get(job.id, admission.id) is None
+    runtime._setup_action_policy.assert_not_awaited()
+    manager.open.assert_not_called()
+    runtime._activate_custom_sidecars.assert_not_awaited()
+
+
+async def test_recovery_uses_retained_pin_not_new_admission_selection(runtime, session_factory, config):
+    sidecars(runtime, [])
+    old, new = _contract("old"), _contract("new")
+    runtime.configure_execution_contracts(available={old.id: old}, selected_for_new=old.id)
+    job = _make_job(repo=config.repos[0], state=JobState.running)
+    job.sdk_session_id = "retained-native-session"
+    await _create_db_job(session_factory, job)
+    async with session_factory() as session:
+        admission = await JobRepository(session).declare_initial_legacy_admission(job.id)
+        await session.commit()
+    retained = await runtime.prepare_execution_contract(job.id, admission.id, recovery=False)
+    runtime.configure_execution_contracts(available={old.id: old, new.id: new}, selected_for_new=new.id)
+    seen = []
+    runtime._setup_action_policy = AsyncMock(
+        side_effect=lambda *args, **kwargs: seen.append(runtime._job_contract_pins[job.id]),
+    )
+    await runtime._recover_active_job(job.id)
+    await asyncio.wait_for(runtime._tasks[job.id], timeout=5)
+    assert seen == [retained]
+
+
+async def test_continuation_handoff_utility_runs_after_new_pin_and_policy(runtime, session_factory, config):
+    from backend.services.adapters.completion_context import current_completion_context
+
+    phases = []
+    sidecars(runtime, phases)
+    contract = _contract("selected")
+    runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
+    job = _make_job(repo=config.repos[0], state=JobState.review)
+    job.session_count = 4
+    await _create_db_job(session_factory, job)
+    async with session_factory() as session:
+        initial = await JobRepository(session).declare_initial_legacy_admission(job.id)
+        await session.commit()
+    seen = []
+
+    async def summarize(job_id, source_session_number, original_task):
+        context = current_completion_context()
+        assert phases == ["policy"]
+        assert context.job_id == job_id
+        assert context.execution_contract == runtime._job_contract_pins[job_id]
+        assert context.execution_contract.admission_id != initial.id
+        assert source_session_number == 4
+        seen.append(context.execution_contract)
+        phases.append("handoff")
+
+    summary = MagicMock()
+    summary.summarize_and_store = AsyncMock(side_effect=summarize)
+    runtime._summarization_service = summary
+    runtime._run_job_guarded = AsyncMock()
+    resumed = await runtime.resume_job(job.id, "Keep going with the prior context")
+    await asyncio.wait_for(runtime._tasks[job.id], timeout=5)
+    assert resumed.session_count == 5 and len(seen) == 1
+    submitted = runtime._run_job_guarded.call_args.args[2]
+    assert "[RESUMED SESSION" in submitted.prompt
+    assert "Keep going with the prior context" in submitted.prompt
+    assert phases == ["policy", "handoff", "builtin", "builtin", "builtin", "preflight"]
+
+
+async def test_legacy_resume_cannot_declare_a_new_admission_before_previous_task_releases(
+    runtime, session_factory, config,
+):
+    from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+
+    job = _make_job(repo=config.repos[0], state=JobState.review)
+    job.sdk_session_id = "previous-native-session"
+    await _create_db_job(session_factory, job)
+    task = asyncio.create_task(asyncio.Event().wait())
+    runtime._tasks[job.id] = task
+    try:
+        with pytest.raises(StateConflictError, match="still releasing"):
+            await runtime.resume_job(job.id, "Next admission")
+        async with session_factory() as session:
+            assert await ExecutionAdmissionRepository(session).current(job.id) is None
+            retained = await JobRepository(session).get(job.id)
+            assert retained.state == JobState.review and retained.session_count == 1
+    finally:
+        runtime._tasks.pop(job.id, None)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

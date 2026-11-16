@@ -141,6 +141,19 @@ Declarations are not successful-start announcements. Immutable abandonment recor
 restore the previous selection without deleting either admission or contract pin.
 Legacy continuation/reset consumers must keep declaration or abandonment atomic
 with their corresponding Job reset or restoration.
+With a contract catalog configured, legacy pin preparation runs at reserved
+startup before policy or preflight. Restart recovery only reads the retained pin.
+Fallback handoff generation waits until pin and policy setup, then carries that
+contract into utility completion while retaining the old summary-session number.
+Native in-process fallback retains the admission. A previous execution that is
+still releasing the Job prevents a new legacy continuation from being declared.
+
+Governed utility calls persist metadata-only request/completion records under
+their exact admission contract. They retain requested/observed models and native
+usage units, not prompt or response text. An unfinished request is not proof of
+execution or completion. Completion-receipt failures remain explicit and retain
+known usage plus its stable operation identity for accounting without retrying
+the model call.
 
 Attempt model reports are session-qualified `model.observed` events carrying
 requested/actual identities and match status, with recipe, attempt and epoch

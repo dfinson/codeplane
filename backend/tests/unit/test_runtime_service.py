@@ -1235,6 +1235,9 @@ class TestResumeFallback:
         config: CPLConfig,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+        from backend.persistence.job_repo import JobRepository
+
         runtime = _make_runtime(
             session_factory=session_factory,
             event_bus=event_bus,
@@ -1254,8 +1257,15 @@ class TestResumeFallback:
         job.session_count = 4
         job.resolution = Resolution.unresolved
         await _create_db_job(session_factory, job)
+        async with session_factory() as session:
+            initial = await JobRepository(session).declare_initial_legacy_admission(job.id)
+            await session.commit()
 
         async def _boom(*args: object, **kwargs: object) -> None:
+            async with session_factory() as session:
+                current = await ExecutionAdmissionRepository(session).current(job.id)
+                assert current is not None and current.id != initial.id
+                assert current.previous_admission_id == initial.id
             raise RuntimeError("startup failed")
 
         monkeypatch.setattr(runtime, "start_or_enqueue", _boom)
@@ -1273,6 +1283,7 @@ class TestResumeFallback:
             assert row.session_count == 4
             assert row.resolution == Resolution.unresolved
             assert row.completed_at is not None
+            assert await ExecutionAdmissionRepository(session).current(job.id) == initial
 
         assert [event.kind for event in published] == []
 
@@ -1357,6 +1368,8 @@ class TestResumeFallback:
         event_bus: EventBus,
         config: CPLConfig,
     ) -> None:
+        from backend.persistence.event_repo import EventRepository
+
         adapter = ResumeFallbackAdapter()
         runtime = _make_runtime(
             session_factory=session_factory,
@@ -1412,6 +1425,11 @@ class TestResumeFallback:
             row = await repo.get(job.id)
             assert row is not None
             assert row.sdk_session_id == "resume-2"
+            declarations = [
+                item.event for item in await EventRepository(session).list_after(0, job_id=job.id)
+                if item.event.kind == "execution.admission.declared"
+            ]
+            assert len(declarations) == 1, "Native fallback must retain the accepted admission"
 
         await runtime.shutdown()
 
@@ -1515,6 +1533,8 @@ class TestRecovery:
         session_factory: async_sessionmaker[AsyncSession],
         config: CPLConfig,
     ) -> None:
+        from backend.persistence.job_repo import JobRepository
+
         published: list[SessionEvent] = []
 
         async def _collect(e: SessionEvent) -> None:
@@ -1524,6 +1544,9 @@ class TestRecovery:
 
         job = _make_job(repo=config.repos[0], state=JobState.running)
         await _create_db_job(session_factory, job)
+        async with session_factory() as session:
+            initial = await JobRepository(session).declare_initial_legacy_admission(job.id)
+            await session.commit()
 
         await runtime.recover_on_startup()
         await _wait_until(
@@ -1532,12 +1555,14 @@ class TestRecovery:
         )
 
         async with session_factory() as session:
+            from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
             from backend.persistence.job_repo import JobRepository
 
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
             assert row.state == JobState.review
+            assert await ExecutionAdmissionRepository(session).current(job.id) == initial
 
         resumed_events = [e for e in published if e.kind == EventKind.session_resumed]
         assert len(resumed_events) == 1

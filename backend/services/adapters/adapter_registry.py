@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
@@ -19,10 +21,15 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
+    from backend.services.adapters.completion_context import CompletionContext
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
 log = structlog.get_logger()
+
+
+def _utility_receipt_id(operation_id: str, phase: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-utility:{operation_id}:{phase}"))
 
 
 class UnavailableTextCompletion:
@@ -53,10 +60,45 @@ class _RegisteredTextCompletion:
             validate_sdk_model(str(self._sdk), model)
         except SDKModelMismatchError as exc:
             raise UtilityCompletionError(str(exc), reason="model_mismatch") from exc
-        return await adapter.complete(
+        from backend.services.adapters.completion_context import current_completion_context
+
+        context = current_completion_context()
+        operation_id = str(uuid.uuid4())
+        if context.execution_contract is not None:
+            from sqlalchemy.exc import SQLAlchemyError
+
+            try:
+                await self._registry.record_utility_receipt(
+                    operation_id, "requested", context,
+                    {"provider": str(self._sdk), "requested_model": model},
+                )
+            except (OSError, SQLAlchemyError) as exc:
+                log.error("utility_request_persistence_failed", job_id=context.job_id, operation_id=operation_id)
+                raise UtilityCompletionError(
+                    "Utility was not invoked because its request could not be recorded",
+                    reason="receipt_persistence_failed",
+                ) from exc
+        result = await adapter.complete(
             prompt, model=model, system_message=system_message,
             excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
         )
+        if context.execution_contract is not None:
+            result = replace(result, usage_event_id=_utility_receipt_id(operation_id, "completed"))
+            try:
+                await self._registry.record_utility_receipt(
+                    operation_id, "completed", context,
+                    {
+                        "provider": str(self._sdk), "requested_model": model, "actual_model": result.model or None,
+                        "usage": [amount.model_dump(mode="json") for amount in result.usage],
+                    },
+                )
+            except (OSError, SQLAlchemyError) as exc:
+                log.error("utility_receipt_persistence_failed", job_id=context.job_id, operation_id=operation_id)
+                raise UtilityCompletionError(
+                    "Utility ran, but its completion receipt could not be persisted",
+                    reason="receipt_persistence_failed", completion=result,
+                ) from exc
+        return result
 
 
 _DESCRIPTORS: dict[str, AdapterDescriptor] = {
@@ -179,6 +221,34 @@ class AdapterRegistry:
                 readiness.reason or "The selected completion provider is unavailable", reason="provider_unavailable",
             )
         return self.get_adapter(selected)
+
+    async def record_utility_receipt(
+        self, operation_id: str, phase: str, context: CompletionContext, payload: dict[str, object],
+    ) -> str:
+        from backend.models.events import new_event
+        from backend.models.session_event import EventMetadata
+        from backend.persistence.database import serialized_write
+        from backend.persistence.event_repo import EventRepository
+
+        pin = context.execution_contract
+        if self._session_factory is None or pin is None or context.job_id != pin.job_id or not context.execution_epoch:
+            raise UtilityCompletionError("Governed utility provenance is unavailable", reason="provider_unavailable")
+        event_id = _utility_receipt_id(operation_id, phase)
+        body: dict[str, object] = {
+            **payload, "operation_id": operation_id, "role": context.role,
+            "admission_id": pin.admission_id, "budget_id": pin.budget_id,
+            "contract": pin.contract.model_dump(mode="json"),
+        }
+        async with serialized_write(self._session_factory) as session:
+            await EventRepository(session).append(new_event(
+                context.job_id, f"utility.completion.{phase}", body,
+                event_id=event_id,
+                metadata=EventMetadata(
+                    source_framework="codeplane", namespace=("control", "utility"),
+                    execution_epoch=context.execution_epoch,
+                ),
+            ))
+        return event_id
 
     def _create(self, sdk: AgentSDK) -> AgentAdapterInterface:
         if sdk == AgentSDK.copilot:

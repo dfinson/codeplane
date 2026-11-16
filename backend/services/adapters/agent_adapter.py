@@ -31,6 +31,7 @@ class CompletionResult:
     cost_usd: float = 0.0
     model: str = ""
     usage: tuple[UsageAmount, ...] = ()
+    usage_event_id: str | None = None
 
 
 class UtilityCompletionError(OSError):
@@ -40,9 +41,12 @@ class UtilityCompletionError(OSError):
     fallback paths. ``reason`` distinguishes timeout, abort and SDK failures.
     """
 
-    def __init__(self, message: str, *, reason: str = "sdk_error") -> None:
+    def __init__(
+        self, message: str, *, reason: str = "sdk_error", completion: CompletionResult | None = None,
+    ) -> None:
         super().__init__(message)
         self.reason = reason
+        self.completion = completion
 
 
 # Model prefixes accepted by each SDK.  An empty tuple means "any model".

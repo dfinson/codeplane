@@ -23,6 +23,83 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 
 
 class TestAdapterRegistry:
+    async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(self, session_factory) -> None:
+        from decimal import Decimal
+
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.models.usage import UsageAmount
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned"),
+        )
+        registry = AdapterRegistry(session_factory=session_factory)
+        adapter = registry.get_adapter("copilot")
+        usage = UsageAmount(
+            amount=Decimal("1"), unit="copilot_cost_unit", producer="copilot", model="served-model",
+            role="utility", job_id="job-1", execution_epoch="epoch", source="assistant.usage",
+        )
+        adapter.complete = AsyncMock(return_value=CompletionResult(
+            text="private completion content", model="served-model", usage=(usage,),
+        ))
+        with completion_context(CompletionContext(
+            job_id="job-1", execution_epoch="epoch", execution_contract=pin,
+        )):
+            result = await registry.get_completion_provider("copilot").complete(
+                "private input", model="requested-model",
+            )
+        async with session_factory() as session:
+            recorded = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in recorded] == [
+            "utility.completion.requested", "utility.completion.completed",
+        ]
+        completed = recorded[-1]
+        assert result.usage_event_id == completed.id
+        assert completed.payload["admission_id"] == pin.admission_id
+        assert completed.payload["contract"] == pin.contract.model_dump(mode="json")
+        assert completed.payload["actual_model"] == "served-model"
+        assert completed.payload["requested_model"] == "requested-model"
+        assert completed.payload["usage"] == [usage.model_dump(mode="json")]
+        assert "private" not in str(completed.payload)
+        assert result.usage == (usage,)
+
+    @pytest.mark.parametrize("failure_phase", ["requested", "completed"])
+    async def test_utility_receipt_failure_distinguishes_no_call_from_retained_completion(
+        self, session_factory, monkeypatch, failure_phase,
+    ) -> None:
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned"),
+        )
+        registry = AdapterRegistry(session_factory=session_factory)
+        adapter = registry.get_adapter("copilot")
+        adapter.complete = AsyncMock(return_value=CompletionResult(text="retained", input_tokens=7, model="served"))
+        record = registry.record_utility_receipt
+
+        async def fail(operation_id, phase, context, payload):
+            if phase == failure_phase:
+                raise OSError("Persistence unavailable")
+            return await record(operation_id, phase, context, payload)
+
+        monkeypatch.setattr(registry, "record_utility_receipt", fail)
+        with (
+            completion_context(CompletionContext(job_id="job-1", execution_epoch="epoch", execution_contract=pin)),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await registry.get_completion_provider("copilot").complete("input")
+        if failure_phase == "requested":
+            adapter.complete.assert_not_awaited()
+            assert caught.value.completion is None
+        else:
+            adapter.complete.assert_awaited_once()
+            assert caught.value.completion.input_tokens == 7
+            assert caught.value.completion.usage_event_id is not None
+
     @pytest.mark.parametrize("work_sdk,utility_sdk,expected", [
         ("claude", None, "copilot"), ("copilot", "claude", "claude"),
     ])

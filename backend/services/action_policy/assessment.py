@@ -23,6 +23,7 @@ from backend.services.adapters.completion_context import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
+    from backend.models.execution_contracts import ExecutionContractPin
     from backend.services.action_policy.credential_filter import Redaction
     from backend.services.adapters.agent_adapter import CompletionResult
     from backend.services.adapters.contracts import TextCompletionProvider
@@ -99,6 +100,7 @@ class AssessmentService:
         provider: TextCompletionProvider | None,
         model: str | None,
         is_current: Callable[[], Awaitable[bool]],
+        execution_contract: ExecutionContractPin | None = None,
     ) -> AssessmentResult:
         start = time.monotonic()
         sources: tuple[AssessmentSource, ...] = ()
@@ -187,6 +189,7 @@ class AssessmentService:
                     role="assessment",
                     job_id=binding.job_id,
                     execution_epoch=binding.epoch,
+                    execution_contract=execution_contract,
                 )
                 with completion_context(invocation):
                     result = await provider.complete(prompt, model=model, system_message=system, excluded_tools=["*"])
@@ -233,7 +236,9 @@ class AssessmentService:
                 return unavailable("assessment_timeout")
             try:
                 return task.result()
-            except (UtilityCompletionError, OSError, RuntimeError, ValueError):
+            except UtilityCompletionError as exc:
+                return unavailable("assessment_provider_failed", exc.completion)
+            except (OSError, RuntimeError, ValueError):
                 return unavailable("assessment_provider_failed")
         finally:
             if not release_later:

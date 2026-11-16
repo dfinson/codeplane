@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
     from backend.services.runtime.execution_contracts import ExecutionContracts
+    from backend.services.runtime.handoff import PendingHandoff
     from backend.services.sidecar.dispatcher import SidecarDispatcher
     from backend.services.steps.tracker import StepTracker
     from backend.services.terminal.terminal_service import TerminalService
@@ -335,6 +336,9 @@ class RuntimeService:
         self._policy_routers: dict[str, Any] = {}  # job_id → PolicyRouter
         self._repo_policies: dict[str, RepoPolicy] = {}
         self._execution_contracts: ExecutionContracts | None = None
+        self._job_contract_pins: dict[str, ExecutionContractPin] = {}
+        self._legacy_recoveries: dict[str, object] = {}
+        self._legacy_handoffs: dict[str, PendingHandoff] = {}
         self._policy_batchers: dict[str, Any] = {}  # job_id → ApprovalBatcher
         self._dequeue_lock = asyncio.Lock()
         self._shutting_down = False
@@ -710,12 +714,18 @@ class RuntimeService:
             if current is None:
                 raise RuntimeError("Job admission requires an owning asyncio task.")
             self._starting_tasks[job.id] = current
+        recovery = self._legacy_recoveries.get(job.id)
+        handoff = self._legacy_handoffs.get(job.id)
         try:
             await self._start_reserved_job(job, override_prompt, resume_sdk_session_id)
         finally:
             if self._starting_tasks.get(job.id) is current:
                 self._starting_tasks.pop(job.id, None)
             self._queued_session_tokens.pop(job.id, None)
+            if self._legacy_recoveries.get(job.id) is recovery:
+                self._legacy_recoveries.pop(job.id, None)
+            if self._legacy_handoffs.get(job.id) is handoff:
+                self._legacy_handoffs.pop(job.id, None)
 
     async def _start_reserved_job(
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
@@ -757,6 +767,9 @@ class RuntimeService:
             if resume_sdk_session_id is not None:
                 session_config = dataclass_replace(session_config, resume_sdk_session_id=resume_sdk_session_id)
 
+            if self._execution_contracts is not None:
+                await self._prepare_legacy_execution_contract(job.id)
+
             # Plan mode: wrap the prompt for the planning session
             if job.mode == JobMode.plan and override_prompt is None and resume_sdk_session_id is None:
                 from backend.services.runtime.plan_mode import build_planning_prompt
@@ -777,6 +790,7 @@ class RuntimeService:
                 job_prompt=job.prompt or "",
                 repo=job.execution_repo,
             )
+            session_config = await self._complete_legacy_handoff(job, session_config)
             async with self._recipe_runner_slots:
                 await self._activate_job_sidecars(job)
 
@@ -1397,6 +1411,9 @@ class RuntimeService:
             self._legacy_runner_slots.remove(job_id)
             self._recipe_runner_slots.release()
         self._queued_session_tokens.pop(job_id, None)
+        self._job_contract_pins.pop(job_id, None)
+        self._legacy_recoveries.pop(job_id, None)
+        self._legacy_handoffs.pop(job_id, None)
         # Last-resort guard: if the job is still non-terminal after all error
         # handlers have run, force it to failed so it doesn't stay stuck.
         await self._ensure_terminal_state(job_id)
@@ -2282,6 +2299,45 @@ class RuntimeService:
             return await self._execution_contracts.recover(job_id, admission_id)
         return await self._execution_contracts.fresh(job_id, admission_id)
 
+    async def _prepare_legacy_execution_contract(self, job_id: str) -> None:
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+        async with self._session_factory() as session:
+            if await RecipeRunRepository(session).get_for_job(job_id) is not None:
+                return
+            admission = await ExecutionAdmissionRepository(session).current(job_id)
+        if admission is None:
+            raise StateConflictError("Legacy execution admission is unrecorded; explicit continuation is required")
+        pin = await self.prepare_execution_contract(
+            job_id, admission.id, recovery=job_id in self._legacy_recoveries,
+        )
+        if pin is None:
+            raise StateConflictError("Recovery cannot create a missing historical execution contract")
+        self._job_contract_pins[job_id] = pin
+
+    async def _complete_legacy_handoff(self, job: Job, config: SessionConfig) -> SessionConfig:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        pending = self._legacy_handoffs.pop(job.id, None)
+        if pending is None:
+            return config
+        pin = self._job_contract_pins.get(job.id)
+        if (
+            pin is None or pin.admission_id != pending.admission_id
+            or job.session_count != pending.target_session_number
+        ):
+            raise StateConflictError("Deferred handoff does not belong to the pinned admission")
+        source_job = dataclass_replace(job, session_count=pending.source_session_number)
+        with completion_context(CompletionContext(
+            job_id=job.id, execution_epoch=self._execution_epoch, execution_contract=pin,
+        )):
+            async with self._session_factory() as session:
+                prompt = await self._build_resume_handoff_prompt_for_job(
+                    session, source_job, pending.instruction, pending.target_session_number,
+                )
+        return dataclass_replace(config, prompt=prompt)
+
     async def bind_attempt_contract(
         self, pin: ExecutionContractPin, attempt_id: str, expected_execution: str,
     ) -> None:
@@ -2558,6 +2614,8 @@ class RuntimeService:
         interacts with in-memory runtime tasks.
         """
         self._queued_session_tokens.pop(job_id, None)
+        self._legacy_recoveries.pop(job_id, None)
+        self._legacy_handoffs.pop(job_id, None)
         task = self._tasks.get(job_id)
         starting = self._starting_tasks.get(job_id)
         if starting is not None and starting is not asyncio.current_task():
@@ -3110,6 +3168,7 @@ class RuntimeService:
                 await self._fail_job(job.id, str(exc))
                 continue
             log.info("recovering_preparing_job", job_id=job.id)
+            self._legacy_recoveries[job.id] = object()
             asyncio.create_task(self.setup_and_start(job), name=f"recover-setup-{job.id}")
 
         recoverable = orphaned_jobs
@@ -3140,6 +3199,7 @@ class RuntimeService:
             if job.source != JobSource.managed:
                 continue
             try:
+                self._legacy_recoveries[job.id] = object()
                 await self.start_or_enqueue(job)
             except IntegrationDisabledError as exc:
                 await self._fail_job(job.id, str(exc))

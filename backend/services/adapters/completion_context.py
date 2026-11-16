@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from backend.models.execution_contracts import ExecutionContractPin
+
 
 @dataclass(frozen=True, slots=True)
 class CompletionContext:
@@ -17,6 +19,7 @@ class CompletionContext:
     role: Literal["primary", "scout", "monitor", "assessment", "title", "utility"] = "utility"
     job_id: str | None = None
     execution_epoch: str | None = None
+    execution_contract: ExecutionContractPin | None = None
 
 
 _CURRENT: ContextVar[CompletionContext | None] = ContextVar("utility_completion_context", default=None)
@@ -41,6 +44,11 @@ def validate_completion_identity(requested: str | None, actual: str, context: Co
 def completion_context(context: CompletionContext) -> Iterator[None]:
     if not 1 <= context.max_output_bytes <= 64 * 1024:
         raise ValueError("Completion output limit must be between 1 and 65536 bytes")
+    if context.execution_contract is not None and (
+        context.execution_contract.job_id != context.job_id
+        or context.execution_contract.budget_id != context.job_id
+    ):
+        raise ValueError("Utility contract must retain the originating Job and budget")
     token = _CURRENT.set(context)
     try:
         yield
