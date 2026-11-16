@@ -2418,6 +2418,7 @@ class RuntimeService:
             metadata=EventMetadata(
                 attempt_id=attempt_id, execution_epoch=self._execution_epoch,
                 execution_token=expected_execution, run_id=target_session_id,
+                source_framework="codeplane", namespace=("control", "admission-receipt"),
             ),
         )
         from backend.persistence.database import serialized_write

@@ -105,6 +105,8 @@ async def test_accepted_dispatch_is_a_receipt_not_a_second_operator_boundary(ses
     assert receipt.payload["operator_content"] == "Operator instruction"
     assert receipt.metadata.execution_token == context.execution_token
     assert receipt.metadata.run_id == "primary"
+    assert receipt.metadata.source_framework == "codeplane"
+    assert receipt.metadata.namespace == ("control", "admission-receipt")
     assert "Operator instruction" not in runtime._echo_suppress.get("job-1", set())
     bus = EventBus()
     output = []
