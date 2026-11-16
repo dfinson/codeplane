@@ -88,7 +88,9 @@ async def _stop_owned_process(
         if process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
-        await process.wait()
+        # returncode observes leader exit independently of inherited pipe closure.
+        while process.returncode is None:
+            await asyncio.sleep(0.02)
         windows_job.terminate()
         while windows_job.active_processes():
             await asyncio.sleep(0.02)

@@ -85,6 +85,49 @@ async def test_unowned_or_unconfirmed_windows_tree_cannot_report_confirmed_stop(
     owner.close()
 
 
+async def test_active_stop_terminates_descendants_before_waiting_for_inherited_pipes(kernel, monkeypatch):
+    monkeypatch.setattr(command_runner, "os", SimpleNamespace(name="nt"))
+    pipes_closed = asyncio.Event()
+    order = []
+    process = MagicMock(returncode=None)
+
+    def exited():
+        process.returncode = 1
+        order.append("leader exited")
+
+    def kill():
+        order.append("kill leader")
+        asyncio.get_running_loop().call_soon(exited)
+
+    def terminate(*_args):
+        assert process.returncode == 1
+        order.append("terminate job")
+        pipes_closed.set()
+        return True
+
+    async def wait():
+        await pipes_closed.wait()
+        order.append("pipes drained")
+        return process.returncode
+
+    def accounting(_handle, _kind, pointer, _size, _returned):
+        info = ctypes.cast(pointer, ctypes.POINTER(windows_process._Accounting)).contents
+        info.TotalProcesses = 3
+        info.ActiveProcesses = 0
+        return True
+
+    process.kill.side_effect = kill
+    process.wait = AsyncMock(side_effect=wait)
+    kernel.TerminateJobObject.side_effect = terminate
+    kernel.QueryInformationJobObject.side_effect = accounting
+    owner = windows_process.WindowsCommandJob()
+    try:
+        await asyncio.wait_for(command_runner._stop(process, owner), timeout=1)
+        assert order == ["kill leader", "leader exited", "terminate job", "pipes drained"]
+    finally:
+        owner.close()
+
+
 def test_windows_job_records_positive_no_command_start_and_isolates_bootstrap(kernel):
     def accounting(_handle, _kind, pointer, _size, _returned):
         info = ctypes.cast(pointer, ctypes.POINTER(windows_process._Accounting)).contents
@@ -102,7 +145,8 @@ def test_windows_job_records_positive_no_command_start_and_isolates_bootstrap(ke
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Native Windows Job Object containment requires Windows.")
-async def test_native_windows_child_is_contained_after_exited_command_leader(tmp_path):
+@pytest.mark.parametrize("active_leader", [False, True])
+async def test_native_windows_child_is_contained_after_exited_command_leader(tmp_path, active_leader):
     import psutil
 
     heartbeat = tmp_path / "heartbeat.txt"
@@ -110,11 +154,14 @@ async def test_native_windows_child_is_contained_after_exited_command_leader(tmp
         "import pathlib,time; p=pathlib.Path(" + repr(str(heartbeat)) + "); "
         "p.write_text('started');\nwhile True:\n p.write_text(str(time.time())); time.sleep(.05)"
     )
+    streams = "None" if active_leader else "subprocess.DEVNULL"
     leader = (
         "import subprocess,sys; "
         f"p=subprocess.Popen([sys.executable,'-I','-S','-c',{child!r}],"
-        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid)"
+        f"stdin=subprocess.DEVNULL,stdout={streams},stderr={streams}); print(p.pid,flush=True)"
     )
+    if active_leader:
+        leader += "; import time; time.sleep(60)"
     owner = windows_process.WindowsCommandJob()
     process = None
     try:
@@ -124,8 +171,12 @@ async def test_native_windows_child_is_contained_after_exited_command_leader(tmp
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
-        assert process.returncode == 0, stderr.decode(errors="replace")
+        if active_leader:
+            stdout = await asyncio.wait_for(process.stdout.readline(), timeout=10)
+            assert process.returncode is None
+        else:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+            assert process.returncode == 0, stderr.decode(errors="replace")
         child_pid = int(stdout.decode().strip())
         assert psutil.pid_exists(child_pid)
         await command_runner._stop(process, owner)
