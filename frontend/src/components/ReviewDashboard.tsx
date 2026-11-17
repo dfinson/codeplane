@@ -11,6 +11,7 @@ import { ReviewSubTabs, type ReviewSubView } from "./review/ReviewSubTabs";
 import { StorySubView } from "./review/StorySubView";
 import { lazyRetry } from "../lib/lazyRetry";
 import type { StepFilter } from "./DiffViewer";
+import { RecipeReviewPanel } from "./RecipeReviewPanel";
 
 const DiffViewer = lazyRetry(() => import("./DiffViewer"));
 
@@ -67,7 +68,8 @@ export function ReviewDashboard({
       />
 
       {/* Sub-view content */}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-auto lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-4">
+        <div className="min-w-0 min-h-[24rem] lg:overflow-hidden">
         {subView === "changes" && hasChanges && (
           <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
             <DiffViewer
@@ -85,6 +87,8 @@ export function ReviewDashboard({
         {subView === "story" && (
           <StorySubView jobId={jobId} />
         )}
+        </div>
+        <RecipeReviewPanel jobId={jobId} />
       </div>
     </div>
   );

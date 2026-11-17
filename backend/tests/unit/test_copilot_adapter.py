@@ -508,7 +508,12 @@ class TestRuntimeContract:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stop_error",
-        [RuntimeError("stop failed"), ExceptionGroup("disconnect failures", [OSError("transport failed")])],
+        [
+            RuntimeError("stop failed"),
+            OSError("stop failed"),
+            ExceptionGroup("disconnect failures", [OSError("transport failed")]),
+            ExceptionGroup("disconnect failures", [_fake_copilot_client_mod.StopError("detach failed")]),
+        ],
     )
     async def test_any_sdk_stop_failure_attempts_force_stop(self, adapter: CopilotAdapter, stop_error) -> None:
         client, _ = self._client()

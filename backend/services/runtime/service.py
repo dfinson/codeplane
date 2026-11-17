@@ -2760,6 +2760,32 @@ class RuntimeService:
                 if job.source == JobSource.managed
                 else job.external_session_id
             )
+            recipe_run_id = None
+            recipe_revision = None
+            step_instance_id = None
+            execution_epoch = self._execution_epoch
+            if attempt_id is not None:
+                from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+                async with self._session_factory() as session:
+                    repository = RecipeRunRepository(session)
+                    attempt = await repository.get_attempt(attempt_id)
+                    if attempt is not None:
+                        step = await repository.get_step(attempt.step_instance_id)
+                        run = await repository.get(step.run_id) if step else None
+                        if (
+                            step is None
+                            or run is None
+                            or run.job_id != job_id
+                            or step.current_attempt_id != attempt_id
+                            or attempt.result is not None
+                            or run.resolved_at is not None
+                            or run.cancel_requested_at is not None
+                        ):
+                            return CurrentExecutionDispatchResult(job_id, token, "conflict", "attempt_scope_changed")
+                        recipe_run_id = run.id
+                        recipe_revision = run.snapshot.revision
+                        step_instance_id = step.id
             try:
                 IntegrationPolicy(self._config).require_enabled(binding.sdk if binding is not None else job.sdk)
                 async with asyncio.timeout(30):
@@ -2803,7 +2829,10 @@ class RuntimeService:
             event_id=receipt_id,
             metadata=EventMetadata(
                 attempt_id=attempt_id,
-                execution_epoch=self._execution_epoch,
+                recipe_run_id=recipe_run_id,
+                recipe_revision=recipe_revision,
+                step_instance_id=step_instance_id,
+                execution_epoch=execution_epoch,
                 execution_token=expected_execution,
                 run_id=target_session_id,
                 source_framework="codeplane",

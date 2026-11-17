@@ -6,11 +6,12 @@ import { useStore } from "../../store";
 vi.mock("../../api/client", () => ({
   fetchRecipeStep: vi.fn(),
   fetchRecipeAttempt: vi.fn(),
+  fetchRecipeAttemptControl: vi.fn(),
   resumeJob: vi.fn(),
   sendOperatorMessage: vi.fn(),
 }));
 
-import { fetchRecipeAttempt, fetchRecipeStep, resumeJob, sendOperatorMessage } from "../../api/client";
+import { fetchRecipeAttempt, fetchRecipeAttemptControl, fetchRecipeStep, resumeJob, sendOperatorMessage } from "../../api/client";
 import { RecipeStepInspector } from "../RecipeStepInspector";
 
 const now = "2026-11-16T09:00:00Z";
@@ -64,6 +65,10 @@ beforeEach(() => {
   useStore.setState({ recipeStepInspections: {}, recipeAttemptInspections: {}, recipeVersions: {}, connectionStatus: "connected" });
   vi.mocked(fetchRecipeStep).mockImplementation(async (_job, _run, id) => step(id));
   vi.mocked(fetchRecipeAttempt).mockImplementation(async (_job, _run, _step, id) => attempt(id));
+  vi.mocked(fetchRecipeAttemptControl).mockImplementation(async (jobId, runId, stepId, attemptId) => ({
+    jobId, runId, stepInstanceId: stepId, attemptId, canMessage: false, messageDisabledReason: "No agent message channel.",
+    executionToken: null, nativeSessionId: null, executionEpoch: "epoch",
+  }));
 });
 
 describe("RecipeStepInspector", () => {

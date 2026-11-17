@@ -234,6 +234,36 @@ async def test_recipe_step_pages_bound_results_without_loading_attempt_evidence(
     assert (await client.get(root, params={"limit": 0})).status_code == 422
 
 
+async def test_step_inspection_links_pinned_dependencies_and_consumers_without_inventing_receipts(
+    client, session_factory
+):
+    from backend.models.schemas.recipes import RecipeDefinition
+
+    run = await create_run(session_factory, RecipeDefinition.model_validate(definition()), job_id="lineage-job")
+    async with session_factory() as session:
+        repository = RecipeRunRepository(session)
+        producer = await repository.get_step_by_path(run.id, "context")
+        consumer = await repository.get_step_by_path(run.id, "check")
+    root = f"/api/jobs/{run.job_id}/recipe/runs/{run.id}/steps"
+    waiting = (await client.get(f"{root}/{consumer.id}")).json()
+    assert waiting["attempts"] == []
+    assert waiting["predecessors"][0]["stepId"] == producer.id
+    assert waiting["predecessors"][0]["attemptId"] is None
+    assert waiting["predecessors"][0]["requiredOutcomes"] == ["succeeded"]
+    assert waiting["predecessors"][0]["inputNames"] == ["brief"]
+    async with session_factory() as session:
+        attempt = await ready_attempt(session, run, "context")
+        await RecipeRunRepository(session).finish_attempt(attempt.id, agent_result(), {"brief": "Exact source brief"})
+        await session.commit()
+    producer_detail = (await client.get(f"{root}/{producer.id}")).json()
+    assert producer_detail["consumers"][0]["stepId"] == consumer.id
+    assert producer_detail["consumers"][0]["attemptId"] is None
+    after = (await client.get(f"{root}/{consumer.id}")).json()
+    assert after["predecessors"][0]["attemptId"] == attempt.id
+    assert after["predecessors"][0]["state"] == "succeeded"
+    assert after["attempts"] == [], "Reading a ready input cannot claim or dispatch the waiting consumer."
+
+
 async def test_job_creation_pins_selected_revision_and_request_before_background_setup(
     client,
     session_factory,
@@ -399,6 +429,92 @@ async def test_explicit_resume_response_retains_the_exact_run_receipt(client, se
         start_request_key="request-key",
         selection=None,
     )
+    mock_runtime_service.resume_job.assert_not_awaited()
+
+
+@pytest.mark.parametrize("case", ["accepted", "pending", "replaced", "uncertain", "failed"])
+async def test_attempt_message_api_uses_only_exact_live_execution(
+    client, session_factory, mock_runtime_service, approval_service, case
+):
+    from backend.models.schemas.recipes import RecipeAttemptExecution
+    from backend.persistence.event_repo import EventRepository
+    from backend.services.completers.copilot_steer import NativeDeliveryError
+
+    run = await create_run(session_factory, simple_recipe(), job_id="controlled-job")
+    async with session_factory() as session:
+        attempt = await ready_attempt(session, run, "context")
+    adapter = MagicMock()
+    adapter.send_message = AsyncMock()
+    registry = MagicMock()
+    registry.get_adapter.return_value = adapter
+    actual = RuntimeService(
+        session_factory=session_factory,
+        event_bus=EventBus(),
+        adapter_registry=registry,
+        config=CPLConfig(),
+        approval_service=approval_service,
+    )
+    live = await actual.register_attempt_execution(run.job_id, attempt.id, adapter, "actual-session")
+    async with session_factory() as session:
+        await RecipeRunRepository(session).record_execution(
+            attempt.id,
+            RecipeAttemptExecution(
+                execution_token=live.execution_token,
+                session_id="actual-session",
+                provider="copilot",
+                model=None,
+                started_at=datetime.now(UTC),
+            ),
+        )
+        await session.commit()
+    mock_runtime_service._execution_control = actual._execution_control
+    mock_runtime_service._attempt_bindings = actual._attempt_bindings
+    mock_runtime_service._recipe_controllers = actual._recipe_controllers
+    mock_runtime_service._config = actual._config
+    mock_runtime_service.execution_epoch = actual.execution_epoch
+    mock_runtime_service._require_attempt_job = actual._require_attempt_job
+    mock_runtime_service.dispatch_current_execution = actual.dispatch_current_execution
+    actual._resume_orphaned = AsyncMock()
+    root = f"/api/jobs/{run.job_id}/recipe/runs/{run.id}/steps/{attempt.step_instance_id}/attempts/{attempt.id}"
+    preview = await client.get(f"{root}/control")
+    assert preview.status_code == 200 and preview.json()["canMessage"]
+    assert preview.json()["executionToken"] == live.execution_token
+    approval = None
+    if case == "pending":
+        approval = await approval_service.create_request(
+            run.job_id, "Current hard gate", requires_explicit_approval=True
+        )
+    elif case == "replaced":
+        await actual.unregister_attempt_execution(run.job_id, attempt.id, live.execution_token)
+        await actual.register_attempt_execution(run.job_id, attempt.id, adapter, "actual-session")
+    elif case in {"uncertain", "failed"}:
+        adapter.send_message.side_effect = NativeDeliveryError(
+            "Provider delivery result", uncertain=case == "uncertain"
+        )
+    response = await client.post(
+        f"{root}/messages",
+        json={
+            "expectedExecution": live.execution_token,
+            "content": "Only this exact attempt",
+        },
+    )
+    assert response.status_code == (409 if case in {"pending", "replaced"} else 200), response.text
+    assert response.json()["status"] == ("conflict" if case in {"pending", "replaced"} else case)
+    if case in {"pending", "replaced"}:
+        adapter.send_message.assert_not_awaited()
+    else:
+        adapter.send_message.assert_awaited_once_with("actual-session", "Only this exact attempt")
+    if approval:
+        assert (await approval_service.get(approval.id)).resolution is None
+    if case == "accepted":
+        receipt_id = response.json()["messageEventId"]
+        async with session_factory() as session:
+            event = await EventRepository(session).get(receipt_id)
+        assert event.metadata.recipe_run_id == run.id and event.metadata.step_instance_id == attempt.step_instance_id
+        assert event.metadata.attempt_id == attempt.id and event.metadata.execution_token == live.execution_token
+        assert event.metadata.run_id == "actual-session" and event.payload["execution_status"] == "unconfirmed"
+    actual._resume_orphaned.assert_not_awaited()
+    adapter.resume_tools.assert_not_called()
     mock_runtime_service.resume_job.assert_not_awaited()
 
 

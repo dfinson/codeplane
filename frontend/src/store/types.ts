@@ -9,6 +9,7 @@ import type {
   DiffFileModel, Job, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload,
   RecipeStepInspection, RecipeAttemptInspection, RecipeRun, RecipeRunList, RecipeStepList,
   TaskLinkInspection, ProjectBoard, ProjectBoardPage, ProjectApprovalPage, ProjectDeliveryPage,
+  RecipeAttemptControl, ReviewPreparation, ReviewHistoryPage,
 } from "../api/types";
 
 /** Connection status exposed to UI components. */
@@ -210,6 +211,9 @@ export interface ContextHandoff {
 }
 
 export interface AppState {
+  reviewPreparations: Record<string, ReviewPreparation>;
+  reviewHistoryPages: Record<string, ReviewHistoryPage>;
+  recipeAttemptControls: Record<string, RecipeAttemptControl>;
   projectBoards: Record<string, ProjectBoard>;
   projectBoardPages: Record<string, ProjectBoardPage>;
   projectApprovalPages: Record<string, ProjectApprovalPage>;

@@ -233,6 +233,104 @@ async def start_runtime(host, run, sessions, monkeypatch):
     return host._tasks[job.id]
 
 
+@pytest.mark.parametrize("retry", [False, True])
+async def test_canceled_outcome_route_cancels_the_job_without_cleanup_failure(sessions, tmp_path, monkeypatch, retry):
+    step = RecipeStep(
+        id="check",
+        title="Canceled route",
+        runner=RecipeCommandRunner(argv=["sh", "-c", "exit 1"]),
+        capabilities=["read", "shell", "write", "external_access"],
+        workspace=RecipeWorkspacePolicy(mode="mutable"),
+        routes={"succeeded": RecipeRoute(terminal="succeeded"), "failed": RecipeRoute(terminal="canceled")},
+        retry=RecipeRetryPolicy(max_attempts=2, retry_on=["failed"], exhaustion=RecipeRoute(terminal="canceled"))
+        if retry
+        else RecipeRetryPolicy(),
+    )
+    host, _, run, _, _ = await command_context(
+        sessions,
+        tmp_path,
+        monkeypatch,
+        "",
+        admit=False,
+        graph=RecipeDefinition(name="Canceled route", entry_steps=["check"], steps=[step]),
+    )
+    await asyncio.wait_for(await start_runtime(host, run, sessions, monkeypatch), timeout=15)
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        finished = await repository.get(run.id)
+        job = await JobRepository(session).get(run.job_id)
+        current = await repository.get_step_by_path(run.id, "check")
+        attempts = await repository.list_attempts(current.id)
+    assert finished.state == "canceled" and finished.resolved_at is not None
+    assert job.state == "canceled" and job.failure_reason is None
+    assert len(attempts) == (2 if retry else 1)
+
+
+async def test_selected_command_stop_retains_uncertain_effects_until_explicit_reconciliation(
+    sessions, tmp_path, monkeypatch
+):
+    from backend.models.schemas.recipes import RecipeReconcileRequest
+    from backend.persistence.approval_repo import ApprovalRepository
+    from backend.services.recipe.control import RecipeControlService
+    from backend.services.recipe.inspection import RecipeInspectionService
+
+    host, _, run, _, _ = await command_context(
+        sessions, tmp_path, monkeypatch, "printf started > started.txt; sleep 60", admit=False
+    )
+    owner_task = await start_runtime(host, run, sessions, monkeypatch)
+    try:
+        async with asyncio.timeout(10):
+            while not (tmp_path / "repo" / "started.txt").exists():
+                await asyncio.sleep(0.02)
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            step = await repository.get_step_by_path(run.id, "check")
+            service = RecipeControlService(
+                RecipeInspectionService(repository, JobRepository(session), ApprovalRepository(session)), host
+            )
+            context = await service.context(run.job_id, run.id, step.id, step.current_attempt_id)
+            assert context.stop.enabled and not context.can_message
+            rejected = await service.stop(run.job_id, run.id, step.id, step.current_attempt_id, "stale")
+            assert rejected.status == "conflict"
+            stopped = await service.stop(
+                run.job_id, run.id, step.id, step.current_attempt_id, context.stop.expected_token
+            )
+            assert stopped.status == "stopped" and stopped.requires_reconciliation
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            step = await repository.get_step(step.id)
+            attempt = await repository.get_attempt(step.current_attempt_id)
+            assert step.state == "interrupted" and attempt.result.evidence.uncertain
+            original_result = attempt.result
+            service = RecipeControlService(
+                RecipeInspectionService(repository, JobRepository(session), ApprovalRepository(session)), host
+            )
+            commit = await host._git_service.capture_worktree_commit(
+                cwd=attempt.workspace.path, snapshot_ref="refs/codeplane/recipe-inputs/operator-reconciled"
+            )
+            receipt = await service.reconcile(
+                run.job_id,
+                run.id,
+                step.id,
+                attempt.id,
+                RecipeReconcileRequest(
+                    expected_version=step.version,
+                    effects_quiescent=True,
+                    evidence="Inspected the owned local process tree and stopped-effect code snapshot.",
+                    code=RecipeCodeReference(workspace=attempt.workspace.path, commit=commit),
+                ),
+            )
+            assert receipt.status == "reconciled"
+        await asyncio.wait_for(owner_task, timeout=10)
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            assert (await repository.get_attempt(attempt.id)).result == original_result
+            assert (await repository.get(run.id)).state == "canceled"
+            assert (await JobRepository(session).get(run.job_id)).state == "canceled"
+    finally:
+        await host.shutdown()
+
+
 async def test_runtime_drives_the_pinned_command_without_legacy_agent_or_scout(sessions, tmp_path, monkeypatch):
     host, router, run, _, _ = await command_context(
         sessions,

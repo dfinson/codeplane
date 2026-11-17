@@ -420,9 +420,21 @@ class RecipeAttemptSummary(RecipeModel):
     completed_at: datetime | None
 
 
+class RecipeStepRelation(RecipeModel):
+    step_id: str | None
+    step_path: str
+    title: str
+    state: RecipeState | None
+    attempt_id: str | None
+    required_outcomes: list[str] = Field(default_factory=list)
+    input_names: list[str] = Field(default_factory=list)
+
+
 class RecipeStepInspection(RecipeModel):
     step: RecipeStepInstanceResponse
     attempts: list[RecipeAttemptSummary]
+    predecessors: list[RecipeStepRelation] = Field(default_factory=list)
+    consumers: list[RecipeStepRelation] = Field(default_factory=list)
 
 
 class RecipeGateInspection(RecipeModel):
@@ -435,3 +447,64 @@ class RecipeGateInspection(RecipeModel):
 class RecipeAttemptInspection(RecipeModel):
     attempt: RecipeAttemptResponse
     gate: RecipeGateInspection | None
+
+
+class RecipeControlAction(RecipeModel):
+    enabled: bool
+    disabled_reason: str | None
+    expected_token: str | None = None
+    expected_version: int | None = None
+
+
+class RecipeAttemptControl(RecipeModel):
+    job_id: str
+    run_id: str
+    step_instance_id: str
+    attempt_id: str
+    can_message: bool
+    message_disabled_reason: str | None
+    execution_token: str | None
+    native_session_id: str | None
+    execution_epoch: str
+    stop: RecipeControlAction | None = None
+    resume: RecipeControlAction | None = None
+    reconcile: RecipeControlAction | None = None
+
+
+class RecipeStopRequest(RecipeModel):
+    expected_token: str = Field(min_length=1, max_length=256)
+
+
+class RecipeAttemptResumeRequest(RecipeModel):
+    expected_version: int = Field(ge=1)
+
+
+class RecipeReconcileRequest(RecipeModel):
+    expected_version: int = Field(ge=1)
+    evidence: str = Field(min_length=1, max_length=10_000)
+    effects_quiescent: Literal[True]
+    code: RecipeCodeReference
+
+
+class RecipeOperationReceipt(RecipeModel):
+    attempt_id: str
+    status: Literal["stopped", "resumed", "reconciled", "conflict", "uncertain"]
+    reason: str
+    requires_reconciliation: bool = False
+
+
+class RecipeMessageRequest(RecipeModel):
+    expected_execution: str = Field(min_length=1, max_length=256)
+    content: str = Field(min_length=1, max_length=10_000)
+
+
+class RecipeMessageReceipt(RecipeModel):
+    job_id: str
+    run_id: str
+    step_instance_id: str
+    attempt_id: str
+    execution_token: str | None
+    status: Literal["accepted", "conflict", "failed", "uncertain"]
+    reason: str | None = None
+    message_event_id: str | None = None
+    execution_status: Literal["unconfirmed"] = "unconfirmed"

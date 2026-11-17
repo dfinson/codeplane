@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 
 _INPUTS = TypeAdapter(dict[str, RecipeInputReceipt])
 _RUNNER: TypeAdapter[RecipeRunner] = TypeAdapter(RecipeRunner)
-_ACTIVE_RUN_STATES = ("blocked", "ready", "running", "needs_decision")
+_ACTIVE_RUN_STATES = ("blocked", "ready", "running", "needs_decision", "interrupted")
 
 
 class RecipeRunRepository(BaseRepository):
@@ -340,6 +340,15 @@ class RecipeRunRepository(BaseRepository):
             .where(
                 RecipeStepInstanceRow.run_id == run_id,
                 func.json_extract(RecipeAttemptResultRow.evidence_json, "$.uncertain").is_(True),
+                ~exists(
+                    select(EventRow.id).where(
+                        EventRow.event_id == "recipe-reconciled-" + RecipeAttemptResultRow.attempt_id,
+                        EventRow.job_id == run.job_id,
+                        EventRow.kind == "recipe.attempt.reconciled",
+                        func.json_extract(EventRow.event_metadata, "$.source_framework") == "codeplane.recipe",
+                        func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+                    )
+                ),
             )
             .limit(1)
         )
@@ -575,6 +584,7 @@ class RecipeRunRepository(BaseRepository):
         expected_execution: str | None,
         expected_instance_version: int,
         dispatch_started: bool | None = None,
+        operator_stop: bool = False,
     ) -> None:
         attempt = await self.get_attempt(attempt_id)
         if attempt is None or attempt.result is not None:
@@ -623,6 +633,7 @@ class RecipeRunRepository(BaseRepository):
                     "resume_safe": stop_confirmed and resume_safe,
                     "execution_token": attempt.executions[-1].execution_token if attempt.executions else None,
                     "dispatch_started": dispatch_started,
+                    "operator_stop": operator_stop,
                 },
                 metadata=EventMetadata(
                     source_framework="codeplane.recipe",
@@ -639,7 +650,66 @@ class RecipeRunRepository(BaseRepository):
                 delete(RecipeWorkspaceLeaseRow).where(RecipeWorkspaceLeaseRow.attempt_id == attempt_id)
             )
 
-    async def resume_interrupted(self, instance: RecipeStepInstanceResponse) -> RecipeAttemptResponse:
+    async def operator_stop_pending(self, attempt_id: str) -> bool:
+        event = await self._session.scalar(
+            select(EventRow)
+            .where(
+                EventRow.kind == "recipe.attempt.interrupted",
+                func.json_extract(EventRow.payload, "$.attempt_id") == attempt_id,
+                func.json_extract(EventRow.event_metadata, "$.source_framework") == "codeplane.recipe",
+                func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+            )
+            .order_by(EventRow.id.desc())
+            .limit(1)
+        )
+        return event is not None and json.loads(event.payload).get("operator_stop") is True
+
+    async def safe_resume_available(self, attempt_id: str) -> bool:
+        attempt = await self.get_attempt(attempt_id)
+        if attempt is None or attempt.result is not None:
+            return False
+        step = await self.get_step(attempt.step_instance_id)
+        run = await self.get(step.run_id) if step else None
+        if (
+            step is None
+            or step.state != "interrupted"
+            or step.current_attempt_id != attempt_id
+            or run is None
+            or run.resolved_at is not None
+            or run.cancel_requested_at is not None
+        ):
+            return False
+        proof = await self._session.scalar(
+            select(EventRow)
+            .where(
+                EventRow.job_id == run.job_id,
+                EventRow.kind == "recipe.attempt.interrupted",
+                func.json_extract(EventRow.payload, "$.attempt_id") == attempt.id,
+                func.json_extract(EventRow.event_metadata, "$.source_framework") == "codeplane.recipe",
+                func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+            )
+            .order_by(EventRow.id.desc())
+            .limit(1)
+        )
+        evidence = json.loads(proof.payload) if proof else {}
+        lease = await self._session.scalar(
+            select(RecipeWorkspaceLeaseRow.attempt_id).where(
+                RecipeWorkspaceLeaseRow.attempt_id == attempt_id,
+            )
+        )
+        return (
+            lease is None
+            and evidence.get("stop_confirmed") is True
+            and evidence.get("resume_safe") is True
+            and evidence.get("run_id") == run.id
+            and evidence.get("execution_token")
+            == (attempt.executions[-1].execution_token if attempt.executions else None)
+            and (attempt.runner.kind != "command" or evidence.get("dispatch_started") is False)
+        )
+
+    async def resume_interrupted(
+        self, instance: RecipeStepInstanceResponse, *, explicit: bool = False
+    ) -> RecipeAttemptResponse:
         if instance.state != "interrupted" or instance.current_attempt_id is None:
             raise StateConflictError("Step has no interrupted execution to resume.")
         attempt = await self.get_attempt(instance.current_attempt_id)
@@ -662,6 +732,8 @@ class RecipeRunRepository(BaseRepository):
             .limit(1)
         )
         evidence = json.loads(proof.payload) if proof is not None else {}
+        if evidence.get("operator_stop") is True and not explicit:
+            raise StateConflictError("An operator-stopped attempt requires explicit Resume.")
         if attempt.runner.kind == "command" and evidence.get("dispatch_started") is not False:
             raise StateConflictError(
                 "A command can resume only when its dispatch is positively recorded as not started."
@@ -732,10 +804,16 @@ class RecipeRunRepository(BaseRepository):
             )
         )
         resumed: set[str] = set()
+        paused = False
         for row in rows:
             instance = self._step(row)
             if instance.definition.runner.kind in {"human", "block"} and instance.state == "running":
                 continue
+            if instance.state == "interrupted" and instance.current_attempt_id is not None:
+                retained = await self.get_attempt(instance.current_attempt_id)
+                if await self.operator_stop_pending(instance.current_attempt_id) or (retained and retained.result):
+                    paused = True
+                    continue
             if (
                 instance.state == "running"
                 and instance.definition.runner.kind == "agent"
@@ -759,8 +837,8 @@ class RecipeRunRepository(BaseRepository):
                 exists(select(JobRow.id).where(JobRow.id == run.job_id, JobRow.state == "running")),
             )
             .values(
-                state="running",
-                reason=None,
+                state="interrupted" if paused else "running",
+                reason="An interrupted attempt requires explicit operator action." if paused else None,
                 updated_at=datetime.now(UTC),
                 version=RecipeRunRow.version + 1,
             )
@@ -965,7 +1043,11 @@ class RecipeRunRepository(BaseRepository):
                 RecipeRunRow.cancel_requested_at.is_(None),
                 live_job,
             )
-            .values(state="running", version=RecipeRunRow.version + 1, updated_at=now)
+            .values(
+                state=case((RecipeRunRow.state == "interrupted", "interrupted"), else_="running"),
+                version=RecipeRunRow.version + 1,
+                updated_at=now,
+            )
             .returning(RecipeRunRow.id)
         )
         if admitted_run is None:
@@ -1191,6 +1273,7 @@ class RecipeRunRepository(BaseRepository):
                     "execution_token": execution_token,
                     "native_session_id": attempt.executions[-1].session_id,
                     "result_text": result_text,
+                    "final_response_qualified": True,
                 },
                 event_id=f"recipe-execution-{execution_token}",
                 metadata=EventMetadata(
@@ -1234,7 +1317,7 @@ class RecipeRunRepository(BaseRepository):
             or payload.get("native_session_id") != execution.session_id
         ):
             raise StateConflictError("The completed-turn receipt has conflicting execution ownership.")
-        if "result_text" in payload:
+        if "result_text" in payload and payload.get("final_response_qualified") is True:
             text = payload["result_text"]
             if text is not None and not isinstance(text, str):
                 raise StateConflictError("The completed-turn output snapshot is invalid.")
@@ -1243,7 +1326,9 @@ class RecipeRunRepository(BaseRepository):
             select(EventRow)
             .where(
                 EventRow.job_id == run.job_id,
-                EventRow.kind == "message.assistant",
+                EventRow.kind.in_(
+                    ("message.assistant", "tool.call.started", "tool.call.completed", "tool.call.failed")
+                ),
                 EventRow.id < receipt.id,
                 func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
                 func.json_extract(EventRow.event_metadata, "$.recipe_run_id") == run.id,
@@ -1255,7 +1340,12 @@ class RecipeRunRepository(BaseRepository):
             .order_by(EventRow.id.desc())
             .limit(1)
         )
-        text = json.loads(message.payload).get("content") if message else None
+        message_payload = json.loads(message.payload) if message and message.kind == "message.assistant" else {}
+        text = (
+            None
+            if message_payload.get("has_tool_requests") or message_payload.get("tool_requests")
+            else message_payload.get("content")
+        )
         return True, text if isinstance(text, str) else None
 
     async def agent_progress(self, attempt_id: str) -> tuple[int, RecipeAgentResult, bool]:
@@ -1531,7 +1621,7 @@ class RecipeRunRepository(BaseRepository):
         now = datetime.now(UTC)
         await self._session.execute(
             update(RecipeRunRow)
-            .where(RecipeRunRow.id == run_id, RecipeRunRow.state.in_(_ACTIVE_RUN_STATES + ("interrupted",)))
+            .where(RecipeRunRow.id == run_id, RecipeRunRow.state.in_(_ACTIVE_RUN_STATES))
             .values(state="canceled", cancel_requested_at=now, updated_at=now, version=RecipeRunRow.version + 1)
         )
 
@@ -1544,5 +1634,70 @@ class RecipeRunRepository(BaseRepository):
                 reason=reason,
                 updated_at=datetime.now(UTC),
                 version=RecipeRunRow.version + 1,
+            )
+        )
+
+    async def reconcile_stopped(
+        self, instance: RecipeStepInstanceResponse, *, evidence: str, code: RecipeCodeReference, execution_epoch: str
+    ) -> None:
+        from backend.models.events import EventMetadata, new_event
+        from backend.persistence.event_repo import EventRepository
+
+        current = await self.get_step(instance.id)
+        attempt = await self.get_attempt(instance.current_attempt_id) if instance.current_attempt_id else None
+        run = await self.get(instance.run_id)
+        if (
+            current is None
+            or current.version != instance.version
+            or current.state not in {"interrupted", "canceled"}
+            or attempt is None
+            or run is None
+            or run.resolved_at is not None
+        ):
+            raise StateConflictError("Only a current unresolved stopped attempt can be reconciled.")
+        if code.workspace != attempt.workspace.path:
+            raise StateConflictError("Reconciliation code belongs to a different attempt workspace.")
+        await EventRepository(self._session).append(
+            new_event(
+                run.job_id,
+                "recipe.attempt.reconciled",
+                {
+                    "attempt_id": attempt.id,
+                    "step_instance_id": instance.id,
+                    "attempt_checksum": content_checksum(attempt.model_dump(mode="json")),
+                    "evidence": evidence,
+                    "code": code.model_dump(mode="json"),
+                    "resolution": "stopped",
+                    "effects_quiescent": True,
+                },
+                event_id=f"recipe-reconciled-{attempt.id}",
+                metadata=EventMetadata(
+                    source_framework="codeplane.recipe",
+                    recipe_run_id=run.id,
+                    step_instance_id=instance.id,
+                    attempt_id=attempt.id,
+                    execution_epoch=execution_epoch,
+                ),
+            )
+        )
+        changed = await self._session.scalar(
+            update(RecipeStepInstanceRow)
+            .where(
+                RecipeStepInstanceRow.id == instance.id,
+                RecipeStepInstanceRow.version == instance.version,
+            )
+            .values(
+                state="canceled",
+                reason="Stopped effects reconciled by the operator; no successful output is granted.",
+                version=instance.version + 1,
+                updated_at=datetime.now(UTC),
+            )
+            .returning(RecipeStepInstanceRow.id)
+        )
+        if changed is None:
+            raise StateConflictError("Attempt changed during reconciliation.")
+        await self._session.execute(
+            delete(RecipeWorkspaceLeaseRow).where(
+                RecipeWorkspaceLeaseRow.attempt_id == attempt.id,
             )
         )

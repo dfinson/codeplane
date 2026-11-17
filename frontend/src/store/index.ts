@@ -331,6 +331,9 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  reviewPreparations: {},
+  reviewHistoryPages: {},
+  recipeAttemptControls: {},
   projectBoards: {},
   projectBoardPages: {},
   projectApprovalPages: {},
@@ -596,6 +599,13 @@ export const useStore = create<AppState>((set, get) => ({
 
   dispatchSSEEvent: (eventType, data) => {
     const payload = data as Record<string, unknown>;
+    if (
+      typeof payload.jobId === "string" && typeof payload.attemptId === "string" &&
+      ["message.user", "permission.requested", "permission.resolved"].includes(eventType)
+    ) {
+      const jobId = payload.jobId;
+      set((state) => ({ recipeVersions: { ...state.recipeVersions, [jobId]: (state.recipeVersions[jobId] ?? 0) + 1 } }));
+    }
     if (/^(job|recipe|permission|tracker)\./.test(eventType)) {
       set((state) => ({ projectBoardVersion: state.projectBoardVersion + 1 }));
     }

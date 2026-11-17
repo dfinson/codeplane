@@ -56,9 +56,11 @@ from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
 from backend.services.project.board_service import ProjectBoardService
 from backend.services.project.project_service import ProjectService
+from backend.services.recipe.control import RecipeControlService
 from backend.services.recipe.definition_service import RecipeDefinitionService
 from backend.services.recipe.inspection import RecipeInspectionService
 from backend.services.recipe.recipe_service import RecipeService
+from backend.services.recipe.review_service import ReviewService
 from backend.services.runtime import RuntimeService
 from backend.services.sharing.push_service import PushService
 from backend.services.sharing.share_service import ShareService
@@ -242,6 +244,16 @@ class RequestProvider(Provider):
         self, runs: RecipeRunRepository, jobs: JobRepository, approvals: ApprovalRepository
     ) -> RecipeInspectionService:
         return RecipeInspectionService(runs, jobs, approvals)
+
+    @provide
+    def recipe_control_service(
+        self, inspection: RecipeInspectionService, runtime: RuntimeService
+    ) -> RecipeControlService:
+        return RecipeControlService(inspection, runtime)
+
+    @provide
+    def review_service(self, runtime: RuntimeService) -> ReviewService:
+        return ReviewService(runtime)
 
     @provide
     def sidecar_template_service(

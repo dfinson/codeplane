@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { ViewTabBar } from "./ViewTabBar";
+import { RecipeAttemptMessage } from "./RecipeAttemptMessage";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="grid min-w-0 gap-2 py-[11px] sm:grid-cols-[155px_minmax(0,1fr)] sm:gap-[18px]"><dt className="text-[13px] leading-relaxed text-muted-foreground">{label}</dt><dd className="min-w-0 break-words text-[13px] leading-relaxed">{children}</dd></div>;
@@ -73,13 +74,14 @@ export interface RecipeStepInspectorProps {
   jobId: string;
   runId: string;
   stepId: string;
+  initialAttemptId?: string;
 }
 
 export function RecipeStepInspector(props: RecipeStepInspectorProps) {
   return <SelectedRecipeStepInspector key={JSON.stringify([props.jobId, props.runId, props.stepId])} {...props} />;
 }
 
-function SelectedRecipeStepInspector({ jobId, runId, stepId }: RecipeStepInspectorProps) {
+function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }: RecipeStepInspectorProps) {
   const key = JSON.stringify([jobId, runId, stepId]);
   const inspection = useStore((state) => state.recipeStepInspections[key]);
   const version = useStore((state) => state.recipeVersions[jobId] ?? 0);
@@ -87,7 +89,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId }: RecipeStepInspect
   const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(initialAttemptId ?? null);
   const [tab, setTab] = useState("overview");
   const attemptId = selectedAttemptId ?? inspection?.step.currentAttemptId ?? null;
   const attemptKey = JSON.stringify([jobId, runId, stepId, attemptId]);
@@ -171,6 +173,13 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId }: RecipeStepInspect
       {runner.kind === "command" && <><h4 className="text-sm font-medium">Command arguments</h4><Value value={runner.argv} /></>}
       <h4 className="text-sm font-medium">Explicit outcome routes</h4>
       <Value value={definition.routes} />
+      <h4 className="text-sm font-medium">Required predecessor outcomes and inputs</h4>
+      {(inspection.predecessors ?? []).map((predecessor) => <div key={predecessor.stepPath} className="rounded-md border border-border p-3 text-sm">
+        <p>{predecessor.title}: {predecessor.state ?? "Not instantiated"}</p>
+        <p className="text-xs text-muted-foreground">Required outcomes: {predecessor.requiredOutcomes?.join(", ") || "Input binding only"} / received as: {predecessor.inputNames?.join(", ") || "Dependency only"}</p>
+        {predecessor.stepId && <a className="text-xs text-primary underline" href={`/jobs/${encodeURIComponent(jobId)}?${new URLSearchParams({ run: runId, step: predecessor.stepId, ...(predecessor.attemptId ? { attempt: predecessor.attemptId } : {}) })}`}>Inspect producer and evidence</a>}
+      </div>)}
+      {(inspection.predecessors ?? []).length === 0 && <p className="text-xs text-muted-foreground">No predecessor bindings.</p>}
       {attempt?.gate && <dl className="divide-y divide-border"><Fact label="Bound approval">{attempt.gate.binding.approvalId}</Fact><Fact label="Recorded decision">{attempt.gate.resolution ?? "Pending"}</Fact><Fact label="Exact decision inputs">{attempt.gate.binding.inputChecksum}</Fact></dl>}
     </div>}
     {tab === "inputs" && <div className="space-y-3">
@@ -184,6 +193,15 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId }: RecipeStepInspect
       {attempt && Object.keys(attempt.attempt.inputs).length === 0 && <p className="text-sm text-muted-foreground">No declared inputs.</p>}
     </div>}
     {tab === "output" && (attempt ? <AttemptEvidence inspection={attempt} /> : <p className="text-sm text-muted-foreground">No selected attempt evidence.</p>)}
+    {tab === "output" && <div className="space-y-2">
+      <h4 className="text-sm font-medium">Declared consumers</h4>
+      <p className="text-xs text-muted-foreground">These are pinned input bindings. A consumer's state alone does not prove it received the selected historical attempt's output.</p>
+      {(inspection.consumers ?? []).map((consumer) => <div key={consumer.stepPath} className="rounded-md border border-border p-3 text-sm">
+        <p>{consumer.title}: {consumer.state ?? "Not instantiated"} / inputs: {consumer.inputNames?.join(", ")}</p>
+        {consumer.stepId && <a className="text-xs text-primary underline" href={`/jobs/${encodeURIComponent(jobId)}?${new URLSearchParams({ run: runId, step: consumer.stepId, ...(consumer.attemptId ? { attempt: consumer.attemptId } : {}) })}`}>Inspect exact received inputs</a>}
+      </div>)}
+      {(inspection.consumers ?? []).length === 0 && <p className="text-xs text-muted-foreground">No sibling step declares an input from this step.</p>}
+    </div>}
     {tab === "history" && <div className="space-y-3">
       <p className="text-sm text-muted-foreground">Several native sessions or turns may belong to one attempt. They are not additional recipe steps.</p>
       {attempt?.attempt.executions.map((execution) => <dl key={execution.executionToken} className="divide-y divide-border rounded-lg border border-border p-3">
@@ -192,6 +210,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId }: RecipeStepInspect
       {(!attempt || attempt.attempt.executions.length === 0) && <p className="text-sm text-muted-foreground">No agent sessions recorded. Command, human and block coordination do not create fictional sessions.</p>}
     </div>}
     {attemptLoading && <p role="status" className="text-xs text-muted-foreground">Refreshing selected attempt...</p>}
+    {attemptId && <RecipeAttemptMessage jobId={jobId} runId={runId} stepId={stepId} attemptId={attemptId} />}
     {attemptError && <div role="alert" className="space-y-2"><p className="text-sm text-destructive">{attemptError}. Retained evidence may be stale.</p><Button size="sm" variant="outline" onClick={() => setRefresh((v) => v + 1)}>Retry evidence read</Button></div>}
   </section>;
 }

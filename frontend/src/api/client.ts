@@ -22,6 +22,15 @@ import type {
   RecipeStepList,
   RecipeStepInspection,
   RecipeAttemptInspection,
+  RecipeAttemptControl,
+  RecipeMessageReceipt,
+  RecipeOperationReceipt,
+  RecipeReconcileRequest,
+  ReviewPreparation,
+  ReviewRecord,
+  ReviewHistoryPage,
+  PrepareReviewRequest,
+  RecordReviewRequest,
   ApprovalRequest,
   DiffFileModel,
   GenerateSidecarResponse,
@@ -95,6 +104,20 @@ export function fetchCurrentRecipeRun(jobId: string): Promise<RecipeCurrentRun> 
   return request(`/jobs/${encodeURIComponent(jobId)}/recipe/current`);
 }
 
+export function prepareReview(jobId: string, selection: PrepareReviewRequest): Promise<ReviewPreparation> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/reviews/prepare`, { method: "POST", body: JSON.stringify(selection) });
+}
+
+export function recordReview(jobId: string, body: RecordReviewRequest): Promise<ReviewRecord> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/reviews`, { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fetchReviewHistory(jobId: string, after = 0, highWater?: number): Promise<ReviewHistoryPage> {
+  const query = new URLSearchParams({ after: String(after), limit: "10" });
+  if (highWater !== undefined) query.set("highWater", String(highWater));
+  return request(`/jobs/${encodeURIComponent(jobId)}/reviews?${query}`);
+}
+
 export function fetchRecipeRun(jobId: string, runId: string): Promise<RecipeRun> {
   return request(recipeRunPath(jobId, runId));
 }
@@ -122,6 +145,50 @@ export function fetchRecipeAttempt(
   jobId: string, runId: string, stepId: string, attemptId: string,
 ): Promise<RecipeAttemptInspection> {
   return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}`);
+}
+
+export function fetchRecipeAttemptControl(
+  jobId: string, runId: string, stepId: string, attemptId: string,
+): Promise<RecipeAttemptControl> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/control`);
+}
+
+export function stopRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, expectedToken: string): Promise<RecipeOperationReceipt> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/stop`, {
+    method: "POST", body: JSON.stringify({ expectedToken }),
+  });
+}
+
+export function resumeRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, expectedVersion: number): Promise<RecipeOperationReceipt> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/resume`, {
+    method: "POST", body: JSON.stringify({ expectedVersion }),
+  });
+}
+
+export function reconcileRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, body: RecipeReconcileRequest): Promise<RecipeOperationReceipt> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/reconcile`, {
+    method: "POST", body: JSON.stringify(body),
+  });
+}
+
+export async function sendRecipeAttemptMessage(
+  jobId: string, runId: string, stepId: string, attemptId: string,
+  expectedExecution: string, content: string,
+): Promise<RecipeMessageReceipt> {
+  try {
+    return await request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/messages`, {
+      method: "POST", body: JSON.stringify({ expectedExecution, content }),
+    });
+  } catch (error) {
+    if (error instanceof ApiError && [400, 404, 409, 422].includes(error.status)) {
+      return {
+        jobId, runId, stepInstanceId: stepId, attemptId, status: error.status === 409 ? "conflict" : "failed", executionToken: null,
+        executionStatus: "unconfirmed",
+        reason: typeof error.body?.reason === "string" ? error.body.reason : error.detail,
+      };
+    }
+    throw error;
+  }
 }
 
 class ApiError extends Error {

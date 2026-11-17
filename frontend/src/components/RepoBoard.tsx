@@ -91,7 +91,7 @@ function WorkCard({ item, projectId }: { item: ProjectBoardItem; projectId: stri
     {item.recipe && <div className="space-y-1 border-t border-border pt-2">
       <p className="text-xs font-medium">{item.recipe.name} / revision {item.recipe.revision} / {item.recipe.state}</p>
       {item.recipe.reason && <p className="text-xs text-muted-foreground">{item.recipe.reason}</p>}
-      {item.recipe.steps.map((step) => <p key={step.id} className="text-xs">{step.title}: {step.state}{step.reason ? ` / ${step.reason}` : ""}</p>)}
+      {item.recipe.steps.map((step) => <p key={step.id} className="text-xs"><Link className="text-primary underline" to={`${jobUrl}?${new URLSearchParams({ run: item.recipe!.runId, step: step.id })}`}>{step.title}</Link>: {step.state}{step.reason ? ` / ${step.reason}` : ""}</p>)}
       {item.recipe.remainingStepCount > 0 && <p className="text-xs text-muted-foreground">{item.recipe.remainingStepCount} more step states in the run inspector.</p>}
     </div>}
     {jobUrl && <Button asChild size="sm" variant="outline"><Link to={jobUrl}>Open Job{item.recipe ? " and run" : ""}</Link></Button>}
