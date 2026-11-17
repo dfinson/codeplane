@@ -117,21 +117,6 @@ TOOL_CATEGORIES: dict[str, str] = {
     "store_memory": "bookkeeping",
     "manage_todo_list": "bookkeeping",
     "memory": "bookkeeping",
-    # MCP coderecon — code reconnaissance and refactoring
-    "recon_scout": "file_read",
-    "recon": "file_search",
-    "recon_map": "file_search",
-    "recon_impact": "file_search",
-    "describe": "file_read",
-    "graph_communities": "file_search",
-    "graph_cycles": "file_search",
-    "graph_export": "file_search",
-    "semantic_diff": "file_read",
-    "checkpoint": "bookkeeping",
-    "refactor_move": "file_write",
-    "refactor_rename": "file_write",
-    "refactor_commit": "file_write",
-    "refactor_cancel": "bookkeeping",
     # execution_subagent — delegation to execution-focused sub-agents
     "execution_subagent": "agent",
 }

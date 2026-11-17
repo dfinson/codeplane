@@ -183,11 +183,3 @@ Share endpoints bypass CodePlane's password but not tunnel-level identity gates.
 |--------|------|-------------|
 | `GET` | `/api/jobs/{job_id}/trail` | Query trail nodes (query: `kinds`, `flat`) |
 | `GET` | `/api/jobs/{job_id}/trail/summary` | Lightweight trail summary (goals, decisions, file counts) |
-
-## Structural Review (CodeRecon)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/jobs/{job_id}/structural-diff` | Structural diff analysis |
-| `GET` | `/api/jobs/{job_id}/review-story` | Review story artifact |
-| `GET` | `/api/jobs/{job_id}/impact-graph/{symbol}` | Caller analysis for a symbol |

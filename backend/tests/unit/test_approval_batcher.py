@@ -65,8 +65,8 @@ class TestActionDescription:
         assert _action_description(action) == "Tool: Bash"
 
     def test_mcp_tool(self):
-        action = FakeAction(mcp_tool="recon", mcp_server="coderecon")
-        assert _action_description(action) == "MCP: coderecon/recon"
+        action = FakeAction(mcp_tool="lookup", mcp_server="repository")
+        assert _action_description(action) == "MCP: repository/lookup"
 
     def test_path_only(self):
         action = FakeAction(path="/etc/passwd")

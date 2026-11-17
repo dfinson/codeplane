@@ -36,7 +36,6 @@ from backend.services.analytics.telemetry_query_service import TelemetryQuerySer
 from backend.services.artifacts.artifact_service import ArtifactService
 from backend.services.artifacts.diff_service import DiffService
 from backend.services.chat.chat_service import ChatService
-from backend.services.coderecon.coderecon_service import CodeReconService
 from backend.services.completers.naming_service import NamingService
 from backend.services.completers.narrator_completer import NarratorCompleter
 from backend.services.completers.voice_service import VoiceService
@@ -93,7 +92,6 @@ class AppProvider(Provider):
     share_service = from_context(provides=ShareService)
     trail_service = from_context(provides=TrailService)
     terminal_service = from_context(provides=TerminalService)
-    coderecon_service = from_context(provides=CodeReconService)
     narrator_completer = from_context(provides=NarratorCompleter)
     ingest_service = from_context(provides=IngestService)
     model_pricing = from_context(provides=ModelPricingService)
@@ -113,21 +111,19 @@ class AppProvider(Provider):
         return TrackerWriteService(approval_service, session_factory=sf)
 
     @provide
-    def diff_service(self, git_service: GitService, event_bus: EventBus, coderecon: CodeReconService) -> DiffService:
-        return DiffService(git_service=git_service, event_bus=event_bus, coderecon=coderecon)
+    def diff_service(self, git_service: GitService, event_bus: EventBus) -> DiffService:
+        return DiffService(git_service=git_service, event_bus=event_bus)
 
     @provide
     def story_service(
         self,
         narrator: NarratorCompleter,
-        coderecon: CodeReconService,
         sf: async_sessionmaker[AsyncSession],
         model_pricing: ModelPricingService,
         git_service: GitService,
     ) -> StoryService:
         return StoryService(
             completer=narrator,
-            coderecon=coderecon,
             session_factory=sf,
             model_pricing=model_pricing,
             git_service=git_service,
@@ -335,6 +331,5 @@ class RequestProvider(Provider):
         step_repo: StepRepository,
         git_service: GitService,
         spans_repo: TelemetrySpansRepository,
-        coderecon: CodeReconService,
     ) -> StepDiffService:
-        return StepDiffService(job_svc, step_repo, git_service, spans_repo, coderecon)
+        return StepDiffService(job_svc, step_repo, git_service, spans_repo)

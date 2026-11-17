@@ -87,7 +87,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from backend.services.action_policy.governance import GovernanceDecider
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
@@ -275,7 +274,6 @@ class RuntimeService:
         sidecar_sessions: SidecarSessionManager | None = None,
         step_tracker: StepTracker | None = None,
         trail_service: TrailService | None = None,
-        coderecon_service: CodeReconService | None = None,
         sidecar_dispatcher: SidecarDispatcher | None = None,
         event_processor: EventProcessor | None = None,
     ) -> None:
@@ -291,7 +289,6 @@ class RuntimeService:
         self._platform_registry = platform_registry
         self._sidecar_sessions = sidecar_sessions
         self._step_tracker = step_tracker
-        self._coderecon_service = coderecon_service
         self._sidecar_dispatcher = sidecar_dispatcher
         # The one funnel — both managed (here) and imported (ingest sources)
         # producers route their TF-native events through this processor.
@@ -305,6 +302,8 @@ class RuntimeService:
         self._governance_decider: GovernanceDecider | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._startup_tasks: dict[str, asyncio.Task[None]] = {}
+        self._scout_tasks: dict[str, asyncio.Task[SessionConfig]] = {}
         self._agent_sessions: dict[str, AgentSession] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task[None]] = {}
         self._last_activity: dict[str, float] = {}
@@ -406,7 +405,6 @@ class RuntimeService:
             git_service=self._git_service,
             config=self._config,
             event_bus=self._event_bus,
-            coderecon=self._coderecon_service,
             project_repo=ProjectRepository(session),
         )
 
@@ -678,6 +676,23 @@ class RuntimeService:
     async def _start_job(
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
     ) -> None:
+        if self._shutting_down or job.id in self._tasks or job.id in self._startup_tasks:
+            return
+        startup = asyncio.create_task(
+            self._start_job_impl(job, override_prompt, resume_sdk_session_id),
+            name=f"startup-{job.id}",
+        )
+        self._startup_tasks[job.id] = startup
+        try:
+            await startup
+        finally:
+            self._startup_tasks.pop(job.id, None)
+            if job.id not in self._tasks:
+                self._agent_sessions.pop(job.id, None)
+
+    async def _start_job_impl(
+        self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
+    ) -> None:
         """Create an asyncio task to execute the job."""
         if job.id in self._tasks:
             return  # Already running (in-memory guard)
@@ -731,31 +746,19 @@ class RuntimeService:
                 repo=job.repo,
             )
 
-            # Preflight context curation — explore repo via CodeRecon and produce a brief
             await self._emit_setup_progress(job.id, "exploring_codebase")
-            # Ensure the repo is indexed before preflight — the curator agent
-            # calls coderecon tools which require a populated index.
-            preflight_worktree_path = job.worktree_path
-            if self._coderecon_service is not None and self._coderecon_service.available:
+            if self._preflight_curator is not None:
+                async with self._session_factory() as session:
+                    before_scout = await JobRepository(session).get(job.id)
+                if before_scout and before_scout.state in TERMINAL_STATES:
+                    self._agent_sessions.pop(job.id, None)
+                    return
+                scout_task = asyncio.create_task(self._run_preflight_curator(job, session_config))
+                self._scout_tasks[job.id] = scout_task
                 try:
-                    repo_name = await self._coderecon_service.ensure_repo_indexed(job.repo)
-                    # Also register the job worktree — the kit only has "main"
-                    # after a fresh index (e.g. server restart). Without this,
-                    # preflight scout fails with "Worktree not found in index".
-                    if job.worktree_path and job.worktree_path != job.repo:
-                        registered = await self._coderecon_service.register_worktree(repo_name, job.worktree_path)
-                        if not registered:
-                            # Worktree doesn't exist or failed to index — fall
-                            # back to repo root so preflight uses "main".
-                            log.info("preflight_worktree_fallback", job_id=job.id, worktree=job.worktree_path)
-                            preflight_worktree_path = job.repo
-                except Exception:
-                    log.debug("preflight_index_failed", job_id=job.id, exc_info=True)
-            session_config = await self._run_preflight_curator(
-                job,
-                session_config,
-                worktree_override=preflight_worktree_path,
-            )
+                    session_config = await scout_task
+                finally:
+                    self._scout_tasks.pop(job.id, None)
 
             # If the job was canceled during preflight, don't start the main session.
             async with self._session_factory() as session:
@@ -767,10 +770,19 @@ class RuntimeService:
 
             await self._emit_setup_progress(job.id, "starting_agent")
 
+            async with self._session_factory() as session:
+                current = await JobRepository(session).get(job.id)
+            if self._shutting_down or (current and current.state in TERMINAL_STATES):
+                self._agent_sessions.pop(job.id, None)
+                return
+
             task = asyncio.create_task(
                 self._run_job_guarded(job.id, agent_session, session_config, session_number=job.session_count),
                 name=f"job-{job.id}",
             )
+        except asyncio.CancelledError:
+            self._agent_sessions.pop(job.id, None)
+            raise
         except Exception:
             # Task creation failed after the DB CAS set state to running.
             # Revert to the pre-claim state so the job isn't orphaned.
@@ -895,14 +907,6 @@ class RuntimeService:
 
         if worktree_path and self._step_tracker is not None:
             self._step_tracker.register_worktree(job_id, worktree_path)
-
-        # Register worktree with coderecon for structural indexing
-        if worktree_path and self._coderecon_service is not None and self._coderecon_service.available:
-            try:
-                repo_name = await self._coderecon_service.ensure_repo_indexed(job.repo)
-                await self._coderecon_service.register_worktree(repo_name, worktree_path)
-            except Exception:
-                log.debug("coderecon_review.worktree_register_failed", job_id=job_id, exc_info=True)
 
         session_id: str | None = None
         error_reason: str | None = None
@@ -1234,7 +1238,6 @@ class RuntimeService:
                 repo=repo,
                 completer=completer,
                 trail_repo=trail_repo,
-                coderecon=self._coderecon_service,
             )
 
         router = PolicyRouter(
@@ -1247,6 +1250,8 @@ class RuntimeService:
         # Wire into adapter
         adapter = self._resolve_adapter(config.sdk)
         adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
+        if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
+            self._preflight_curator.adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         self._policy_routers[job_id] = router
         self._policy_batchers[job_id] = batcher
 
@@ -1341,9 +1346,6 @@ class RuntimeService:
         # handlers have run, force it to failed so it doesn't stay stuck.
         await self._ensure_terminal_state(job_id)
         await self._finalize_artifacts_safe(job_id)
-
-        # Close CodeRecon session for this job's worktree — no-op with ReviewKit
-        # (in-process kits are shared and closed on shutdown, not per-job)
 
         if self._trail_service is not None:
             self._trail_service.cleanup(job_id)
@@ -2132,11 +2134,19 @@ class RuntimeService:
         by the service layer (JobService.cancel_job). This method only
         interacts with in-memory runtime tasks.
         """
+        startup = self._startup_tasks.get(job_id)
+        if startup is not None and not startup.done():
+            startup.cancel()
+            log.info("job_startup_cancel_requested", job_id=job_id)
+            return
         task = self._tasks.get(job_id)
         if task is not None:
             task.cancel()
             log.info("job_cancel_requested", job_id=job_id)
         else:
+            scout_task = self._scout_tasks.get(job_id)
+            if scout_task is not None:
+                scout_task.cancel()
             # No task yet — job may still be in preflight curation.
             # Abort the agent session so the preflight curator's stream ends.
             agent_session = self._agent_sessions.get(job_id)
@@ -2711,13 +2721,16 @@ class RuntimeService:
         instead of marking them as canceled (which confused users).
         """
         self._shutting_down = True
+        for job_id, startup in list(self._startup_tasks.items()):
+            startup.cancel()
+            log.info("shutdown_startup_cancelled", job_id=job_id)
         for job_id in list(self._tasks):
             task = self._tasks.get(job_id)
             if task is not None:
                 task.cancel()
                 log.info("shutdown_task_cancelled", job_id=job_id)
         # Wait briefly for tasks to complete
-        tasks = list(self._tasks.values())
+        tasks = [*self._tasks.values(), *self._startup_tasks.values()]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -3017,18 +3030,16 @@ class RuntimeService:
     ) -> SessionConfig:
         """Run the preflight curator agent to produce curated context.
 
-        The curator agent explores the repository structure via CodeRecon
+        The utility-model Scout explores the job worktree with read/search
         tools and produces a brief for the main agent's system prompt.
         Returns *session_config* with ``memory_context`` populated (or
         unchanged on failure).
         """
         from backend.models.secondary_session import EntryKind, SecondarySessionKind, SecondarySessionStatus
         from backend.persistence.secondary_session_repo import SecondarySessionRepository
+        from backend.services.tools.preflight_curator import PreflightReport
 
-        worktree_path = worktree_override or job.worktree_path or job.repo
-
-        if self._coderecon_service is None or not self._coderecon_service.available:
-            return session_config
+        worktree_path = worktree_override or job.worktree_path
 
         if self._preflight_curator is None:
             log.debug("preflight_curator.not_configured", job_id=job.id)
@@ -3038,6 +3049,7 @@ class RuntimeService:
         started_at = datetime.now(UTC)
         repo = SecondarySessionRepository(self._session_factory)
         seq_counter = 0
+        usage_report = PreflightReport()
 
         try:
             # Persist + emit started
@@ -3144,6 +3156,12 @@ class RuntimeService:
                     )
                 )
 
+            async def _on_usage(observed: PreflightReport) -> None:
+                nonlocal usage_report
+                usage_report = observed
+
+            if not worktree_path:
+                raise ValueError("Scout requires a job worktree")
             report = await self._preflight_curator.curate(
                 task=session_config.prompt,
                 repo=str(job.repo),
@@ -3151,6 +3169,7 @@ class RuntimeService:
                 job_id=job.id,
                 on_tool_call=_on_tool_call,
                 on_reasoning=_on_reasoning,
+                on_usage=_on_usage,
             )
 
             # Emit completed
@@ -3160,6 +3179,10 @@ class RuntimeService:
                 status=SecondarySessionStatus.completed.value,
                 completed_at=completed_at,
                 output=report.brief or None,
+                input_tokens=report.input_tokens,
+                output_tokens=report.output_tokens,
+                cost_usd=report.cost_usd,
+                metadata={"model": report.model, "requested_model": self._config.runtime.utility_model},
             )
             await self._event_bus.publish(
                 new_event(
@@ -3170,6 +3193,9 @@ class RuntimeService:
                         "session_id": session_id,
                         "status": SecondarySessionStatus.completed.value,
                         "output": report.brief or None,
+                        "input_tokens": report.input_tokens,
+                        "output_tokens": report.output_tokens,
+                        "cost_usd": report.cost_usd,
                     },
                 )
             )
@@ -3197,14 +3223,26 @@ class RuntimeService:
                 )
                 return dataclass_replace(session_config, memory_context=report.brief)
             log.debug("preflight_curator.nothing_relevant", job_id=job.id)
-        except Exception:
-            log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+        except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                log.info("preflight_curator.curation_cancelled", job_id=job.id)
+            else:
+                log.warning("preflight_curator.curation_failed", job_id=job.id, exc_info=True)
+            failed_report = usage_report
             # Mark session failed if it was created
             try:
                 await repo.complete_session(
                     session_id,
-                    status=SecondarySessionStatus.failed.value,
+                    status=(
+                        SecondarySessionStatus.timeout.value
+                        if isinstance(exc, TimeoutError)
+                        else SecondarySessionStatus.failed.value
+                    ),
                     completed_at=datetime.now(UTC),
+                    input_tokens=failed_report.input_tokens,
+                    output_tokens=failed_report.output_tokens,
+                    cost_usd=failed_report.cost_usd,
+                    metadata={"model": failed_report.model, "requested_model": self._config.runtime.utility_model},
                 )
                 await self._event_bus.publish(
                     new_event(
@@ -3213,12 +3251,21 @@ class RuntimeService:
                         kind=EventKind.secondary_session_completed,
                         payload={
                             "session_id": session_id,
-                            "status": SecondarySessionStatus.failed.value,
+                            "status": (
+                                SecondarySessionStatus.timeout.value
+                                if isinstance(exc, TimeoutError)
+                                else SecondarySessionStatus.failed.value
+                            ),
+                            "input_tokens": failed_report.input_tokens,
+                            "output_tokens": failed_report.output_tokens,
+                            "cost_usd": failed_report.cost_usd,
                         },
                     )
                 )
             except Exception:
-                pass
+                log.warning("preflight_curator.failure_persist_failed", job_id=job.id, exc_info=True)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
 
         return session_config
 

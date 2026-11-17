@@ -32,7 +32,7 @@ Write a prompt, pick a repo and model, hit go. The agent runs in an isolated wor
 
 ### 2. Mirror your native CLI sessions (zero workflow change)
 
-Keep using `claude` or `copilot` in your terminal exactly as you do now. CodePlane auto-discovers running sessions via file-tailing, ingests them into the same pipeline, and gives you the full dashboard — cost tracking, trail, structural review — without you changing anything.
+Keep using `claude` or `copilot` in your terminal exactly as you do now. CodePlane auto-discovers running sessions via file-tailing, ingests them into the same pipeline, and gives you the full dashboard — cost tracking, trail, narrative review — without you changing anything.
 
 | Agent | Managed (headless) | Mirrored (native CLI) |
 |-------|-------------------|-----------------------|
@@ -51,7 +51,6 @@ Keep using `claude` or `copilot` in your terminal exactly as you do now. CodePla
 ### Review as a Story
 
 - **Narrative review** — answers "why was this change made?" with verified references traced back through the decision trail
-- **Structural risk scoring** — graph-based analysis of breaking vs. additive changes, coupling drift, caller verification, and merge confidence verdict
 - **Decision trail** — a structured intent graph of what the agent did, why, and where it backtracked — enriched by parallel LLM analysis
 
 ### Analyze
@@ -67,7 +66,6 @@ Other tools give you a dashboard for one agent session. CodePlane builds a **nor
 
 - **Provenance data layer** — every session (managed or mirrored) normalized into a local SQLite database with precomputed cost per span, per file, per phase. Query it with `sqlite3` or point a notebook at it
 - **Sidecar intelligence** — parallel LLM sessions that observe and intervene in real time: stall recovery, plan inference, enrichment, custom sidecars in plain English
-- **Structural code analysis** — CodeRecon traces callers of modified symbols, detects introduced dependency cycles, measures community drift — a graph-based signal, not LLM vibes
 - **Action policy engine** — cost-aware tiers, batch approval, trust grants with TTL, protected paths, cost ceilings — above the SDK’s binary allow/deny
 - **MCP server** — CodePlane *exposes itself as* an MCP server. External agents can delegate coding tasks and monitor them programmatically
 
@@ -102,7 +100,7 @@ cpl version                                  # show version
 
 - **Solo devs using Claude Code or Copilot CLI** who want cost visibility and review tools without changing their workflow
 - **Teams running many agent sessions** who need cost forensics and behavioral pattern analysis, not just a billing page
-- **Reviewers of agent output** who need structural risk triage and a narrative explanation, not just a raw diff
+- **Reviewers of agent output** who need a navigable diff and an evidence-based narrative explanation, not just a raw diff
 - **Regulated environments** where AI-generated code requires decision provenance and an audit trail
 
 ## Documentation

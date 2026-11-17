@@ -255,14 +255,6 @@ class TrailConfig:
 
 
 @dataclass
-class CodeReconConfig:
-    """CodeRecon structural analysis feature toggles."""
-
-    splade: bool = False
-    cross_encoder: bool = False
-
-
-@dataclass
 class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -275,7 +267,6 @@ class CPLConfig:
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     trail: TrailConfig = field(default_factory=TrailConfig)
-    coderecon: CodeReconConfig = field(default_factory=CodeReconConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -324,7 +315,6 @@ def load_config(path: Path | None = None) -> CPLConfig:
         telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
         pricing=_parse_section(raw, PricingConfig, "pricing"),
         trail=_parse_section(raw, TrailConfig, "trail"),
-        coderecon=_parse_section(raw, CodeReconConfig, "coderecon"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )
@@ -398,7 +388,6 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # Tracker synchronization uses a fixed production cadence. Remove the
     # retired persisted section when any settings save occurs.
     existing.pop("tracker", None)
-    existing["coderecon"] = _to_dict(config.coderecon)
     if config.platforms:
         existing["platforms"] = {name: _to_dict(pc) for name, pc in config.platforms.items()}
 

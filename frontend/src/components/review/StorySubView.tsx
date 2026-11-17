@@ -135,8 +135,8 @@ function StoryTOC({ blocks }: { blocks: StoryBlock[] }) {
   );
 }
 
-/** Trail-based story fallback when CodeRecon is unavailable. */
-function TrailStoryFallback({ jobId }: { jobId: string }) {
+/** Trail-based narrative of the job. */
+function TrailStory({ jobId }: { jobId: string }) {
   const setStory = useStore((s) => s.setStory);
 
   const [regenerating, setRegenerating] = useState(false);
@@ -463,7 +463,7 @@ function StoryTimelineSidebar({
 export function StorySubView({ jobId }: StorySubViewProps) {
   return (
     <div className="h-full overflow-hidden">
-      <TrailStoryFallback jobId={jobId} />
+      <TrailStory jobId={jobId} />
     </div>
   );
 }

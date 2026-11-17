@@ -111,7 +111,6 @@ CodePlane is a two-tier application.
 | Toasts | Sonner |
 | Icons | Lucide React |
 | API type generation | openapi-typescript (from FastAPI OpenAPI spec) |
-| Structural analysis | CodeRecon (semantic diff, dependency graphs, merge confidence) |
 | Package management | uv (Python), npm (Frontend) |
 
 ### 2.1 Frontend Serving Model
@@ -174,12 +173,6 @@ State slices:
 | `streamingToolOutput` | In-flight streaming tool output |
 | `streamingReasoning` | In-flight streaming reasoning content |
 | `telemetryVersions` | Hydration version tracking for telemetry |
-| `repoIndexState` | Per-repo structural indexing progress |
-| `structuralDiffs` | Per-job structural coupling diff |
-| `multiSessions` | Per-job multi-session analysis |
-| `communities` | Per-job community detection results |
-| `reviewStories` | Per-job structural review story |
-| `structuralWarnings` | Per-job structural warnings |
 | `sdks` | Available SDK catalogue with models |
 | `terminalSessions` | Active terminal sessions and drawer state |
 | `connectionStatus` | SSE connection state (`connected`, `reconnecting`, `disconnected`) |
@@ -401,8 +394,6 @@ backend/
 │   ├── memory/                # Workspace memory extraction and compaction
 │   ├── tool_classifier.py     # Tool action classification (activity dimensions)
 │   ├── tool_formatters/       # Human-readable tool output formatting
-│   ├── coderecon_service.py   # CodeRecon structural analysis integration
-│   ├── coderecon_tools.py     # CodeRecon MCP tool bridge
 │   ├── auth.py                # Authentication helpers (password, session cookies)
 │   ├── cf_access.py           # Cloudflare Access JWT verification
 │   ├── share_service.py       # Share token management
@@ -414,7 +405,7 @@ backend/
 │   ├── retry_tracker.py       # Agent retry detection and tracking
 │   ├── snapshot_helpers.py    # Job state snapshot construction
 │   ├── copilot_steer.py       # Copilot session steering prompts
-│   ├── preflight_curator.py   # Preflight prompt curation
+│   ├── preflight_curator.py   # Read-only utility-model Scout
 │   ├── lightweight_completer.py # Single-turn LLM completions
 │   ├── narrator_completer.py  # Narrative generation LLM calls
 │   └── parsing_utils.py       # Shared parsing helpers
@@ -1777,10 +1768,6 @@ class EventKind(StrEnum):
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
     # Repo index
-    repo_index_progress = "repo.index_progress"
-    repo_index_complete = "repo.index_complete"
-    # Structural health
-    structural_warning = "structural.warning"
     stall_detected = "stall.detected"
     # Monitors
     monitor_approved = "monitor.approved"
@@ -1851,9 +1838,6 @@ currently emits, not a closed enumeration of permitted TraceForge kinds.
 | `turn.summary` | AI-generated turn summary | `turn_id`, `summary` |
 | `action.classified` | Action policy classification | `recommendedAction`, `reasonCode`, `riskScore`, `riskBand`, `effect` |
 | `policy.settings_changed` | Policy configuration changed | `preset` |
-| `repo.index_progress` | Repo structural indexing progress | `repo`, `progress` |
-| `repo.index_complete` | Repo structural indexing complete | `repo` |
-| `structural.warning` | Code structure warning detected | `warning` |
 | `stall.detected` | Agent stall detected by arbiter sidecar | |
 | `monitor.approved` | Monitor sidecar auto-approved action | `action` |
 | `monitor.rejected` | Monitor sidecar auto-rejected action | `action` |
@@ -2173,13 +2157,6 @@ CREATE TABLE jobs (
     external_session_id TEXT,
     tail_offset INTEGER NOT NULL DEFAULT 0,
     story_text TEXT,
-    review_story_json TEXT,
-    review_story_hash TEXT,
-    structural_coupling_delta REAL,
-    structural_cycle_count INTEGER,
-    structural_changes_touch_tests BOOLEAN,
-    structural_change_count INTEGER,
-    structural_merge_confidence TEXT,
     trail_state_snapshot TEXT,         -- JSON
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -2606,11 +2583,6 @@ The health endpoint does **not** require authentication. It returns:
 | `GET` | `/api/jobs/{job_id}/snapshot` | Full state hydration (for reconnect/refresh) |
 | `GET` | `/api/jobs/{job_id}/telemetry` | Get job telemetry data |
 | `GET` | `/api/jobs/{job_id}/story` | Get narrative story of job execution |
-| `GET` | `/api/jobs/{job_id}/structural-diff` | Get structural coupling diff |
-| `GET` | `/api/jobs/{job_id}/multi-session` | Get multi-session analysis |
-| `GET` | `/api/jobs/{job_id}/impact-graph/{symbol}` | Get code impact graph |
-| `GET` | `/api/jobs/{job_id}/communities` | Get community detection results |
-| `GET` | `/api/jobs/{job_id}/review-story` | Get structural review story |
 | `GET` | `/api/jobs/{job_id}/trail` | Get structured intent graph (audit trail) |
 | `GET` | `/api/jobs/{job_id}/trail/summary` | Get lightweight trail summary |
 
@@ -2737,7 +2709,6 @@ POST /api/approvals/{approval_id}/resolve
 | `PUT` | `/api/settings` | Update settings (structured, partial) |
 | `GET` | `/api/settings/repos` | List registered repos |
 | `GET` | `/api/settings/repos/{repo_path}` | Get detailed repo config with resolved MCP servers |
-| `GET` | `/api/settings/repos/{repo_path}/health` | Get structural health status |
 | `GET` | `/api/settings/repos/{repo_path}/summary` | Get aggregated repo overview |
 | `GET` | `/api/settings/repos/{repo_path}/jobs` | List jobs for a repo |
 | `GET` | `/api/settings/repos/{repo_path}/memory` | Get repo workspace memory |

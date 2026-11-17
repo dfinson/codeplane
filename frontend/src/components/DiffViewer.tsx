@@ -13,11 +13,8 @@ import { cn } from "../lib/utils";
 import { MicButton } from "./VoiceButton";
 
 import { useDrag } from "../hooks/useDrag";
-import { useCoverageLayers } from "../hooks/useCoverageLayers";
-import { useImpactLayers } from "../hooks/useImpactLayers";
 import { useMotivationLayers } from "../hooks/useMotivationLayers";
 import { useLayeredDiffStyles } from "../hooks/useLayeredDiffStyles";
-import { CoveragePopover } from "./CoveragePopover";
 import type { DiffFileModel, DiffHunkModel, FileMotivation, HunkMotivation, StepDiffResponse } from "../api/types";
 import { BottomSheet } from "./ui/bottom-sheet";
 import { DiffViewerFileList, STATUS_ICON, STATUS_BADGE, STATUS_ICON_CLASS } from "./DiffViewerFileList";
@@ -104,9 +101,6 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
   // Split (side-by-side) vs unified (single) diff view
   const [splitView, setSplitView] = useState(false);
 
-  // V8: Layered diff toggles — all ON by default (mockup default state)
-  const [showCoverage, setShowCoverage] = useState(true);
-  const [showImpact, setShowImpact] = useState(true);
 
   // Lazy-loaded truncated file diffs (keyed by file path)
   const [loadedTruncatedFiles, setLoadedTruncatedFiles] = useState<Record<string, import("../api/types").DiffFileModel>>({});
@@ -417,26 +411,6 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
   // V8: Inject layered diff CSS
   useLayeredDiffStyles();
 
-  // V8: Coverage layer — glyph decorations + popover on click
-  const { popover: coveragePopover, dismissPopover: dismissCoveragePopover } = useCoverageLayers({
-    jobId,
-    filePath: selectedFile?.path,
-    enabled: showCoverage,
-    editorRef: diffEditorRef,
-    monacoRef,
-    editorReady,
-  });
-
-  // V8: Impact layer — view zones showing callers/tests affected by changes
-  useImpactLayers({
-    jobId,
-    file: selectedFile,
-    enabled: showImpact,
-    editorRef: diffEditorRef,
-    monacoRef,
-    editorReady,
-  });
-
   // V8: Motivation layer — already partially wired via showIntent; add job-level fallback
   useMotivationLayers({
     jobId,
@@ -693,18 +667,6 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
         <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-card relative flex flex-col">
           {/* V8: Layer toggles toolbar — sliding switches matching mockup */}
           <div className="flex items-center gap-4 px-3 py-1.5 border-b border-border bg-[#2d2d2d] shrink-0">
-            <button onClick={() => setShowImpact(!showImpact)} className="flex items-center gap-[5px] text-[11px] text-[#a0a0a0] hover:text-[#d4d4d4] cursor-pointer select-none">
-              <span className={cn("relative w-6 h-[13px] rounded-[7px] transition-colors", showImpact ? "bg-[#569cd6]" : "bg-[#555]")}>
-                <span className={cn("absolute top-[2px] w-[9px] h-[9px] bg-[#e0e0e0] rounded-full transition-[left]", showImpact ? "left-[13px]" : "left-[2px]")} />
-              </span>
-              <span>Impact</span>
-            </button>
-            <button onClick={() => setShowCoverage(!showCoverage)} className="flex items-center gap-[5px] text-[11px] text-[#a0a0a0] hover:text-[#d4d4d4] cursor-pointer select-none">
-              <span className={cn("relative w-6 h-[13px] rounded-[7px] transition-colors", showCoverage ? "bg-[#569cd6]" : "bg-[#555]")}>
-                <span className={cn("absolute top-[2px] w-[9px] h-[9px] bg-[#e0e0e0] rounded-full transition-[left]", showCoverage ? "left-[13px]" : "left-[2px]")} />
-              </span>
-              <span>Coverage</span>
-            </button>
             <button onClick={() => setShowIntent(!showIntent)} className="flex items-center gap-[5px] text-[11px] text-[#a0a0a0] hover:text-[#d4d4d4] cursor-pointer select-none">
               <span className={cn("relative w-6 h-[13px] rounded-[7px] transition-colors", showIntent ? "bg-[#569cd6]" : "bg-[#555]")}>
                 <span className={cn("absolute top-[2px] w-[9px] h-[9px] bg-[#e0e0e0] rounded-full transition-[left]", showIntent ? "left-[13px]" : "left-[2px]")} />
@@ -858,8 +820,6 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
         </div>
       )}
 
-      {/* V8: Coverage popover — shown when clicking a coverage glyph dot */}
-      <CoveragePopover state={coveragePopover} onDismiss={dismissCoveragePopover} />
     </div>
   );
 }

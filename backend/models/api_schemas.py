@@ -138,8 +138,6 @@ class UpdateSettingsRequest(CamelModel):
         None,
         description="Sidecar names for CLI sessions; null leaves current value unchanged",
     )
-    coderecon_splade: bool | None = None
-    coderecon_cross_encoder: bool | None = None
 
 
 class SettingsResponse(CamelModel):
@@ -156,8 +154,6 @@ class SettingsResponse(CamelModel):
     verify_prompt: str
     self_review_prompt: str
     cli_sidecars: list[str] | None
-    coderecon_splade: bool
-    coderecon_cross_encoder: bool
 
 
 class RegisterRepoRequest(CamelModel):
@@ -462,20 +458,6 @@ class RepoDetailResponse(CamelModel):
     platform: str | None = None
 
 
-class RepoHealthResponse(CamelModel):
-    """Structural health status for a repository (§6.2)."""
-
-    repo: str
-    available: bool = False
-    index_status: str | None = None  # pending | indexing | ready | error
-    symbol_count: int = 0
-    file_count: int = 0
-    last_indexed_sha: str | None = None
-    community_count: int = 0
-    cycle_count: int = 0
-    stale: bool = False
-
-
 class RepoJobSummary(CamelModel):
     """Minimal job info for repo dashboard."""
 
@@ -567,7 +549,6 @@ class RepoSummaryResponse(CamelModel):
     recent_jobs: list[RepoJobSummary] = []
     active_job_count: int = 0
     cost: RepoCostSummary = RepoCostSummary()
-    health: RepoHealthResponse | None = None
 
 
 # --- SSE Payload Models ---
@@ -669,18 +650,6 @@ class DiffHunkModel(CamelModel):
     lines: list[DiffLineModel]
 
 
-class DiffFileSymbolImpact(CamelModel):
-    """A symbol in a diff file with its impact data from CodeRecon semantic_diff."""
-
-    symbol: str
-    kind: str  # added | removed | modified | moved
-    category: str = "non-structural"  # breaking | body | additive | non-structural
-    line_range: list[int] | None = None  # [start, end]
-    ref_count: int = 0
-    ref_tiers: dict[str, int] = Field(default_factory=dict)
-    test_files: list[str] = Field(default_factory=list)
-
-
 class DiffFileModel(CamelModel):
     path: str
     status: DiffFileStatus
@@ -691,7 +660,6 @@ class DiffFileModel(CamelModel):
     raw_size: int | None = None
     write_count: int | None = None
     retry_count: int | None = None
-    symbols: list[DiffFileSymbolImpact] = Field(default_factory=list)
 
 
 class JobStateChangedPayload(CamelModel):
@@ -766,7 +734,6 @@ class PlatformStatusListResponse(CamelModel):
 
 class ResolveJobRequest(CamelModel):
     action: ResolutionAction
-    confirm_low_confidence: bool = False
 
 
 class ResolveJobResponse(CamelModel):
@@ -872,23 +839,6 @@ class StepEntriesReassignedPayload(CamelModel):
     turn_id: str
     old_step_id: str
     new_step_id: str
-
-
-class RepoIndexProgressPayload(CamelModel):
-    repo: str
-    indexed: int = 0
-    total: int = 0
-    phase: str = "indexing"
-
-
-class RepoIndexCompletePayload(CamelModel):
-    repo: str
-
-
-class StructuralWarningPayload(CamelModel):
-    repo: str = ""
-    warning_type: str = ""
-    detail: str = ""
 
 
 class StallDetectedPayload(CamelModel):
@@ -1220,245 +1170,11 @@ class StoryResponse(CamelModel):
 
 
 # ---------------------------------------------------------------------------
-# Structural Review (CodeRecon integration)
 # ---------------------------------------------------------------------------
 
 
-class StructuralChange(CamelModel):
-    """A single structural change detected by semantic diff."""
-
-    kind: str  # added | removed | modified | moved
-    symbol: str | None = None
-    file: str
-    summary: str | None = None
-    category: str = "non-structural"  # breaking | body | additive | non-structural
-    ref_count: int = 0
-    ref_tiers: dict[str, int] = Field(default_factory=dict)  # e.g. {"verified": 3, "inferred": 2, "unverified": 1}
-    test_files: list[str] = Field(default_factory=list)
-    risk: float = 0.0
-    line_range: list[int] | None = None  # [start, end]
-    coverage_confidence: str | None = None  # high | medium | low | None (no data)
-
-
-class StructuralDiffResponse(CamelModel):
-    """Structural diff result for a job's changes."""
-
-    job_id: str
-    summary: str = ""
-    changes: list[StructuralChange] = []
-    available: bool = True
-    merge_confidence: str | None = None  # HIGH | MEDIUM | LOW
-    triage: dict[str, int] = Field(default_factory=dict)  # category → count
-
-
-class SessionSegment(CamelModel):
-    """Structural analysis of a single agent session."""
-
-    session_number: int
-    start_sha: str | None = None
-    end_sha: str | None = None
-    changes: list[StructuralChange] = []
-    risk: float = 0.0
-    warnings: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class MultiSessionResponse(CamelModel):
-    """Multi-session structural intelligence for a job (§10)."""
-
-    job_id: str
-    available: bool = True
-    sessions: list[SessionSegment] = []
-    direction_changes: list[dict[str, Any]] = Field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
-# Coverage / Blast Radius (CodeRecon coverage integration)
 # ---------------------------------------------------------------------------
-
-
-class CoveringTestCandidate(CamelModel):
-    """A test that covers a specific symbol."""
-
-    test_id: str
-    source: str  # coverage | reachability | graph
-    distance: int = 0
-    confidence: float = 0.0
-    reason: str = ""
-
-
-class CoveringTestsResponse(CamelModel):
-    """Tests covering definitions in a file."""
-
-    job_id: str
-    file_path: str
-    available: bool = True
-    symbols: dict[str, list[CoveringTestCandidate]] = Field(default_factory=dict)
-
-
-class LineCoverageTestInfo(CamelModel):
-    """A test that covers a specific line."""
-
-    name: str
-    file: str
-    line: int = 0
-    status: str = "notrun"  # pass | fail | notrun
-
-
-class LineCoverageResponse(CamelModel):
-    """Per-line coverage for gutter rendering in the layered diff view."""
-
-    job_id: str
-    file_path: str
-    available: bool = True
-    covered_lines: list[int] = Field(default_factory=list)
-    uncovered_lines: list[int] = Field(default_factory=list)
-    total_instrumented: int = 0
-    line_rate: float = 0.0
-    tests_by_line: dict[str, list[LineCoverageTestInfo]] = Field(default_factory=dict)
-
-
-class BlastRadiusCandidate(CamelModel):
-    """A test candidate from blast radius analysis."""
-
-    test_id: str
-    source: str
-    distance: int = 0
-    confidence: float = 0.0
-    reason: str = ""
-
-
-class BlastRadiusResponse(CamelModel):
-    """Blast radius result for a job's changed files."""
-
-    job_id: str
-    available: bool = True
-    has_coverage_data: bool = False
-    candidates: list[BlastRadiusCandidate] = Field(default_factory=list)
-    coverage_gaps: list[str] = Field(default_factory=list)
-
-
-class ImpactReference(CamelModel):
-    """A single reference/caller in an impact graph."""
-
-    symbol: str = ""
-    file: str = ""
-    line: int | None = None
-    tier: str = "unverified"  # verified | inferred | unverified
-    is_test: bool = False
-    raw_tier: str = "UNKNOWN"
-    covered: bool | None = None
-    test_passed: bool | None = None
-    covering_test_ids: list[str] = Field(default_factory=list)
-    stale: bool | None = None
-
-
-class ImpactGraphResponse(CamelModel):
-    """Impact graph for a symbol — callers with tier classification."""
-
-    job_id: str
-    target: str
-    available: bool = True
-    total_references: int = 0
-    files_affected: int = 0
-    summary: str = ""
-    references: list[ImpactReference] = Field(default_factory=list)
-    fail_count: int = 0
-    uncovered_count: int = 0
-
-
-class ImpactGraphBatchRequest(CamelModel):
-    """Request body for batch impact graph queries."""
-
-    symbols: list[str]
-
-
-class ImpactGraphBatchResponse(CamelModel):
-    """Batch impact graph results keyed by symbol name."""
-
-    job_id: str
-    results: dict[str, ImpactGraphResponse] = Field(default_factory=dict)
-
-
-class CommunityGroup(CamelModel):
-    """A module community with its grouped changes."""
-
-    name: str
-    changes: list[dict[str, Any]] = Field(default_factory=list)
-    total_risk: float = 0.0
-
-
-class CommunitiesResponse(CamelModel):
-    """Community-grouped structural changes for a job."""
-
-    job_id: str
-    available: bool = True
-    communities: list[CommunityGroup] = Field(default_factory=list)
-    unclustered: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ReviewStoryHeader(CamelModel):
-    """Header block for the review story."""
-
-    title: str = ""
-    file_count: int = 0
-    breaking_count: int = 0
-    merge_confidence: str | None = None
-
-
-class ReviewStoryVerdict(CamelModel):
-    """Verdict section of the review story."""
-
-    confidence: str = "MEDIUM"
-    blockers: list[str] = Field(default_factory=list)
-    summary: str = ""
-
-
-class EdgeCaseBlockSchema(CamelModel):
-    """A metadata block for non-narrative content (docs, generated, vendor, etc.)."""
-
-    kind: str = ""
-    icon: str = ""
-    title: str = ""
-    files: list[str] = Field(default_factory=list)
-    detail: str = ""
-
-
-class CommunityRollupSchema(CamelModel):
-    """Community-level aggregation when body changes exceed cognitive cap."""
-
-    name: str = ""
-    change_count: int = 0
-    avg_risk: float = 0.0
-    highest_risk_symbol: str | None = None
-    highest_risk: float = 0.0
-    summary: str = ""
-
-
-class PatternGroupSchema(CamelModel):
-    """A group of changes sharing a common structural pattern."""
-
-    pattern: str = ""
-    count: int = 0
-    files: list[str] = Field(default_factory=list)
-    summary: str = ""
-
-
-class ReviewStoryResponse(CamelModel):
-    """Structured review story artifact (§11)."""
-
-    job_id: str
-    available: bool = True
-    collapsed: bool = False
-    header: ReviewStoryHeader | None = None
-    attention_required: list[dict[str, Any]] = Field(default_factory=list)
-    structural_concerns: list[dict[str, Any]] = Field(default_factory=list)
-    what_changed: list[dict[str, Any]] = Field(default_factory=list)
-    what_added: list[dict[str, Any]] = Field(default_factory=list)
-    non_structural_count: int = 0
-    edge_cases: list[EdgeCaseBlockSchema] = Field(default_factory=list)
-    community_rollups: list[CommunityRollupSchema] = Field(default_factory=list)
-    pattern_groups: list[PatternGroupSchema] = Field(default_factory=list)
-    verdict: ReviewStoryVerdict | None = None
 
 
 # TestCoModification, ReviewSignals, ReviewComplexity, and JobTelemetryReport

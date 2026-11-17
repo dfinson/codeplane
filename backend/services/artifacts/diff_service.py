@@ -15,7 +15,6 @@ import structlog
 from backend.models.api_schemas import (
     DiffFileModel,
     DiffFileStatus,
-    DiffFileSymbolImpact,
     DiffHunkModel,
     DiffLineModel,
     DiffLineType,
@@ -25,7 +24,6 @@ from backend.models.events import EventKind, new_event
 from backend.services.git.git_service import GitError
 
 if TYPE_CHECKING:
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
 
@@ -57,30 +55,12 @@ _SIMILARITY_RE = re.compile(r"^similarity index")
 _WORKTREE_MARKER = "/.codeplane-worktrees/"
 
 
-def _classify_category(c: object) -> str:
-    """Classify a structural change into review categories."""
-    kind = c.change  # type: ignore[attr-defined]
-    ref_count = c.impact.reference_count if c.impact and c.impact.reference_count else 0  # type: ignore[attr-defined]
-    if kind == "removed":
-        return "breaking" if ref_count > 0 else "non-structural"
-    if kind == "modified":
-        if c.old_sig is not None and c.new_sig is not None and c.old_sig != c.new_sig:  # type: ignore[attr-defined]
-            return "breaking"
-        return "body"
-    if kind == "added":
-        return "additive"
-    if kind == "moved":
-        return "body"
-    return "non-structural"
-
-
 class DiffService:
     """Generates and parses unified diffs from git worktrees."""
 
-    def __init__(self, git_service: GitService, event_bus: EventBus, coderecon: CodeReconService | None = None) -> None:
+    def __init__(self, git_service: GitService, event_bus: EventBus) -> None:
         self._git = git_service
         self._event_bus = event_bus
-        self._coderecon = coderecon
         # Monotonic timestamps of last diff calculation per job
         self._last_diff_at: dict[str, float] = {}
         # Per-job locks to prevent concurrent diff calculations
@@ -205,13 +185,9 @@ class DiffService:
         worktree_path: str,
         base_ref: str,
     ) -> list[DiffFileModel]:
-        """Calculate diff, enrich with CodeRecon symbols, publish event, update throttle."""
+        """Calculate diff, publish event, update throttle."""
         files = await self.calculate_diff(worktree_path, base_ref)
         self._last_diff_at[job_id] = time.monotonic()
-
-        # Enrich with per-file symbol impact from CodeRecon semantic_diff
-        if files and self._coderecon and self._coderecon.available:
-            await self._enrich_symbols(files, worktree_path, base_ref)
 
         # Use snake_case keys for internal domain event payload;
         # SSE manager re-serializes to camelCase for the wire.
@@ -226,70 +202,6 @@ class DiffService:
             )
         )
         return files
-
-    async def _enrich_symbols(
-        self,
-        files: list[DiffFileModel],
-        worktree_path: str,
-        base_ref: str,
-    ) -> None:
-        """Attach per-file symbol impact from CodeRecon semantic_diff."""
-        coderecon = self._coderecon
-        if not coderecon:
-            return
-
-        # Derive repo root from worktree path: <repo>/.codeplane-worktrees/<job>
-        marker_idx = worktree_path.find(_WORKTREE_MARKER)
-        if marker_idx < 0:
-            return
-        repo = worktree_path[:marker_idx]
-
-        try:
-            repo_name = await coderecon.ensure_repo_indexed(repo)
-            await coderecon.register_worktree(repo_name, worktree_path)
-            diff_result = await coderecon.semantic_diff(
-                repo_name,
-                base=base_ref,
-                worktree=worktree_path,
-            )
-        except Exception:
-            log.debug("diff_enrich_symbols_failed", worktree=worktree_path, exc_info=True)
-            return
-
-        by_file: dict[str, list[DiffFileSymbolImpact]] = {}
-        for c in diff_result.structural_changes:
-            name = c.qualified_name or c.name
-            if not name:
-                continue
-            impact = c.impact
-            ref_tiers: dict[str, int] = {}
-            if impact and impact.ref_tiers:
-                tiers = impact.ref_tiers
-                proven = tiers.proven or 0
-                strong = tiers.strong or 0
-                anchored = tiers.anchored or 0
-                unknown = tiers.unknown or 0
-                if proven:
-                    ref_tiers["verified"] = proven
-                if strong or anchored:
-                    ref_tiers["inferred"] = strong + anchored
-                if unknown:
-                    ref_tiers["unverified"] = unknown
-            sym = DiffFileSymbolImpact(
-                symbol=name,
-                kind=c.change,
-                category=_classify_category(c),
-                line_range=[c.start_line, c.end_line] if c.start_line else None,
-                ref_count=impact.reference_count if impact and impact.reference_count else 0,
-                ref_tiers=ref_tiers,
-                test_files=impact.affected_test_files if impact and impact.affected_test_files else [],
-            )
-            by_file.setdefault(c.path, []).append(sym)
-
-        for f in files:
-            symbols = by_file.get(f.path)
-            if symbols:
-                f.symbols = symbols
 
     @staticmethod
     def _parse_unified_diff(raw: str) -> list[DiffFileModel]:

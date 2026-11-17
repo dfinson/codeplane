@@ -38,9 +38,6 @@ const RepoJobs = lazyRetry(() =>
 const RepoBoard = lazyRetry(() =>
   import("./components/RepoBoard").then((module) => ({ default: module.RepoBoard })),
 );
-const RepoHealth = lazyRetry(() =>
-  import("./components/RepoHealth").then((module) => ({ default: module.RepoHealth })),
-);
 const RepoCost = lazyRetry(() =>
   import("./components/RepoCost").then((module) => ({ default: module.RepoCost })),
 );
@@ -114,7 +111,7 @@ function RouteFallback() {
  * pre project-id routing) to its canonical `/projects/id/:projectId[/...]` URL.
  * Old bookmarks/shared links must still work — this looks up the owning
  * Project by repo membership and redirects, rather than 404ing outright.
- * `repoScoped` routes (health/cost/jobs) carry the repo path forward as a
+ * `repoScoped` routes (cost/jobs) carry the repo path forward as a
  * nested segment since those screens stay repo-keyed by spec.
  */
 function LegacyRepoRedirect({ suffix, repoScoped }: { suffix: string; repoScoped?: boolean }) {
@@ -254,7 +251,6 @@ export function App() {
                 <Route path="id/:projectId/chats/:chatId" element={<ProjectChats />} />
                 <Route path="id/:projectId/settings" element={<RepoSettings />} />
                 <Route path="id/:projectId/repos/:repoPath/jobs" element={<RepoJobs />} />
-                <Route path="id/:projectId/repos/:repoPath/health" element={<RepoHealth />} />
                 <Route path="id/:projectId/repos/:repoPath/cost" element={<RepoCost />} />
                 <Route path="id/:projectId/repos/:repoPath/settings" element={<RepoSettings />} />
                 {/* Legacy repo-path-keyed URLs (pre project-id routing). Not stable/shareable
@@ -265,7 +261,6 @@ export function App() {
                 <Route path=":repoPath/chats" element={<LegacyRepoRedirect suffix="/chats" />} />
                 <Route path=":repoPath/settings" element={<LegacyRepoRedirect suffix="/settings" />} />
                 <Route path=":repoPath/jobs" element={<LegacyRepoRedirect suffix="/jobs" repoScoped />} />
-                <Route path=":repoPath/health" element={<LegacyRepoRedirect suffix="/health" repoScoped />} />
                 <Route path=":repoPath/cost" element={<LegacyRepoRedirect suffix="/cost" repoScoped />} />
               </Route>
               <Route path="/settings" element={<SettingsScreen />} />

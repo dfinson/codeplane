@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.config import CPLConfig
-    from backend.services.coderecon.coderecon_service import CodeReconService
     from backend.services.completers.copilot_steer import CopilotSteerClient
     from backend.services.events.event_processor import EventProcessor
     from backend.services.git.git_service import GitService
@@ -50,13 +49,11 @@ class SessionStateWatcher(TraceForgeIngestBase):
         session_factory: async_sessionmaker[AsyncSession],
         config: CPLConfig,
         git_service: GitService | None = None,
-        coderecon_service: CodeReconService | None = None,
         steer_client: CopilotSteerClient | None = None,
     ) -> None:
         super().__init__(event_processor, runtime_service, session_factory, "copilot")
         self._config = config
         self._git = git_service
-        self._coderecon = coderecon_service
         self._steer = steer_client
         self._started_at: str | None = None
 
@@ -210,7 +207,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
         self._job_base_refs[job_id] = job.base_ref or "HEAD"
         await self._runtime.register_external_session(job_id, self._job_worktrees[job_id], self._job_base_refs[job_id])
         self._start_tail(session_id, job_id, _SESSION_STATE_DIR / session_id / "events.jsonl")
-        self._fire_bg(self._run_coderecon(job_id, job.repo, self._coderecon), name=f"copilot-coderecon-{job_id[:8]}")
 
     def _start_tail(self, session_id: str, job_id: str, events_path: Path, *, initial_skip_count: int = 0) -> None:
         task = asyncio.create_task(

@@ -43,7 +43,7 @@ function snakeKeyToCamel(key: string): string {
  *
  * - Only keys are transformed; values are left untouched.
  * - Recurses through nested objects and arrays (transcript entries, approval
- *   actions, plan steps, diff hunks, symbols, ...).
+ *   actions, plan steps, diff hunks, ...).
  * - Idempotent: already-camel and single-word keys are unchanged.
  */
 export function deepSnakeToCamel(value: unknown): unknown {

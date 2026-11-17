@@ -6,11 +6,6 @@
  */
 
 import type { DiffFileModel, SDKInfo, StoryResponse } from "../api/types";
-import type {
-  MultiSessionResponse,
-  ReviewStoryResponse as StructuralReviewStoryResponse,
-} from "../api/client";
-
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
 
@@ -216,20 +211,8 @@ export interface TerminalSession {
 }
 
 /** Real-time index progress for a repo being onboarded. */
-export interface RepoIndexProgress {
-  repo: string;
-  indexed: number;
-  total: number;
-  phase: string;
-}
 
 /** Structural warning emitted at step boundaries during execution. */
-export interface StructuralWarning {
-  warningType: string;
-  detail: string;
-  repo: string;
-  timestamp: number;
-}
 
 /** Context handoff — emitted when context crosses a session boundary. */
 export interface ContextHandoff {
@@ -272,16 +255,6 @@ export interface AppState {
   telemetryVersions: Record<string, number>; // keyed by jobId
   /** Bumped after terminal artifact collection finishes so panels re-fetch. */
   artifactVersions: Record<string, number>; // keyed by jobId
-
-  // Repo index progress (keyed by repo name)
-  repoIndexState: Record<string, RepoIndexProgress>;
-
-  // Structural analysis (keyed by jobId) — populated by Review tab
-  multiSessions: Record<string, MultiSessionResponse | null>;
-  reviewStories: Record<string, StructuralReviewStoryResponse | null>;
-
-  // Structural warnings accumulated during execution (keyed by jobId)
-  structuralWarnings: Record<string, StructuralWarning[]>;
 
   /** Context handoffs per job — shows what was passed between sessions. */
   contextHandoffs: Record<string, ContextHandoff[]>;
@@ -343,9 +316,4 @@ export interface AppState {
   setHoveredPlanItemId: (id: string | null) => void;
   setStory: (jobId: string, story: StoryResponse) => void;
 
-  // Structural review cache actions
-  setMultiSession: (jobId: string, data: MultiSessionResponse) => void;
-  setReviewStory: (jobId: string, data: StructuralReviewStoryResponse) => void;
-  /** Prefetch structural review data for a job (called on job_review SSE). */
-  prefetchReviewData: (jobId: string) => void;
 }

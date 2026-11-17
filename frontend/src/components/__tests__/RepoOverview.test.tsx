@@ -25,17 +25,6 @@ function summary(path: string, cost: number, jobs: number) {
     recentJobs: [],
     activeJobCount: jobs,
     cost: { totalCostUsd: cost, totalJobs: jobs, totalTokens: jobs * 100 },
-    health: {
-      repo: path,
-      available: true,
-      indexStatus: "ready",
-      symbolCount: 10,
-      fileCount: 5,
-      lastIndexedSha: "abc",
-      communityCount: 2,
-      cycleCount: 0,
-      stale: false,
-    },
   };
 }
 
@@ -66,7 +55,8 @@ describe("RepoOverview", () => {
     expect(fetchRepoSummary).toHaveBeenNthCalledWith(1, "/repo/api");
     expect(fetchRepoSummary).toHaveBeenNthCalledWith(2, "/repo/web");
     expect(screen.queryByRole("link", { name: "Details →" })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText("Select a repository above for details")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Select a repository above for details")).toHaveLength(1));
+    expect(screen.queryByText("Structural Health")).not.toBeInTheDocument();
   });
   it("guides the user to Project settings when no repositories are available", async () => {
     vi.mocked(fetchProject).mockResolvedValueOnce({

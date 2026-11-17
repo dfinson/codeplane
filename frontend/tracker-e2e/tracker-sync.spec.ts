@@ -305,39 +305,6 @@ test.beforeAll(async () => {
     initializeGitRepo(memberRepoPath);
     initializeGitRepo(addedRepoPath);
 
-    // This UI flow exercises the current backend schema, not the Alembic chain.
-    // Build an isolated database directly from the ORM metadata.
-    const schemaScript = [
-      "from backend.config import get_codeplane_dir",
-      "from backend.models.db import Base",
-      "from sqlalchemy import create_engine",
-      "root = get_codeplane_dir()",
-      "root.mkdir(parents=True, exist_ok=True)",
-      "engine = create_engine(f\"sqlite:///{root / 'data.db'}\")",
-      "Base.metadata.create_all(engine)",
-      "engine.dispose()",
-    ].join("; ");
-    const schemaResult = spawnSync(
-      "uv",
-      ["run", "--no-sync", "python", "-c", schemaScript],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          CODEPLANE_HOME: codeplaneHome,
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
-        },
-        windowsHide: true,
-        encoding: "utf8",
-      },
-    );
-    if (schemaResult.status !== 0) {
-      throw new Error(
-        `Could not create tracker E2E schema: ${schemaResult.stderr || schemaResult.stdout}`,
-      );
-    }
-
     const launchScript = [
       "import uvicorn",
       "from backend.app_factory import create_app",

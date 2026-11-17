@@ -12,7 +12,6 @@ Sub-packages:
 * **artifacts/** — Artifact storage, diffs, and snapshot helpers.
 * **auth/** — Authentication middleware, Cloudflare Access, permission policy.
 * **claude_adapter/** — Claude CLI adapter.
-* **coderecon/** — CodeRecon integration services.
 * **completers/** — LLM completion, summarization, naming, narration, voice.
 * **copilot_adapter/** — Copilot SDK adapter.
 * **events/** — Event bus, SSE, event processing pipeline.
@@ -38,7 +37,6 @@ __all__ = [
     "artifacts",
     "auth",
     "claude_adapter",
-    "coderecon",
     "completers",
     "copilot_adapter",
     "events",

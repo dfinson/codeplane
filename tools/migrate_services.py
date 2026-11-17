@@ -7,10 +7,8 @@ No shims, no backward compat — direct import path updates.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,10 +47,6 @@ PACKAGES: dict[str, list[str]] = {
         "summarization_service.py",
         "copilot_steer.py",
         "voice_service.py",
-    ],
-    "coderecon": [
-        "coderecon_service.py",
-        "coderecon_tools.py",
     ],
     "sharing": [
         "share_service.py",
@@ -157,7 +151,6 @@ def create_init_files() -> None:
             "adapters": "Agent adapter abstraction layer.",
             "events": "Event bus, SSE, and event processing pipeline.",
             "completers": "LLM completion, summarization, and naming services.",
-            "coderecon": "CodeRecon integration services.",
             "sharing": "Sharing, tunnels, and push notification services.",
             "auth": "Authentication and permission services.",
             "artifacts": "Artifact storage, diffs, and snapshot services.",
@@ -229,9 +222,7 @@ def update_services_init() -> None:
         old_module = old.split(".")[-1]
         new_pkg = new.split(".")[-2]
         # Replace references like "``analytics_service``" with "``analytics/analytics_service``"
-        new_text = new_text.replace(
-            f"``{old_module}``", f"``{new_pkg}/{old_module}``"
-        )
+        new_text = new_text.replace(f"``{old_module}``", f"``{new_pkg}/{old_module}``")
 
     if new_text != text:
         init_path.write_text(new_text)

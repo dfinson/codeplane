@@ -130,8 +130,8 @@ class FakeAdapterRegistry(AdapterRegistry):
 
 
 @pytest.fixture
-async def engine() -> AsyncGenerator[AsyncEngine, None]:
-    eng = create_async_engine("sqlite+aiosqlite:///:memory:")
+async def engine(tmp_path: Path) -> AsyncGenerator[AsyncEngine, None]:
+    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'data.db'}")
     sa_event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

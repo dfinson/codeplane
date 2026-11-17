@@ -632,142 +632,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/jobs/{job_id}/structural-diff": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Structural Diff
-         * @description Return structural diff analysis for a job's changes.
-         *
-         *     Uses CodeRecon's semantic_diff to classify changes by structural impact
-         *     (added/removed/modified/moved symbols) rather than raw text diff.
-         *     Computes risk scores and merge confidence per design §9.4 and §7.4.
-         */
-        get: operations["get_job_structural_diff_api_jobs__job_id__structural_diff_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/multi-session": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Multi Session
-         * @description Multi-session structural intelligence.
-         *
-         *     Returns per-session structural analysis with direction change detection
-         *     and messy-session warnings (§10).
-         */
-        get: operations["get_job_multi_session_api_jobs__job_id__multi_session_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/impact-graph/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Impact Graph
-         * @description Return reference/caller graph for a symbol in the job's worktree.
-         *
-         *     Uses ReviewKit.impact() when available; returns available=False otherwise.
-         */
-        get: operations["get_impact_graph_api_jobs__job_id__impact_graph__symbol__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/impact-graph-batch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Impact Graph Batch
-         * @description Return impact graphs for multiple symbols in a single request.
-         */
-        post: operations["get_impact_graph_batch_api_jobs__job_id__impact_graph_batch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/communities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Communities
-         * @description Return community-grouped structural changes for a job.
-         *
-         *     Groups changes by module community so reviewers can see which logical
-         *     areas of the codebase are affected.
-         */
-        get: operations["get_job_communities_api_jobs__job_id__communities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/review-story": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Review Story
-         * @description Generate a structured review story artifact (§11).
-         *
-         *     Returns a structured document with sections: attention_required,
-         *     structural_concerns, what_changed, what_added, session_history, verdict.
-         *     Each section is populated from structural diff data.
-         */
-        get: operations["get_review_story_api_jobs__job_id__review_story_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/jobs/{job_id}/motivations": {
         parameters: {
             query?: never;
@@ -780,66 +644,6 @@ export interface paths {
          * @description Return all motivation annotations for a job's changed files.
          */
         get: operations["get_job_motivations_api_jobs__job_id__motivations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/covering-tests": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Covering Tests
-         * @description Return tests that cover definitions in the given file for a job's repo.
-         */
-        get: operations["get_job_covering_tests_api_jobs__job_id__covering_tests_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/line-coverage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Line Coverage
-         * @description Return per-line coverage data for gutter dot rendering in the layered diff view.
-         */
-        get: operations["get_job_line_coverage_api_jobs__job_id__line_coverage_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/blast-radius": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Job Blast Radius
-         * @description Return blast radius analysis for a job's changed files.
-         */
-        get: operations["get_job_blast_radius_api_jobs__job_id__blast_radius_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1235,26 +1039,6 @@ export interface paths {
          * @description Register a repository (local path or remote URL).
          */
         post: operations["register_repo_endpoint_api_settings_repos_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/repos/{repo_path}/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Repo Health
-         * @description Structural health status for a repository (§6.2).
-         */
-        get: operations["get_repo_health_api_settings_repos__repo_path__health_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3476,53 +3260,6 @@ export interface components {
             /** Tasklinkid */
             taskLinkId: string;
         };
-        /**
-         * BlastRadiusCandidate
-         * @description A test candidate from blast radius analysis.
-         */
-        BlastRadiusCandidate: {
-            /** Testid */
-            testId: string;
-            /** Source */
-            source: string;
-            /**
-             * Distance
-             * @default 0
-             */
-            distance: number;
-            /**
-             * Confidence
-             * @default 0
-             */
-            confidence: number;
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-        };
-        /**
-         * BlastRadiusResponse
-         * @description Blast radius result for a job's changed files.
-         */
-        BlastRadiusResponse: {
-            /** Jobid */
-            jobId: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /**
-             * Hascoveragedata
-             * @default false
-             */
-            hasCoverageData: boolean;
-            /** Candidates */
-            candidates?: components["schemas"]["BlastRadiusCandidate"][];
-            /** Coveragegaps */
-            coverageGaps?: string[];
-        };
         /** Body_transcribe_api_voice_transcribe_post */
         Body_transcribe_api_voice_transcribe_post: {
             /** Audio */
@@ -3671,75 +3408,6 @@ export interface components {
             /** Removed */
             removed: number;
         };
-        /**
-         * CommunitiesResponse
-         * @description Community-grouped structural changes for a job.
-         */
-        CommunitiesResponse: {
-            /** Jobid */
-            jobId: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /** Communities */
-            communities?: components["schemas"]["CommunityGroup"][];
-            /** Unclustered */
-            unclustered?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /**
-         * CommunityGroup
-         * @description A module community with its grouped changes.
-         */
-        CommunityGroup: {
-            /** Name */
-            name: string;
-            /** Changes */
-            changes?: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Totalrisk
-             * @default 0
-             */
-            totalRisk: number;
-        };
-        /**
-         * CommunityRollupSchema
-         * @description Community-level aggregation when body changes exceed cognitive cap.
-         */
-        CommunityRollupSchema: {
-            /**
-             * Name
-             * @default
-             */
-            name: string;
-            /**
-             * Changecount
-             * @default 0
-             */
-            changeCount: number;
-            /**
-             * Avgrisk
-             * @default 0
-             */
-            avgRisk: number;
-            /** Highestrisksymbol */
-            highestRiskSymbol?: string | null;
-            /**
-             * Highestrisk
-             * @default 0
-             */
-            highestRisk: number;
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
-        };
         /** ContextHandoffPayload */
         ContextHandoffPayload: {
             /**
@@ -3841,50 +3509,6 @@ export interface components {
              * @default 0
              */
             jobs: number;
-        };
-        /**
-         * CoveringTestCandidate
-         * @description A test that covers a specific symbol.
-         */
-        CoveringTestCandidate: {
-            /** Testid */
-            testId: string;
-            /** Source */
-            source: string;
-            /**
-             * Distance
-             * @default 0
-             */
-            distance: number;
-            /**
-             * Confidence
-             * @default 0
-             */
-            confidence: number;
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-        };
-        /**
-         * CoveringTestsResponse
-         * @description Tests covering definitions in a file.
-         */
-        CoveringTestsResponse: {
-            /** Jobid */
-            jobId: string;
-            /** Filepath */
-            filePath: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /** Symbols */
-            symbols?: {
-                [key: string]: components["schemas"]["CoveringTestCandidate"][];
-            };
         };
         /**
          * CreateChatRequest
@@ -4170,42 +3794,12 @@ export interface components {
             writeCount?: number | null;
             /** Retrycount */
             retryCount?: number | null;
-            /** Symbols */
-            symbols?: components["schemas"]["DiffFileSymbolImpact"][];
         };
         /**
          * DiffFileStatus
          * @enum {string}
          */
         DiffFileStatus: "added" | "modified" | "deleted" | "renamed";
-        /**
-         * DiffFileSymbolImpact
-         * @description A symbol in a diff file with its impact data from CodeRecon semantic_diff.
-         */
-        DiffFileSymbolImpact: {
-            /** Symbol */
-            symbol: string;
-            /** Kind */
-            kind: string;
-            /**
-             * Category
-             * @default non-structural
-             */
-            category: string;
-            /** Linerange */
-            lineRange?: number[] | null;
-            /**
-             * Refcount
-             * @default 0
-             */
-            refCount: number;
-            /** Reftiers */
-            refTiers?: {
-                [key: string]: number;
-            };
-            /** Testfiles */
-            testFiles?: string[];
-        };
         /** DiffHunkModel */
         DiffHunkModel: {
             /** Oldstart */
@@ -4239,34 +3833,6 @@ export interface components {
         DismissResponse: {
             /** Status */
             status: string;
-        };
-        /**
-         * EdgeCaseBlockSchema
-         * @description A metadata block for non-narrative content (docs, generated, vendor, etc.).
-         */
-        EdgeCaseBlockSchema: {
-            /**
-             * Kind
-             * @default
-             */
-            kind: string;
-            /**
-             * Icon
-             * @default
-             */
-            icon: string;
-            /**
-             * Title
-             * @default
-             */
-            title: string;
-            /** Files */
-            files?: string[];
-            /**
-             * Detail
-             * @default
-             */
-            detail: string;
         };
         /** EditEfficiencyCategory */
         EditEfficiencyCategory: {
@@ -4665,109 +4231,6 @@ export interface components {
             title: string;
             /** Why */
             why: string;
-        };
-        /**
-         * ImpactGraphBatchRequest
-         * @description Request body for batch impact graph queries.
-         */
-        ImpactGraphBatchRequest: {
-            /** Symbols */
-            symbols: string[];
-        };
-        /**
-         * ImpactGraphBatchResponse
-         * @description Batch impact graph results keyed by symbol name.
-         */
-        ImpactGraphBatchResponse: {
-            /** Jobid */
-            jobId: string;
-            /** Results */
-            results?: {
-                [key: string]: components["schemas"]["ImpactGraphResponse"];
-            };
-        };
-        /**
-         * ImpactGraphResponse
-         * @description Impact graph for a symbol — callers with tier classification.
-         */
-        ImpactGraphResponse: {
-            /** Jobid */
-            jobId: string;
-            /** Target */
-            target: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /**
-             * Totalreferences
-             * @default 0
-             */
-            totalReferences: number;
-            /**
-             * Filesaffected
-             * @default 0
-             */
-            filesAffected: number;
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
-            /** References */
-            references?: components["schemas"]["ImpactReference"][];
-            /**
-             * Failcount
-             * @default 0
-             */
-            failCount: number;
-            /**
-             * Uncoveredcount
-             * @default 0
-             */
-            uncoveredCount: number;
-        };
-        /**
-         * ImpactReference
-         * @description A single reference/caller in an impact graph.
-         */
-        ImpactReference: {
-            /**
-             * Symbol
-             * @default
-             */
-            symbol: string;
-            /**
-             * File
-             * @default
-             */
-            file: string;
-            /** Line */
-            line?: number | null;
-            /**
-             * Tier
-             * @default unverified
-             */
-            tier: string;
-            /**
-             * Istest
-             * @default false
-             */
-            isTest: boolean;
-            /**
-             * Rawtier
-             * @default UNKNOWN
-             */
-            rawTier: string;
-            /** Covered */
-            covered?: boolean | null;
-            /** Testpassed */
-            testPassed?: boolean | null;
-            /** Coveringtestids */
-            coveringTestIds?: string[];
-            /** Stale */
-            stale?: boolean | null;
         };
         /**
          * IngestTaskGraphResponse
@@ -5297,59 +4760,6 @@ export interface components {
             sdk?: string | null;
         };
         /**
-         * LineCoverageResponse
-         * @description Per-line coverage for gutter rendering in the layered diff view.
-         */
-        LineCoverageResponse: {
-            /** Jobid */
-            jobId: string;
-            /** Filepath */
-            filePath: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /** Coveredlines */
-            coveredLines?: number[];
-            /** Uncoveredlines */
-            uncoveredLines?: number[];
-            /**
-             * Totalinstrumented
-             * @default 0
-             */
-            totalInstrumented: number;
-            /**
-             * Linerate
-             * @default 0
-             */
-            lineRate: number;
-            /** Testsbyline */
-            testsByLine?: {
-                [key: string]: components["schemas"]["LineCoverageTestInfo"][];
-            };
-        };
-        /**
-         * LineCoverageTestInfo
-         * @description A test that covers a specific line.
-         */
-        LineCoverageTestInfo: {
-            /** Name */
-            name: string;
-            /** File */
-            file: string;
-            /**
-             * Line
-             * @default 0
-             */
-            line: number;
-            /**
-             * Status
-             * @default notrun
-             */
-            status: string;
-        };
-        /**
          * LogLevel
          * @enum {string}
          */
@@ -5765,28 +5175,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /**
-         * MultiSessionResponse
-         * @description Multi-session structural intelligence for a job (§10).
-         */
-        MultiSessionResponse: {
-            /** Jobid */
-            jobId: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /**
-             * Sessions
-             * @default []
-             */
-            sessions: components["schemas"]["SessionSegment"][];
-            /** Directionchanges */
-            directionChanges?: {
-                [key: string]: unknown;
-            }[];
-        };
         /** ObservationEntry */
         ObservationEntry: {
             /**
@@ -5896,29 +5284,6 @@ export interface components {
              * @default 0
              */
             totalWasteUsd: number;
-        };
-        /**
-         * PatternGroupSchema
-         * @description A group of changes sharing a common structural pattern.
-         */
-        PatternGroupSchema: {
-            /**
-             * Pattern
-             * @default
-             */
-            pattern: string;
-            /**
-             * Count
-             * @default 0
-             */
-            count: number;
-            /** Files */
-            files?: string[];
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
         };
         /** PinMetricRequest */
         PinMetricRequest: {
@@ -6153,7 +5518,7 @@ export interface components {
             /** Cloneto */
             cloneTo?: string | null;
             /** Mode */
-            mode?: "register" | "clone" | null;
+            mode?: ("register" | "clone") | null;
         };
         /** RegisterRepoResponse */
         RegisterRepoResponse: {
@@ -6204,48 +5569,6 @@ export interface components {
             activeJobCount: number;
             /** Platform */
             platform?: string | null;
-        };
-        /**
-         * RepoHealthResponse
-         * @description Structural health status for a repository (§6.2).
-         */
-        RepoHealthResponse: {
-            /** Repo */
-            repo: string;
-            /**
-             * Available
-             * @default false
-             */
-            available: boolean;
-            /** Indexstatus */
-            indexStatus?: string | null;
-            /**
-             * Symbolcount
-             * @default 0
-             */
-            symbolCount: number;
-            /**
-             * Filecount
-             * @default 0
-             */
-            fileCount: number;
-            /** Lastindexedsha */
-            lastIndexedSha?: string | null;
-            /**
-             * Communitycount
-             * @default 0
-             */
-            communityCount: number;
-            /**
-             * Cyclecount
-             * @default 0
-             */
-            cycleCount: number;
-            /**
-             * Stale
-             * @default false
-             */
-            stale: boolean;
         };
         /**
          * RepoJobSummary
@@ -6358,7 +5681,6 @@ export interface components {
              *     }
              */
             cost: components["schemas"]["RepoCostSummary"];
-            health?: components["schemas"]["RepoHealthResponse"] | null;
         };
         /**
          * Resolution
@@ -6419,11 +5741,6 @@ export interface components {
         /** ResolveJobRequest */
         ResolveJobRequest: {
             action: components["schemas"]["ResolutionAction"];
-            /**
-             * Confirmlowconfidence
-             * @default false
-             */
-            confirmLowConfidence: boolean;
         };
         /** ResolveJobResponse */
         ResolveJobResponse: {
@@ -6482,94 +5799,6 @@ export interface components {
              * @default 0
              */
             retryPct: number;
-        };
-        /**
-         * ReviewStoryHeader
-         * @description Header block for the review story.
-         */
-        ReviewStoryHeader: {
-            /**
-             * Title
-             * @default
-             */
-            title: string;
-            /**
-             * Filecount
-             * @default 0
-             */
-            fileCount: number;
-            /**
-             * Breakingcount
-             * @default 0
-             */
-            breakingCount: number;
-            /** Mergeconfidence */
-            mergeConfidence?: string | null;
-        };
-        /**
-         * ReviewStoryResponse
-         * @description Structured review story artifact (§11).
-         */
-        ReviewStoryResponse: {
-            /** Jobid */
-            jobId: string;
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /**
-             * Collapsed
-             * @default false
-             */
-            collapsed: boolean;
-            header?: components["schemas"]["ReviewStoryHeader"] | null;
-            /** Attentionrequired */
-            attentionRequired?: {
-                [key: string]: unknown;
-            }[];
-            /** Structuralconcerns */
-            structuralConcerns?: {
-                [key: string]: unknown;
-            }[];
-            /** Whatchanged */
-            whatChanged?: {
-                [key: string]: unknown;
-            }[];
-            /** Whatadded */
-            whatAdded?: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Nonstructuralcount
-             * @default 0
-             */
-            nonStructuralCount: number;
-            /** Edgecases */
-            edgeCases?: components["schemas"]["EdgeCaseBlockSchema"][];
-            /** Communityrollups */
-            communityRollups?: components["schemas"]["CommunityRollupSchema"][];
-            /** Patterngroups */
-            patternGroups?: components["schemas"]["PatternGroupSchema"][];
-            verdict?: components["schemas"]["ReviewStoryVerdict"] | null;
-        };
-        /**
-         * ReviewStoryVerdict
-         * @description Verdict section of the review story.
-         */
-        ReviewStoryVerdict: {
-            /**
-             * Confidence
-             * @default MEDIUM
-             */
-            confidence: string;
-            /** Blockers */
-            blockers?: string[];
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
         };
         /** SDKInfoResponse */
         SDKInfoResponse: {
@@ -6847,32 +6076,6 @@ export interface components {
              */
             timestamp: string;
         };
-        /**
-         * SessionSegment
-         * @description Structural analysis of a single agent session.
-         */
-        SessionSegment: {
-            /** Sessionnumber */
-            sessionNumber: number;
-            /** Startsha */
-            startSha?: string | null;
-            /** Endsha */
-            endSha?: string | null;
-            /**
-             * Changes
-             * @default []
-             */
-            changes: components["schemas"]["StructuralChange"][];
-            /**
-             * Risk
-             * @default 0
-             */
-            risk: number;
-            /** Warnings */
-            warnings?: {
-                [key: string]: unknown;
-            }[];
-        };
         /** SettingsResponse */
         SettingsResponse: {
             /** Maxconcurrentjobs */
@@ -6901,10 +6104,6 @@ export interface components {
             selfReviewPrompt: string;
             /** Clisidecars */
             cliSidecars: string[] | null;
-            /** Codereconsplade */
-            codereconSplade: boolean;
-            /** Codereconcrossencoder */
-            codereconCrossEncoder: boolean;
         };
         /** ShareTokenResponse */
         ShareTokenResponse: {
@@ -7208,74 +6407,6 @@ export interface components {
              * @default false
              */
             pending: boolean;
-        };
-        /**
-         * StructuralChange
-         * @description A single structural change detected by semantic diff.
-         */
-        StructuralChange: {
-            /** Kind */
-            kind: string;
-            /** Symbol */
-            symbol?: string | null;
-            /** File */
-            file: string;
-            /** Summary */
-            summary?: string | null;
-            /**
-             * Category
-             * @default non-structural
-             */
-            category: string;
-            /**
-             * Refcount
-             * @default 0
-             */
-            refCount: number;
-            /** Reftiers */
-            refTiers?: {
-                [key: string]: number;
-            };
-            /** Testfiles */
-            testFiles?: string[];
-            /**
-             * Risk
-             * @default 0
-             */
-            risk: number;
-            /** Linerange */
-            lineRange?: number[] | null;
-            /** Coverageconfidence */
-            coverageConfidence?: string | null;
-        };
-        /**
-         * StructuralDiffResponse
-         * @description Structural diff result for a job's changes.
-         */
-        StructuralDiffResponse: {
-            /** Jobid */
-            jobId: string;
-            /**
-             * Summary
-             * @default
-             */
-            summary: string;
-            /**
-             * Changes
-             * @default []
-             */
-            changes: components["schemas"]["StructuralChange"][];
-            /**
-             * Available
-             * @default true
-             */
-            available: boolean;
-            /** Mergeconfidence */
-            mergeConfidence?: string | null;
-            /** Triage */
-            triage?: {
-                [key: string]: number;
-            };
         };
         /** SubscriptionRequest */
         SubscriptionRequest: {
@@ -8362,10 +7493,6 @@ export interface components {
              * @description Sidecar names for CLI sessions; null leaves current value unchanged
              */
             cliSidecars?: string[] | null;
-            /** Codereconsplade */
-            codereconSplade?: boolean | null;
-            /** Codereconcrossencoder */
-            codereconCrossEncoder?: boolean | null;
         };
         /** UpdateSidecarTemplateRequest */
         UpdateSidecarTemplateRequest: {
@@ -9458,197 +8585,6 @@ export interface operations {
             };
         };
     };
-    get_job_structural_diff_api_jobs__job_id__structural_diff_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StructuralDiffResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_multi_session_api_jobs__job_id__multi_session_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MultiSessionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_impact_graph_api_jobs__job_id__impact_graph__symbol__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImpactGraphResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_impact_graph_batch_api_jobs__job_id__impact_graph_batch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ImpactGraphBatchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ImpactGraphBatchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_communities_api_jobs__job_id__communities_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommunitiesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_review_story_api_jobs__job_id__review_story_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewStoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_job_motivations_api_jobs__job_id__motivations_get: {
         parameters: {
             query?: never;
@@ -9667,109 +8603,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobMotivationsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_covering_tests_api_jobs__job_id__covering_tests_get: {
-        parameters: {
-            query: {
-                /** @description Relative file path to query covering tests for */
-                file_path: string;
-            };
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CoveringTestsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_line_coverage_api_jobs__job_id__line_coverage_get: {
-        parameters: {
-            query: {
-                /** @description Relative file path to query line coverage for */
-                file_path: string;
-                /** @description Optional start of line range */
-                start_line?: number | null;
-                /** @description Optional end of line range */
-                end_line?: number | null;
-            };
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LineCoverageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_job_blast_radius_api_jobs__job_id__blast_radius_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BlastRadiusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10367,37 +9200,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegisterRepoResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_repo_health_api_settings_repos__repo_path__health_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                repo_path: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RepoHealthResponse"];
                 };
             };
             /** @description Validation Error */

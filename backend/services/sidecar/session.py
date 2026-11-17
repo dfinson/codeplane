@@ -226,7 +226,6 @@ class AgenticSidecarSession:
             mcp_servers=config.mcp_servers,
             protected_paths=config.protected_paths,
             blocking_permission_handler=config.blocking_permission_handler,
-            coderecon_tools=config.coderecon_tools,
             max_turns=self._max_turns,
             disallowed_tools=config.disallowed_tools,
             session_kind=config.session_kind,

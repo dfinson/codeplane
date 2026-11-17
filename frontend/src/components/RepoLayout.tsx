@@ -67,7 +67,7 @@ export function RepoLayout() {
   const repoScopedUrl = displayedRepoPath
     ? `${projectUrl}/repos/${encodeURIComponent(displayedRepoPath)}`
     : null;
-  const repoView = location.pathname.match(/\/(jobs|health|cost|settings)$/)?.[1] ?? "jobs";
+  const repoView = location.pathname.match(/\/(jobs|cost|settings)$/)?.[1] ?? "jobs";
   const activeRepoView = location.pathname.includes("/repos/") ? repoView : "";
   const activeProjectTab = location.pathname === projectUrl
     ? "overview"
@@ -78,11 +78,11 @@ export function RepoLayout() {
         : location.pathname.startsWith(`${projectUrl}/settings`)
           ? "settings"
           : "";
-  const repoTabs: ViewTabBarItem[] = (["jobs", "health", "cost"] as const).map((view) => ({
+  const repoTabs: ViewTabBarItem[] = (["jobs", "cost"] as const).map((view) => ({
     id: view,
     label: view === "jobs" ? "Jobs" : view.charAt(0).toUpperCase() + view.slice(1),
     disabled: !repoScopedUrl,
-    disabledTip: "Select a repository above to view Jobs, Health, and Cost.",
+    disabledTip: "Select a repository above to view Jobs and Cost.",
   }));
 
   useEffect(() => {
@@ -277,7 +277,7 @@ export function RepoLayout() {
                     />
                     {!repoScopedUrl && (
                       <span className="mt-2 block text-xs text-muted-foreground">
-                        Select a repository above to view Jobs, Health, and Cost.
+                        Select a repository above to view Jobs and Cost.
                       </span>
                     )}
                   </div>
