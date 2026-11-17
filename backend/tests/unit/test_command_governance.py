@@ -89,6 +89,9 @@ async def _production(sessions, tmp_path, monkeypatch, argv):
         ["git", "-C", ".", "rebase", "topic"],
         ["git", "reset", "--hard", "HEAD"],
         ["git", "push", "--force"],
+        ["sh", "-c", "git -C . merge topic"],
+        ["env", "git", "merge", "topic"],
+        ["pwsh.exe", "-Command", "git merge topic"],
         ["bash", "-c", "git -C . merge topic"],
         ["bash", "-lc", "'/usr/bin/git' -C . merge topic"],
         ["env", "LANG=C", "git", "-C", ".", "merge", "topic"],
@@ -130,7 +133,9 @@ async def test_direct_git_argv_hard_gate_precedes_an_sdk_labeled_model_answer(
         ),
         model="claude-test",
     )
-    host._policy_routers[run.job_id]._authority._provider = provider
+    authority = host._policy_routers[run.job_id]._authority
+    authority._provider = provider
+    authority._model = "claude-test"
     requested = asyncio.Event()
 
     async def on_event(event):
