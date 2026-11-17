@@ -41,7 +41,7 @@ from backend.models.schemas.tracker_operations import (
     TrackerOperationListResponse as TrackerOperationListResponse,
 )
 from backend.models.schemas.tracker_operations import (
-    TrackerOperationResponse as TrackerOperationResponse,
+    TrackerOperationResponse as TrackerOperationResponse,  # noqa: TC001 -- Pydantic resolves this at runtime.
 )
 from backend.models.schemas.tracker_operations import (
     TrackerOperationState as TrackerOperationState,
@@ -579,6 +579,101 @@ class TaskLinkResponse(CamelModel):
 class TaskLinkListResponse(CamelModel):
     items: list[TaskLinkResponse]
 
+
+class TaskDependencyStatus(CamelModel):
+    key: str
+    task_link_id: str | None
+    job_id: str | None
+    job_state: str | None
+    resolution: str | None
+    satisfied: bool
+
+
+class TaskLinkInspectionResponse(CamelModel):
+    task: TaskLinkResponse
+    prompt: str
+    prompt_source: Literal["stored_override", "historical_reference"]
+    dependencies: list[TaskDependencyStatus]
+    can_start: bool
+    disabled_reason: str | None
+    pending_approval_ids: list[str]
+    requires_chain_approval: bool
+    sdk: str
+    model: str | None
+    preset: Preset
+    mode: JobMode
+    recipe_revision_id: str | None
+
+
+ProjectBoardColumn = Literal["ready_blocked", "in_progress", "needs_decision", "failed"]
+
+
+class ProjectBoardTotals(CamelModel):
+    task_count: int
+    linked_job_count: int
+    standalone_job_count: int
+    pending_approval_count: int
+    review_job_count: int
+    delivery_attention_count: int
+    work_counts: dict[ProjectBoardColumn, int]
+
+
+class ProjectRecipeStep(CamelModel):
+    id: str
+    title: str
+    state: str
+    reason: str | None
+
+
+class ProjectRecipeSummary(CamelModel):
+    run_id: str
+    revision: int
+    name: str
+    state: str
+    reason: str | None
+    steps: list[ProjectRecipeStep]
+    remaining_step_count: int
+
+
+class ProjectTaskSummary(CamelModel):
+    id: str
+    repo_path: str
+    story_node_id: str | None
+    tracker_ticket_ref: str | None
+    state: str
+
+
+class ProjectBoardItem(CamelModel):
+    id: str
+    column: ProjectBoardColumn
+    job: JobResponse | None
+    tasks: list[ProjectTaskSummary]
+    task_count: int
+    pending_approval_count: int
+    delivery_attention_count: int
+    recipe: ProjectRecipeSummary | None
+    has_failure: bool
+
+
+class ProjectBoardPage(CamelModel):
+    items: list[ProjectBoardItem]
+    next_cursor: str | None
+
+
+class ProjectBoardResponse(CamelModel):
+    project: ProjectResponse
+    totals: ProjectBoardTotals
+    columns: dict[ProjectBoardColumn, ProjectBoardPage]
+
+
+class ProjectApprovalPage(CamelModel):
+    items: list[ApprovalResponse]
+    next_cursor: str | None
+
+
+class ProjectDeliveryPage(CamelModel):
+    items: list[TrackerOperationResponse]
+    next_cursor: str | None
 
 class RepoSummaryResponse(CamelModel):
     """Aggregated overview for a single repo dashboard."""

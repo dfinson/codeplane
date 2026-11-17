@@ -331,6 +331,12 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  projectBoards: {},
+  projectBoardPages: {},
+  projectApprovalPages: {},
+  projectDeliveryPages: {},
+  projectBoardVersion: 0,
+  taskLinkInspections: {},
   recipeCurrentRuns: {},
   recipeRuns: {},
   recipeRunHistoryPages: {},
@@ -590,6 +596,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   dispatchSSEEvent: (eventType, data) => {
     const payload = data as Record<string, unknown>;
+    if (/^(job|recipe|permission|tracker)\./.test(eventType)) {
+      set((state) => ({ projectBoardVersion: state.projectBoardVersion + 1 }));
+    }
 
     // `snapshot` is a passthrough camelCase frame (not a traceforge event) and
     // never drives a derived state transition.

@@ -24,6 +24,7 @@ from backend.persistence.file_access_repo import FileAccessRepository
 from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.latency_attribution_repo import LatencyAttributionRepository
+from backend.persistence.project_board_repo import ProjectBoardRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.persistence.recipe_repo import RecipeRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
@@ -53,6 +54,7 @@ from backend.services.ingest.record_service import ObservationRecords
 from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
+from backend.services.project.board_service import ProjectBoardService
 from backend.services.project.project_service import ProjectService
 from backend.services.recipe.definition_service import RecipeDefinitionService
 from backend.services.recipe.inspection import RecipeInspectionService
@@ -320,6 +322,16 @@ class RequestProvider(Provider):
     @provide
     def project_repo(self, session: AsyncSession) -> ProjectRepository:
         return ProjectRepository(session)
+
+    @provide
+    def project_board_repo(self, session: AsyncSession) -> ProjectBoardRepository:
+        return ProjectBoardRepository(session)
+
+    @provide
+    def project_board_service(
+        self, projects: ProjectRepository, board: ProjectBoardRepository
+    ) -> ProjectBoardService:
+        return ProjectBoardService(projects, board)
 
     @provide
     def project_service(

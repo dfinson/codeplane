@@ -2839,6 +2839,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/projects/{project_id}/task-links/{task_link_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Task Link */
+        get: operations["inspect_task_link_api_settings_projects__project_id__task_links__task_link_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board */
+        get: operations["get_project_board_api_settings_projects__project_id__board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/columns/{column}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Column */
+        get: operations["get_project_board_column_api_settings_projects__project_id__board_columns__column__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Approvals */
+        get: operations["get_project_board_approvals_api_settings_projects__project_id__board_approvals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Deliveries */
+        get: operations["get_project_board_deliveries_api_settings_projects__project_id__board_deliveries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{project_id}/tracker-links/operations": {
         parameters: {
             query?: never;
@@ -6021,6 +6106,77 @@ export interface components {
              */
             replacesCount: number;
         };
+        /** ProjectApprovalPage */
+        ProjectApprovalPage: {
+            /** Items */
+            items: components["schemas"]["ApprovalResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** ProjectBoardItem */
+        ProjectBoardItem: {
+            /** Id */
+            id: string;
+            /**
+             * Column
+             * @enum {string}
+             */
+            column: "ready_blocked" | "in_progress" | "needs_decision" | "failed";
+            job: components["schemas"]["JobResponse"] | null;
+            /** Tasks */
+            tasks: components["schemas"]["ProjectTaskSummary"][];
+            /** Taskcount */
+            taskCount: number;
+            /** Pendingapprovalcount */
+            pendingApprovalCount: number;
+            /** Deliveryattentioncount */
+            deliveryAttentionCount: number;
+            recipe: components["schemas"]["ProjectRecipeSummary"] | null;
+            /** Hasfailure */
+            hasFailure: boolean;
+        };
+        /** ProjectBoardPage */
+        ProjectBoardPage: {
+            /** Items */
+            items: components["schemas"]["ProjectBoardItem"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** ProjectBoardResponse */
+        ProjectBoardResponse: {
+            project: components["schemas"]["ProjectResponse"];
+            totals: components["schemas"]["ProjectBoardTotals"];
+            /** Columns */
+            columns: {
+                [key: string]: components["schemas"]["ProjectBoardPage"];
+            };
+        };
+        /** ProjectBoardTotals */
+        ProjectBoardTotals: {
+            /** Taskcount */
+            taskCount: number;
+            /** Linkedjobcount */
+            linkedJobCount: number;
+            /** Standalonejobcount */
+            standaloneJobCount: number;
+            /** Pendingapprovalcount */
+            pendingApprovalCount: number;
+            /** Reviewjobcount */
+            reviewJobCount: number;
+            /** Deliveryattentioncount */
+            deliveryAttentionCount: number;
+            /** Workcounts */
+            workCounts: {
+                [key: string]: number;
+            };
+        };
+        /** ProjectDeliveryPage */
+        ProjectDeliveryPage: {
+            /** Items */
+            items: components["schemas"]["TrackerOperationResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
         /** ProjectListResponse */
         ProjectListResponse: {
             /** Items */
@@ -6030,6 +6186,34 @@ export interface components {
         ProjectListSummaryResponse: {
             /** Items */
             items: components["schemas"]["ProjectSummaryResponse"][];
+        };
+        /** ProjectRecipeStep */
+        ProjectRecipeStep: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** State */
+            state: string;
+            /** Reason */
+            reason: string | null;
+        };
+        /** ProjectRecipeSummary */
+        ProjectRecipeSummary: {
+            /** Runid */
+            runId: string;
+            /** Revision */
+            revision: number;
+            /** Name */
+            name: string;
+            /** State */
+            state: string;
+            /** Reason */
+            reason: string | null;
+            /** Steps */
+            steps: components["schemas"]["ProjectRecipeStep"][];
+            /** Remainingstepcount */
+            remainingStepCount: number;
         };
         /**
          * ProjectResponse
@@ -6081,6 +6265,19 @@ export interface components {
             failedCount: number;
             /** Lastactivityat */
             lastActivityAt?: string | null;
+        };
+        /** ProjectTaskSummary */
+        ProjectTaskSummary: {
+            /** Id */
+            id: string;
+            /** Repopath */
+            repoPath: string;
+            /** Storynodeid */
+            storyNodeId: string | null;
+            /** Trackerticketref */
+            trackerTicketRef: string | null;
+            /** State */
+            state: string;
         };
         /** ProviderGuidanceResponse */
         ProviderGuidanceResponse: {
@@ -7911,6 +8108,50 @@ export interface components {
             branchName: string;
             /** Worktreename */
             worktreeName: string;
+        };
+        /** TaskDependencyStatus */
+        TaskDependencyStatus: {
+            /** Key */
+            key: string;
+            /** Tasklinkid */
+            taskLinkId: string | null;
+            /** Jobid */
+            jobId: string | null;
+            /** Jobstate */
+            jobState: string | null;
+            /** Resolution */
+            resolution: string | null;
+            /** Satisfied */
+            satisfied: boolean;
+        };
+        /** TaskLinkInspectionResponse */
+        TaskLinkInspectionResponse: {
+            task: components["schemas"]["TaskLinkResponse"];
+            /** Prompt */
+            prompt: string;
+            /**
+             * Promptsource
+             * @enum {string}
+             */
+            promptSource: "stored_override" | "historical_reference";
+            /** Dependencies */
+            dependencies: components["schemas"]["TaskDependencyStatus"][];
+            /** Canstart */
+            canStart: boolean;
+            /** Disabledreason */
+            disabledReason: string | null;
+            /** Pendingapprovalids */
+            pendingApprovalIds: string[];
+            /** Requireschainapproval */
+            requiresChainApproval: boolean;
+            /** Sdk */
+            sdk: string;
+            /** Model */
+            model: string | null;
+            preset: components["schemas"]["Preset"];
+            mode: components["schemas"]["JobMode"];
+            /** Reciperevisionid */
+            recipeRevisionId: string | null;
         };
         /** TaskLinkListResponse */
         TaskLinkListResponse: {
@@ -14105,6 +14346,172 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_task_link_api_settings_projects__project_id__task_links__task_link_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                task_link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskLinkInspectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_api_settings_projects__project_id__board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBoardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_column_api_settings_projects__project_id__board_columns__column__get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                column: "ready_blocked" | "in_progress" | "needs_decision" | "failed";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBoardPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_approvals_api_settings_projects__project_id__board_approvals_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectApprovalPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_deliveries_api_settings_projects__project_id__board_deliveries_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDeliveryPage"];
                 };
             };
             /** @description Validation Error */

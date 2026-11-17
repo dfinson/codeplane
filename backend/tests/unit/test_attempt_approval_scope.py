@@ -1,3 +1,5 @@
+"""Scope predicate regression cases imported from runtime producer 9a2ffb6."""
+
 import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock

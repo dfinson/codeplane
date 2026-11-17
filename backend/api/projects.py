@@ -9,24 +9,32 @@ is durably registered going forward.
 from __future__ import annotations
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.api_schemas import (
     CreateManualTaskLinkRequest,
     CreateProjectRequest,
+    ProjectApprovalPage,
+    ProjectBoardColumn,
+    ProjectBoardPage,
+    ProjectBoardResponse,
+    ProjectDeliveryPage,
     ProjectListResponse,
     ProjectListSummaryResponse,
     ProjectResponse,
     ProjectSummaryResponse,
+    TaskLinkInspectionResponse,
     TaskLinkListResponse,
     TaskLinkResponse,
     UpdateProjectRequest,
 )
 from backend.models.domain import Project, ProjectSummary, TaskLink
+from backend.services.project.board_service import ProjectBoardService
 from backend.services.project.project_service import ProjectService
 from backend.services.recipe.recipe_service import RecipeService
 from backend.services.runtime import RuntimeService
+from backend.services.task_execution_service import TaskExecutionService
 
 router = APIRouter(tags=["projects"], route_class=DishkaRoute)
 
@@ -183,3 +191,51 @@ async def start_task_link(
     await session.commit()
     background_tasks.add_task(runtime_service.setup_and_start, job)
     return _task_link_to_response(task_link)
+
+
+@router.get(
+    "/settings/projects/{project_id}/task-links/{task_link_id}",
+    response_model=TaskLinkInspectionResponse,
+)
+async def inspect_task_link(
+    project_id: str,
+    task_link_id: str,
+    execution_service: FromDishka[TaskExecutionService],
+) -> TaskLinkInspectionResponse:
+    return await execution_service.inspect_task_link(project_id, task_link_id)
+
+
+@router.get("/settings/projects/{project_id}/board", response_model=ProjectBoardResponse)
+async def get_project_board(project_id: str, service: FromDishka[ProjectBoardService]) -> ProjectBoardResponse:
+    return await service.get(project_id)
+
+
+@router.get("/settings/projects/{project_id}/board/columns/{column}", response_model=ProjectBoardPage)
+async def get_project_board_column(
+    project_id: str,
+    column: ProjectBoardColumn,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(20, ge=1, le=100),
+) -> ProjectBoardPage:
+    return await service.page(project_id, column, after=after, limit=limit)
+
+
+@router.get("/settings/projects/{project_id}/board/approvals", response_model=ProjectApprovalPage)
+async def get_project_board_approvals(
+    project_id: str,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(30, ge=1, le=100),
+) -> ProjectApprovalPage:
+    return await service.approvals(project_id, after=after, limit=limit)
+
+
+@router.get("/settings/projects/{project_id}/board/deliveries", response_model=ProjectDeliveryPage)
+async def get_project_board_deliveries(
+    project_id: str,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(20, ge=1, le=100),
+) -> ProjectDeliveryPage:
+    return await service.deliveries(project_id, after=after, limit=limit)

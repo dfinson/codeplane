@@ -129,7 +129,6 @@ class ApprovalRepository(BaseRepository):
             if owner is None:
                 log.warning("approval_gate_scope_conflict", approval_id=approval.id, job_id=approval.job_id)
             return owner
-
         # Tool arguments in proposed_action are not authority to declare scope.
         # Older SDK requests obtain scope only from their persisted app event.
         result = await self._session.execute(

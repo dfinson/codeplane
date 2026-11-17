@@ -148,6 +148,10 @@ export const TaskLinkCard = memo(function TaskLinkCard({
 
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-muted-foreground truncate" title={taskLink.repoPath}>{repoName}</span>
+        <Button size="sm" variant="outline" onClick={(event) => {
+          event.stopPropagation();
+          navigate(`/projects/id/${encodeURIComponent(taskLink.projectId)}/board/task/${encodeURIComponent(taskLink.id)}`);
+        }}>Inspect task</Button>
         {taskLink.state === "ready" && !taskLink.jobId && onStart && (
           <Button
             size="sm"
