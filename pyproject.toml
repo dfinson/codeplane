@@ -14,8 +14,8 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "aiosqlite>=0.20,<1",
     "alembic>=1.14,<2",
-    # Agent SDK
-    "github-copilot-sdk>=1.0.34,<2",
+    # Pin the newest SDK available from the approved package mirror, including prereleases.
+    "github-copilot-sdk==1.0.32rc1",
     # Structured logging
     "structlog>=24.0,<26",
     # Terminal UI

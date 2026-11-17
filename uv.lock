@@ -552,7 +552,7 @@ requires-dist = [
     { name = "dishka", extras = ["fastapi"], specifier = ">=1.9.1,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2" },
-    { name = "github-copilot-sdk", specifier = ">=1.0.34,<2" },
+    { name = "github-copilot-sdk", specifier = "==1.0.32rc1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=1.9,<2" },
     { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.20,<2" },
@@ -1012,7 +1012,7 @@ wheels = [
 
 [[package]]
 name = "github-copilot-sdk"
-version = "1.0.34"
+version = "1.0.32rc1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1020,7 +1020,7 @@ dependencies = [
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/3f/9b8405bf4943dfb6ecd5d0ac2179e1fab896a61bd31273c94267faeae5c9/github_copilot_sdk-1.0.34-py3-none-any.whl", hash = "sha256:0d9cffccdb59f5d90512e9b94a70d482859a5fc9e0d2d0926e1bb138a1e593c4", size = 1116400, upload-time = "2026-11-14T00:08:47.124Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/b9/e2146860844561cb3cd76a73555805ca9dd3cab0432e1984f76246d38ae8/github_copilot_sdk-1.0.32rc1-py3-none-any.whl", hash = "sha256:6836f681aa9a32570a1c8bb4425d7be909e7a9f18930d65adfdd17b5001fcd36", size = 1091271, upload-time = "2026-11-10T23:11:18.727Z" },
 ]
 
 [[package]]
