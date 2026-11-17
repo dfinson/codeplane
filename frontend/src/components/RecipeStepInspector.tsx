@@ -179,7 +179,13 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
   return <section aria-label="Recipe step inspector" className="min-w-0 space-y-4 rounded-lg border border-border bg-card px-[22px] py-[18px]">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs text-muted-foreground">{definition.runner.kind} step / {step.stepPath}</p><h3 className="text-lg font-semibold">{definition.title}</h3><p className="break-all text-xs text-muted-foreground">Run {runId}</p></div>
-      <Button size="sm" variant="outline" disabled={loading || attemptLoading} onClick={() => setRefresh((v) => v + 1)}>Refresh read</Button>
+      <Button
+        size="sm"
+        variant="outline"
+        aria-disabled={loading || attemptLoading}
+        className="aria-disabled:cursor-wait aria-disabled:opacity-50"
+        onClick={() => { if (!loading && !attemptLoading) setRefresh((v) => v + 1); }}
+      >Refresh read</Button>
     </header>
     {error && <p role="alert" className="text-sm text-destructive">{error}. Retained data may be stale.</p>}
     <dl className="divide-y divide-border">

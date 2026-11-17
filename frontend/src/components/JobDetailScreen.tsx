@@ -243,7 +243,9 @@ export function JobDetailScreen() {
     if (!nextTab) return;
     // Clear then re-set so consecutive same-direction swipes re-trigger the CSS animation
     setSlideDir(null);
-    requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    }
     handleTabChange(nextTab);
   }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable, recipeRun]);
 
