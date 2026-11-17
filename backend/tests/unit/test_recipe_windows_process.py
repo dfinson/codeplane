@@ -187,9 +187,15 @@ async def test_native_windows_child_is_contained_after_exited_command_leader(tmp
             assert process.returncode == 0, stderr.decode(errors="replace")
         child_pid = int(stdout.decode().strip())
         assert psutil.pid_exists(child_pid)
+        child_process = psutil.Process(child_pid)
         await command_runner._stop(process, owner)
         assert owner.active_processes() == 0 and owner.command_started is True
-        assert not psutil.pid_exists(child_pid)
+        # Windows can retain a terminated process object/PID while handles exist.
+        # Wait on the actual process, then prove its file-writing effects stopped.
+        assert child_process.wait(timeout=5) == 1
+        stopped_contents = heartbeat.read_bytes()
+        await asyncio.sleep(0.15)
+        assert heartbeat.read_bytes() == stopped_contents
     finally:
         if process is not None:
             await command_runner._stop(process, owner)
