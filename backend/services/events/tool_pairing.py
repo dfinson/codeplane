@@ -25,6 +25,13 @@ class ToolPairing:
         self._starts: OrderedDict[tuple[str, str], SessionEvent] = OrderedDict()
 
     @staticmethod
+    def _call_id(event: SessionEvent) -> str | None:
+        value = event.payload.get("tool_call_id")
+        if value is None and event.metadata.source_framework == "opencode":
+            value = event.payload.get("call_id")
+        return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
     def _key(event: SessionEvent, call_id: str) -> tuple[str, str]:
         metadata = event.metadata
         namespace = metadata.namespace or ()
@@ -45,8 +52,8 @@ class ToolPairing:
         return event.session_id, scope
 
     def process(self, event: SessionEvent) -> SessionEvent | list[SessionEvent] | None:
-        call_id = event.payload.get("tool_call_id")
-        if not isinstance(call_id, str) or not call_id.strip():
+        call_id = self._call_id(event)
+        if call_id is None:
             if event.kind in (EventKind.tool_call_started, EventKind.tool_call_completed, EventKind.tool_call_failed):
                 return self._orphan(event, "missing_identity")
             return event
@@ -93,8 +100,13 @@ class ToolPairing:
             updates["motivation"] = start.metadata.motivation
         name = payload.get("tool_name")
         arguments = payload.get("arguments")
+        if event.metadata.source_framework == "opencode":
+            name = payload.get("tool_name", payload.get("tool"))
+            arguments = payload.get("arguments", payload.get("input"))
         if isinstance(name, str):
-            result = payload.get("result")
+            result = payload.get(
+                "result", payload.get("output") if event.metadata.source_framework == "opencode" else None
+            )
             updates["tool_display"] = event.metadata.tool_display or format_tool_display(
                 name,
                 arguments if isinstance(arguments, str) else json.dumps(arguments),
@@ -127,8 +139,8 @@ class ToolPairing:
             raise ValueError("Checkpoint exceeds pairing capacity")
         starts: OrderedDict[tuple[str, str], SessionEvent] = OrderedDict()
         for event in checkpoint.starts:
-            call_id = event.payload.get("tool_call_id")
-            if event.kind != EventKind.tool_call_started or not isinstance(call_id, str) or not call_id.strip():
+            call_id = self._call_id(event)
+            if event.kind != EventKind.tool_call_started or call_id is None:
                 raise ValueError("Invalid pending tool checkpoint")
             key = self._key(event, call_id)
             if key in starts:

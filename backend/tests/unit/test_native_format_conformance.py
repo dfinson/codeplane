@@ -348,9 +348,15 @@ async def test_admitted_source_record_survives_canonical_storage_and_replay(name
     async with session_factory() as session:
         durable = await EventRepository(session).list_after(0, job_id=job.id)
         assert durable == before
-        # Assert at the admitted-history boundary, not on an intermediate
-        # decoder object that a consumer is entitled to enrich before storage.
-        assert any(row.event.raw_event == raw for row in durable)
+        receipts = [row.event for row in durable if row.event.kind == "integration.batch.accepted"]
+        assert len(receipts) == 1
+        assert receipts[0].raw_event == {
+            "contract": "codeplane-source-batch-v1",
+            "source_key": "source",
+            "start_index": 0,
+            "prefix_sha256": "0" * 64,
+            "records": [raw],
+        }
 
 
 def test_openai_unfinished_function_span_does_not_invent_completion():
@@ -457,7 +463,15 @@ async def test_unknown_native_shape_is_not_silently_lost_after_admission(name, r
         else:
             assert receipt.accepted_records == 1
             retained = await EventRepository(session).list_after(0, job_id=job.id)
-            assert any(row.event.raw_event == raw for row in retained)
+            assert len(retained) == 1
+            assert retained[0].event.kind == "integration.batch.accepted"
+            assert retained[0].event.raw_event == {
+                "contract": "codeplane-source-batch-v1",
+                "source_key": "source",
+                "start_index": 0,
+                "prefix_sha256": "0" * 64,
+                "records": [raw],
+            }
 
 
 @pytest.mark.parametrize(

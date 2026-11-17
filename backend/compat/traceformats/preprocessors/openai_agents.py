@@ -55,6 +55,9 @@ def preprocess_openai_agents(obj: dict[str, Any]) -> list[dict[str, Any]]:
             "tool_name": span_data.get("name"),
             "arguments": span_data.get("input"),
         }
+        events = [started] if obj.get("started_at") is not None else []
+        if obj.get("ended_at") is None:
+            return events
         finished_type = "function.failed" if obj.get("error") else "function.completed"
         finished = {
             **base,
@@ -63,8 +66,10 @@ def preprocess_openai_agents(obj: dict[str, Any]) -> list[dict[str, Any]]:
             "tool_name": span_data.get("name"),
             "result": span_data.get("output"),
         }
-        return [started, finished]
+        return [*events, finished]
 
+    if obj.get("ended_at") is None:
+        return []
     event_type_by_span = {
         "agent": "agent.completed",
         "generation": "generation.completed",

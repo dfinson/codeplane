@@ -2,7 +2,7 @@
   "baseline_head": "b79ddb03d5a94d85aa7dc29fb617407876568090",
   "baseline_checkout_is_shallow": true,
   "specification_sha256": "9941bd11323740358f158baf953083d192873f03b610708d9fad10934aee29c5",
-  "status": "incomplete",
+  "status": "decoder_qualification_passed_producer_evidence_incomplete",
   "baseline_tests": {
     "command": "uv run pytest backend/tests/unit/test_native_format_conformance.py -q --tb=short",
     "passed": 193,
@@ -20,6 +20,23 @@
     "xfail": 0,
     "raw_history_boundary": "HistoryRegistration -> ObservationRecords -> SQLite commit -> repeated batch receipt -> fresh-session EventRepository read. Missing history reproduced for 23 JSON formats, while MAF passes.",
     "production_repair_commit": "b538b37f966fe29edc3626bead314e9cd1d3ed40"
+  },
+  "decoder_storage_repair": {
+    "qualification_passed": 233,
+    "existing_native_mapping_passed": 12,
+    "focused_recovery_ingestion_pairing_passed": 31,
+    "raw_history_and_metadata_disclosure_passed": 7,
+    "total_passed": 283,
+    "failed": 0,
+    "skipped": 0,
+    "xfail": 0,
+    "parser_revision": "cp-mappings-v3",
+    "source_retention": "Each existing integration.batch.accepted receipt stores a codeplane-source-batch-v1 raw_event envelope with source_key, start_index, prefix_sha256 and the exact records array. Zero-output records and both sides of multi-output tool pairs survive independently of canonical projection.",
+    "atomicity": "The existing repository transaction commits receipt raw data, canonical events, source cursor and projection checkpoint together. Receipt-write failures roll all of them back. The receipt is included in the existing 8 MiB total projection bound.",
+    "state_recovery": "VS Code and OpenCode preprocessors are decoder-owned instances. JSON state is checkpointed, restored across database sessions and rolled back on failed records. Unsupported VS Code versions are rejected before state mutation.",
+    "legacy_handling": "Existing receipts remain replayable without backfilling unknown historical raw data. Older parser/projection checkpoints require explicit reconciliation before new progress. Metadata-only exports still exclude raw data.",
+    "migration": "No migration needed. Existing event raw_event storage and accepted-batch receipts provide durable atomic retention. Local migration head remains 0081.",
+    "scope": "The storage assertions now compare exact records on real durable receipts. No fabricated producer events, skipped tests, expected failures, or weaker payload goldens were introduced."
   },
   "legacy_comparison": {
     "revision": "46e0340b7bb3fd4740f8dba02a5e7586fa26608f",
@@ -64,7 +81,7 @@
     "unknown_shapes": "The approved accepted-source preservation requirement applies independently of a preprocessor emitting zero records. The test allows explicit unsupported-shape rejection and does not require a fabricated canonical event.",
     "binding_isolation": "SPEC.md binds decoder context and projection checkpoints to the registered binding/source session. Another binding's snapshot must not replace checkpointed context."
   },
-  "unresolved_baseline_contracts": [
+  "resolved_baseline_contracts": [
     "23 JSON mappings omit original raw_event. The initial decoder assertion is now exercised through HistoryRegistration, ObservationRecords, committed EventRepository history and batch replay, without requiring an intermediate decoder field.",
     "OpenAI Agents unfinished function spans fabricate tool completion.",
     "VS Code and OpenCode preprocessor state is module-global, outside DecoderState and binding scope.",
