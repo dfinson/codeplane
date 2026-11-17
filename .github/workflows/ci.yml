@@ -154,7 +154,6 @@ jobs:
     permissions:
       contents: read
     env:
-      CODEPLANE_HOME: ${{ runner.temp }}/codeplane-recipe-qualification
       UV_CONCURRENT_DOWNLOADS: "2"
       UV_CONCURRENT_BUILDS: "1"
     steps:
@@ -168,6 +167,7 @@ jobs:
         run: |
           $revision = git rev-parse HEAD
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Native Windows recipe qualification: $revision"
+          Add-Content -Path $env:GITHUB_ENV -Value "CODEPLANE_HOME=$env:RUNNER_TEMP/codeplane-recipe-qualification"
           uv --version
       - name: Run real owned-process tests serially
         shell: pwsh
