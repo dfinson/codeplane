@@ -1,6 +1,7 @@
 """Rationale retains exact evidence, without agent commands or delivery."""
 
 import asyncio
+import hashlib
 
 import pytest
 
@@ -58,14 +59,18 @@ async def test_review_is_idempotent_append_only_and_does_not_change_job_or_execu
     assert second.event_id != first.event_id and not host._tasks and not host._agent_sessions
 
 
-@pytest.mark.parametrize("change", ["code", "original_artifact", "snapshot", "missing_artifact"])
+@pytest.mark.parametrize(
+    "change", ["code", "original_artifact", "snapshot", "snapshot_with_new_checksum", "missing_artifact"]
+)
 async def test_review_revalidates_exact_code_and_evidence_content(sessions, tmp_path, monkeypatch, change):
     _, run, _, _, review, prepared, request = await prepared_review(sessions, tmp_path, monkeypatch)
     if change == "code":
         (tmp_path / "repo" / "source.txt").write_text("New code after capture\n")
     else:
         artifact_id = (
-            prepared.snapshot_artifact_id if change == "snapshot" else prepared.evidence.artifacts[0].original_id
+            prepared.snapshot_artifact_id
+            if change.startswith("snapshot")
+            else prepared.evidence.artifacts[0].original_id
         )
         async with sessions() as session:
             artifact = await ArtifactRepository(session).get(artifact_id)
@@ -74,6 +79,10 @@ async def test_review_revalidates_exact_code_and_evidence_content(sessions, tmp_
             path.unlink()
         else:
             path.write_bytes(b"overwritten mutable content")
+            if change == "snapshot_with_new_checksum":
+                request = request.model_copy(
+                    update={"snapshot_checksum": hashlib.sha256(path.read_bytes()).hexdigest()}
+                )
     with pytest.raises(StateConflictError):
         await review.record(run.job_id, request)
     assert (await review.history(run.job_id, after=0, high_water=None, limit=20)).items == []

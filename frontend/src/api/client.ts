@@ -28,6 +28,7 @@ import type {
   RecipeReconcileRequest,
   RecipeResumeResponse,
   RecipeGateDecisionRequest,
+  JobPendingDecisionPage,
   ReviewPreparation,
   ReviewRecord,
   ReviewHistoryPage,
@@ -104,6 +105,10 @@ function recipeRunPath(jobId: string, runId: string): string {
 
 export function fetchCurrentRecipeRun(jobId: string): Promise<RecipeCurrentRun> {
   return request(`/jobs/${encodeURIComponent(jobId)}/recipe/current`);
+}
+
+export function fetchJobPendingDecisions(jobId: string, after = ""): Promise<JobPendingDecisionPage> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/recipe/decisions?${new URLSearchParams({ after })}`);
 }
 
 export function resumeSelectedRecipeRun(jobId: string, expectedRunId: string, startRequestKey: string, instruction: string): Promise<RecipeResumeResponse> {

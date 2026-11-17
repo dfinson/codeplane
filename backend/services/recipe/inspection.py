@@ -17,6 +17,7 @@ from backend.models.schemas.recipes import (
 from backend.services.recipe.definition_service import RecipeNotFoundError
 
 if TYPE_CHECKING:
+    from backend.models.api_schemas import JobPendingDecisionPage
     from backend.models.schemas.recipes import RecipeRunListResponse, RecipeRunResponse, RecipeStepInstanceResponse
     from backend.persistence.approval_repo import ApprovalRepository
     from backend.persistence.job_repo import JobRepository
@@ -36,6 +37,10 @@ class RecipeInspectionService:
     async def current(self, job_id: str) -> RecipeCurrentRunResponse:
         await self._require_job(job_id)
         return RecipeCurrentRunResponse(run=await self._runs.get_for_job(job_id))
+
+    async def pending_decisions(self, job_id: str, *, after: str, limit: int) -> JobPendingDecisionPage:
+        await self._require_job(job_id)
+        return await self._approvals.pending_decisions(job_id, after=after, limit=limit)
 
     async def history(self, job_id: str, *, after: int, limit: int, high_water: int | None) -> RecipeRunListResponse:
         await self._require_job(job_id)

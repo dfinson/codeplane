@@ -196,6 +196,22 @@ async def test_independent_bound_gate_does_not_block_open_bind_attach_or_dispatc
     assert (await approvals.get(approval.id)).resolution is None
 
 
+@pytest.mark.parametrize("kind", ["human", "command"])
+async def test_pending_decision_page_retains_canonical_target_and_human_authority(sessions, kind):
+    from backend.persistence.approval_repo import ApprovalRepository
+
+    runtime, _, approvals, run, owner, _, _ = await _context(sessions, kind)
+    approval = await _gate(sessions, approvals, run, owner, kind, runtime.execution_epoch)
+    async with sessions() as session:
+        page = await ApprovalRepository(session).pending_decisions(run.job_id, limit=1)
+    assert len(page.items) == 1
+    assert page.items[0].approval.id == approval.id
+    assert page.items[0].attempt_id == owner.id
+    assert page.items[0].recipe_run_id == run.id
+    assert page.items[0].human_gate == (kind == "human")
+    assert (await approvals.get(approval.id)).resolution is None
+
+
 @pytest.mark.parametrize(
     "alteration",
     ["missing", "observation", "namespace", "stale_token", "wrong_step", "ambiguous"],

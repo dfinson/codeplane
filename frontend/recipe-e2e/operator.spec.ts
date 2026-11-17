@@ -120,11 +120,15 @@ test("publishes, executes a real command and inspects exact evidence and review 
   await page.getByRole("button", { name: "Publish revision" }).click();
   await expect(page.getByLabel("Publication receipt")).toBeVisible();
   const revisions = await (await request.get(`/api/recipes/${draft.id}/revisions`)).json();
-  const create = await request.post("/api/jobs", { data: {
-    projectId: project.id, repo: repository, prompt: "Run the actual Git check",
-    title: "Actual Git check", branch: "recipe-browser", worktreeName: "recipe-browser",
-    preset: "autonomous", recipe: { revisionId: revisions.items[0].id },
-  } });
+  await page.goto(`/jobs/new?projectId=${project.id}`);
+  await page.getByLabel("Launch recipe definition").selectOption(draft.id);
+  await page.getByLabel("Launch recipe revision").selectOption(revisions.items[0].id);
+  await page.locator("#prompt-input").fill("Run the actual Git check");
+  await page.getByRole("button", { name: "Autonomous", exact: true }).click();
+  const [create] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/jobs") && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Create Job", exact: true }).click(),
+  ]);
   expect(create.ok(), await create.text()).toBeTruthy();
   const job = await create.json();
   await page.goto(`/jobs/${job.id}`);
@@ -154,5 +158,90 @@ test("publishes, executes a real command and inspects exact evidence and review 
   expect((await (await request.get(`/api/jobs/${job.id}/reviews`)).json()).items).toHaveLength(1);
   await page.goto(`/projects/id/${project.id}/board`);
   await expect(page.getByLabel("Persisted Project totals")).toContainText("2 standalone Jobs");
-  await expect(page.getByRole("region", { name: "Needs a decision" })).toContainText("Actual Git check");
+  await expect(page.getByRole("region", { name: "Needs a decision" })).toContainText("Actual command browser journey");
+});
+
+test("pins a reusable block, joins isolated command branches and rejects only the exact human proposal", async ({ page, request }) => {
+  const project = (await (await request.get("/api/settings/projects")).json()).items[0];
+  const capabilities = ["read", "shell", "write", "external_access"];
+  const child = await (await request.post("/api/recipes", { data: {
+    name: "Pinned verification block", kind: "block", entrySteps: ["verify"], steps: [{
+      id: "verify", title: "Verify pinned code", runner: { kind: "command", argv: ["git", "status", "--porcelain"] },
+      capabilities, workspace: { mode: "mutable" },
+      routes: { succeeded: { terminal: "succeeded" }, failed: { terminal: "failed" } },
+    }],
+  } })).json();
+  const childRevision = await (await request.post(`/api/recipes/${child.id}/publish`, { data: { expectedVersion: 1 } })).json();
+  const draftResponse = await request.post("/api/recipes", { data: {
+    name: "Block and fanout join", entrySteps: ["block"], steps: [
+      {
+        id: "block", title: "Pinned block", runner: { kind: "block", revisionId: childRevision.id },
+        capabilities, workspace: { mode: "mutable" },
+        routes: { succeeded: { nextSteps: ["left", "right"] }, failed: { terminal: "failed" } },
+      },
+      ...["left", "right"].map((id) => ({
+        id, title: `${id} isolated check`, runner: { kind: "command", argv: ["git", "status", "--porcelain"] },
+        capabilities, workspace: { mode: "isolated", key: id }, dependsOn: [{ stepId: "block" }],
+        outputs: { code: { type: "code_ref" } },
+        routes: { succeeded: { nextSteps: ["join"] }, failed: { terminal: "failed" } },
+      })),
+      {
+        id: "join", title: "Join exact code evidence",
+        runner: { kind: "command", argv: ["git", "merge", "--no-edit", { input: "left", field: "commit" }, { input: "right", field: "commit" }], reconciles: ["left", "right"] },
+        capabilities, workspace: { mode: "mutable" },
+        dependsOn: [{ stepId: "left" }, { stepId: "right" }],
+        inputs: Object.fromEntries(["left", "right"].map((id) => [id, { type: "code_ref", binding: { source: "output", stepId: id, output: "code" } }])),
+        outputs: { result: { type: "object" } },
+        routes: { succeeded: { nextSteps: ["gate"] }, failed: { terminal: "failed" } },
+      },
+      {
+        id: "gate", title: "Review joined evidence", runner: { kind: "human", proposedAction: "Decide only this joined evidence." },
+        capabilities: [], workspace: { mode: "none" }, dependsOn: [{ stepId: "join" }],
+        inputs: { result: { type: "object", binding: { source: "output", stepId: "join", output: "result" } } },
+        routes: { approved: { terminal: "succeeded" }, rejected: { terminal: "failed" } },
+      },
+    ],
+  } });
+  expect(draftResponse.ok(), await draftResponse.text()).toBeTruthy();
+  const draft = await draftResponse.json();
+  const published = await request.post(`/api/recipes/${draft.id}/publish`, { data: { expectedVersion: 1 } });
+  expect(published.ok(), await published.text()).toBeTruthy();
+  const revision = await published.json();
+  const created = await request.post("/api/jobs", { data: {
+    projectId: project.id, repo: repository, prompt: "Run block and joined checks",
+    title: "Block fanout join", branch: "block-fanout", worktreeName: "block-fanout",
+    preset: "autonomous", recipe: { revisionId: revision.id },
+  } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const job = await created.json();
+  const run = (await (await request.get(`/api/jobs/${job.id}/recipe/current`)).json()).run;
+  expect(run.snapshot.blocks[childRevision.id].revisionId).toBe(childRevision.id);
+  await page.goto(`/jobs/${job.id}`);
+  const permissions = page.getByRole("region", { name: "Pending Job decisions" });
+  await expect(permissions.getByText("Approve this exact recipe command invocation")).toBeVisible({ timeout: 20_000 });
+  await expect(permissions.getByText(/git merge --no-edit/)).toBeVisible();
+  await permissions.getByRole("button", { name: "Approve", exact: true }).click();
+  let gate: { id: string; currentAttemptId: string; state: string } | undefined;
+  try {
+    await expect.poll(async () => {
+      const steps = (await (await request.get(`/api/jobs/${job.id}/recipe/runs/${run.id}/steps`)).json()).items;
+      gate = steps.find((step: { stepPath: string }) => step.stepPath === "gate");
+      return gate?.state;
+    }, { timeout: 20_000 }).toBe("needs_decision");
+  } catch (error) {
+    const steps = await (await request.get(`/api/jobs/${job.id}/recipe/runs/${run.id}/steps`)).json();
+    const approvals = await (await request.get(`/api/jobs/${job.id}/approvals`)).json();
+    throw new Error(`${String(error)}\nSteps:${JSON.stringify(steps)}\nApprovals:${JSON.stringify(approvals)}\nServer:${output.slice(-12000)}`);
+  }
+  await page.goto(`/jobs/${job.id}?run=${run.id}&step=${gate!.id}&attempt=${gate!.currentAttemptId}`);
+  const decision = page.getByRole("region", { name: "Exact human gate decision" });
+  await expect(decision).toBeVisible();
+  await page.getByRole("button", { name: "Inputs", exact: true }).click();
+  await expect(page.getByText("Producer outcome", { exact: true })).toBeVisible();
+  await decision.getByRole("checkbox").check();
+  await decision.getByRole("button", { name: "Reject exact proposal" }).click();
+  await expect.poll(async () => (await (await request.get(`/api/jobs/${job.id}/recipe/current`)).json()).run.state).toBe("failed");
+  const detail = await (await request.get(`/api/jobs/${job.id}/recipe/runs/${run.id}/steps/${gate!.id}/attempts/${gate!.currentAttemptId}`)).json();
+  expect(detail.attempt.result.evidence.decision).toBe("rejected");
+  expect(detail.attempt.executions).toEqual([]);
 });

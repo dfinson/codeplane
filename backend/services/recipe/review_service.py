@@ -220,6 +220,19 @@ class ReviewService:
                     async with serialized_write(host._session_factory) as session:
                         for artifact in records:
                             await ArtifactRepository(session).create(artifact)
+                        await EventRepository(session).append(
+                            new_event(
+                                job_id,
+                                "review.evidence_prepared",
+                                {"snapshot_artifact_id": retained.id, "snapshot_checksum": checksum},
+                                event_id=f"review-evidence-{retained.id}",
+                                metadata=EventMetadata(
+                                    source_framework="codeplane",
+                                    namespace=("control", "review-evidence"),
+                                    recipe_run_id=snapshot.run_id,
+                                ),
+                            )
+                        )
 
                 await _settle(asyncio.create_task(save_captures()))
                 cleanup.pop_all()
@@ -227,6 +240,18 @@ class ReviewService:
 
     async def _snapshot(self, job_id: str, request: RecordReviewRequest) -> ReviewEvidenceSnapshot:
         async with self._runtime._session_factory() as session:
+            preparation = await EventRepository(session).get(f"review-evidence-{request.snapshot_artifact_id}")
+            if (
+                preparation is None
+                or preparation.session_id != job_id
+                or str(preparation.kind) != "review.evidence_prepared"
+                or preparation.metadata.source_framework != "codeplane"
+                or preparation.metadata.namespace != ("control", "review-evidence")
+                or preparation.metadata.integration_binding_id is not None
+                or preparation.payload.get("snapshot_artifact_id") != request.snapshot_artifact_id
+                or preparation.payload.get("snapshot_checksum") != request.snapshot_checksum
+            ):
+                raise StateConflictError("The selected review snapshot has no matching app-owned capture receipt.")
             artifact = await ArtifactRepository(session).get(request.snapshot_artifact_id)
             if artifact is None or artifact.name != "review-evidence.json" or artifact.size_bytes > _SNAPSHOT_LIMIT:
                 raise StateConflictError("The selected review snapshot is unavailable.")
@@ -303,6 +328,8 @@ class ReviewService:
                         attempt is None
                         or step is None
                         or step.version != selected_attempt.step.version
+                        or content_checksum(selected_attempt.attempt.model_dump(mode="json"))
+                        != selected_attempt.checksum
                         or content_checksum(attempt.model_dump(mode="json")) != selected_attempt.checksum
                     ):
                         raise StateConflictError("Selected attempt evidence changed after capture.")

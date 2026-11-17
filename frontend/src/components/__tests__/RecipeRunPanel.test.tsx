@@ -8,6 +8,7 @@ vi.mock("../../api/client", () => ({
   fetchRecipeRun: vi.fn(),
   fetchRecipeRunHistory: vi.fn(),
   fetchRecipeRunSteps: vi.fn(),
+  fetchJobPendingDecisions: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   resumeSelectedRecipeRun: vi.fn(),
   resumeJob: vi.fn(),
 }));
@@ -15,7 +16,7 @@ vi.mock("../RecipeStepInspector", () => ({
   RecipeStepInspector: ({ runId, stepId }: { runId: string; stepId: string }) => <div>Selected {runId} / {stepId}</div>,
 }));
 
-import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob, resumeSelectedRecipeRun } from "../../api/client";
+import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob, resumeSelectedRecipeRun, fetchJobPendingDecisions } from "../../api/client";
 import { RecipeRunPanel } from "../RecipeRunPanel";
 
 function run(number: number, jobId = "job"): RecipeRun {
@@ -41,6 +42,7 @@ beforeEach(() => {
   vi.mocked(fetchRecipeRun).mockImplementation(async (_job, id) => run(id.endsWith("1") ? 1 : 2));
   vi.mocked(fetchRecipeRunHistory).mockResolvedValue({ items: [run(1)], nextCursor: 1, highWater: 2 });
   vi.mocked(fetchRecipeRunSteps).mockResolvedValue({ items: [], nextCursor: null });
+  vi.mocked(fetchJobPendingDecisions).mockResolvedValue({ items: [], nextCursor: null });
 });
 
 it("inspects historical runs without replacing the current run and preserves the history bound", async () => {

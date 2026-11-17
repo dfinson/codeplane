@@ -3199,6 +3199,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/recipe/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending Decisions */
+        get: operations["pending_decisions_api_jobs__job_id__recipe_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/recipe/runs": {
         parameters: {
             query?: never;
@@ -5024,6 +5041,25 @@ export interface components {
             hunkMotivations: {
                 [key: string]: components["schemas"]["HunkMotivation"];
             };
+        };
+        /** JobPendingDecision */
+        JobPendingDecision: {
+            approval: components["schemas"]["ApprovalResponse"];
+            /** Reciperunid */
+            recipeRunId: string | null;
+            /** Stepinstanceid */
+            stepInstanceId: string | null;
+            /** Attemptid */
+            attemptId: string | null;
+            /** Humangate */
+            humanGate: boolean;
+        };
+        /** JobPendingDecisionPage */
+        JobPendingDecisionPage: {
+            /** Items */
+            items: components["schemas"]["JobPendingDecision"][];
+            /** Nextcursor */
+            nextCursor: string | null;
         };
         /** JobResponse */
         JobResponse: {
@@ -15388,6 +15424,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeCurrentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pending_decisions_api_jobs__job_id__recipe_decisions_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPendingDecisionPage"];
                 };
             };
             /** @description Validation Error */

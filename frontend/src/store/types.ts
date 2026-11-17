@@ -5,7 +5,7 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload, RecipeStepInspection, RecipeAttemptInspection, RecipeRun, RecipeRunList, RecipeStepList, TaskLinkInspection, ProjectBoard, ProjectBoardPage, ProjectApprovalPage, ProjectDeliveryPage, RecipeAttemptControl, ReviewPreparation, ReviewHistoryPage } from "../api/types";
+import type { DiffFileModel, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload, RecipeStepInspection, RecipeAttemptInspection, RecipeRun, RecipeRunList, RecipeStepList, TaskLinkInspection, ProjectBoard, ProjectBoardPage, ProjectApprovalPage, ProjectDeliveryPage, RecipeAttemptControl, ReviewPreparation, ReviewHistoryPage, JobPendingDecisionPage } from "../api/types";
 
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -226,6 +226,7 @@ export interface ContextHandoff {
 }
 
 export interface AppState {
+  jobPendingDecisionPages: Record<string, JobPendingDecisionPage>;
   reviewPreparations: Record<string, ReviewPreparation>;
   reviewHistoryPages: Record<string, ReviewHistoryPage>;
   recipeAttemptControls: Record<string, RecipeAttemptControl>;

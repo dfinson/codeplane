@@ -39,6 +39,7 @@ export type RecipeOperationReceipt = components["schemas"]["RecipeOperationRecei
 export type RecipeReconcileRequest = components["schemas"]["RecipeReconcileRequest"];
 export type RecipeResumeResponse = components["schemas"]["RecipeResumeResponse"];
 export type RecipeGateDecisionRequest = components["schemas"]["RecipeGateDecisionRequest"];
+export type JobPendingDecisionPage = components["schemas"]["JobPendingDecisionPage"];
 export type ReviewPreparation = components["schemas"]["ReviewPreparation"];
 export type ReviewRecord = components["schemas"]["ReviewRecord"];
 export type ReviewHistoryPage = components["schemas"]["ReviewHistoryPage"];
