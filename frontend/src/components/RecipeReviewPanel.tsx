@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { fetchCurrentRecipeRun, fetchRecipeRunSteps, fetchReviewHistory, prepareReview, recordReview } from "../api/client";
+import { ApiError, fetchCurrentRecipeRun, fetchRecipeRunSteps, fetchReviewHistory, prepareReview, recordReview } from "../api/client";
 import type { RecordReviewRequest } from "../api/types";
 import { useStore } from "../store";
 import { Button } from "./ui/button";
@@ -104,7 +104,15 @@ function JobReviewPanel({ jobId }: { jobId: string }) {
       setHistoryCursor({ after: 0 });
       setRefresh((value) => value + 1);
     } catch (cause: unknown) {
-      if (active.current) setError(`${String(cause)}. The same request identity is retained for safe receipt retry.`);
+      if (!active.current) return;
+      if (cause instanceof ApiError && cause.status === 409) {
+        pendingRequest.current = null;
+        setSelectedSnapshot(null);
+        setNotice(null);
+        setError(`${String(cause)} Retain fresh evidence before recording your preserved rationale.`);
+      } else {
+        setError(`${String(cause)}. The same request identity is retained for safe receipt retry.`);
+      }
     } finally {
       reserved.current = false;
       if (active.current) setBusy(false);

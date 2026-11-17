@@ -1317,6 +1317,31 @@ class RecipeRunRepository(BaseRepository):
             or payload.get("native_session_id") != execution.session_id
         ):
             raise StateConflictError("The completed-turn receipt has conflicting execution ownership.")
+        if execution.provider == "claude":
+            native = await self._session.scalar(
+                select(EventRow)
+                .where(
+                    EventRow.job_id == run.job_id,
+                    EventRow.kind == "session.ended",
+                    EventRow.id < receipt.id,
+                    func.json_extract(EventRow.event_metadata, "$.source_framework") == "claude",
+                    func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+                    func.json_extract(EventRow.event_metadata, "$.recipe_run_id") == run.id,
+                    func.json_extract(EventRow.event_metadata, "$.step_instance_id") == instance.id,
+                    func.json_extract(EventRow.event_metadata, "$.attempt_id") == attempt.id,
+                    func.json_extract(EventRow.event_metadata, "$.execution_token") == execution.execution_token,
+                    func.json_extract(EventRow.event_metadata, "$.execution_epoch") == metadata.get("execution_epoch"),
+                    func.json_extract(EventRow.event_metadata, "$.run_id") == execution.session_id,
+                )
+                .order_by(EventRow.id.desc())
+                .limit(1)
+            )
+            if native is None:
+                return False, None
+            text = json.loads(native.payload).get("result")
+            if text is not None and not isinstance(text, str):
+                raise StateConflictError("The native completed-turn output is invalid.")
+            return True, text
         if "result_text" in payload and payload.get("final_response_qualified") is True:
             text = payload["result_text"]
             if text is not None and not isinstance(text, str):
