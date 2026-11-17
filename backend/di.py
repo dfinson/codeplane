@@ -315,9 +315,7 @@ class RequestProvider(Provider):
         return ProjectBoardRepository(session)
 
     @provide
-    def project_board_service(
-        self, projects: ProjectRepository, board: ProjectBoardRepository
-    ) -> ProjectBoardService:
+    def project_board_service(self, projects: ProjectRepository, board: ProjectBoardRepository) -> ProjectBoardService:
         return ProjectBoardService(projects, board)
 
     @provide

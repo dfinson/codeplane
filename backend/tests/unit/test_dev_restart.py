@@ -454,7 +454,6 @@ class TestRunParent:
 
         mock_spawn.assert_not_called()
 
-
     def test_successful_adoption_returns_zero(self, tmp_path: Path) -> None:
         paths = get_request_paths("req-abc")
         timeouts = RestartTimeouts()
@@ -542,8 +541,11 @@ class TestAccessOnlyHandoffParent:
     @staticmethod
     def profile():
         return _profile(
-            remote=True, provider="cloudflare", tunnel_ownership="external",
-            tunnel_origin="https://access.example.test", auth_mode="access_only",
+            remote=True,
+            provider="cloudflare",
+            tunnel_ownership="external",
+            tunnel_origin="https://access.example.test",
+            auth_mode="access_only",
         )
 
     def test_cached_token_is_captured_without_login_or_secret_arguments(self):
@@ -554,14 +556,19 @@ class TestAccessOnlyHandoffParent:
             patch("backend.services.dev_restart.launch_profile.validate_launch_profile") as validate,
             patch.object(dev_restart.shutil, "which", return_value="cloudflared"),
             patch.object(
-                dev_restart.subprocess, "run",
+                dev_restart.subprocess,
+                "run",
                 return_value=CompletedProcess([], 0, stdout=token + "\n", stderr=""),
             ) as run,
         ):
             assert retrieve(self.profile()) == token
         validate.assert_called_once()
         assert run.call_args.args[0] == [
-            "cloudflared", "access", "token", "--app", "https://access.example.test",
+            "cloudflared",
+            "access",
+            "token",
+            "--app",
+            "https://access.example.test",
         ]
         assert run.call_args.kwargs["capture_output"] is True
         assert run.call_args.kwargs["timeout"] == 30
@@ -596,7 +603,10 @@ class TestAccessOnlyHandoffParent:
         spawn.assert_not_called()
 
     def test_parent_commits_only_after_authenticated_receipt_without_persisting_token(
-        self, tmp_path, capsys, monkeypatch,
+        self,
+        tmp_path,
+        capsys,
+        monkeypatch,
     ):
         from backend.services.dev_restart import restart_helper as rh
 

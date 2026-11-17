@@ -257,7 +257,10 @@ def _link_config_directory(selected: Path, target: Path) -> None:
         selected_arg, target_arg = str(selected).replace("'", "''"), str(target).replace("'", "''")
         subprocess.run(
             [
-                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
                 "$ErrorActionPreference = 'Stop'; "
                 f"New-Item -ItemType Junction -Path '{selected_arg}' -Target '{target_arg}' | Out-Null",
             ],
@@ -310,7 +313,8 @@ def test_retired_analysis_section_removed_atomically(tmp_path: Path, monkeypatch
 
 
 def test_retirement_preserves_selected_link_and_unrelated_target_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target_dir = tmp_path / "settings"
     target_dir.mkdir()
@@ -342,7 +346,9 @@ def test_retirement_preserves_selected_link_and_unrelated_target_values(
 @pytest.mark.parametrize("operation", ["load", "save"])
 @pytest.mark.parametrize("contents", ["broken: [\n", "- value\n", "[]\n", "false\n", "null\n"])
 def test_retirement_rejects_malformed_or_non_mapping_config_without_overwrite(
-    tmp_path: Path, contents: str, operation: str,
+    tmp_path: Path,
+    contents: str,
+    operation: str,
 ) -> None:
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(contents, encoding="utf-8")
@@ -358,7 +364,9 @@ def test_retirement_rejects_malformed_or_non_mapping_config_without_overwrite(
 
 @pytest.mark.parametrize("missing_instance_id", [False, True])
 def test_retirement_replace_failure_surfaces_and_preserves_original(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_instance_id: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_instance_id: bool,
 ) -> None:
     cfg_path = tmp_path / "config.yaml"
     data = _retired_config(cfg_path)
@@ -379,7 +387,8 @@ def test_retirement_replace_failure_surfaces_and_preserves_original(
 
 
 def test_retirement_detects_concurrent_same_size_input_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg_path = tmp_path / "config.yaml"
     _retired_config(cfg_path)

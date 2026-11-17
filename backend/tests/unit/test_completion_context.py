@@ -11,6 +11,4 @@ def test_assessment_cannot_use_missing_or_changed_served_model(actual) -> None:
 
 
 def test_provider_date_alias_preserves_explicit_requested_identity() -> None:
-    validate_completion_identity(
-        "claude-haiku-4-5", "claude-haiku-4-5-20251001", CompletionContext(role="assessment")
-    )
+    validate_completion_identity("claude-haiku-4-5", "claude-haiku-4-5-20251001", CompletionContext(role="assessment"))

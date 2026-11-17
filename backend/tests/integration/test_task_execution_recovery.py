@@ -1442,7 +1442,12 @@ async def test_new_start_process_loss_after_commit_is_recovered_by_runtime_once(
     git.get_default_branch.assert_not_awaited()
 
     runtime = RuntimeService(
-        factory, EventBus(), AdapterRegistry(), config, approval_service=approvals, git_service=git,
+        factory,
+        EventBus(),
+        AdapterRegistry(),
+        config,
+        approval_service=approvals,
+        git_service=git,
     )
     setup_finished = asyncio.Event()
     setup_tasks = []

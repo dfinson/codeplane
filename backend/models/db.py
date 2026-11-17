@@ -91,7 +91,9 @@ class RecipeRunRow(Base):
         UniqueConstraint("start_request_key", name="uq_recipe_runs_start_request_key"),
         CheckConstraint("run_number >= 1", name="ck_recipe_run_number"),
         Index(
-            "uq_recipe_job_unresolved_run", "job_id", unique=True,
+            "uq_recipe_job_unresolved_run",
+            "job_id",
+            unique=True,
             sqlite_where=text("resolved_at IS NULL"),
         ),
         CheckConstraint(

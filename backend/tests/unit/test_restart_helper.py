@@ -1051,6 +1051,8 @@ class TestCheckingRemotePhase:
         assert paths.started.exists()
         assert paths.ready.exists()
         assert not get_restart_lock_path().exists()
+
+
 class TestAccessOnlyHandoffHelper:
     def test_redirect_never_receives_the_credential(self):
         assert hasattr(rh, "authenticate_access_handoff"), "Introduce authenticate_access_handoff"
@@ -1115,16 +1117,23 @@ class TestAccessOnlyHandoffHelper:
             key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         token = jwt.encode(payload, key, algorithm="RS256")
         profile = _remote_profile(
-            provider="cloudflare", password_source=SecretSource.not_required(),
-            tunnel_origin="https://access.example.test", auth_mode="access_only",
+            provider="cloudflare",
+            password_source=SecretSource.not_required(),
+            tunnel_origin="https://access.example.test",
+            auth_mode="access_only",
         )
-        request = rh.RestartRequest("handoff", tmp_path, profile,
-                                    RestartTimeouts(response_grace_seconds=0, pause_wait_seconds=0), "nonce")
+        request = rh.RestartRequest(
+            "handoff", tmp_path, profile, RestartTimeouts(response_grace_seconds=0, pause_wait_seconds=0), "nonce"
+        )
         paths = get_request_paths("handoff")
         frame = {
-            "version": 1, "kind": "credential", "requestId": "handoff",
-            "serverPid": profile.started_pid, "serverProcessTime": profile.started_process_time,
-            "origin": profile.tunnel_origin, "jwt": token,
+            "version": 1,
+            "kind": "credential",
+            "requestId": "handoff",
+            "serverPid": profile.started_pid,
+            "serverProcessTime": profile.started_process_time,
+            "origin": profile.tunnel_origin,
+            "jwt": token,
         }
         read_fd, write_fd = os.pipe()
         os.write(write_fd, protocol.encode_handoff_frame(frame))

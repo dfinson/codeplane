@@ -63,8 +63,13 @@ def validate_access_origin(origin: Any) -> str:
     try:
         parsed = urlsplit(origin)
         if (
-            parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
         ):
             raise ValueError
         _ = parsed.port
@@ -75,7 +80,8 @@ def validate_access_origin(origin: Any) -> str:
 
 def validate_access_token(token: Any) -> str:
     if (
-        not isinstance(token, str) or len(token) > MAX_HANDOFF_BYTES
+        not isinstance(token, str)
+        or len(token) > MAX_HANDOFF_BYTES
         or re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", token) is None
     ):
         raise RestartProtocolError("access_token_invalid")
@@ -152,8 +158,11 @@ def validate_handoff_frame(
     frame: dict[str, Any], *, request_id: str, server_pid: int, server_process_time: float, origin: str
 ) -> str:
     expected = {
-        "version": 1, "kind": "credential", "requestId": request_id,
-        "serverPid": server_pid, "serverProcessTime": server_process_time,
+        "version": 1,
+        "kind": "credential",
+        "requestId": request_id,
+        "serverPid": server_pid,
+        "serverProcessTime": server_process_time,
         "origin": validate_access_origin(origin),
     }
     if set(frame) != {*expected, "jwt"} or any(

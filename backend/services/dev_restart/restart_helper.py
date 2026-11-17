@@ -178,7 +178,8 @@ class HandoffProcess:
                     # Windows venv python.exe is a redirector. Its one Python child,
                     # not the redirector, executes the exact helper argv we spawned.
                     redirected = (
-                        sys.platform == "win32" and candidate.ppid() == self.process.pid
+                        sys.platform == "win32"
+                        and candidate.ppid() == self.process.pid
                         and candidate.cmdline()[1:] == [self.helper_script, "--helper", self.request_path]
                     )
                     if (direct or redirected) and marker.get("helperProcessTime") == created:
@@ -205,8 +206,13 @@ class HandoffProcess:
 
 
 def spawn_detached_helper(
-    python_executable: Path, helper_script: Path, request_path: Path, log_handle: Any,
-    *, handoff: dict[str, Any] | None = None, adoption_seconds: float = 5.0,
+    python_executable: Path,
+    helper_script: Path,
+    request_path: Path,
+    log_handle: Any,
+    *,
+    handoff: dict[str, Any] | None = None,
+    adoption_seconds: float = 5.0,
 ) -> int | HandoffProcess:
     """Start ``helper_script --helper <request_path>`` fully detached.
 
@@ -249,8 +255,12 @@ def spawn_detached_helper(
         return proc.pid
     try:
         handle = HandoffProcess(
-            proc, handoff["requestId"], psutil.Process(proc.pid).create_time(), deadline,
-            str(helper_script), str(request_path),
+            proc,
+            handoff["requestId"],
+            psutil.Process(proc.pid).create_time(),
+            deadline,
+            str(helper_script),
+            str(request_path),
         )
         assert proc.stdin is not None
         write_handoff_frame(proc.stdin.fileno(), handoff, deadline)
@@ -427,8 +437,10 @@ def _http_request(
         target = urlparse(url)
         query = parse_qs(target.query)
         allowed = (
-            method == "GET" and target.path == "/api/jobs"
-            and query.get("state") == ["running"] and set(query) <= {"state", "limit", "cursor"}
+            method == "GET"
+            and target.path == "/api/jobs"
+            and query.get("state") == ["running"]
+            and set(query) <= {"state", "limit", "cursor"}
         ) or (method == "POST" and re.fullmatch(r"/api/jobs/[^/]+/pause", target.path) and not target.query)
         if f"{target.scheme}://{target.netloc}" != _helper_auth_origin or not allowed or target.fragment:
             raise HelperAbort(RestartPhase.failed, "restart_credential_destination_rejected")
@@ -469,8 +481,11 @@ def authenticate_access_handoff(request: RestartRequest, *, fd: int, deadline: f
     profile = request.launch_profile
     try:
         token = validate_handoff_frame(
-            frame, request_id=request.request_id, server_pid=profile.started_pid,
-            server_process_time=profile.started_process_time, origin=profile.tunnel_origin or "",
+            frame,
+            request_id=request.request_id,
+            server_pid=profile.started_pid,
+            server_process_time=profile.started_process_time,
+            origin=profile.tunnel_origin or "",
         )
         if not profile_owns_listener(profile):
             raise RestartProtocolError("handoff_server_identity_changed")
@@ -478,7 +493,8 @@ def authenticate_access_handoff(request: RestartRequest, *, fd: int, deadline: f
         _helper_access_token = token
         _helper_access_profile = profile
         status, _ = _http_request(
-            "GET", f"{_helper_auth_origin}/api/jobs?state=running&limit=1",
+            "GET",
+            f"{_helper_auth_origin}/api/jobs?state=running&limit=1",
             timeout=max(0.001, deadline - time.monotonic()),
         )
         if status != 200 or time.monotonic() >= deadline:

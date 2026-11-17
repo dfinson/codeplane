@@ -19,8 +19,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
-
-
 async def _attach_tracker_link(client: AsyncClient, project_id: str) -> str:
     credential = await client.post(
         "/api/settings/credentials",
@@ -38,8 +36,6 @@ async def _attach_tracker_link(client: AsyncClient, project_id: str) -> str:
     )
     assert tracker_link.status_code == 201
     return str(tracker_link.json()["id"])
-
-
 
 
 class TestTaskSourceRetirement:
@@ -88,8 +84,6 @@ class TestTaskSourceRetirement:
         schema = create_app().openapi()
         assert "/api/settings/projects/{project_id}/ingest-tasks" not in schema["paths"]
         assert "IngestTaskGraphResponse" not in schema["components"]["schemas"]
-
-
 
 
 class TestListTaskLinks:
