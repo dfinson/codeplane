@@ -90,6 +90,8 @@ jobs:
     name: E2E
     runs-on: ubuntu-24.04
     needs: [backend, frontend]
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v4
 
