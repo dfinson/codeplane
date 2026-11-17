@@ -36,8 +36,10 @@ async def stop_copilot_client(client: CopilotClient, *, timeout: float) -> None:
         await asyncio.wait_for(client.force_stop(), timeout=timeout)
     except TimeoutError:
         log.error("copilot_client_force_stop_timed_out", timeout_seconds=timeout)
+        raise
     except Exception:
         log.error("copilot_client_force_stop_failed", exc_info=True)
+        raise
     finally:
         if cancelled:
             raise asyncio.CancelledError

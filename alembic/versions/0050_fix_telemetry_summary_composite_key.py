@@ -40,8 +40,7 @@ def upgrade() -> None:
         recreate="always",
     ) as batch_op:
         batch_op.alter_column("job_id", existing_type=sa.String(), nullable=False)
-        batch_op.alter_column("session_kind", existing_type=sa.String(), nullable=False,
-                              server_default="job")
+        batch_op.alter_column("session_kind", existing_type=sa.String(), nullable=False, server_default="job")
         batch_op.create_primary_key("pk_job_telemetry_summary", ["job_id", "session_kind"])
 
 

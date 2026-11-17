@@ -224,12 +224,13 @@ class TelemetrySummaryRepository(BaseRepository):
         await self._session.flush()
 
     async def set_quota(self, job_id: str, quota_json: str) -> None:
-        """Store latest Copilot quota snapshot as JSON."""
+        """Merge a Copilot quota observation without discarding other resources."""
         now = datetime.now(UTC).isoformat()
         await self._session.execute(
             text("""
                 UPDATE job_telemetry_summary
-                SET quota_json = :quota_json, updated_at = :now
+                SET quota_json = json_patch(COALESCE(NULLIF(quota_json, ''), '{}'), :quota_json),
+                    updated_at = :now
                 WHERE job_id = :job_id AND session_kind = 'job'
             """),
             {"job_id": job_id, "quota_json": quota_json, "now": now},

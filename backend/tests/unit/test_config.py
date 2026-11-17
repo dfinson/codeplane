@@ -189,6 +189,7 @@ def test_init_config_creates_file(tmp_path: Path) -> None:
     content = cfg_path.read_text()
     assert "server:" in content
     assert "host: 127.0.0.1" in content
+    assert "coderecon" not in content.lower()
 
 
 def test_init_config_roundtrips(tmp_path: Path) -> None:
@@ -242,7 +243,7 @@ def test_instance_id_stable_across_loads(tmp_path: Path) -> None:
 
 
 def test_daily_spend_limit_roundtrip(tmp_path: Path) -> None:
-    """daily_spend_limit_usd survives save → load roundtrip."""
+    """daily_spend_limit_usd survives a save and load roundtrip."""
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text("server:\n  port: 8080\n")
     config = load_config(cfg_path)

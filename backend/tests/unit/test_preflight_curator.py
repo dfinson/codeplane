@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
-import inspect
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,11 +20,7 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 async def scout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
-    """Use startup's constructor, without starting services or requiring CodeRecon.
-
-    The legacy argument/tool builder is stubbed only to let the baseline reach
-    the session assertions. Neither supplies context or tools to the Scout.
-    """
+    """Use startup's constructor without starting external services."""
     import backend.lifespan as lifespan
 
     config = CPLConfig(repos=[str(tmp_path / "checkout")])
@@ -64,18 +58,14 @@ async def scout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamesp
         instance.start = AsyncMock()
         monkeypatch.setattr(lifespan, name, MagicMock(return_value=instance))
 
-    legacy_tools = ModuleType("backend.services.coderecon.coderecon_tools")
-    legacy_tools.build_coderecon_tools = MagicMock(return_value=None)
-    monkeypatch.setitem(sys.modules, legacy_tools.__name__, legacy_tools)
     kwargs: dict[str, Any] = {
         "session_factory": MagicMock(),
         "event_bus": MagicMock(),
         "config": config,
     }
-    if "coderecon_service" in inspect.signature(lifespan._wire_core_services).parameters:
-        kwargs["coderecon_service"] = SimpleNamespace(available=False)
     services = await lifespan._wire_core_services(**kwargs)
     curator = services.runtime_service.set_preflight_curator.call_args.args[0]
+    (tmp_path / "job-worktree").mkdir()
     return SimpleNamespace(
         curator=curator,
         adapter=adapter,
@@ -278,10 +268,61 @@ async def test_scout_empty_success_has_no_invented_brief(scout: SimpleNamespace)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("success", [True, False])
-async def test_scout_does_not_promote_pre_tool_narration_at_stream_end(
-    scout: SimpleNamespace, success: bool
+@pytest.mark.parametrize("ended", [False, True])
+async def test_scout_missing_final_brief_is_not_an_empty_success(scout: SimpleNamespace, ended: bool) -> None:
+    async def events(session_id: str):
+        if ended:
+            yield new_event(session_id, EventKind.session_ended, {})
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="final context brief"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worktree_kind", ["missing", "file", "unreadable"])
+async def test_scout_requires_a_readable_worktree(
+    scout: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, worktree_kind: str
 ) -> None:
+    if worktree_kind == "missing":
+        scout.worktree = str(tmp_path / "missing")
+    elif worktree_kind == "file":
+        path = tmp_path / "not-a-directory"
+        path.write_text("not a worktree")
+        scout.worktree = str(path)
+    else:
+        monkeypatch.setattr(preflight_curator.os, "scandir", MagicMock(side_effect=PermissionError("unreadable")))
+    with pytest.raises(OSError):
+        await _curate(scout)
+    scout.adapter.create_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scout_stops_at_the_turn_bound(scout: SimpleNamespace) -> None:
+    async def events(session_id: str):
+        for _ in range(16):
+            yield new_event(session_id, EventKind.turn_started, {})
+        yield new_event(session_id, EventKind.message_assistant, {"content": "too late"})
+
+    scout.adapter.stream_events.side_effect = events
+    with pytest.raises(RuntimeError, match="15-turn limit"):
+        await _curate(scout)
+    scout.adapter.abort_session.assert_awaited_once_with("scout-sdk")
+
+
+def test_scout_denies_symlink_escape(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (worktree / "linked").symlink_to(outside, target_is_directory=True)
+    assert not preflight_curator.scout_read_allowed(str(worktree), "read", "view", ["linked/private.py"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success", [True, False])
+async def test_scout_does_not_promote_pre_tool_narration_at_stream_end(scout: SimpleNamespace, success: bool) -> None:
     async def events(session_id: str):
         yield new_event(
             session_id,
@@ -324,9 +365,7 @@ async def test_scout_rejects_pending_tool_request_without_execution_events(
 ) -> None:
     async def events(session_id: str):
         yield new_event(session_id, EventKind.message_assistant, {"content": "Earlier partial context."})
-        yield new_event(
-            session_id, EventKind.message_assistant, {"content": content, "has_tool_requests": True}
-        )
+        yield new_event(session_id, EventKind.message_assistant, {"content": content, "has_tool_requests": True})
 
     scout.adapter.stream_events.side_effect = events
     with pytest.raises(RuntimeError, match="final context brief"):

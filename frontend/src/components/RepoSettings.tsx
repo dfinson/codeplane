@@ -414,7 +414,7 @@ export function RepoSettings() {
           >
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>Historical Jobs remain in Job History and are never deleted.</p>
-              <p>Project TrackerLinks remain attached. Repository indexing and detail views stop appearing here.</p>
+              <p>Project TrackerLinks remain attached. Repository detail views stop appearing here.</p>
               <ul className="list-disc pl-5 font-mono text-xs">
                 {project?.repoPaths.filter((path) => !repoPaths.includes(path)).map((path) => (
                   <li key={path}>{path}</li>

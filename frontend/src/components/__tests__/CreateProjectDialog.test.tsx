@@ -165,7 +165,7 @@ describe("CreateProjectDialog", () => {
 
     await waitFor(() => expect(unregisterRepo).toHaveBeenCalledWith("/home/user/cloned-repo"));
     expect(
-      await screen.findByText(/Repository files and any completed index remain at: \/home\/user\/cloned-repo/),
+      await screen.findByText(/Repository files remain at: \/home\/user\/cloned-repo/),
     ).toBeInTheDocument();
   });
 

@@ -694,7 +694,6 @@ export function JobDetailScreen() {
             </div>
           )}
           <div className="flex flex-col gap-4 flex-1 min-w-0">
-            {/* §7.2 — Structural warnings accumulated during execution */}
             <div className="h-[calc(100dvh-92px)] md:h-full min-h-[22rem]">
               <CuratedFeed
                 jobId={jobId}

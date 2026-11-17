@@ -15,7 +15,7 @@ dependencies = [
     "aiosqlite>=0.20,<1",
     "alembic>=1.14,<2",
     # Agent SDK
-    "github-copilot-sdk>=0.3.0,<0.4",
+    "github-copilot-sdk>=1.0.34,<2",
     # Structured logging
     "structlog>=24.0,<26",
     # Terminal UI

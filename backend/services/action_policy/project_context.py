@@ -98,7 +98,6 @@ class ProjectContext:
                 except Exception:
                     log.debug("project_context_config_error", file=name, exc_info=True)
 
-
         self._built = True
 
         # Freeze the initial snapshot on first build only

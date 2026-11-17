@@ -239,7 +239,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         own ``_cleanup_session`` after doing SDK-specific teardown.
         """
         self._paused_sessions.discard(session_id)
-        self._session_kinds.pop(session_id, None)
+        session_kind = self._session_kinds.pop(session_id, None)
         self._session_metadata.pop(session_id, None)
         self._permission_generations.pop(session_id, None)
         self._session_workspaces.pop(session_id, None)
@@ -247,7 +247,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
         self._queues.pop(session_id, None)
-        if job_id and job_id not in self._session_to_job.values():
+        if job_id and session_kind != "preflight" and job_id not in self._session_to_job.values():
             for attr in self._JOB_TRACKING_DICTS:
                 getattr(self, attr).pop(job_id, None)
 

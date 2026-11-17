@@ -119,7 +119,6 @@ async def update_settings(
 
     save_config(config)
 
-
     return _config_to_response(config)
 
 
@@ -130,8 +129,6 @@ async def list_repos(
 ) -> RepoListResponse:
     """List every Project-owned or legacy-registered repository path."""
     return RepoListResponse(items=await list_managed_repo_paths(config, project_repo))
-
-
 
 
 @router.get("/settings/repos/{repo_path:path}/summary", response_model=RepoSummaryResponse)

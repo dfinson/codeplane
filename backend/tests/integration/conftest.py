@@ -158,8 +158,6 @@ def mock_terminal_service() -> Mock:
     return Mock()
 
 
-
-
 @pytest.fixture
 def mock_tracker_sync_service() -> AsyncMock:
     return AsyncMock(spec=TrackerSyncService)

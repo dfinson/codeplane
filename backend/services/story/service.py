@@ -1133,7 +1133,6 @@ class StoryService:
             finally:
                 self._gen_locks.pop(lock_key, None)
 
-
     async def _ensure_diffs(
         self,
         session: AsyncSession,
@@ -1273,7 +1272,6 @@ class StoryService:
             {"jid": job_id},
         )
         pending_enrichment = unenriched.scalar() or 0
-
 
         system = _STORY_SYSTEM
 

@@ -379,7 +379,6 @@ class TrailEnricher:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-
     async def drain_loop(self) -> None:
         """Run forever, periodically processing enrichment and motivations."""
         while True:

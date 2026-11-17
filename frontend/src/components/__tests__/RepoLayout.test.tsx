@@ -257,7 +257,7 @@ describe("RepoLayout project sidebar", () => {
     expect(selector).toHaveValue("");
     expect(screen.getByText("Select a repository above to view Jobs and Cost.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jobs" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Health" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Health" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cost" })).toBeDisabled();
   });
 
@@ -271,6 +271,8 @@ describe("RepoLayout project sidebar", () => {
     await waitFor(() => expect(screen.getByLabelText("Repository")).toHaveValue("/repos/api"));
     expect(screen.queryByText("Select a repository above to view Jobs and Cost.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jobs" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cost" })).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Health" })).not.toBeInTheDocument();
   });
 
   it("reveals repository basenames through an accessible disclosure", async () => {

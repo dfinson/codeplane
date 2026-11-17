@@ -506,8 +506,6 @@ class RepoDetailResponse(CamelModel):
     platform: str | None = None
 
 
-
-
 class RepoJobSummary(CamelModel):
     """Minimal job info for repo dashboard."""
 
@@ -700,8 +698,6 @@ class DiffHunkModel(CamelModel):
     lines: list[DiffLineModel]
 
 
-
-
 class DiffFileModel(CamelModel):
     path: str
     status: DiffFileStatus
@@ -891,12 +887,6 @@ class StepEntriesReassignedPayload(CamelModel):
     turn_id: str
     old_step_id: str
     new_step_id: str
-
-
-
-
-
-
 
 
 class StallDetectedPayload(CamelModel):
@@ -1246,52 +1236,8 @@ class StoryResponse(CamelModel):
 # ---------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # TestCoModification, ReviewSignals, ReviewComplexity, and JobTelemetryReport

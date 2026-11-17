@@ -101,7 +101,7 @@ class _FakeAssistantMessage:
 class _FakeResultMessage:
     def __init__(
         self,
-        result: str = "",
+        result: str | None = "",
         total_cost_usd: float = 0.0,
         usage: dict[str, int] | None = None,
         duration_ms: int = 0,
@@ -491,6 +491,7 @@ class TestScoutPermissions:
             ("Grep", {"path": "..", "pattern": "target"}),
             ("Read", {"file_path": "src.py", "path": "..\\outside.py"}),
             ("Read", {"file_path": "https://example.test/source.py"}),
+            ("Glob", {"pattern": "../outside/**/*.py"}),
         ],
     )
     async def test_scout_denies_unsafe_requests_before_general_allow(
@@ -810,6 +811,57 @@ class TestProcessAssistantMessage:
 
 
 class TestProcessResultMessage:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("include_result", [False, True])
+    async def test_scout_narration_without_final_result_fails(
+        self, adapter: ClaudeAdapter, tmp_path: Path, include_result: bool
+    ) -> None:
+        from backend.services.tools.preflight_curator import PreflightCurator
+
+        client = _FakeClaudeSDKClient()
+        client._messages = [_FakeAssistantMessage(content=[_FakeTextBlock("I will inspect the callers next.")])]
+        if include_result:
+            client._messages.append(_FakeResultMessage(result=None))
+        with (
+            patch("claude_code_sdk.ClaudeSDKClient", return_value=client),
+            pytest.raises(RuntimeError, match="without a final context brief"),
+        ):
+            await PreflightCurator(adapter, model="utility-model").curate(
+                "Inspect the callers", repo=str(tmp_path), worktree=str(tmp_path), job_id="job-1"
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("brief", ["", "src.py contains the parser."])
+    async def test_scout_result_keeps_its_model_and_explicit_final_brief(
+        self, adapter: ClaudeAdapter, brief: str
+    ) -> None:
+        sid = "scout"
+        adapter._queues[sid] = asyncio.Queue()
+        adapter.set_job_id(sid, "job-1")
+        adapter.set_session_kind(sid, "preflight")
+        adapter._job_main_models["job-1"] = "primary-model"
+        adapter._requested_models["job-1"] = "primary-model"
+        adapter._schedule_db_write = lambda coro: coro.close()
+        await adapter._process_assistant_message(
+            sid, _FakeAssistantMessage(content=[_FakeTextBlock("Exploring")], model="utility-observed")
+        )
+        await adapter._process_result_message(
+            sid,
+            _FakeResultMessage(result=brief, usage={"input_tokens": 10, "output_tokens": 5}),
+        )
+        events = []
+        while not adapter._queues[sid].empty():
+            events.append(adapter._queues[sid].get_nowait())
+        usage = next(event for event in events if event.kind == EventKind.telemetry_usage)
+        assert usage.payload["model"] == "utility-observed"
+        assert usage.payload["input_tokens"] == 10
+        final = next(event for event in events if event.kind == EventKind.session_ended)
+        assert final.payload["result"] == brief
+        adapter._cleanup_session(sid)
+        assert adapter._job_main_models["job-1"] == "primary-model"
+        assert adapter._requested_models["job-1"] == "primary-model"
+        assert sid not in adapter._scout_models
+
     @pytest.mark.asyncio
     async def test_successful_result(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"
@@ -1339,6 +1391,27 @@ class TestCreateSession:
             await adapter.create_session(config)
 
         assert captured_opts[0].resume == "prev-session"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", [ConnectionError, asyncio.CancelledError])
+    async def test_scout_connect_failure_kills_unregistered_client(
+        self, adapter: ClaudeAdapter, error_type: type[BaseException]
+    ) -> None:
+        client = _FakeClaudeSDKClient()
+        client.connect = AsyncMock(side_effect=error_type())
+        with (
+            patch("claude_code_sdk.ClaudeSDKClient", return_value=client),
+            patch("backend.services.claude_adapter._adapter._kill_sdk_subprocess") as kill,
+            pytest.raises(error_type),
+        ):
+            await adapter.create_session(_make_config(session_kind="preflight"))
+
+        kill.assert_called_once_with(client)
+        assert not adapter._queues
+        assert not adapter._clients
+        assert not adapter._scout_models
+        assert not adapter._stderr_file_objects
+        assert not adapter._stderr_files
 
     @pytest.mark.asyncio
     async def test_create_session_connect_failure_cleans_up(self, adapter: ClaudeAdapter) -> None:

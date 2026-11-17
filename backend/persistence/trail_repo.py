@@ -359,9 +359,6 @@ class TrailNodeRepository:
             stmt = update(TrailNodeRow).where(TrailNodeRow.id == node_id).values(edit_motivations=motivations_json)
             await session.execute(stmt)
 
-
-
-
     async def update_tool_metadata(
         self,
         job_id: str,

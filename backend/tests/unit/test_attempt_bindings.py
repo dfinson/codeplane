@@ -372,7 +372,7 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
                 )
             return await callbacks["on_permission_request"](
                 SimpleNamespace(
-                    kind=SimpleNamespace(value="shell"), tool_name="bash", full_command_text=command,
+                    kind="shell", tool_name="bash", full_command_text=command,
                     file_name=None, path=None, possible_paths=None, read_only=False,
                 ),
                 {"session_id": sid},
