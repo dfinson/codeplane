@@ -255,7 +255,7 @@ async def _create_db_job(
 
         existing = await ProjectRepository(session).get(job.project_id)
         if existing is None:
-            await ProjectRepository(session).create(job.project_id, "Test Project", [job.repo])
+            await ProjectRepository(session).create(job.project_id, "Test Project", [job.execution_repo])
         row = JobRow(
             id=job.id,
             repo=job.repo,

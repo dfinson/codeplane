@@ -174,9 +174,11 @@ class _Runtime:
             elif os.name == "nt":
                 target = psutil.Process(self.profile["startedPid"])
                 assert abs(target.create_time() - self.profile["startedProcessTime"]) < 0.1
+                uv = shutil.which("uv")
+                assert uv is not None, "Real runtime acceptance requires uv"
                 stopped = subprocess.run(
                     [
-                        shutil.which("uv"),
+                        uv,
                         "run",
                         "--no-sync",
                         "cpl",
@@ -421,7 +423,7 @@ def _native_records(path, *, raw=None):
 
 def _native_cancel_state(records, baseline, cancel_ordinal=None, issued_at=None):
     """Only explicit interruption inside one new, still-active turn can prove a stop."""
-    result = {"status": "pending", "reason": "no_new_turn"}
+    result: dict[str, str | int] = {"status": "pending", "reason": "no_new_turn"}
     for ordinal, record in enumerate(records[baseline:], baseline + 1):
         kind = record["type"]
         data = record.get("data") if isinstance(record.get("data"), dict) else {}

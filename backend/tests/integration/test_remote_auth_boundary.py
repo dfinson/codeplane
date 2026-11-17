@@ -319,7 +319,7 @@ class TestAccessOnlyRestart:
             encoding="utf-8",
         )
         identities = []
-        processes = []
+        processes: list[subprocess.Popen[bytes]] = []
         isolation = (
             {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
             if sys.platform == "win32"

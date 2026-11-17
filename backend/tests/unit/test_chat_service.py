@@ -37,7 +37,12 @@ class TestRuntimeContract:
         repo.get.return_value = Chat(
             id="chat-contract", project_id=None, title="Discussion", created_at=None, last_message_at=None
         )
-        repo.add_message.side_effect = lambda message: (persisted.append(message), message)[1]
+
+        def append_message(message):
+            persisted.append(message)
+            return message
+
+        repo.add_message.side_effect = append_message
         repo.list_messages.side_effect = lambda _chat_id: list(persisted)
         adapter = AsyncMock()
         adapter.complete.side_effect = [CompletionResult(text="First answer"), CompletionResult(text="Second answer")]

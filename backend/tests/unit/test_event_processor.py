@@ -38,12 +38,12 @@ def processor(event_bus: EventBus) -> EventProcessor:
 
 class TestRuntimeContract:
     async def test_terminal_orphan_has_same_annotations_as_live_event(self):
-        from traceforge.enricher import Enricher
+        from backend.services.events.tool_pairing import ToolPairing
 
         bus = EventBus()
-        received = []
+        received: list[SessionEvent] = []
         bus.subscribe(AsyncMock(side_effect=received.append))
-        processor = EventProcessor(bus, enricher=Enricher())
+        processor = EventProcessor(bus, enricher=ToolPairing())
         event = _tf(EventKind.tool_call_started, {"tool_call_id": "pending", "tool_name": "view"})
         await processor.process_event("j1", event)
         await processor.on_job_terminal("j1", "review")

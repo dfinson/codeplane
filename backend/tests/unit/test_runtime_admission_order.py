@@ -32,7 +32,7 @@ def sidecars(runtime, phases):
 
 
 async def test_policy_precedes_all_sidecar_and_scout_startup(runtime, session_factory, config):
-    phases = []
+    phases: list[str] = []
     sidecars(runtime, phases)
     runtime._preflight_curator = object()
 
@@ -116,7 +116,7 @@ async def test_concurrent_starts_reserve_before_the_database_await(runtime, sess
 
 
 async def test_declared_pin_is_persisted_before_policy_and_preflight(runtime, session_factory, config):
-    phases = []
+    phases: list[str] = []
     sidecars(runtime, phases)
     contract = _contract("selected")
     runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
@@ -180,7 +180,7 @@ async def test_recovery_uses_retained_pin_not_new_admission_selection(runtime, s
 async def test_continuation_handoff_utility_runs_after_new_pin_and_policy(runtime, session_factory, config):
     from backend.services.adapters.completion_context import current_completion_context
 
-    phases = []
+    phases: list[str] = []
     sidecars(runtime, phases)
     contract = _contract("selected")
     runtime.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
