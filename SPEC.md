@@ -420,6 +420,10 @@ text-only refinement, with one worker, queue 64, at most 12 bounded snippets,
 claims are never retried during recovery.
 
 Direct command argv is checked for mandatory Git hard gates before assessment.
+Known executable wrappers and literal nested shell scripts retain that gate.
+The authority also inspects executable AST nodes, including Git global options
+and quoted executable paths, independently of model-provided mechanism labels.
+Quoted prose in ordinary arguments is not treated as an executable command.
 Committed command results join the canonical replay cursor and accrue exactly
 once, including executed failures. A known non-start does not accrue; an unknown
 start/effect remains explicitly unaccountable. Windows audit keys use user-bound

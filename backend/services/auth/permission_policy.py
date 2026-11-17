@@ -10,10 +10,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
+from typing import TYPE_CHECKING
 
 import structlog
 
 log = structlog.get_logger()
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from backend.services.action_policy.syntax import SyntaxFacts
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,13 +112,75 @@ def is_hard_gated_command(command: str) -> bool:
     )
 
 
-def is_hard_gated_argv(argv: list[str]) -> bool:
-    """Evaluate native Git argv before model semantics, without shell reconstruction."""
-    if not argv or PureWindowsPath(argv[0]).name.lower() not in {"git", "git.exe"}:
+def is_hard_gated_syntax(syntax: SyntaxFacts) -> bool:
+    """Inspect executable AST nodes, including nested scripts, not quoted prose."""
+    return any(
+        _hard_gated_argv((command.name, *command.arguments), parse_shell=False)
+        for command in syntax.commands
+        if command.name is not None
+    )
+
+
+def is_hard_gated_argv(argv: Sequence[str]) -> bool:
+    """Evaluate actual argv and known wrappers without shell reconstruction."""
+    return _hard_gated_argv(argv, parse_shell=True)
+
+
+def _hard_gated_argv(argv: Sequence[str | None], *, parse_shell: bool, depth: int = 0) -> bool:
+    if not argv or argv[0] is None:
+        return False
+    if depth >= 32:
+        return True
+    executable = PureWindowsPath(argv[0]).name.lower().removesuffix(".exe")
+    if executable in {"env", "command", "exec", "nohup", "nice"}:
+        index = 1
+        while index < len(argv):
+            option = argv[index]
+            if option is None:
+                return True
+            if option == "--":
+                index += 1
+                break
+            if executable == "env" and "=" in option and not option.startswith("-"):
+                index += 1
+            elif (executable == "env" and option in {"-u", "--unset", "-C", "--chdir"}) or (
+                executable == "nice" and option in {"-n", "--adjustment"}
+            ):
+                index += 2
+            elif (executable == "env" and option in {"-i", "--ignore-environment"}) or (
+                executable == "command" and option == "-p"
+            ):
+                index += 1
+            elif option.startswith("-"):
+                return True
+            else:
+                break
+        return _hard_gated_argv(argv[index:], parse_shell=parse_shell, depth=depth + 1)
+    if executable in {"sh", "bash", "pwsh", "powershell", "cmd"}:
+        if not parse_shell:
+            # Nested literal scripts are already independent AST documents.
+            return False
+        from backend.services.action_policy.syntax import analyze_syntax
+
+        dialect = "powershell" if executable in {"pwsh", "powershell"} else executable
+        for index, option in enumerate(argv[1:], 1):
+            if option in {"-c", "-lc", "-ic", "-Command", "-command"}:
+                if index + 1 >= len(argv) or argv[index + 1] is None:
+                    return True
+                script = argv[index + 1]
+                assert script is not None
+                syntax = analyze_syntax(script, dialect)
+                return not syntax.complete or is_hard_gated_syntax(syntax)
+        return True
+    if executable != "git":
         return False
     index = 1
-    while index < len(argv) and argv[index].startswith("-"):
+    while index < len(argv):
         option = argv[index]
+        if option is None:
+            return True
+        if not option.startswith("-"):
+            break
         if option in {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}:
             index += 2
         elif "=" in option or option in {"--no-pager", "--paginate", "--bare", "--no-optional-locks"}:
@@ -128,5 +196,8 @@ def is_hard_gated_argv(argv: list[str]) -> bool:
         or operation == "reset"
         and "--hard" in arguments
         or operation == "push"
-        and any(value == "-f" or value == "--force" or value.startswith("--force-with-lease") for value in arguments)
+        and any(
+            value is None or value == "-f" or value == "--force" or value.startswith("--force-with-lease")
+            for value in arguments
+        )
     )

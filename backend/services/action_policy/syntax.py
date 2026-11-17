@@ -156,10 +156,6 @@ _DYNAMIC = frozenset({"expansion", "simple_expansion", "arithmetic_expansion", "
 
 def _literal(node: Node, raw: bytes, dialect: str) -> str | None:
     text = raw[node.start_byte : node.end_byte].decode("utf-8")
-    if node.type in {"word", "command_name", "command_name_expr", "generic_token"}:
-        if any(character in text for character in "$`*?[]{}\\"):
-            return None
-        return text
     if len(text) >= 2 and text[0] == text[-1] == "'":
         if dialect == "powershell":
             return text[1:-1].replace("''", "'")
@@ -169,6 +165,10 @@ def _literal(node: Node, raw: bytes, dialect: str) -> str | None:
         if any(character in inner for character in "$`\\"):
             return None
         return inner
+    if node.type in {"word", "command_name", "command_name_expr", "generic_token"}:
+        if any(character in text for character in "$`*?[]{}\\'\""):
+            return None
+        return text
     return None
 
 
