@@ -122,8 +122,6 @@ class EventKind(StrEnum):
     verification_result = "verification.result"
     action_classified = "action.classified"
     policy_settings_changed = "policy.settings_changed"
-    # --- Repo index ---
-    # --- Structural health ---
     stall_detected = "stall.detected"
     # --- Monitors ---
     monitor_approved = "monitor.approved"

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -100,6 +102,8 @@ def scout_read_allowed(workspace: str, kind: str, tool_name: str, paths: list[st
             return False
         candidates = [workspace]
     try:
+        if not Path(workspace).is_dir():
+            return False
         for raw in candidates:
             workspace_target(workspace, raw)
     except (OSError, ValueError, RuntimeError):
@@ -146,6 +150,10 @@ class PreflightCurator:
         self._adapter = adapter
         self._model = model
 
+    @property
+    def adapter(self) -> AgentAdapterInterface:
+        return self._adapter
+
     async def curate(
         self,
         task: str,
@@ -157,8 +165,15 @@ class PreflightCurator:
         on_reasoning: Callable[[str], Awaitable[None]] | None = None,
         on_usage: Callable[[PreflightReport], Awaitable[None]] | None = None,
     ) -> PreflightReport:
+        if not worktree:
+            raise ValueError("Scout requires a job worktree")
+        root = Path(worktree).resolve(strict=True)
+        if not root.is_dir():
+            raise NotADirectoryError(f"Scout worktree is not a directory: {root}")
+        with os.scandir(root) as entries:
+            next(entries, None)
         config = SessionConfig(
-            workspace_path=worktree,
+            workspace_path=str(root),
             prompt=(
                 "Prepare a context brief for another agent. Do not carry out the task below, "
                 "even if it asks for edits or commands. Use only repository reads and searches. "
@@ -185,8 +200,8 @@ class PreflightCurator:
     ) -> PreflightReport:
         started = time.monotonic()
         session_id: str | None = None
-        brief_candidate = ""
-        awaiting_brief = False
+        brief_candidate: str | None = None
+        turns = 0
         tool_calls: list[PreflightToolCall] = []
         result_text: str | None = None
         input_tokens = 0
@@ -212,20 +227,17 @@ class PreflightCurator:
                     payload = event.payload
                     if event.kind == EventKind.message_assistant:
                         content = str(payload.get("content", ""))
-                        if payload.get("has_tool_requests"):
-                            brief_candidate = ""
-                            awaiting_brief = True
-                        elif content.strip():
-                            brief_candidate = content
-                            awaiting_brief = False
+                        brief_candidate = None if payload.get("has_tool_requests") else content
                         if content.strip() and on_reasoning is not None:
                             await on_reasoning(content)
+                    elif event.kind == EventKind.turn_started:
+                        turns += 1
+                        if turns > _MAX_TURNS:
+                            raise RuntimeError(f"Scout exceeded its {_MAX_TURNS}-turn limit")
                     elif event.kind == EventKind.tool_call_started:
-                        brief_candidate = ""
-                        awaiting_brief = True
+                        brief_candidate = None
                     elif event.kind == EventKind.tool_call_completed:
-                        brief_candidate = ""
-                        awaiting_brief = True
+                        brief_candidate = None
                         duration = event.metadata.duration_ms
                         call = PreflightToolCall(
                             tool_name=str(payload.get("tool_name", "")),
@@ -250,8 +262,8 @@ class PreflightCurator:
                         break
                     elif event.kind in (EventKind.session_error, EventKind.job_failed):
                         raise RuntimeError(str(payload.get("message") or "Scout session failed"))
-                if result_text is None and awaiting_brief:
-                    raise RuntimeError("Scout ended without a final context brief after tool activity")
+                if result_text is None and brief_candidate is None:
+                    raise RuntimeError("Scout ended without a final context brief")
         except TimeoutError:
             log.warning("preflight_curator.session_timeout", job_id=config.job_id, timeout_s=_SESSION_TIMEOUT_S)
             raise
@@ -267,4 +279,4 @@ class PreflightCurator:
                     await self._adapter.abort_session(session_id)
                 except Exception:
                     log.warning("preflight_curator.session_close_failed", job_id=config.job_id, exc_info=True)
-        return report((result_text if result_text is not None else brief_candidate).strip())
+        return report((result_text if result_text is not None else brief_candidate or "").strip())

@@ -599,7 +599,7 @@ requires-dist = [
     { name = "dishka", extras = ["fastapi"], specifier = ">=1.9.1,<2" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.1,<2" },
-    { name = "github-copilot-sdk", specifier = ">=0.3.0,<0.4" },
+    { name = "github-copilot-sdk", specifier = ">=1.0.34,<2" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "mcp", specifier = ">=1.9,<2" },
     { name = "opentelemetry-api", marker = "extra == 'telemetry'", specifier = ">=1.20,<2" },
@@ -1085,19 +1085,15 @@ wheels = [
 
 [[package]]
 name = "github-copilot-sdk"
-version = "0.3.0"
-source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
+version = "1.0.34"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "python-dateutil" },
 ]
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:ed8f27989158824c754d7febb473bdf25744a1e6bc07a06f114f7e7deebd2c22", size = 58566984, upload-time = "2026-08-02T18:44:28Z" },
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:7e241d9b00ebf8bb4d10b2d6101c75fcef38de04d144d729e07fa48394270ee1", size = 55318729, upload-time = "2026-07-30T02:48:03Z" },
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:f4d98a67b8f038885ddd38bd7033d1ac20c3010f04c72ee0fc74ba4984b69ffa", size = 61452705, upload-time = "2026-08-06T22:55:11Z" },
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:b591546d789f9f8243fb59ca71b08cb0bb1dbec818fbef060c3830c6787de2c8", size = 59646875, upload-time = "2026-08-05T19:33:11Z" },
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-win_amd64.whl", hash = "sha256:c5712d57a2c6291b805c79e039c55c48d858034b1a37fc8e1653925403a028e9", size = 54165496, upload-time = "2026-07-29T19:53:13Z" },
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/github-copilot-sdk/0.3/github_copilot_sdk-0.3.0-py3-none-win_arm64.whl", hash = "sha256:93b07c46f60cebbbb003d5bddba22eab886849b1d052b98037b52b6434a5bc07", size = 52103138, upload-time = "2026-07-30T03:41:14Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/3f/9b8405bf4943dfb6ecd5d0ac2179e1fab896a61bd31273c94267faeae5c9/github_copilot_sdk-1.0.34-py3-none-any.whl", hash = "sha256:0d9cffccdb59f5d90512e9b94a70d482859a5fc9e0d2d0926e1bb138a1e593c4", size = 1116400, upload-time = "2026-11-14T00:08:47.124Z" },
 ]
 
 [[package]]

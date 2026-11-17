@@ -252,7 +252,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       const failed = await compensateRegistrations(stagedRepoPaths);
       const reason = err instanceof Error ? err.message : "Failed to create Project";
       const retained = stagedRepoPaths.length > 0
-        ? ` Repository files and any completed index remain at: ${stagedRepoPaths.join(", ")}. Remove them manually if unwanted.`
+        ? ` Repository files remain at: ${stagedRepoPaths.join(", ")}. Remove them manually if unwanted.`
         : "";
       const rollback = failed.length > 0
         ? ` Registration rollback also failed for: ${failed.join(", ")}.`
@@ -277,7 +277,7 @@ export function CreateProjectDialog({ open, onClose, onCreated }: CreateProjectD
       if (failed.length > 0) {
         toast.error(`Could not undo repository registration for: ${failed.join(", ")}`);
       }
-      toast.info(`Repository files and any completed index remain at: ${stagedRepoPaths.join(", ")}`);
+      toast.info(`Repository files remain at: ${stagedRepoPaths.join(", ")}`);
     }
     if (formGeneration.current === generation) onClose();
   }, [onClose, stagedRepoPaths]);

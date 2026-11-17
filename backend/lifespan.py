@@ -602,7 +602,7 @@ async def _wire_core_services(
     await sidecar_dispatcher.start()
     event_bus.subscribe(sidecar_dispatcher.handle_event)
 
-    # --- Preflight curator (pre-job context curation: memory + structural) ---
+    # --- Preflight Scout (read-only worktree context) ---
     from backend.services.tools.preflight_curator import PreflightCurator
 
     preflight_curator = PreflightCurator(adapter=utility_adapter, model=config.runtime.utility_model)

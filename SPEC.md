@@ -224,6 +224,18 @@ retained historical context without treating old outcomes as current approvals.
 
 ### Existing runtime guarantees
 
+Managed Copilot uses the 1.x SDK contract (minimum 1.0.34), including generated
+permission decisions, timedeltas, quota observations and shutdown records.
+Its session-qualified callback fences and recipe capability restrictions remain
+in force. Session/client ownership is retained until bounded teardown succeeds,
+including repeated cancellation; a failed forced stop remains visible.
+
+Packaged installations load migration scripts from `backend/_migrations`.
+Historical revisions 0033 and 0049 remain addressable in the compatibility
+chain for existing databases; migration 0074 retires their structural storage.
+This does not re-enable CodeRecon or source ingestion. Fresh databases end at
+the same retired schema, and unknown revision IDs still fail without stamping.
+
 `start_or_enqueue` admits or queues work without invoking sidecars. Startup is
 reserved before the first database await, then `_start_reserved_job` configures
 policy before built-in/custom sidecars or Scout can run. The contract-pin hook

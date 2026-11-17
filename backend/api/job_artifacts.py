@@ -63,20 +63,6 @@ _EVENT_QUERY_DEFAULT = 2000
 _EVENT_QUERY_CEILING = 5000
 _HEADLINE_QUERY_LIMIT = 200
 
-# ── Structural analysis response cache ──
-# Keyed on (job_id, endpoint_name, latest_end_sha). Entries are invalidated
-# when the worktree advances (new SHA = cache miss, old entry evicted).
-
-
-
-
-
-
-
-
-
-
-
 
 @router.get("/jobs/{job_id}/logs", response_model=LogListResponse)
 async def get_job_logs(
@@ -170,8 +156,6 @@ async def get_job_diff(
             if row:
                 f.write_count = row["write_count"]
                 f.retry_count = row["retry_count"]
-
-    # (backfill for historical events stored without symbols)
 
     return DiffListResponse(items=DiffService.truncate_large_files(files))
 
@@ -648,59 +632,6 @@ async def get_job_story(
     return StoryResponse(job_id=job_id, blocks=[], cached=False, pending=True)
 
 
-
-
-# -- Structural diff helpers --------------------------------------------------
-
-# Category severity for risk scoring (§9.4)
-_CATEGORY_SEVERITY = {
-    "breaking": 1.0,
-    "body": 0.5,
-    "additive": 0.1,
-    "non-structural": 0.0,
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# -- Multi-session intelligence (§10) -----------------------------------------
-
-
-
-
-# -- Impact graph drill-down (§9.5) -------------------------------------------
-
-_IMPACT_TIER_MAP = {"high": "verified", "medium": "inferred", "unknown": "unverified"}
-
-
-
-
-
-
-
-
-# -- Community clustering view (§9.7) -----------------------------------------
-
-
-
-
-# -- Review story artifact (§11) ----------------------------------------------
-
-
-
-
-
-
 # ---------------------------------------------------------------------------
 # Motivations endpoint (job-level)
 # ---------------------------------------------------------------------------
@@ -778,8 +709,3 @@ async def get_job_motivations(
         file_motivations=file_motivations,
         hunk_motivations=hunk_motivations,
     )
-
-
-# ---------------------------------------------------------------------------
-# Coverage / Blast Radius endpoints
-# ---------------------------------------------------------------------------

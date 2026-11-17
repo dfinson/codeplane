@@ -850,6 +850,12 @@ class RuntimeService:
 
             await self._emit_setup_progress(job.id, "starting_agent")
 
+            async with self._session_factory() as session:
+                current = await JobRepository(session).get(job.id)
+            if self._shutting_down or (current and current.state in TERMINAL_STATES):
+                self._agent_sessions.pop(job.id, None)
+                return
+
             task = asyncio.create_task(
                 self._run_job_guarded(job.id, agent_session, session_config, session_number=job.session_count),
                 name=f"job-{job.id}",
@@ -1359,6 +1365,8 @@ class RuntimeService:
         # Wire into adapter
         adapter = self._resolve_adapter(config.sdk)
         adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
+        if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
+            self._preflight_curator.adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         self._policy_routers[job_id] = router
         self._repo_policies[job_id] = policy
         self._policy_batchers[job_id] = batcher
@@ -1461,8 +1469,6 @@ class RuntimeService:
         await self._ensure_terminal_state(job_id)
         await self._stop_attempt_executions(job_id)
         await self._finalize_artifacts_safe(job_id)
-
-        # (in-process kits are shared and closed on shutdown, not per-job)
 
         if self._trail_service is not None:
             self._trail_service.cleanup(job_id)
@@ -3605,7 +3611,7 @@ class RuntimeService:
         from backend.persistence.secondary_session_repo import SecondarySessionRepository
         from backend.services.tools.preflight_curator import PreflightReport
 
-        worktree_path = worktree_override or job.worktree_path or job.repo
+        worktree_path = worktree_override or job.worktree_path
 
         if self._preflight_curator is None:
             log.debug("preflight_curator.not_configured", job_id=job.id)
@@ -3726,6 +3732,8 @@ class RuntimeService:
                 nonlocal usage_report
                 usage_report = observed
 
+            if not worktree_path:
+                raise ValueError("Scout requires a job worktree")
             report = await self._preflight_curator.curate(
                 task=session_config.prompt,
                 repo=str(job.repo),

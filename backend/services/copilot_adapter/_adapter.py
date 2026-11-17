@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
@@ -35,8 +36,10 @@ if TYPE_CHECKING:
         AssistantReasoningDeltaData,
         AssistantUsageData,
         PermissionRequest,
+        ProviderQuotaState,
         SessionCompactionCompleteData,
         SessionModelChangeData,
+        SessionQuotaObservationData,
         SessionShutdownData,
         SessionTruncationData,
         SessionUsageInfoData,
@@ -50,6 +53,7 @@ if TYPE_CHECKING:
     )
     from copilot.session import (
         CopilotSession,
+        PermissionInvocation,
         PermissionRequestResult,
         PreToolUseHookInput,
         PreToolUseHookOutput,
@@ -63,6 +67,12 @@ if TYPE_CHECKING:
     from backend.services.job.approval_service import ApprovalService
 
 log = structlog.get_logger()
+
+
+def _sdk_excluded_tools(tools: list[str] | None) -> list[str] | None:
+    if tools is not None and "*" in tools:
+        return ["builtin:*", "mcp:*", "custom:*"]
+    return tools
 
 
 class CopilotAdapter(BaseAgentAdapter):
@@ -98,32 +108,46 @@ class CopilotAdapter(BaseAgentAdapter):
         # compute duration_ms and carry start-time context (re-homed from EventPipeline).
         self._tool_buf: dict[tuple[str, str], dict[str, Any]] = {}
 
-    def _cleanup_session(self, session_id: str) -> asyncio.Task[None] | None:
-        """Remove session and queue references for a completed/aborted session.
+    async def _cleanup_session(self, session_id: str) -> None:
+        """Fence callbacks immediately, retaining ownership until closure succeeds."""
+        task = self._stop_tasks.get(session_id)
+        if task is None:
+            task = asyncio.create_task(self._close_session(session_id), name=f"copilot-stop-{session_id[:8]}")
+            self._stop_tasks[session_id] = task
+            task.add_done_callback(lambda completed: self._forget_stop(session_id, completed))
+        cancelled: asyncio.CancelledError | None = None
+        while True:
+            try:
+                await asyncio.shield(task)
+                break
+            except asyncio.CancelledError as exc:
+                if task.cancelled():
+                    raise
+                cancelled = exc
+        if cancelled is not None:
+            raise cancelled
 
-        Also stops the CopilotClient that owns the backing CLI server process
-        to prevent leaked child processes from accumulating over time.
-        """
+    async def _close_session(self, session_id: str) -> None:
         self._accepting_events.discard(session_id)
+        self.pause_tools(session_id)
         unsubscribe = self._unsubscribe.pop(session_id, None)
         if unsubscribe is not None:
             try:
                 unsubscribe()
             except Exception:
                 log.warning("copilot_unsubscribe_failed", session_id=session_id, exc_info=True)
-        for task in self._callback_tasks.get(session_id, ()):
-            task.cancel()
+        callbacks = tuple(self._callback_tasks.get(session_id, ()))
+        for callback in callbacks:
+            callback.cancel()
         queue = self._queues.get(session_id)
         if queue is not None:
             queue.put_nowait(None)
-        self._sessions.pop(session_id, None)
         client = self._clients.get(session_id)
-        stop_task: asyncio.Task[None] | None = None
+        if callbacks:
+            await asyncio.gather(*callbacks, return_exceptions=True)
         if client is not None:
-            stop_task = asyncio.create_task(self._stop_client(client), name=f"copilot-stop-{session_id[:8]}")
-            self._stop_tasks[session_id] = stop_task
-            stop_task.add_done_callback(lambda task: self._forget_stop(session_id, task))
-        stop_task = self._stop_tasks.get(session_id)
+            await self._stop_client(client)
+        self._sessions.pop(session_id, None)
         job_id = self._session_to_job.get(session_id)
         last_for_job = not any(sid != session_id and jid == job_id for sid, jid in self._session_to_job.items())
         if job_id and last_for_job:
@@ -133,7 +157,6 @@ class CopilotAdapter(BaseAgentAdapter):
         if not last_for_job:
             self._session_to_job.pop(session_id, None)
         super()._cleanup_session_state(session_id)
-        return stop_task
 
     def _forget_stop(self, session_id: str, task: asyncio.Task[None]) -> None:
         if self._stop_tasks.get(session_id) is task:
@@ -142,12 +165,7 @@ class CopilotAdapter(BaseAgentAdapter):
             log.error("copilot_stop_task_failed", session_id=session_id, error=str(task.exception()))
 
     async def _finish_session(self, session_id: str) -> None:
-        callbacks = tuple(self._callback_tasks.get(session_id, ()))
-        stop_task = self._cleanup_session(session_id)
-        if callbacks:
-            await asyncio.gather(*callbacks, return_exceptions=True)
-        if stop_task is not None:
-            await asyncio.shield(stop_task)
+        await self._cleanup_session(session_id)
 
     async def shutdown(self) -> None:
         """Stop admission, cancel pending starts and drain all owned SDK work."""
@@ -156,9 +174,8 @@ class CopilotAdapter(BaseAgentAdapter):
         for task in opening:
             task.cancel()
         callbacks = [task for tasks in self._callback_tasks.values() for task in tasks]
-        for session_id in list(self._clients):
-            self._cleanup_session(session_id)
-        pending = set(opening + callbacks + list(self._stop_tasks.values()) + self._write_tasks)
+        closures = [asyncio.create_task(self._finish_session(session_id)) for session_id in list(self._clients)]
+        pending = set(opening + callbacks + closures + list(self._stop_tasks.values()) + self._write_tasks)
         if pending:
             await asyncio.wait_for(
                 asyncio.gather(*pending, return_exceptions=True),
@@ -179,7 +196,7 @@ class CopilotAdapter(BaseAgentAdapter):
     async def _handle_permission_request(
         self,
         request: PermissionRequest,
-        invocation: dict[str, str],
+        invocation: PermissionInvocation,
         config: SessionConfig,
     ) -> PermissionRequestResult:
         """Bridge SDK permission requests into CodePlane's approval system.
@@ -187,43 +204,46 @@ class CopilotAdapter(BaseAgentAdapter):
         Wraps the base adapter's ``_evaluate_permission`` to return SDK-
         specific PermissionRequestResult objects.
         """
-        from copilot.session import PermissionRequestResult as _Result
+        from copilot.generated.rpc import PermissionDecisionApproveOnce, PermissionDecisionReject
 
-        kind_val = request.kind.value if request.kind else "unknown"
+        kind_val = request.kind
         sid = invocation.get("session_id", "")
         fence = self._capture_permission_fence(sid)
         if not self._permission_fence_is_current(sid, fence):
-            return _Result(kind="reject")
+            return PermissionDecisionReject()
+        file_name = getattr(request, "file_name", None)
+        path = getattr(request, "path", None)
+        possible_paths = getattr(request, "possible_paths", None)
+        full_command_text = getattr(request, "full_command_text", None)
+        tool_name = getattr(request, "tool_name", "")
 
         # Collect path candidates for policy evaluation
         candidate_paths: list[str] = []
-        if request.file_name:
-            candidate_paths.append(request.file_name)
-        if request.path:
-            candidate_paths.append(request.path)
-        if request.possible_paths:
-            candidate_paths.extend(request.possible_paths)
+        if file_name:
+            candidate_paths.append(file_name)
+        if path:
+            candidate_paths.append(path)
+        if possible_paths:
+            candidate_paths.extend(possible_paths)
 
         if config.session_kind == "preflight":
             from backend.services.tools.preflight_curator import scout_read_allowed
 
-            if request.full_command_text or not scout_read_allowed(
-                config.workspace_path, kind_val, request.tool_name or "", candidate_paths
-            ):
-                return _Result(kind="reject")
+            if full_command_text or not scout_read_allowed(config.workspace_path, kind_val, tool_name, candidate_paths):
+                return PermissionDecisionReject()
 
         # Build tool_input dict for the base method
         tool_input: dict[str, Any] = {}
-        if request.full_command_text:
-            tool_input["command"] = request.full_command_text
+        if full_command_text:
+            tool_input["command"] = full_command_text
 
         perm_request = PolicyRequest(
             kind=kind_val,
             workspace_path=config.workspace_path,
-            full_command_text=request.full_command_text,
-            file_name=request.file_name,
-            path=request.path,
-            read_only=request.read_only,
+            full_command_text=full_command_text,
+            file_name=file_name,
+            path=path,
+            read_only=getattr(request, "read_only", False),
             possible_paths=candidate_paths or None,
         )
         from backend.services.adapters.capability_guard import enforce_tool_capabilities
@@ -234,25 +254,25 @@ class CopilotAdapter(BaseAgentAdapter):
                 config.execution_capabilities,
                 workspace=config.workspace_path,
                 kind=kind_val,
-                tool_name=request.tool_name or "",
+                tool_name=tool_name,
                 paths=candidate_paths,
-                command=request.full_command_text,
-                dialect="powershell" if request.tool_name == "powershell" else None,
+                command=full_command_text,
+                dialect="powershell" if tool_name == "powershell" else None,
             )
         except CapabilityDeniedError as exc:
             log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
-            return _Result(kind="reject")
+            return PermissionDecisionReject()
         decision = await self._evaluate_permission(
             sid,
             fence[0],
             perm_request,
-            tool_name=request.tool_name or "",
+            tool_name=tool_name,
             tool_input=tool_input or None,
             fence=fence,
         )
         if decision == PermissionDecision.allow:
-            return _Result(kind="approve-once")
-        return _Result(kind="reject")
+            return PermissionDecisionApproveOnce()
+        return PermissionDecisionReject()
 
     # --- Pipeline-based event processing ---
 
@@ -321,7 +341,7 @@ class CopilotAdapter(BaseAgentAdapter):
             content = (am.content or "") if am else ""
             is_scout = self.get_session_kind(session_id) == "preflight"
             has_tool_requests = bool(getattr(am, "tool_requests", None))
-            if content.strip() or (is_scout and has_tool_requests):
+            if content.strip() or is_scout:
                 title = getattr(am, "title", None) if am else None
                 payload: dict[str, Any] = {"content": content}
                 if is_scout:
@@ -329,6 +349,9 @@ class CopilotAdapter(BaseAgentAdapter):
                 if title:
                     payload["title"] = title
                 self._emit_tf(session_id, job_id, EventKind.message_assistant, payload)
+
+        elif kind_str == "assistant.turn_start" and self.get_session_kind(session_id) == "preflight":
+            self._emit_tf(session_id, job_id, EventKind.turn_started, {})
 
         elif kind_str == "assistant.message_delta":
             md = cast("AssistantMessageDeltaData", data) if data else None
@@ -498,16 +521,17 @@ class CopilotAdapter(BaseAgentAdapter):
                         "cache_read_tokens": int(au.cache_read_tokens or 0),
                         "cache_write_tokens": int(au.cache_write_tokens or 0),
                         "cost_usd": float(au.cost or 0),
-                        "duration_ms": float(au.duration or 0),
+                        "duration_ms": au.duration.total_seconds() * 1000 if au.duration else 0.0,
                         "is_subagent": is_subagent,
                         "advance_turn": True,
                         "num_turns": 1,
                     },
                 )
 
-                # Copilot-specific: quota snapshots
-                if au.quota_snapshots:
-                    self._record_quota_snapshots(au.quota_snapshots, job_id)
+        elif kind_str == "session.quota_observation":
+            observation = cast("SessionQuotaObservationData", data) if data else None
+            if observation:
+                self._record_quota_observation(observation.observation, job_id)
 
         # --- Managed-only session-state (context/compaction/truncation/premium/
         #     model). Not bus events (imported path has no equivalent); reproduced
@@ -570,13 +594,17 @@ class CopilotAdapter(BaseAgentAdapter):
                 self._emit_log_line(session_id, job_id, f"Model changed to {mc.new_model}", "info")
 
         elif kind_str == "session.shutdown":
-            sd = cast("SessionShutdownData", data) if data else None
-            if sd and sd.total_premium_requests is not None:
-                premium = int(sd.total_premium_requests)
-                from backend.services.analytics import telemetry as tel
+            try:
+                sd = cast("SessionShutdownData", data) if data else None
+                if sd and sd._total_premium_requests is not None:  # noqa: SLF001
+                    premium = sd._total_premium_requests  # noqa: SLF001
+                    from backend.services.analytics import telemetry as tel
 
-                tel.premium_requests_counter.add(premium, {"job_id": job_id, "sdk": "copilot"})
-                self._schedule_db_write(self._db_write_increment(job_id=job_id, premium_requests=premium))
+                    tel.premium_requests_counter.add(premium, {"job_id": job_id, "sdk": "copilot"})
+                    self._schedule_db_write(self._db_write_increment(job_id=job_id, premium_requests=premium))
+            finally:
+                queue.put_nowait(None)
+            return
 
         # --- Session lifecycle (sentinel terminates stream_events) ---
         if kind_str in ("session.task_complete", "session.idle", "session.shutdown"):
@@ -590,39 +618,36 @@ class CopilotAdapter(BaseAgentAdapter):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
 
-    def _record_quota_snapshots(self, quota_snapshots: Any, job_id: str) -> None:
-        """Record Copilot quota snapshot telemetry (adapter-specific)."""
+    def _record_quota_observation(self, observation: ProviderQuotaState, job_id: str) -> None:
+        """Normalize an SDK budget observation into the existing quota transport."""
         import json as _json
 
         from backend.services.analytics import telemetry as tel
 
-        parsed: dict[str, dict[str, Any]] = {}
-        for key, snap in quota_snapshots.items():
-            used = float(snap.used_requests or 0)
-            entitlement = float(snap.entitlement_requests or 0)
-            remaining = float(snap.remaining_percentage or 0)
-            parsed[key] = {
-                "used_requests": used,
-                "entitlement_requests": entitlement,
-                "remaining_percentage": remaining,
-                "overage": float(snap.overage or 0),
-                "overage_allowed": bool(snap.overage_allowed_with_exhausted_quota),
-                "is_unlimited": bool(snap.is_unlimited_entitlement),
-                "reset_date": str(snap.reset_date or ""),
+        budget = observation.budget_metadata
+        if budget is None:
+            return
+        key = observation.compatibility_key or observation.quota_id
+        reset_date = (
+            datetime.fromtimestamp(budget.reset_at_epoch_ms / 1000, tz=UTC).isoformat()
+            if budget.reset_at_epoch_ms is not None
+            else ""
+        )
+        parsed = {
+            key: {
+                "used_requests": budget.consumed,
+                "entitlement_requests": budget.entitlement,
+                "remaining_percentage": budget.remaining_percentage,
+                "overage": budget.overage,
+                "overage_allowed": budget.overage_allowed_when_exhausted,
+                "is_unlimited": budget.unlimited,
+                "reset_date": reset_date,
             }
-            tel.quota_used_gauge.set(
-                used,
-                {"job_id": job_id, "sdk": "copilot", "resource": key},
-            )
-            tel.quota_entitlement_gauge.set(
-                entitlement,
-                {"job_id": job_id, "sdk": "copilot", "resource": key},
-            )
-            tel.quota_remaining_gauge.set(
-                remaining,
-                {"job_id": job_id, "sdk": "copilot", "resource": key},
-            )
-
+        }
+        attrs = {"job_id": job_id, "sdk": "copilot", "resource": key}
+        tel.quota_used_gauge.set(budget.consumed, attrs)
+        tel.quota_entitlement_gauge.set(budget.entitlement, attrs)
+        tel.quota_remaining_gauge.set(budget.remaining_percentage, attrs)
         self._schedule_db_write(self._db_write_set_quota(job_id=job_id, quota_remaining=_json.dumps(parsed)))
 
     async def create_session(self, config: SessionConfig) -> str:
@@ -652,11 +677,13 @@ class CopilotAdapter(BaseAgentAdapter):
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
         # Thin closure that delegates to the instance method, capturing only `config`.
-        async def _on_permission(request: PermissionRequest, invocation: dict[str, str]) -> PermissionRequestResult:
+        async def _on_permission(
+            request: PermissionRequest, invocation: PermissionInvocation
+        ) -> PermissionRequestResult:
             return await self._handle_permission_request(request, invocation, config)
 
         async def _guard_invocation(
-            request: PreToolUseHookInput, invocation: dict[str, str]
+            request: PreToolUseHookInput, invocation: PermissionInvocation
         ) -> PreToolUseHookOutput | None:
             from backend.services.adapters.capability_guard import enforce_invocation_capabilities
             from backend.services.adapters.contracts import CapabilityDeniedError
@@ -740,7 +767,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     model=config.model or None,
                     system_message=system_message,
                     tools=None,
-                    excluded_tools=excluded_tools or None,
+                    excluded_tools=_sdk_excluded_tools(excluded_tools or None),
                     available_tools=available_tools,
                     hooks=hooks,
                 )
@@ -753,7 +780,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     system_message=system_message,
                     model=config.model or None,
                     available_tools=available_tools,
-                    excluded_tools=excluded_tools or None,
+                    excluded_tools=_sdk_excluded_tools(excluded_tools or None),
                     hooks=hooks,
                 )
         else:
@@ -763,7 +790,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 system_message=system_message,
                 model=config.model or None,
                 available_tools=available_tools,
-                excluded_tools=excluded_tools or None,
+                excluded_tools=_sdk_excluded_tools(excluded_tools or None),
                 hooks=hooks,
             )
 
@@ -895,11 +922,10 @@ class CopilotAdapter(BaseAgentAdapter):
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
         session = self._sessions.get(session_id)
-        if session is None:
-            return
         try:
-            await session.abort()
-        except (JsonRpcError, ProcessExitedError):
+            if session is not None:
+                await asyncio.wait_for(session.abort(), timeout=CLIENT_STOP_TIMEOUT_S)
+        except (TimeoutError, JsonRpcError, ProcessExitedError):
             log.warning("copilot_abort_failed", session_id=session_id, exc_info=True)
         finally:
             await self._finish_session(session_id)
@@ -913,7 +939,7 @@ class CopilotAdapter(BaseAgentAdapter):
         excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
         """Complete a text-only turn, failing explicitly unless the turn finishes."""
-        from copilot.session import PermissionRequestResult as _Result
+        from copilot.generated.rpc import PermissionDecisionReject
 
         if self._closing:
             raise UtilityCompletionError("Copilot adapter is shutting down", reason="shutdown")
@@ -931,10 +957,10 @@ class CopilotAdapter(BaseAgentAdapter):
 
         tool_attempted = False
 
-        async def _deny_permission(request: object, invocation: dict[str, str]) -> PermissionRequestResult:
+        async def _deny_permission(request: object, invocation: PermissionInvocation) -> PermissionRequestResult:
             nonlocal tool_attempted
             tool_attempted = True
-            return _Result(kind="reject")
+            return PermissionDecisionReject()
 
         accepting = True
         completion = current_completion_context()
@@ -1030,7 +1056,7 @@ class CopilotAdapter(BaseAgentAdapter):
                     on_permission_request=_deny_permission,
                     model=model or None,
                     system_message=sys_msg_config,
-                    excluded_tools=excluded_tools if excluded_tools is not None else ["*"],
+                    excluded_tools=_sdk_excluded_tools(excluded_tools if excluded_tools is not None else ["*"]),
                     available_tools=[],
                 )
                 if self._closing:

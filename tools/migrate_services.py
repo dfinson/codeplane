@@ -222,9 +222,7 @@ def update_services_init() -> None:
         old_module = old.split(".")[-1]
         new_pkg = new.split(".")[-2]
         # Replace references like "``analytics_service``" with "``analytics/analytics_service``"
-        new_text = new_text.replace(
-            f"``{old_module}``", f"``{new_pkg}/{old_module}``"
-        )
+        new_text = new_text.replace(f"``{old_module}``", f"``{new_pkg}/{old_module}``")
 
     if new_text != text:
         init_path.write_text(new_text)

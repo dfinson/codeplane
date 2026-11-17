@@ -65,6 +65,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         )
         self._consumer_tasks: dict[str, asyncio.Task[None]] = {}
         self._requested_models: dict[str, str] = {}
+        self._scout_models: dict[str, str] = {}
         self._model_verified: dict[str, bool] = {}
         # Stderr capture files for debugging failed sessions
         self._stderr_files: dict[str, str] = {}
@@ -94,6 +95,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         job_id = self._session_to_job.get(session_id)
         self._requested_models.pop(session_id, None)
         self._model_verified.pop(session_id, None)
+        self._scout_models.pop(session_id, None)
         if job_id and not any(sid != session_id and owner == job_id for sid, owner in self._session_to_job.items()):
             self._log_seqs.pop(job_id, None)
         for key in [key for key in self._tool_buf if key[0] == session_id]:
@@ -172,7 +174,11 @@ class ClaudeAdapter(BaseAgentAdapter):
                     config.workspace_path,
                     tool_kind,
                     tool_name,
-                    [value for key in ("file_path", "path") if isinstance(value := input_data.get(key), str) and value],
+                    [
+                        value
+                        for key in (("file_path", "path", "pattern") if tool_name == "Glob" else ("file_path", "path"))
+                        if isinstance(value := input_data.get(key), str) and value
+                    ],
                 ):
                     return PermissionResultDeny(message="Scout tools are limited to workspace reads and searches")
             decision = await self._evaluate_permission(
@@ -231,7 +237,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                         try:
                             if isinstance(message, SystemMessage):
                                 job_id = self._session_to_job.get(session_id)
-                                if job_id:
+                                if job_id and self.get_session_kind(session_id) != "preflight":
                                     self._emit_tf(
                                         session_id,
                                         job_id,
@@ -262,6 +268,13 @@ class ClaudeAdapter(BaseAgentAdapter):
 
                     else:
                         # Iterator exhausted without ResultMessage — session ended
+                        if self.get_session_kind(session_id) == "preflight":
+                            self._emit_tf(
+                                session_id,
+                                self._session_to_job.get(session_id) or session_id,
+                                EventKind.job_failed,
+                                {"message": "Claude Scout ended without a final context brief"},
+                            )
                         done = True
                 except Exception as exc:
                     if MessageParseError is not None and isinstance(exc, MessageParseError):
@@ -349,6 +362,9 @@ class ClaudeAdapter(BaseAgentAdapter):
         job_id = self._session_to_job.get(session_id)
         metadata = self._session_metadata.get(session_id)
         is_attempt = metadata is not None and metadata.attempt_id is not None
+        is_scout = self.get_session_kind(session_id) == "preflight"
+        if is_scout and model:
+            self._scout_models[session_id] = model
 
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and (self.get_session_kind(session_id) != "preflight" or is_attempt):
@@ -362,14 +378,24 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
+        if is_scout:
+            texts = [block.text or "" for block in content_blocks if isinstance(block, TextBlock)]
+            has_tool_requests = any(isinstance(block, ToolUseBlock) for block in content_blocks)
+            if texts or has_tool_requests:
+                self._emit_tf(
+                    session_id,
+                    job_id,
+                    EventKind.message_assistant,
+                    {"content": "\n".join(texts), "has_tool_requests": has_tool_requests},
+                )
         for block in content_blocks:
             if isinstance(block, TextBlock):
+                if is_scout:
+                    continue
                 text = block.text or ""
                 if not text.strip():
                     continue
                 payload: dict[str, Any] = {"content": text}
-                if self.get_session_kind(session_id) == "preflight":
-                    payload["has_tool_requests"] = any(isinstance(item, ToolUseBlock) for item in content_blocks)
                 self._emit_tf(session_id, job_id, EventKind.message_assistant, payload)
 
             elif isinstance(block, ToolUseBlock):
@@ -477,7 +503,11 @@ class ClaudeAdapter(BaseAgentAdapter):
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
         if job_id:
-            model = self._job_main_models.get(job_id, "")
+            model = (
+                self._scout_models.get(session_id, "")
+                if self.get_session_kind(session_id) == "preflight"
+                else self._job_main_models.get(job_id, "")
+            )
             num_turns = getattr(message, "num_turns", 0) or 1
 
             self._emit_tf(
@@ -504,6 +534,21 @@ class ClaudeAdapter(BaseAgentAdapter):
                 job_id or session_id,
                 EventKind.job_failed,
                 {"message": "Claude session ended with error", "result": result_text},
+            )
+        elif self.get_session_kind(session_id) == "preflight":
+            if getattr(message, "result", None) is None:
+                self._emit_tf(
+                    session_id,
+                    job_id or session_id,
+                    EventKind.job_failed,
+                    {"message": "Claude Scout ended without a final context brief"},
+                )
+                return
+            self._emit_tf(
+                session_id,
+                job_id or session_id,
+                EventKind.session_ended,
+                {"result": getattr(message, "result", None)},
             )
         # On success no explicit event is emitted; the ``done=True`` break in
         # ``_consume_messages`` triggers the queue sentinel that ends the stream.
@@ -579,6 +624,8 @@ class ClaudeAdapter(BaseAgentAdapter):
             self.set_job_id(session_id, config.job_id)
             if config.model:
                 self._requested_models[session_id] = config.model
+            if config.session_kind == "preflight":
+                self._scout_models[session_id] = config.model or ""
         if config.session_kind != "job":
             self.set_session_kind(session_id, config.session_kind)
 
@@ -695,6 +742,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                     resume_id=options.resume,
                     exc_info=True,
                 )
+                _kill_sdk_subprocess(client)
                 options.resume = None
                 try:
                     client = ClaudeSDKClient(options)

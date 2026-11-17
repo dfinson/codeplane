@@ -27,7 +27,7 @@ _DESCRIPTORS: dict[str, AdapterDescriptor] = {
     "copilot": AdapterDescriptor(
         id="copilot",
         provider_family="github-copilot",
-        supported_versions=(">=0.3,<0.4",),
+        supported_versions=(">=1.0.34,<2",),
         channels=frozenset({"sdk-events", "sdk-control", "sdk-tool-hooks"}),
         hooks=("on_pre_tool_use", "on_permission_request"),
         ownership="managed-sdk-session",
@@ -102,9 +102,11 @@ class AdapterRegistry:
             installed = version(package)
         except PackageNotFoundError:
             return AdapterReadiness(False, f"Missing provider dependency: {package}")
-        match = re.fullmatch(r"0\.(\d+)\.(\d+)", installed)
+        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", installed)
         compatible = match is not None and (
-            int(match[1]) == 3 if descriptor.id == "copilot" else int(match[1]) == 0 and int(match[2]) >= 25
+            int(match[1]) == 1 and (int(match[2]), int(match[3])) >= (0, 34)
+            if descriptor.id == "copilot"
+            else (int(match[1]), int(match[2])) == (0, 0) and int(match[3]) >= 25
         )
         return AdapterReadiness(
             compatible, None if compatible else "Provider version is outside the supported release range", installed

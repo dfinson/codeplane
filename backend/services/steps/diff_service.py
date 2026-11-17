@@ -33,8 +33,6 @@ log = structlog.get_logger()
 _EVENT_QUERY_CEILING = 5000
 
 
-
-
 class StepDiffService:
     """Resolves step SHAs and computes annotated diffs."""
 
@@ -73,7 +71,6 @@ class StepDiffService:
             worktree_path=job.worktree_path,
         )
 
-
         return StepDiffPayload(
             step_id=step_id,
             diff=diff_text,
@@ -83,7 +80,6 @@ class StepDiffService:
             file_motivations=file_motivations,
             hunk_motivations=hunk_motivations,
         )
-
 
     async def _resolve_shas(
         self,
