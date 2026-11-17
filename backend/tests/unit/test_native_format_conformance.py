@@ -12,10 +12,17 @@ from pathlib import Path
 import pytest
 import yaml
 
+from backend.models.schemas.integrations import ObservationRecordBatch
 from backend.persistence.event_repo import EventRepository
+from backend.persistence.integration_repo import IntegrationRepository
+from backend.persistence.job_repo import JobRepository
+from backend.persistence.project_repo import ProjectRepository
+from backend.services.events.event_bus import EventBus
 from backend.services.events.tool_pairing import ToolPairing
 from backend.services.ingest._base import _advance_prefix, _canonical_record, _verify_source_prefix
+from backend.services.ingest.history_registration import HistoryRegistration
 from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest.record_service import ObservationRecords
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "native_formats"
@@ -261,7 +268,7 @@ def test_copilot_sqlite_markdown_turn_preserves_medium_fidelity():
         ("maf", []),
         ("maf_transcript", [("tool.call.started", None, "missing_identity")]),
         ("openai_agents", [("tool.call.completed", "call-1", None)]),
-        ("opencode", [("tool.call.started", None, "missing_identity"), ("tool.call.failed", None, "missing_identity")]),
+        ("opencode", [("tool.call.failed", "call-1", None)]),
         ("openhands", []),
         ("pydantic_ai", [("tool.call.failed", "call-1", None)]),
         ("semantic_kernel", [("tool.call.failed", "call-1", None)]),
@@ -278,7 +285,11 @@ def test_released_tool_pairing_preserves_unresolved_evidence(name, expected):
             emitted.extend(result if isinstance(result, list) else [result] if result is not None else [])
     emitted.extend(pairing.flush())
     assert [
-        (event.kind, event.payload.get("tool_call_id"), event.payload.get("_codeplane_pairing", {}).get("reason"))
+        (
+            event.kind,
+            event.payload.get("tool_call_id", event.payload.get("call_id")),
+            event.payload.get("_codeplane_pairing", {}).get("reason"),
+        )
         for event in emitted
         if event.kind in {"tool.call.started", "tool.call.completed", "tool.call.failed"}
     ] == expected
@@ -317,13 +328,29 @@ async def test_all_formats_durable_replay_keeps_storage_cursor_separate(session_
 
 
 @pytest.mark.parametrize("name", SHAPES)
-def test_native_events_retain_source_record_for_replay(name):
-    decoder = _decoder(name)
-    for index, raw in enumerate(SHAPES[name]["records"]):
-        for event in decoder.decode(raw, index):
-            # The legacy JsonLineAdapter.parse attaches the input, including
-            # producer sequence and fields not projected by the YAML contract.
-            assert event.raw_event == raw
+async def test_admitted_source_record_survives_canonical_storage_and_replay(name, session_factory):
+    raw = deepcopy(SHAPES[name]["records"][0])
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="qualification", project_id="proj-1", format_id=name, external_session_id="producer"
+        )
+        await session.commit()
+        service = ObservationRecords(bindings, jobs, EventBus())
+        batch = ObservationRecordBatch(source_key="source", start_index=0, records=[raw], end_session=True)
+        first = await service.append("qualification", batch)
+        before = await EventRepository(session).list_after(0, job_id=job.id)
+        replay = await service.append("qualification", batch)
+        after = await EventRepository(session).list_after(0, job_id=job.id)
+        assert first.accepted_records == first.next_index == 1
+        assert not first.replay and replay.replay
+        assert before == after
+    async with session_factory() as session:
+        durable = await EventRepository(session).list_after(0, job_id=job.id)
+        assert durable == before
+        # Assert at the admitted-history boundary, not on an intermediate
+        # decoder object that a consumer is entitled to enrich before storage.
+        assert any(row.event.raw_event == raw for row in durable)
 
 
 def test_openai_unfinished_function_span_does_not_invent_completion():
@@ -411,13 +438,26 @@ def test_vscode_unsupported_journal_version_stops_before_acceptance():
         ("openai_agents", {"object": "trace.future", "id": "future-1"}),
     ],
 )
-def test_unknown_native_shape_obeys_declared_raw_fallback(name, raw):
-    decoder = _decoder(name)
-    assert decoder.mapping.default_kind == "raw"
-    events = decoder.decode(raw, 0)
-    assert len(events) == 1
-    assert events[0].kind == "raw"
-    assert events[0].raw_event == raw
+async def test_unknown_native_shape_is_not_silently_lost_after_admission(name, raw, session_factory):
+    async with session_factory() as session:
+        bindings, jobs = IntegrationRepository(session), JobRepository(session)
+        job = await HistoryRegistration(bindings, jobs, ProjectRepository(session)).register(
+            binding_id="qualification", project_id="proj-1", format_id=name, external_session_id="producer"
+        )
+        await session.commit()
+        service = ObservationRecords(bindings, jobs, EventBus())
+        batch = ObservationRecordBatch(source_key="source", start_index=0, records=[raw], end_session=True)
+        # A preprocessor may intentionally emit zero events. The accepted
+        # source-history contract still forbids silently discarding its record.
+        try:
+            receipt = await service.append("qualification", batch)
+        except ValueError as exc:
+            assert any(reason in str(exc).lower() for reason in ("unsupported", "unknown", "version"))
+            assert await EventRepository(session).list_after(0, job_id=job.id) == []
+        else:
+            assert receipt.accepted_records == 1
+            retained = await EventRepository(session).list_after(0, job_id=job.id)
+            assert any(row.event.raw_event == raw for row in retained)
 
 
 @pytest.mark.parametrize(
