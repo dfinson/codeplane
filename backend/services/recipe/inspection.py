@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from backend.models.domain import StateConflictError
 from backend.models.schemas.recipes import (
     RecipeAttemptInspection,
+    RecipeConsumedInputPage,
     RecipeCurrentRunResponse,
     RecipeGateInspection,
     RecipeOutputBinding,
@@ -146,4 +147,15 @@ class RecipeInspectionService:
                 notes=approval.notes,
                 resolved_at=approval.resolved_at,
             )
-        return RecipeAttemptInspection(attempt=attempt, gate=gate)
+        return RecipeAttemptInspection(
+            attempt=attempt, gate=gate, consumed_by=await self._runs.consumed_by(run_id, attempt_id)
+        )
+
+    async def consumed_by(
+        self, job_id: str, run_id: str, step_id: str, attempt_id: str, *, after: str, limit: int
+    ) -> RecipeConsumedInputPage:
+        await self._step(job_id, run_id, step_id)
+        attempt = await self._runs.get_attempt(attempt_id)
+        if attempt is None or attempt.step_instance_id != step_id:
+            raise RecipeNotFoundError("The selected attempt does not belong to this step.")
+        return await self._runs.consumed_by(run_id, attempt_id, after=after, limit=limit)
