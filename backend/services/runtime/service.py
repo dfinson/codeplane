@@ -103,6 +103,7 @@ if TYPE_CHECKING:
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+    from backend.services.recipe.executor import RecipeExecutor
     from backend.services.runtime.execution_contracts import ExecutionContracts
     from backend.services.sidecar.dispatcher import SidecarDispatcher
     from backend.services.steps.tracker import StepTracker
@@ -320,6 +321,7 @@ class RuntimeService:
         self._governance_decider: GovernanceDecider | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._recipe_controllers: dict[str, RecipeExecutor] = {}
         self._recipe_runner_slots = asyncio.Semaphore(config.runtime.max_concurrent_jobs)
         self._legacy_runner_slots: set[str] = set()
         self._queued_session_tokens: dict[str, str] = {}
@@ -918,12 +920,18 @@ class RuntimeService:
                 try:
                     if job.id not in self._recipe_contract_pins:
                         raise StateConflictError("Recipe execution has no prepared admission contract.")
-                    await RecipeExecutor(
+                    controller = RecipeExecutor(
                         self,
                         job,
                         config,
                         contract_pin=self._recipe_contract_pins[job.id],
-                    ).execute()
+                    )
+                    self._recipe_controllers[job_id] = controller
+                    try:
+                        await controller.execute()
+                    finally:
+                        if self._recipe_controllers.get(job_id) is controller:
+                            self._recipe_controllers.pop(job_id, None)
                 except Exception as exc:
                     log.error("recipe_execution_failed", job_id=job_id, exc_info=True)
                     await self._fail_job(job_id, str(exc))
@@ -2508,6 +2516,32 @@ class RuntimeService:
                 if job.source == JobSource.managed
                 else job.external_session_id
             )
+            recipe_run_id = None
+            recipe_revision = None
+            step_instance_id = None
+            execution_epoch = self._execution_epoch
+            if attempt_id is not None:
+                from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+                async with self._session_factory() as session:
+                    repository = RecipeRunRepository(session)
+                    attempt = await repository.get_attempt(attempt_id)
+                    if attempt is not None:
+                        step = await repository.get_step(attempt.step_instance_id)
+                        run = await repository.get(step.run_id) if step else None
+                        if (
+                            step is None
+                            or run is None
+                            or run.job_id != job_id
+                            or step.current_attempt_id != attempt_id
+                            or attempt.result is not None
+                            or run.resolved_at is not None
+                            or run.cancel_requested_at is not None
+                        ):
+                            return CurrentExecutionDispatchResult(job_id, token, "conflict", "attempt_scope_changed")
+                        recipe_run_id = run.id
+                        recipe_revision = run.snapshot.revision
+                        step_instance_id = step.id
             try:
                 IntegrationPolicy(self._config).require_enabled(binding.sdk if binding is not None else job.sdk)
                 async with asyncio.timeout(30):
@@ -2553,7 +2587,10 @@ class RuntimeService:
                 source_framework="codeplane",
                 namespace=("control", "admission-receipt"),
                 attempt_id=attempt_id,
-                execution_epoch=self._execution_epoch,
+                recipe_run_id=recipe_run_id,
+                recipe_revision=recipe_revision,
+                step_instance_id=step_instance_id,
+                execution_epoch=execution_epoch,
                 execution_token=expected_execution,
                 run_id=target_session_id,
             ),

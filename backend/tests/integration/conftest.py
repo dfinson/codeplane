@@ -212,6 +212,7 @@ async def app(
         projects,
         recipe_runs,
         recipes,
+        reviews,
         settings,
         share,
         terminal,
@@ -243,6 +244,7 @@ async def app(
     application.include_router(tracker_links.router, prefix="/api")
     application.include_router(recipes.router, prefix="/api")
     application.include_router(recipe_runs.router, prefix="/api")
+    application.include_router(reviews.router, prefix="/api")
 
     config = _test_config()
     tracker_write_service = TrackerWriteService(

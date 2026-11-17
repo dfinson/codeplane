@@ -44,6 +44,7 @@ from backend.api import (
     projects,
     recipe_runs,
     recipes,
+    reviews,
     settings,
     share,
     sidecar_templates,
@@ -234,6 +235,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(tracker_links.router, prefix="/api")
     app.include_router(recipes.router, prefix="/api")
     app.include_router(recipe_runs.router, prefix="/api")
+    app.include_router(reviews.router, prefix="/api")
 
 
 def _register_domain_exception_handlers(app: FastAPI) -> None:

@@ -344,7 +344,8 @@ try:
         """Count tokens using tiktoken (accurate for OpenAI and Claude models)."""
         return len(_tok_enc.encode(text))
 
-except ImportError:
+except (ImportError, OSError) as exc:
+    log.warning("story_tokenizer_unavailable", error=str(exc), fallback="character_estimate")
 
     def _estimate_tokens(text: str) -> int:
         """Fallback: rough token count (~4 chars/token)."""

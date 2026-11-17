@@ -9,8 +9,10 @@ from backend.models.schemas.recipes import (
     RecipeAttemptInspection,
     RecipeCurrentRunResponse,
     RecipeGateInspection,
+    RecipeOutputBinding,
     RecipeStepInspection,
     RecipeStepListResponse,
+    RecipeStepRelation,
 )
 from backend.services.recipe.definition_service import RecipeNotFoundError
 
@@ -63,7 +65,64 @@ class RecipeInspectionService:
 
     async def step(self, job_id: str, run_id: str, step_id: str) -> RecipeStepInspection:
         step = await self._step(job_id, run_id, step_id)
-        return RecipeStepInspection(step=step, attempts=await self._runs.list_attempt_summaries(step.id))
+        run = await self.run(job_id, run_id)
+        definition = run.snapshot.definition
+        prefix = ""
+        for component in step.step_path.split("/")[:-1]:
+            caller_name, separator, number = component.rpartition("@")
+            caller = next((node for node in definition.steps if node.id == caller_name), None)
+            instance = await self._runs.get_step_by_path(run.id, prefix + caller_name)
+            if (
+                not separator
+                or not number.isdecimal()
+                or caller is None
+                or instance is None
+                or caller.runner.kind != "block"
+                or not any(
+                    attempt.number == int(number) for attempt in await self._runs.list_attempt_summaries(instance.id)
+                )
+            ):
+                raise StateConflictError("The historical block scope has no exact retained invocation.")
+            block = run.snapshot.blocks.get(caller.runner.revision_id)
+            if block is None:
+                raise StateConflictError("The historical block revision is missing from the pinned run.")
+            definition = block.definition
+            prefix += component + "/"
+        siblings = await self._runs.list_scope(run.id, prefix.rstrip("/"), definition)
+        predecessors = []
+        consumers = []
+        for node in definition.steps:
+            peer = siblings.get(node.id)
+            required = next((dep.outcomes for dep in step.definition.depends_on if dep.step_id == node.id), [])
+            received = [
+                name
+                for name, port in step.definition.inputs.items()
+                if isinstance(port.binding, RecipeOutputBinding) and port.binding.step_id == node.id
+            ]
+            consumes = [
+                name
+                for name, port in node.inputs.items()
+                if isinstance(port.binding, RecipeOutputBinding) and port.binding.step_id == step.definition.id
+            ]
+            relation = RecipeStepRelation(
+                step_id=peer.id if peer else None,
+                step_path=prefix + node.id,
+                title=node.title,
+                state=peer.state if peer else None,
+                attempt_id=peer.current_attempt_id if peer else None,
+                required_outcomes=required,
+                input_names=received,
+            )
+            if required or received:
+                predecessors.append(relation)
+            if consumes:
+                consumers.append(relation.model_copy(update={"input_names": consumes, "required_outcomes": []}))
+        return RecipeStepInspection(
+            step=step,
+            attempts=await self._runs.list_attempt_summaries(step.id),
+            predecessors=predecessors,
+            consumers=consumers,
+        )
 
     async def attempt(self, job_id: str, run_id: str, step_id: str, attempt_id: str) -> RecipeAttemptInspection:
         await self._step(job_id, run_id, step_id)

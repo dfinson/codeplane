@@ -122,8 +122,8 @@ describe("RecipeDefinitionEditor", () => {
     );
     expect(publishRecipe).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /^Verify / }));
-    expect(screen.getByLabelText("Command arguments")).toHaveValue(
+    fireEvent.click(await screen.findByRole("button", { name: /^Verify / }));
+    expect(await screen.findByLabelText("Command arguments")).toHaveValue(
       JSON.stringify(
         ["git", "show", "--check", { input: "code", field: "commit" }],
         null,

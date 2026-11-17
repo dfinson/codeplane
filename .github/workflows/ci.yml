@@ -2,17 +2,23 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_recipe_qualification:
+        description: Run only the two native Windows recipe process-tree cases
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}${{ inputs.windows_recipe_qualification && '-windows-recipe' || '' }}
+  cancel-in-progress: ${{ !inputs.windows_recipe_qualification }}
 
 jobs:
   backend:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_recipe_qualification
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -52,6 +58,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   frontend:
+    if: github.event_name != 'workflow_dispatch' || !inputs.windows_recipe_qualification
     name: Frontend
     runs-on: ubuntu-latest
     defaults:
@@ -137,4 +144,45 @@ jobs:
         with:
           name: playwright-report
           path: frontend/playwright-report/
+          retention-days: 14
+
+  windows-recipe-qualification:
+    name: Native Windows recipe containment
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_recipe_qualification
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CODEPLANE_HOME: ${{ runner.temp }}/codeplane-recipe-qualification
+      UV_CONCURRENT_DOWNLOADS: "2"
+      UV_CONCURRENT_BUILDS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          python-version: "3.12"
+      - name: Record exact source revision
+        shell: pwsh
+        run: |
+          $revision = git rev-parse HEAD
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Native Windows recipe qualification: $revision"
+          uv --version
+      - name: Run real owned-process tests serially
+        shell: pwsh
+        run: |
+          uv sync --no-default-groups --no-install-project
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -q backend/tests/unit/test_recipe_windows_process.py -k native_windows_child --junitxml=recipe-windows-results.xml --tb=short
+      - name: Require both native cases without skips
+        run: >-
+          uv run --no-project python -c
+          "from xml.etree import ElementTree as E; cases=E.parse('recipe-windows-results.xml').findall('.//testcase'); assert len(cases)==2, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases); print('Both native active/exited leader cases passed without skips.')"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recipe-windows-native-${{ github.sha }}
+          path: recipe-windows-results.xml
+          if-no-files-found: warn
           retention-days: 14

@@ -1,16 +1,24 @@
 """Bounded Job-owned recipe inspection. GET requests never start runners."""
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from backend.models.api_schemas import (
+    RecipeAttemptControl,
     RecipeAttemptInspection,
+    RecipeAttemptResumeRequest,
     RecipeCurrentRunResponse,
+    RecipeMessageReceipt,
+    RecipeMessageRequest,
+    RecipeOperationReceipt,
+    RecipeReconcileRequest,
     RecipeRunListResponse,
     RecipeRunResponse,
     RecipeStepInspection,
     RecipeStepListResponse,
+    RecipeStopRequest,
 )
+from backend.services.recipe.control import RecipeControlService
 from backend.services.recipe.inspection import RecipeInspectionService
 
 router = APIRouter(
@@ -72,3 +80,73 @@ async def inspect_attempt(
     service: FromDishka[RecipeInspectionService],
 ) -> RecipeAttemptInspection:
     return await service.attempt(job_id, run_id, step_id, attempt_id)
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/control",
+    response_model=RecipeAttemptControl,
+)
+async def attempt_control(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    service: FromDishka[RecipeControlService],
+) -> RecipeAttemptControl:
+    return await service.context(job_id, run_id, step_id, attempt_id)
+
+
+@router.post(
+    "/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/messages",
+    response_model=RecipeMessageReceipt,
+    responses={409: {"model": RecipeMessageReceipt}},
+)
+async def message_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeMessageRequest,
+    response: Response,
+    service: FromDishka[RecipeControlService],
+) -> RecipeMessageReceipt:
+    receipt = await service.message(job_id, run_id, step_id, attempt_id, body)
+    if receipt.status == "conflict":
+        response.status_code = 409
+    return receipt
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/stop", response_model=RecipeOperationReceipt)
+async def stop_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeStopRequest,
+    service: FromDishka[RecipeControlService],
+) -> RecipeOperationReceipt:
+    return await service.stop(job_id, run_id, step_id, attempt_id, body.expected_token)
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/resume", response_model=RecipeOperationReceipt)
+async def resume_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeAttemptResumeRequest,
+    service: FromDishka[RecipeControlService],
+) -> RecipeOperationReceipt:
+    return await service.resume(job_id, run_id, step_id, attempt_id, body.expected_version)
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/reconcile", response_model=RecipeOperationReceipt)
+async def reconcile_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeReconcileRequest,
+    service: FromDishka[RecipeControlService],
+) -> RecipeOperationReceipt:
+    return await service.reconcile(job_id, run_id, step_id, attempt_id, body)

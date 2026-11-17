@@ -306,6 +306,40 @@ async def test_agent_persists_real_handle_before_send_and_keeps_reported_model(s
     assert completed == 1 and progress.actual_models == ["reported-model"] and not mismatch
 
 
+@pytest.mark.parametrize("final_response", [None, "The verified final brief"])
+async def test_tool_commentary_cannot_satisfy_a_plain_string_output(sessions, final_response):
+    run, instance, attempt, adapter, _, make_runtime, emit = await agent_context(sessions)
+
+    async def stream(_session_id):
+        yield emit("message.assistant", {"content": "I will inspect the source", "has_tool_requests": True})
+        yield emit("tool.call.started", {"tool_call_id": "read-1", "tool_name": "read"})
+        yield emit("tool.call.completed", {"tool_call_id": "read-1", "success": True})
+        if final_response is not None:
+            yield emit("message.assistant", {"content": final_response, "has_tool_requests": False})
+
+    adapter.stream_events = stream
+    host = make_runtime()
+    pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+    result, outputs = await AgentStepRunner(host).run(
+        run,
+        instance,
+        attempt,
+        SessionConfig(workspace_path="/repo/snapshot", prompt="Read"),
+        contract_pin=pin,
+    )
+    assert result.outcome == ("succeeded" if final_response else "failed")
+    assert outputs == ({"result": final_response} if final_response else {})
+    async with sessions() as session:
+        receipt = await session.scalar(select(EventRow).where(EventRow.kind == "recipe.execution.completed"))
+        payload = json.loads(receipt.payload)
+        payload.pop("result_text")
+        payload.pop("final_response_qualified")
+        receipt.payload = json.dumps(payload)
+        await session.commit()
+        qualified, text = await RecipeRunRepository(session).completed_execution_text(attempt.id)
+    assert qualified and text == final_response
+
+
 @pytest.mark.parametrize("case", ["creation", "delivery_unknown", "bad_outputs"])
 async def test_failed_or_unconfirmed_agent_work_is_not_success(sessions, case):
     run, instance, attempt, adapter, _, make_runtime, emit = await agent_context(sessions)

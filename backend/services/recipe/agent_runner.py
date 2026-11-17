@@ -276,7 +276,9 @@ class AgentStepRunner:
                             )
                         if event.kind == EventKind.message_assistant:
                             content = event.payload.get("content")
-                            if isinstance(content, str):
+                            if event.payload.get("has_tool_requests") or event.payload.get("tool_requests"):
+                                text = None
+                            elif isinstance(content, str) and not pending_tools:
                                 text = content
                         elif event.kind == EventKind.job_failed:
                             error = str(event.payload.get("message") or event.payload.get("reason") or "Agent failed.")
@@ -294,8 +296,10 @@ class AgentStepRunner:
                             break
                         identity = str(event.payload.get("tool_call_id") or event.metadata.correlation_id or event.id)
                         if event.kind == EventKind.tool_call_started:
+                            text = None
                             pending_tools.add(identity)
                         elif event.kind in {EventKind.tool_call_completed, "tool.call.failed"}:
+                            text = None
                             pending_tools.discard(identity)
                     current_context = await self._host.get_current_execution_context(run.job_id, attempt_id=attempt.id)
                     if current_context.execution_token != token:

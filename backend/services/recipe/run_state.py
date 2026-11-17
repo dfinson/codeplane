@@ -145,6 +145,8 @@ def completed_run_state(
             route = completed_route(step, attempt)
             if route and route.terminal:
                 terminals.add(route.terminal)
+            elif instances[step.id].state == "canceled":
+                terminals.add("canceled")
     if "failed" in terminals:
         return "failed"
     if "canceled" in terminals:

@@ -213,6 +213,44 @@ only for the selected attempt. Active step pages are live cursor projections,
 not a claim of a frozen historical snapshot. Resolved run history retains its
 recorded definitions, outcomes and gate receipts after a successor is admitted.
 
+Selected-attempt `/control` reads describe the actual owned message channel and
+its disabled reason, not a model's presumed capabilities. `/messages` requires
+the expected execution token and checks current Job/run/step/attempt ownership
+again before dispatch. It never uses the Job's primary session as a fallback.
+Conflict, failed and uncertain delivery remain distinct; accepted means a
+durable admission receipt, not observed execution. Read refreshes do not resend,
+resume or clear gates. Receipts capture the original canonical recipe scope,
+native session and execution fence before provider awaits.
+
+Selected stop targets the exact owned runner task, not the Job or sibling
+attempts. A safe read-only/no-dispatch stop requires explicit attempt Resume.
+Uncertain command or writer effects retain ownership until an operator records
+stopped-effect reconciliation with the exact current code and rationale.
+Reconciliation does not mutate prior results, manufacture success, or grant a
+retry. Whole-Job cancellation remains a separate action.
+
+The shared inspector lists pinned predecessor outcomes and declared consumers
+within the exact block invocation. Deep links carry run, step and optional
+attempt identities. Declared consumer bindings are not represented as proof
+that a selected historical attempt's output was consumed.
+
+`POST /api/jobs/{jobId}/reviews/prepare` seals the explicitly selected attempt
+and event evidence plus an exact current-code snapshot without executing work.
+Selection is bounded to 20 attempts and 100 canonical events. Structured
+snapshot metadata is limited to 1 MiB and copied artifact evidence to 256 MiB.
+Copies are checksummed before short metadata writes; original mutable artifact
+IDs alone are not review evidence. Captures follow ordinary artifact retention,
+while the recorded event keeps the selected structured evidence and checksums.
+
+`POST /api/jobs/{jobId}/reviews` records rationale with a stable request key,
+snapshot identity and checksum after revalidating Job/run versions, code and
+selected evidence. It is an append-only `review.recorded` event, not an
+accept/reject state machine, agent message, approval, merge or tracker command.
+Legacy Jobs have no fabricated recipe correlation. Review history uses bounded
+storage cursors and a frozen high-water mark, not a reconstruction of unsaved
+Story annotations. Changes and Story remain central, with the selected
+generation, command, result and delivery evidence alongside them.
+
 `POST /api/jobs/{jobId}/resume` accepts `expectedRunId` and `startRequestKey`
 for an exact continuation receipt, with an optional explicit replacement
 `recipe` selection. Replaying the same request cannot start a third run or
@@ -269,6 +307,20 @@ cannot clear a new draft, change the selected Chat, or navigate a newer view.
 Late clone/init results retain repository files and report registration
 cleanup separately. Chat drafts remain scoped to their conversation, and
 retrying a failed conversation read never resends a Chat or Job command.
+
+Project Boards read persisted Project ownership rather than the browser's Job
+page or a Project's current repository list. The four projected columns are
+Ready / blocked, In Progress, Needs a decision and Failed. A linked Task and Job
+share one work card; recipe steps are nested evidence, not extra work items.
+Full-scope totals name task, linked-Job, standalone-Job and approval units.
+Column, approval and tracker-delivery reads are bounded and paginated.
+Pending approvals remain visible on completed or archived Jobs. Tracker
+approval and delivery states remain distinct from code completion.
+
+Task inspection returns its full stored prompt or explicitly labeled historical
+source reference, predecessor delivery conditions and current Start eligibility
+from the shared execution service. Inspecting never creates a Job, worktree or
+approval. Start rechecks the same conditions rather than trusting a prior read.
 
 Verification results describe completed, failed or interrupted verification
 agent turns. Completion is not proof of test success or operator acceptance.

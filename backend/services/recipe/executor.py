@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import structlog
 
@@ -53,6 +55,14 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+@dataclass(frozen=True)
+class OwnedRecipeStep:
+    token: str
+    run_id: str
+    step_id: str
+    task: asyncio.Task[None]
+
+
 class RecipeExecutor:
     def __init__(
         self,
@@ -69,6 +79,24 @@ class RecipeExecutor:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._resumed_instances: set[str] = set()
         self._wake = asyncio.Event()
+        self._owned_attempts: dict[str, OwnedRecipeStep] = {}
+        self._stopping_attempts: set[str] = set()
+
+    def owned_attempt(self, attempt_id: str) -> OwnedRecipeStep | None:
+        owned = self._owned_attempts.get(attempt_id)
+        return owned if owned is not None and not owned.task.done() else None
+
+    def request_attempt_stop(self, attempt_id: str, expected_token: str) -> asyncio.Task[None]:
+        owned = self.owned_attempt(attempt_id)
+        if owned is None or owned.token != expected_token:
+            raise StateConflictError("The selected recipe execution changed before stop.")
+        self._stopping_attempts.add(attempt_id)
+        owned.task.cancel()
+        return owned.task
+
+    def wake_resumed(self, step_id: str) -> None:
+        self._resumed_instances.add(step_id)
+        self._wake.set()
 
     async def _changed(self, run_id: str, step_id: str | None = None) -> None:
         self._wake.set()
@@ -130,6 +158,17 @@ class RecipeExecutor:
                     await self._host._publish_state_event(self._job.id, previous, JobState.review)
             elif state == "failed":
                 await self._host._fail_job(self._job.id, run.reason or "The recipe's recorded outcome routes failed.")
+            elif state == "canceled":
+                async with serialized_write(self._host._session_factory) as session:
+                    service = self._host._make_job_service(session)
+                    job = await service.get_job(self._job.id)
+                    if job.state in {JobState.running, JobState.waiting_for_approval}:
+                        previous = job.state
+                        await service.transition_state(job.id, JobState.canceled)
+                    else:
+                        previous = None
+                if previous:
+                    await self._host._publish_state_event(self._job.id, previous, JobState.canceled)
         except asyncio.CancelledError:
             if not self._host._shutting_down:
                 async with serialized_write(self._host._session_factory) as session:
@@ -250,7 +289,7 @@ class RecipeExecutor:
                     continue
                 attempt = attempts.get(key)
                 if instance.state == "ready" or (
-                    instance.state in {"running", "needs_decision", "interrupted"} and attempt is not None
+                    instance.state in {"running", "needs_decision"} and attempt is not None
                 ):
                     task = asyncio.create_task(
                         self._step(run, instance, attempt, parent),
@@ -261,6 +300,9 @@ class RecipeExecutor:
                 instance.id: self._tasks[instance.id] for instance in instances.values() if instance.id in self._tasks
             }
             if not active:
+                if any(instance.state == "interrupted" for instance in instances.values()):
+                    await self._wake.wait()
+                    continue
                 raise StateConflictError("The recipe has no runnable node or recorded terminal outcome.")
             wake = asyncio.create_task(self._wake.wait())
             try:
@@ -380,6 +422,31 @@ class RecipeExecutor:
         instance: RecipeStepInstanceResponse,
         attempt: RecipeAttemptResponse,
     ) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            raise StateConflictError("A recipe runner requires an owned execution task.")
+        owned = OwnedRecipeStep(
+            token=f"{self._host.execution_epoch}:{uuid4().hex}",
+            run_id=run.id,
+            step_id=instance.id,
+            task=task,
+        )
+        self._stopping_attempts.discard(attempt.id)
+        self._owned_attempts[attempt.id] = owned
+        try:
+            await self._execute_claimed(run, instance, attempt)
+        finally:
+            if self._owned_attempts.get(attempt.id) is owned:
+                self._owned_attempts.pop(attempt.id, None)
+            self._stopping_attempts.discard(attempt.id)
+            self._wake.set()
+
+    async def _execute_claimed(
+        self,
+        run: RecipeRunResponse,
+        instance: RecipeStepInstanceResponse,
+        attempt: RecipeAttemptResponse,
+    ) -> None:
         runner_started = False
         try:
             async with self._host._session_factory() as session:
@@ -418,7 +485,7 @@ class RecipeExecutor:
             else:
                 result, outputs = await self._block(run, instance, attempt)
         except InterruptedAgentError as stopped:
-            if self._host._shutting_down:
+            if self._host._shutting_down or attempt.id in self._stopping_attempts:
                 async with serialized_write(self._host._session_factory) as session:
                     await RecipeRunRepository(session).interrupt_attempt(
                         attempt.id,
@@ -428,11 +495,36 @@ class RecipeExecutor:
                         execution_epoch=self._host.execution_epoch,
                         expected_execution=stopped.execution_token,
                         expected_instance_version=stopped.instance_version,
+                        operator_stop=attempt.id in self._stopping_attempts,
                     )
+                if attempt.id in self._stopping_attempts:
+                    await self._changed(run.id, instance.id)
+                    return
             else:
                 await self._cancel_claimed(run, instance, attempt, stopped.evidence)
             raise asyncio.CancelledError from None
         except asyncio.CancelledError:
+            if attempt.id in self._stopping_attempts:
+                async with serialized_write(self._host._session_factory) as session:
+                    repository = RecipeRunRepository(session)
+                    current = await repository.get_step(instance.id)
+                    retained = await repository.get_attempt(attempt.id)
+                    if current is None or retained is None:
+                        raise StateConflictError("Stopped attempt ownership is missing.") from None
+                    no_dispatch = not runner_started or (attempt.runner.kind == "agent" and not retained.executions)
+                    await repository.interrupt_attempt(
+                        attempt.id,
+                        "Selected attempt stopped before complete result capture.",
+                        stop_confirmed=no_dispatch,
+                        resume_safe=no_dispatch,
+                        execution_epoch=self._host.execution_epoch,
+                        expected_execution=retained.executions[-1].execution_token if retained.executions else None,
+                        expected_instance_version=current.version,
+                        dispatch_started=not no_dispatch,
+                        operator_stop=True,
+                    )
+                await self._changed(run.id, instance.id)
+                return
             if not self._host._shutting_down or not runner_started:
                 async with self._host._session_factory() as session:
                     current = await RecipeRunRepository(session).get_step(instance.id)
@@ -447,6 +539,11 @@ class RecipeExecutor:
         ):
             await self._cancel_claimed(run, instance, attempt)
             raise asyncio.CancelledError
+
+        if attempt.id in self._stopping_attempts and not getattr(result.evidence, "uncertain", False):
+            result = result.model_copy(
+                update={"outcome": "canceled", "reason": "Selected attempt stopped by the operator."}
+            )
 
         async def finish() -> None:
             async with serialized_write(self._host._session_factory) as session:

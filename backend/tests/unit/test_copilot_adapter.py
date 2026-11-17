@@ -508,7 +508,10 @@ class TestRuntimeContract:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "stop_error",
-        [OSError("stop failed"), ExceptionGroup("disconnect failures", [_fake_copilot_client_mod.StopError("detach failed")])],
+        [
+            OSError("stop failed"),
+            ExceptionGroup("disconnect failures", [_fake_copilot_client_mod.StopError("detach failed")]),
+        ],
     )
     async def test_any_sdk_stop_failure_attempts_force_stop(self, adapter: CopilotAdapter, stop_error) -> None:
         client, _ = self._client()
@@ -1754,7 +1757,7 @@ class TestComplete:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("excluded_tools", "sdk_exclusions"),
-        [(None, None), (["bash"], ["bash"]), (["*"], ["builtin:*", "mcp:*", "custom:*"])],
+        [(None, ["builtin:*", "mcp:*", "custom:*"]), (["bash"], ["bash"]), (["*"], ["builtin:*", "mcp:*", "custom:*"])],
     )
     async def test_collects_response(
         self, adapter: CopilotAdapter, excluded_tools: list[str] | None, sdk_exclusions: list[str] | None

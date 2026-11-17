@@ -378,7 +378,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         if not job_id:
             return
 
-        if is_scout:
+        if is_scout or is_attempt:
             texts = [block.text or "" for block in content_blocks if isinstance(block, TextBlock)]
             has_tool_requests = any(isinstance(block, ToolUseBlock) for block in content_blocks)
             if texts or has_tool_requests:
@@ -390,7 +390,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                 )
         for block in content_blocks:
             if isinstance(block, TextBlock):
-                if is_scout:
+                if is_scout or is_attempt:
                     continue
                 text = block.text or ""
                 if not text.strip():

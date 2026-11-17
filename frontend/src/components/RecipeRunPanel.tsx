@@ -6,11 +6,18 @@ import { Button } from "./ui/button";
 import { RecipeStepInspector } from "./RecipeStepInspector";
 import { cn } from "../lib/utils";
 
-export function RecipeRunPanel({ jobId }: { jobId: string }) {
-  return <JobRecipePanel key={jobId} jobId={jobId} />;
+interface RecipeRunTarget {
+  jobId: string;
+  requestedRunId?: string;
+  requestedStepId?: string;
+  requestedAttemptId?: string;
 }
 
-function JobRecipePanel({ jobId }: { jobId: string }) {
+export function RecipeRunPanel(props: RecipeRunTarget) {
+  return <JobRecipePanel key={JSON.stringify(props)} {...props} />;
+}
+
+function JobRecipePanel({ jobId, ...target }: RecipeRunTarget) {
   const run = useStore((state) => state.recipeCurrentRuns[jobId]);
   const version = useStore((state) => state.recipeVersions[jobId] ?? 0);
   const connection = useStore((state) => state.connectionStatus);
@@ -40,12 +47,12 @@ function JobRecipePanel({ jobId }: { jobId: string }) {
   if (run === null) return null;
   if (!run) return <p role="status" className="mx-3 mt-2 text-xs text-muted-foreground">Reading pinned recipe...</p>;
   return <section aria-label="Job recipe" className="min-w-0">
-    <RecipeRunBrowser jobId={jobId} current={run} />
+    <RecipeRunBrowser jobId={jobId} current={run} {...target} />
   </section>;
 }
 
-function RecipeRunBrowser({ jobId, current }: { jobId: string; current: RecipeRun }) {
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+function RecipeRunBrowser({ jobId, current, requestedRunId, requestedStepId, requestedAttemptId }: RecipeRunTarget & { current: RecipeRun }) {
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(requestedRunId ?? null);
   const [historyPage, setHistoryPage] = useState<{ after: number; highWater?: number }>({ after: 0 });
   const [refresh, setRefresh] = useState(0);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -103,14 +110,14 @@ function RecipeRunBrowser({ jobId, current }: { jobId: string; current: RecipeRu
       <p className="break-all text-xs text-muted-foreground">{selected.id} / snapshot {selected.snapshotChecksum}</p>
       {selected.id !== current.id && <p className="rounded-md border border-border bg-card p-3 text-sm">Historical run. Current instructions, approvals and completion are not inherited from this record.</p>}
       {selected.instruction && <p className="whitespace-pre-wrap text-sm">{selected.instruction}</p>}
-      <RunSteps key={selected.id} jobId={jobId} run={selected} />
+      <RunSteps key={selected.id} jobId={jobId} run={selected} initialStepId={(!requestedRunId || selected.id === requestedRunId) ? requestedStepId : undefined} initialAttemptId={(!requestedRunId || selected.id === requestedRunId) ? requestedAttemptId : undefined} />
     </> : null}
   </div>;
 }
 
-function RunSteps({ jobId, run }: { jobId: string; run: RecipeRun }) {
+function RunSteps({ jobId, run, initialStepId, initialAttemptId }: { jobId: string; run: RecipeRun; initialStepId?: string; initialAttemptId?: string }) {
   const [after, setAfter] = useState("");
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(initialStepId ?? null);
   const [refresh, setRefresh] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const key = JSON.stringify([jobId, run.id, after]);
@@ -141,6 +148,6 @@ function RunSteps({ jobId, run }: { jobId: string; run: RecipeRun }) {
         <Button size="sm" variant="outline" onClick={() => setRefresh((value) => value + 1)}>Refresh steps</Button>
       </div>
     </aside>
-    {stepId && <RecipeStepInspector jobId={jobId} runId={run.id} stepId={stepId} />}
+    {stepId && <RecipeStepInspector jobId={jobId} runId={run.id} stepId={stepId} initialAttemptId={stepId === initialStepId ? initialAttemptId : undefined} />}
   </div>;
 }

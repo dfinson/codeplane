@@ -341,11 +341,10 @@ class CopilotAdapter(BaseAgentAdapter):
             content = (am.content or "") if am else ""
             is_scout = self.get_session_kind(session_id) == "preflight"
             has_tool_requests = bool(getattr(am, "tool_requests", None))
-            if content.strip() or is_scout:
+            if content.strip() or is_scout or has_tool_requests:
                 title = getattr(am, "title", None) if am else None
                 payload: dict[str, Any] = {"content": content}
-                if is_scout:
-                    payload["has_tool_requests"] = has_tool_requests
+                payload["has_tool_requests"] = has_tool_requests
                 if title:
                     payload["title"] = title
                 self._emit_tf(session_id, job_id, EventKind.message_assistant, payload)
@@ -683,7 +682,7 @@ class CopilotAdapter(BaseAgentAdapter):
             return await self._handle_permission_request(request, invocation, config)
 
         async def _guard_invocation(
-            request: PreToolUseHookInput, invocation: PermissionInvocation
+            request: PreToolUseHookInput, invocation: dict[str, str]
         ) -> PreToolUseHookOutput | None:
             from backend.services.adapters.capability_guard import enforce_invocation_capabilities
             from backend.services.adapters.contracts import CapabilityDeniedError

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo, Suspense, Component, type ReactNode } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, PanelLeftClose } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
@@ -61,6 +61,7 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 
 export function JobDetailScreen() {
+  const [searchParams] = useSearchParams();
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const jobs = useStore(selectJobs);
@@ -648,7 +649,7 @@ export function JobDetailScreen() {
         {/* ── Content panel ── */}
         <div className="flex-1 min-w-0 md:flex md:flex-col md:overflow-hidden">
       <div className={cn("min-h-0 flex-1 overflow-auto pt-3", (tab !== "live" || recipeRun === null) && "hidden")}>
-        <RecipeRunPanel jobId={jobId} />
+        <RecipeRunPanel jobId={jobId} requestedRunId={searchParams.get("run") ?? undefined} requestedStepId={searchParams.get("step") ?? undefined} requestedAttemptId={searchParams.get("attempt") ?? undefined} />
       </div>
       {tab === "live" && recipeRun === null && (
         <div className="flex flex-row relative md:h-full md:min-h-0">

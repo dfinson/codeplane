@@ -30,6 +30,7 @@ vi.mock("../../api/client", () => ({
   fetchProject: vi.fn(),
   fetchProjectTaskLinks: vi.fn().mockResolvedValue({ items: [] }),
   fetchCurrentRecipeRun: vi.fn().mockResolvedValue({ run: null }),
+  fetchReviewHistory: vi.fn().mockResolvedValue({ items: [], nextCursor: null, highWater: 0 }),
 }));
 
 vi.mock("../../hooks/useSSE", () => ({
