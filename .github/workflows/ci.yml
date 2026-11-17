@@ -35,7 +35,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --extra legacy-traceforge
 
       - name: Lint
         run: uv run ruff check backend/
@@ -156,6 +156,7 @@ jobs:
     env:
       UV_CONCURRENT_DOWNLOADS: "2"
       UV_CONCURRENT_BUILDS: "1"
+      HATCH_BUILD_HOOKS_DISABLE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -172,7 +173,7 @@ jobs:
       - name: Run real owned-process tests serially
         shell: pwsh
         run: |
-          uv sync --no-default-groups --no-install-project
+          uv sync --no-default-groups
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -q backend/tests/unit/test_recipe_windows_process.py -k native_windows_child --junitxml=recipe-windows-results.xml --tb=short
       - name: Require both native cases without skips
