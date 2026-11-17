@@ -7,15 +7,15 @@
 # NOTE: v1.0+ moved to SDK Pydantic events with kind=ActionEvent /
 # ObservationEvent / MessageEvent / SystemPromptEvent. The preprocessor
 # synthesizes ActionEvent.<tool_name>, ObservationEvent.<tool_name>, and
-# MessageEvent.<source> discriminators for those rows.
+# MessageEvent.<source> in _event_type, preserving the native action object.
 #
 # CRITICAL: OpenHands uses a COMPOUND discriminator:
 #   - Action events have: {"action": "run", "args": {...}}
 #   - Observation events have: {"observation": "run", "content": "...", "extras": {...}}
 #
-# An OpenHandsPreProcessor synthesizes compound types:
-#   "action" key → type = action value (e.g. "run")
-#   "observation" key → type = "observation.<value>" (e.g. "observation.run")
+# An OpenHandsPreProcessor synthesizes _event_type:
+#   "action" key → action value (e.g. "run")
+#   "observation" key → "observation.<value>" (e.g. "observation.run")
 #
 # Serialization rules (event_to_dict):
 #   - TOP_KEYS hoisted: id, timestamp, source, message, cause, action/observation,
@@ -27,7 +27,7 @@
 framework: openhands
 framework_version: ">=0.30,<2.0"
 ingestion_mode: file_watch
-type_field: action
+type_field: _event_type
 timestamp_field: timestamp
 preprocessor: openhands
 
@@ -219,7 +219,7 @@ events:
       option: args.option
       source: source
 
-  # ── Observation events (preprocessor synthesizes action: "observation.<value>") ──
+  # ── Observation events (preprocessor synthesizes _event_type: "observation.<value>") ──
   observation.run:
     kind: command.completed
     payload:
