@@ -92,6 +92,10 @@ class AssessmentService:
         self._tasks: set[asyncio.Task[AssessmentResult]] = set()
         self._closed = False
 
+    @property
+    def active(self) -> bool:
+        return self._waiting > 0 or bool(self._tasks)
+
     async def assess(
         self,
         binding: ActionBinding,

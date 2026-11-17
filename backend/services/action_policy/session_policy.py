@@ -27,6 +27,7 @@ class PermissionInvocation:
     tool_call_id: str | None = None
     dialect: str | None = None
     tool_definition: str = ""
+    hard_gate: bool = False
 
 
 @runtime_checkable

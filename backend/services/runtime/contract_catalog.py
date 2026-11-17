@@ -86,8 +86,9 @@ def standalone_contract() -> ExecutionContract:
         ),
         grouping=_sources(ActivityProjection.version, "services/events/activity_projection.py"),
         title=_sources(
-            "cp-deterministic-title-v1",
+            "cp-title-v1",
             "services/events/activity_projection.py",
+            "services/events/title_refinement.py",
             "services/action_policy/credential_filter.py",
         ),
         grammars=tuple(

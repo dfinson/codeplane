@@ -122,7 +122,7 @@ class StandalonePolicyRouter:
             job_id=invocation.job_id,
             preset=selected_policy.preset,
             trusted_file_read=trusted_read,
-            hard_gate=bool(command) and is_hard_gated_command(command),
+            hard_gate=invocation.hard_gate or bool(command) and is_hard_gated_command(command),
             protected_write=protected and request.kind != "read",
             local_scope="external" if paths and not contained else None,
         )

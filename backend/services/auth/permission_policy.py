@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import PureWindowsPath
 
 import structlog
 
@@ -102,4 +103,30 @@ def is_hard_gated_command(command: str) -> bool:
     stripped = _strip_quoted_strings(command)
     return bool(
         _GIT_HARD_GATE_RE.search(stripped) or _GIT_RESET_HARD_RE.search(stripped) or _GIT_FORCE_PUSH_RE.search(stripped)
+    )
+
+
+def is_hard_gated_argv(argv: list[str]) -> bool:
+    """Evaluate native Git argv before model semantics, without shell reconstruction."""
+    if not argv or PureWindowsPath(argv[0]).name.lower() not in {"git", "git.exe"}:
+        return False
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        option = argv[index]
+        if option in {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}:
+            index += 2
+        elif "=" in option or option in {"--no-pager", "--paginate", "--bare", "--no-optional-locks"}:
+            index += 1
+        else:
+            return True
+    if index >= len(argv):
+        return False
+    operation = argv[index]
+    arguments = argv[index + 1 :]
+    return (
+        operation in {"merge", "pull", "rebase", "cherry-pick"}
+        or operation == "reset"
+        and "--hard" in arguments
+        or operation == "push"
+        and any(value == "-f" or value == "--force" or value.startswith("--force-with-lease") for value in arguments)
     )

@@ -19,6 +19,7 @@ from backend.services.action_policy.assessment import AssessmentService
 from backend.services.action_policy.audit import AuditIntegrityError, GovernanceAudit
 from backend.services.action_policy.authority import PolicyAuthority
 from backend.services.action_policy.standalone_router import StandalonePolicyRouter
+from backend.services.events.title_refinement import TitleRefinement
 from backend.services.runtime.contract_catalog import standalone_contract
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ class StandaloneGovernance:
         self._ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
         self._audit = GovernanceAudit(directory / "audit", self._ledger)
         self._assessments = AssessmentService()
+        self._titles = TitleRefinement(host, self._assessments)
         self._policy = AgtPolicy()
         self._delivery: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -53,6 +55,7 @@ class StandaloneGovernance:
             log.error("governance_audit_unavailable", reason=self.audit_error, exc_info=True)
         self._host.configure_execution_contracts(available={contract.id: contract}, selected_for_new=contract.id)
         self._host._event_bus.subscribe(self.observe)
+        self._titles.start()
         self._delivery = asyncio.create_task(self._deliver(), name="governance-audit-delivery")
 
     async def _deliver(self) -> None:
@@ -89,7 +92,55 @@ class StandaloneGovernance:
         if metadata.integration_binding_id is not None or not event.session_id or not metadata.execution_epoch:
             return
         try:
-            if event.kind in {EventKind.tool_call_completed, EventKind.tool_call_failed}:
+            if event.kind == "execution.command.result":
+                from backend.models.schemas.recipes import RecipeCommandResult
+
+                if metadata.source_framework != "codeplane.recipe" or not metadata.attempt_id:
+                    return
+                result = RecipeCommandResult.model_validate(event.payload["result"])
+                if result.started is False:
+                    return
+                if result.started is None or not metadata.execution_token:
+                    await self._ledger.record_uncertainty(
+                        event.session_id,
+                        metadata.execution_epoch,
+                        event.id,
+                        "command_execution_unconfirmed",
+                    )
+                    return
+                decision = await self._ledger.authorized_tool(
+                    event.session_id,
+                    metadata.execution_epoch,
+                    metadata.execution_token,
+                    metadata.execution_token,
+                )
+                if decision is None:
+                    await self._ledger.record_uncertainty(
+                        event.session_id,
+                        metadata.execution_epoch,
+                        event.id,
+                        "command_authorization_unreconciled",
+                    )
+                    return
+                if result.uncertain or not isinstance(decision.metadata.get("destructive"), bool):
+                    await self._ledger.record_uncertainty(
+                        event.session_id,
+                        metadata.execution_epoch,
+                        event.id,
+                        "command_effect_unresolved",
+                    )
+                await self._ledger.record_completion(
+                    job_id=event.session_id,
+                    epoch=metadata.execution_epoch,
+                    event_id=event.id,
+                    tool_call_id=metadata.attempt_id,
+                    source_id=f"recipe:{metadata.recipe_run_id}",
+                    action_digest=decision.action_digest,
+                    executed=True,
+                    succeeded=result.exit_status == 0,
+                    destructive=decision.metadata.get("destructive") is True,
+                )
+            elif event.kind in {EventKind.tool_call_completed, EventKind.tool_call_failed}:
                 # Failure severity alone is not proof that a native operation ran.
                 if event.kind == EventKind.tool_call_failed and event.payload.get("executed") is not True:
                     return
@@ -211,6 +262,7 @@ class StandaloneGovernance:
     async def close(self) -> None:
         self._stop.set()
         self._host._event_bus.unsubscribe(self.observe)
+        await self._titles.close()
         await self._assessments.shutdown()
         if self._delivery is not None:
             done, _ = await asyncio.wait({self._delivery}, timeout=2)

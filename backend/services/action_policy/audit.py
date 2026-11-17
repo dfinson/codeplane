@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import stat
+import sys
 from typing import TYPE_CHECKING
 
 from backend.persistence.governance_repo import AuditDecision, AuditHead, GovernanceLedger
@@ -36,11 +37,14 @@ class GovernanceAudit:
         await asyncio.to_thread(self._initialize)
 
     def _initialize(self) -> None:
-        if os.name == "nt":
-            raise AuditIntegrityError("Protected Windows audit-key storage is not qualified")
         self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = self._directory.stat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        if sys.platform == "win32":
+            from backend.services.action_policy.windows_audit import private_directory, reject_reparse
+
+            reject_reparse(self._directory)
+            private_directory(self._directory)
+        elif not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise AuditIntegrityError("Audit directory must be private to the service owner")
         if not (self._directory / "active-key").exists():
             key_id = self._new_key()
@@ -50,6 +54,9 @@ class GovernanceAudit:
         self._key(self._active_key())
 
     def _sync_directory(self) -> None:
+        if sys.platform == "win32":
+            # Each file is flushed with fsync; Windows does not expose POSIX directory fsync.
+            return
         descriptor = os.open(self._directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(descriptor)
@@ -57,7 +64,7 @@ class GovernanceAudit:
             os.close(descriptor)
 
     def _create(self, path: Path, data: bytes) -> None:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(data)
             stream.flush()
@@ -66,10 +73,16 @@ class GovernanceAudit:
 
     @staticmethod
     def _read(path: Path, limit: int) -> bytes:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        if sys.platform == "win32":
+            from backend.services.action_policy.windows_audit import reject_reparse
+
+            reject_reparse(path)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as stream:
             info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            if not stat.S_ISREG(info.st_mode) or (
+                sys.platform != "win32" and (info.st_uid != os.geteuid() or info.st_mode & 0o077)
+            ):
                 raise AuditIntegrityError("Audit files must be private regular files owned by the service")
             data = stream.read(limit + 1)
         if len(data) > limit:
@@ -78,7 +91,12 @@ class GovernanceAudit:
 
     def _new_key(self) -> str:
         key_id = secrets.token_hex(16)
-        self._create(self._directory / f"{key_id}.key", secrets.token_bytes(32))
+        key = secrets.token_bytes(32)
+        if sys.platform == "win32":
+            from backend.services.action_policy.windows_audit import protect
+
+            key = protect(key)
+        self._create(self._directory / f"{key_id}.key", key)
         return key_id
 
     def _active_key(self) -> str:
@@ -90,7 +108,11 @@ class GovernanceAudit:
     def _key(self, key_id: str) -> bytes:
         if _KEY_ID.fullmatch(key_id) is None:
             raise AuditIntegrityError("Invalid audit key identifier")
-        key = self._read(self._directory / f"{key_id}.key", 32)
+        key = self._read(self._directory / f"{key_id}.key", 4096 if sys.platform == "win32" else 32)
+        if sys.platform == "win32":
+            from backend.services.action_policy.windows_audit import protect
+
+            key = protect(key, decrypt=True)
         if len(key) != 32:
             raise AuditIntegrityError("Audit signing requires a 256-bit key")
         return key
@@ -156,7 +178,7 @@ class GovernanceAudit:
             if len(json.dumps(entry.model_dump(mode="json"), ensure_ascii=True).encode("utf-8")) > 60 * 1024:
                 raise AuditIntegrityError("Audit envelope exceeds its record bound")
             sink.write(entry)
-            descriptor = os.open(self._path(segment), os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(self._path(segment), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
                 os.fsync(descriptor)
             finally:

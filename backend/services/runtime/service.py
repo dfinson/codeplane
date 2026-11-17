@@ -2376,7 +2376,7 @@ class RuntimeService:
         from backend.persistence.recipe_run_repo import RecipeRunRepository
         from backend.services.action_policy.session_policy import PermissionInvocation
         from backend.services.action_policy.standalone_router import StandalonePolicyRouter
-        from backend.services.auth.permission_policy import PermissionRequest
+        from backend.services.auth.permission_policy import PermissionRequest, is_hard_gated_argv
 
         controller = self._recipe_controllers.get(job_id)
         owned = controller.owned_attempt(attempt_id) if controller else None
@@ -2454,10 +2454,26 @@ class RuntimeService:
                 is_current=current,
                 dialect=dialect,
                 tool_call_id=owned.token,
+                hard_gate=is_hard_gated_argv(argv),
             )
         )
         if not permitted or not await current():
             raise StateConflictError("The exact command invocation was not authorized")
+        from backend.persistence.database import serialized_write
+        from backend.persistence.event_repo import EventRepository
+
+        async with serialized_write(self._session_factory) as session:
+            await EventRepository(session).append(
+                new_event(
+                    job_id,
+                    "execution.command.authorized",
+                    {"argv": argv, "workspace": workspace, "attempt_id": attempt_id},
+                    event_id=f"command-authorized:{owned.token}",
+                    metadata=metadata,
+                )
+            )
+        if not await current():
+            raise StateConflictError("Command ownership changed before dispatch")
 
     @contextlib.asynccontextmanager
     async def open_attempt_execution(

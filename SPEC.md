@@ -412,10 +412,19 @@ session/attempt ownership and actual arguments into that authority. Optional
 voice model loading is deferred to an explicit voice request.
 
 This cutover is not full qualification: native-source compatibility paths,
-historical budget/trust reconciliation, bounded model-refined activity titles,
-optional export and complete interoperability/acceptance gates remain open.
-Deterministic activity labels and known native usage units are retained without
-claiming a model-refinement result or a native cost unit as verified USD.
+historical budget/trust reconciliation, optional export and complete
+interoperability/acceptance gates remain open. Deterministic activity labels
+remain authoritative fallbacks. Closed activities may receive one durably claimed
+text-only refinement, with one worker, queue 64, at most 12 bounded snippets,
+4 KiB input, 512-byte output and an 8-second deadline. Failed or interrupted
+claims are never retried during recovery.
+
+Direct command argv is checked for mandatory Git hard gates before assessment.
+Committed command results join the canonical replay cursor and accrue exactly
+once, including executed failures. A known non-start does not accrue; an unknown
+start/effect remains explicitly unaccountable. Windows audit keys use user-bound
+DPAPI encryption and a protected current-user/SYSTEM directory DACL. Native
+Windows qualification is a separate required gate, not inferred from Linux tests.
 
 `start_or_enqueue` admits or queues work without invoking sidecars. Startup is
 reserved before the first database await, then `_start_reserved_job` configures

@@ -1588,6 +1588,43 @@ class RecipeRunRepository(BaseRepository):
                 completed_at=result.completed_at,
             )
         )
+        if isinstance(result.evidence, RecipeCommandResult):
+            from backend.models.events import new_event
+            from backend.models.session_event import EventMetadata
+            from backend.persistence.event_repo import EventRepository
+
+            authorization = await self._session.scalar(
+                select(EventRow)
+                .where(
+                    EventRow.job_id == run.job_id,
+                    EventRow.kind == "execution.command.authorized",
+                    func.json_extract(EventRow.event_metadata, "$.attempt_id") == attempt_id,
+                )
+                .order_by(EventRow.id.desc())
+                .limit(1)
+            )
+            if authorization is not None:
+                context = EventMetadata.model_validate_json(authorization.event_metadata or "{}")
+                retained = json.loads(authorization.payload)
+                if (
+                    context.source_framework != "codeplane.recipe"
+                    or context.integration_binding_id is not None
+                    or context.recipe_run_id != run.id
+                    or context.step_instance_id != instance.id
+                    or retained.get("argv") != result.evidence.argv
+                    or retained.get("workspace") != result.evidence.workspace
+                ):
+                    raise StateConflictError("Command completion authorization differs from its owned invocation")
+                await EventRepository(self._session).append(
+                    new_event(
+                        run.job_id,
+                        "execution.command.result",
+                        {"attempt_id": attempt_id, "result": result.evidence.model_dump(mode="json")},
+                        event_id=f"command-result:{attempt_id}",
+                        metadata=context,
+                        timestamp=result.completed_at,
+                    )
+                )
         for name, value in outputs.items():
             if name not in expected or not value_matches(value, expected[name].type):
                 continue
