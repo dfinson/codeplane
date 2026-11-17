@@ -32,8 +32,17 @@ def kernel(monkeypatch):
 
 def test_bootstrap_enrolls_itself_before_dispatch_and_fails_closed(kernel, monkeypatch):
     order = []
-    kernel.AssignProcessToJobObject.side_effect = lambda *_args: order.append("enrolled") or True
-    dispatch = MagicMock(side_effect=lambda *_args, **_kwargs: order.append("dispatch") or 7)
+
+    def enroll(*_args):
+        order.append("enrolled")
+        return True
+
+    def dispatch_result(*_args, **_kwargs):
+        order.append("dispatch")
+        return 7
+
+    kernel.AssignProcessToJobObject.side_effect = enroll
+    dispatch = MagicMock(side_effect=dispatch_result)
     monkeypatch.setattr(subprocess, "call", dispatch)
     assert windows_process._run_enrolled(["owned-job", "program.exe", "argument with spaces"]) == 7
     assert order == ["enrolled", "dispatch"]

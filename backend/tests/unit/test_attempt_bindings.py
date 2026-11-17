@@ -6,7 +6,7 @@ import pytest
 
 from backend.config import CPLConfig
 from backend.models.domain import SessionConfig
-from backend.models.events import EventKind, new_event
+from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.action_policy.classifier import Preset, RepoPolicy
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.claude_adapter import ClaudeAdapter
@@ -105,7 +105,7 @@ async def test_runtime_pending_approval_blocks_attempt_dispatch_and_registration
 
 async def test_accepted_dispatch_is_a_receipt_not_a_second_operator_boundary(session_factory):
     runtime, _, _, _ = _runtime(session_factory)
-    received = []
+    received: list[SessionEvent] = []
     runtime._event_bus.subscribe(AsyncMock(side_effect=received.append))
     context = await runtime.get_current_execution_context("job-1")
     result = await runtime.dispatch_current_execution("job-1", context.execution_token, "Operator instruction")
@@ -120,7 +120,7 @@ async def test_accepted_dispatch_is_a_receipt_not_a_second_operator_boundary(ses
     assert receipt.metadata.namespace == ("control", "admission-receipt")
     assert "Operator instruction" not in runtime._echo_suppress.get("job-1", set())
     bus = EventBus()
-    output = []
+    output: list[SessionEvent] = []
     bus.subscribe(AsyncMock(side_effect=output.append))
     tracker, activities = StepTracker(bus), ActivityProjection(bus)
     titles = SimpleNamespace(push=AsyncMock())
@@ -371,7 +371,7 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
                 )
             return await callbacks["on_permission_request"](
                 SimpleNamespace(
-                    kind=SimpleNamespace(value="shell"),
+                    kind="shell",
                     tool_name="bash",
                     full_command_text=command,
                     file_name=None,
@@ -557,7 +557,7 @@ async def test_classification_keeps_original_scope_across_policy_wait_and_replac
     from backend.services.adapters.base_adapter import PermissionDecision
 
     events = EventBus()
-    observed = []
+    observed: list[SessionEvent] = []
     events.subscribe(AsyncMock(side_effect=observed.append))
     adapter, _, config = _scoped_permission_adapter(session_factory, event_bus=events)
     entered, release = asyncio.Event(), asyncio.Event()

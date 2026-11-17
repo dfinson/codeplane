@@ -30,7 +30,7 @@ def sidecars(runtime, phases):
 
 
 async def test_policy_precedes_all_sidecar_and_scout_startup(runtime, session_factory, config):
-    phases = []
+    phases: list[str] = []
     sidecars(runtime, phases)
     runtime._preflight_curator = object()
 

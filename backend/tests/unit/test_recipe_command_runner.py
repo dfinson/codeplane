@@ -611,7 +611,9 @@ async def test_pinned_block_runs_real_child_with_exact_invocation_parameters(ses
     assert inner_attempt.inputs["message"].value == "nested payload with spaces"
     assert inner_attempt.result.evidence.argv == ["printf", "nested payload with spaces"]
     assert outer_attempt.result.evidence.child_attempt_ids == [inner_attempt.id]
-    assert outer_attempt.outputs[0].value["stdout_preview"] == "nested payload with spaces"
+    command_receipt = outer_attempt.outputs[0].value
+    assert isinstance(command_receipt, dict)
+    assert command_receipt["stdout_preview"] == "nested payload with spaces"
     assert outer_attempt.executions == inner_attempt.executions == []
     router.route.assert_awaited_once()
 
