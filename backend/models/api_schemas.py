@@ -676,6 +676,7 @@ class ProjectDeliveryPage(CamelModel):
     items: list[TrackerOperationResponse]
     next_cursor: str | None
 
+
 class RepoSummaryResponse(CamelModel):
     """Aggregated overview for a single repo dashboard."""
 

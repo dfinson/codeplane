@@ -3,7 +3,6 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import * as api from "../../api/client";
-import type { CreateJobResponse } from "../../api/types";
 import { useStore } from "../../store";
 import { normalizeTFEvent } from "../../store/sseNormalize";
 import { CuratedFeed } from "../CuratedFeed";
@@ -86,7 +85,7 @@ it.each(["draft", "sending"])("does not apply a prior Job failure to the current
 });
 
 it.each([false, true])("does not navigate on a stale continuation response (returned to A: %s)", async (returnToA) => {
-  const continuation = pending<CreateJobResponse>();
+  const continuation = pending<Awaited<ReturnType<typeof api.continueJob>>>();
   vi.spyOn(api, "continueJob").mockReturnValue(continuation.promise);
   const view = render(feed("a", "completed"));
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow-up for A" } });
@@ -95,7 +94,7 @@ it.each([false, true])("does not navigate on a stale continuation response (retu
   if (returnToA) view.rerender(feed("a", "completed"));
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Current draft" } });
   await act(async () => continuation.resolve({
-    id: "followup-a", state: "queued", sdk: "copilot", createdAt: "2026-01-01T00:00:00Z",
+    id: "followup-a", state: "queued", branch: null, worktreePath: null, createdAt: "2026-01-01T00:00:00Z",
   }));
   expect(navigate).not.toHaveBeenCalled();
   expect(toast.success).not.toHaveBeenCalled();

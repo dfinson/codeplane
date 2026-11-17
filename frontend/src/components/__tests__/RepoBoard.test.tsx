@@ -39,6 +39,7 @@ function item(id: string, linked = false): ProjectBoardItem {
       id: "job-1", projectId: "project-1", repo: "/historical/repo", prompt: "Exact prompt",
       title: "Linked work", state: "review", baseRef: "main", worktreePath: null, branch: null,
       createdAt: now, updatedAt: now, completedAt: null, sdk: "copilot", source: "managed", mode: "standard",
+      observationOnly: false,
     } : null,
     recipe: linked ? {
       runId: "run-1", revision: 2, name: "Pinned recipe", state: "succeeded", reason: null,
