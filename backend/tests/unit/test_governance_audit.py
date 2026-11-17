@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 
 import pytest
 
@@ -57,6 +59,27 @@ async def test_crash_between_audit_append_and_database_ack_does_not_duplicate_de
     assert await recovered.deliver_one()
     assert len(recovered._entries(0)) == 2
     assert not await recovered.deliver_one()
+
+
+async def test_audit_flush_uses_write_capable_file_handles(tmp_path, monkeypatch):
+    real_fsync = os.fsync
+    flushed_files = []
+
+    def require_writable_fsync(descriptor):
+        if stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.write(descriptor, b"")
+            flushed_files.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", require_writable_fsync)
+    ledger, audit = await _services(tmp_path)
+    await _decision(ledger, "decision")
+    assert await audit.deliver_one()
+    assert flushed_files
+    recovered = GovernanceAudit(tmp_path / "audit", ledger)
+    await recovered.initialize()
+    assert not await recovered.deliver_one()
+    assert len(recovered._entries(0)) == 2
 
 
 async def test_key_rotation_retains_old_keys_and_links_new_segment(tmp_path):

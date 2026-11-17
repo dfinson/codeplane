@@ -178,7 +178,7 @@ class GovernanceAudit:
             if len(json.dumps(entry.model_dump(mode="json"), ensure_ascii=True).encode("utf-8")) > 60 * 1024:
                 raise AuditIntegrityError("Audit envelope exceeds its record bound")
             sink.write(entry)
-            descriptor = os.open(self._path(segment), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            descriptor = os.open(self._path(segment), os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
                 os.fsync(descriptor)
             finally:
