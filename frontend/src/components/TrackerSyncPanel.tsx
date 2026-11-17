@@ -347,7 +347,8 @@ function ProjectOperations({ projectRef }: { projectRef: string }) {
   );
 }
 
-function TrackerOperation({ operation }: { operation: TrackerOperationResponse }) {
+export function TrackerOperation({ operation: suppliedOperation }: { operation: TrackerOperationResponse }) {
+  const operation = useStore((state) => state.trackerOperations[suppliedOperation.id] ?? suppliedOperation);
   const [evidence, setEvidence] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

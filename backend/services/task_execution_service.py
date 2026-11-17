@@ -16,6 +16,7 @@ from weakref import WeakValueDictionary
 
 import structlog
 
+from backend.models.api_schemas import TaskDependencyStatus, TaskLinkInspectionResponse, TaskLinkResponse
 from backend.models.domain import (
     Approval,
     ApprovalResolution,
@@ -23,6 +24,7 @@ from backend.models.domain import (
     JobSpec,
     JobState,
     ProjectNotFoundError,
+    RepoNotAllowedError,
     StateConflictError,
     TaskLink,
     TaskLinkNotFoundError,
@@ -35,6 +37,7 @@ from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.persistence.task_link_repo import TaskLinkRepository
 from backend.persistence.tracker_link_repo import TrackerLinkRepository
+from backend.services.adapters.integration_policy import IntegrationPolicy
 from backend.services.job.job_service import JobService
 from backend.services.tracker_resolution import TrackerResolutionError
 from backend.services.tracker_write_service import TrackerWriteAction, TrackerWriteRequest
@@ -303,6 +306,80 @@ class TaskExecutionService:
                 return "skip", None
             return "gate", None
         return ("gate", None) if snapshot.gated else ("start", None)
+
+    async def inspect_task_link(self, project_id: str, task_id: str) -> TaskLinkInspectionResponse:
+        from backend.services.recipe.recipe_service import RecipeService
+
+        async with self._session_factory() as session:
+            snapshot = await self._snapshot(session, project_id, task_id)
+            membership_reason = None
+            if snapshot.task.job_id is None:
+                jobs = JobService.from_session(session, self._config, git_service=self._git)
+                resolved_repo = await jobs.validate_repo_async(snapshot.task.repo_path)
+                try:
+                    await jobs._resolve_job_project_id(resolved_repo, project_id)
+                except RepoNotAllowedError as exc:
+                    membership_reason = str(exc)
+        reason = membership_reason
+        can_start = False
+        if reason is not None:
+            pass
+        elif self._git is None:
+            reason = "GitService required for job creation"
+        elif task_id in self._gates_inflight:
+            reason = "A chain approval is being persisted."
+        else:
+            try:
+                decision, _ = self._decision(snapshot, mode="direct", parent_job_id=None, recovery=False)
+                can_start = decision == "start"
+            except StateConflictError as exc:
+                reason = str(exc)
+        if not can_start and reason is None:
+            reason = (
+                "This task already owns a Job. Open that Job instead."
+                if snapshot.task.job_id is not None
+                else "Predecessor delivery conditions are not satisfied or this task is already reserved."
+            )
+        by_key = {key: link for link in snapshot.links if (key := _key(link)) is not None}
+        dependencies = []
+        for key in snapshot.task.depends_on:
+            predecessor = by_key.get(key)
+            job = snapshot.jobs.get(predecessor.job_id) if predecessor and predecessor.job_id else None
+            dependencies.append(
+                TaskDependencyStatus(
+                    key=key,
+                    task_link_id=predecessor.id if predecessor else None,
+                    job_id=job.id if job else None,
+                    job_state=job.state if job else None,
+                    resolution=str(job.resolution) if job and job.resolution else None,
+                    satisfied=_successful(job),
+                )
+            )
+        spec = JobSpec(
+            repo=snapshot.task.repo_path, project_id=project_id, prompt=RecipeService._derive_prompt(snapshot.task)
+        )
+        return TaskLinkInspectionResponse(
+            task=TaskLinkResponse.model_validate(snapshot.task, from_attributes=True),
+            prompt=spec.prompt,
+            prompt_source="stored_override" if snapshot.task.prompt_override else "historical_reference",
+            dependencies=dependencies,
+            can_start=can_start,
+            disabled_reason=reason,
+            pending_approval_ids=[
+                approval.id
+                for approval in snapshot.approvals
+                if approval.resolution is None
+                and approval.job_id in snapshot.jobs
+                and (action := parse_spawn_action(approval.proposed_action)) is not None
+                and action["taskLinkId"] == task_id
+            ],
+            requires_chain_approval=snapshot.gated,
+            sdk=spec.sdk or IntegrationPolicy(self._config).default_sdk,
+            model=spec.model,
+            preset=spec.preset,
+            mode=spec.mode,
+            recipe_revision_id=spec.recipe.revision_id if spec.recipe else None,
+        )
 
     async def _run(
         self,

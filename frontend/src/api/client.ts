@@ -39,6 +39,12 @@ import type {
   ChatMessage,
   CreateChatRequest,
   TaskLinkListResponse,
+  TaskLinkInspection,
+  ProjectBoard,
+  ProjectBoardPage,
+  ProjectBoardColumn,
+  ProjectApprovalPage,
+  ProjectDeliveryPage,
   TrackerLinkListResponse,
   TrackerLinkResponse,
   TrackerSummaryResponse,
@@ -58,6 +64,28 @@ const BASE = "/api";
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
+
+export function fetchTaskLinkInspection(projectId: string, taskId: string): Promise<TaskLinkInspection> {
+  return request(`/settings/projects/${encodeURIComponent(projectId)}/task-links/${encodeURIComponent(taskId)}`);
+}
+
+export function fetchProjectBoard(projectId: string, signal?: AbortSignal): Promise<ProjectBoard> {
+  return request(`/settings/projects/${encodeURIComponent(projectId)}/board`, { signal });
+}
+
+export function fetchProjectBoardPage(
+  projectId: string, column: ProjectBoardColumn, after: string, signal?: AbortSignal,
+): Promise<ProjectBoardPage> {
+  return request(`/settings/projects/${encodeURIComponent(projectId)}/board/columns/${column}?${new URLSearchParams({ after })}`, { signal });
+}
+
+export function fetchProjectBoardApprovals(projectId: string, after = "", signal?: AbortSignal): Promise<ProjectApprovalPage> {
+  return request(`/settings/projects/${encodeURIComponent(projectId)}/board/approvals?${new URLSearchParams({ after })}`, { signal });
+}
+
+export function fetchProjectBoardDeliveries(projectId: string, after = "", signal?: AbortSignal): Promise<ProjectDeliveryPage> {
+  return request(`/settings/projects/${encodeURIComponent(projectId)}/board/deliveries?${new URLSearchParams({ after })}`, { signal });
+}
 
 function recipeRunPath(jobId: string, runId: string): string {
   return `/jobs/${encodeURIComponent(jobId)}/recipe/runs/${encodeURIComponent(runId)}`;

@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+import structlog
+from pydantic import ValidationError
+from sqlalchemy import func, select, update
 
-from backend.models.db import ApprovalRow
+from backend.models.db import (
+    ApprovalRow,
+    EventRow,
+    RecipeAttemptExecutionRow,
+    RecipeAttemptRow,
+    RecipeGateBindingRow,
+    RecipeRunRow,
+    RecipeStepInstanceRow,
+)
 from backend.models.domain import Approval, ApprovalResolution
+from backend.models.events import EventKind
+from backend.models.session_event import EventMetadata
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+log = structlog.get_logger()
 
 
 class ApprovalRepository(BaseRepository):
@@ -68,6 +83,117 @@ class ApprovalRepository(BaseRepository):
         stmt = stmt.order_by(ApprovalRow.requested_at)
         result = await self._session.execute(stmt)
         return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def has_blocking_approvals(self, job_id: str, *, attempt_id: str | None = None) -> bool:
+        """Exclude only positively attributed sibling gates; unknown scope blocks."""
+        pending = await self.list_pending(job_id)
+        if attempt_id is None:
+            return bool(pending)
+        if not pending:
+            return False
+        target = await self._session.scalar(
+            select(RecipeAttemptRow.id)
+            .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+            .join(RecipeRunRow, RecipeRunRow.id == RecipeStepInstanceRow.run_id)
+            .where(
+                RecipeAttemptRow.id == attempt_id,
+                RecipeStepInstanceRow.current_attempt_id == attempt_id,
+                RecipeRunRow.job_id == job_id,
+                RecipeRunRow.resolved_at.is_(None),
+            )
+        )
+        if target is None:
+            return True
+        for approval in pending:
+            owner = await self._attempt_owner(approval)
+            if owner is None or owner == attempt_id:
+                return True
+        return False
+
+    async def _attempt_owner(self, approval: Approval) -> str | None:
+        gate = await self._session.scalar(
+            select(RecipeGateBindingRow).where(RecipeGateBindingRow.approval_id == approval.id)
+        )
+        if gate is not None:
+            owner = await self._session.scalar(
+                select(RecipeAttemptRow.id)
+                .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+                .join(RecipeRunRow, RecipeRunRow.id == RecipeStepInstanceRow.run_id)
+                .where(
+                    RecipeAttemptRow.id == gate.attempt_id,
+                    RecipeStepInstanceRow.current_attempt_id == gate.attempt_id,
+                    RecipeRunRow.job_id == approval.job_id,
+                    RecipeRunRow.resolved_at.is_(None),
+                )
+            )
+            if owner is None:
+                log.warning("approval_gate_scope_conflict", approval_id=approval.id, job_id=approval.job_id)
+            return owner
+        # Proposed tool JSON is not authority to declare an approval's attempt.
+        result = await self._session.execute(
+            select(EventRow)
+            .where(
+                EventRow.job_id == approval.job_id,
+                EventRow.kind == EventKind.approval_requested.value,
+                func.json_extract(EventRow.payload, "$.approval_id") == approval.id,
+            )
+            .limit(2)
+        )
+        events = result.scalars().all()
+        if len(events) != 1:
+            if events:
+                log.warning("approval_event_scope_ambiguous", approval_id=approval.id, job_id=approval.job_id)
+            return None
+        try:
+            metadata = EventMetadata.model_validate_json(events[0].event_metadata or "{}")
+        except ValidationError:
+            log.warning("approval_event_scope_invalid", approval_id=approval.id, job_id=approval.job_id)
+            return None
+        if (
+            metadata.integration_binding_id is not None
+            or bool(metadata.namespace)
+            or not metadata.attempt_id
+            or not metadata.step_instance_id
+            or not metadata.recipe_run_id
+            or not metadata.execution_epoch
+            or metadata.source_framework not in {"copilot", "claude", "codeplane.recipe"}
+            or json.loads(events[0].payload).get("proposed_action") != approval.proposed_action
+        ):
+            return None
+        attempt = await self._session.scalar(
+            select(RecipeAttemptRow)
+            .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+            .join(RecipeRunRow, RecipeRunRow.id == RecipeStepInstanceRow.run_id)
+            .where(
+                RecipeAttemptRow.id == metadata.attempt_id,
+                RecipeStepInstanceRow.id == metadata.step_instance_id,
+                RecipeStepInstanceRow.current_attempt_id == metadata.attempt_id,
+                RecipeRunRow.id == metadata.recipe_run_id,
+                RecipeRunRow.job_id == approval.job_id,
+                RecipeRunRow.resolved_at.is_(None),
+            )
+        )
+        if attempt is None:
+            log.warning("approval_event_owner_conflict", approval_id=approval.id, job_id=approval.job_id)
+            return None
+        if metadata.source_framework == "codeplane.recipe":
+            return attempt.id if json.loads(attempt.runner_json).get("kind") == "command" else None
+        execution = await self._session.scalar(
+            select(RecipeAttemptExecutionRow)
+            .where(RecipeAttemptExecutionRow.attempt_id == attempt.id)
+            .order_by(RecipeAttemptExecutionRow.sequence.desc())
+            .limit(1)
+        )
+        if (
+            execution is None
+            or not metadata.execution_token
+            or not metadata.run_id
+            or execution.execution_token != metadata.execution_token
+            or execution.session_id != metadata.run_id
+            or execution.provider != metadata.source_framework
+        ):
+            return None
+        return attempt.id
 
     async def resolve(
         self,

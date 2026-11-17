@@ -6,9 +6,9 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
-from backend.models.db import JobRow, ProjectRow, TaskLinkRow, TrackerLinkRow
+from backend.models.db import ApprovalRow, JobRow, ProjectRow, TaskLinkRow, TrackerLinkRow
 from backend.models.domain import Project, ProjectMembershipImpact
 from backend.persistence.repository import BaseRepository
 from backend.services.project.repo_membership import (
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     import builtins
 
 
-class RepoJobCounts:
-    """Job status bucket counts + last activity timestamp for one repo path.
+class ProjectJobCounts:
+    """Job status counts and last activity for one persisted Project owner.
 
     Bucket boundaries mirror the frontend classifier
     (``frontend/src/store/selectors.ts``): active = preparing/queued/running;
@@ -170,25 +170,33 @@ class ProjectRepository(BaseRepository):
             tracker_link_count=int(tracker_links or 0),
         )
 
-    async def job_counts_by_repo(self, repo_paths: builtins.list[str]) -> dict[str, RepoJobCounts]:
-        """Bucket job status counts + last-activity per repo path, in a single query.
-
-        Used by ``ProjectService.summary_all`` (Story 2.2 / CAP-2) to build the
-        batch Projects Overview summary without N sequential per-Project
-        queries. Repos with no jobs simply have no entry in the returned dict.
-        """
-        if not repo_paths:
+    async def job_counts_by_project(self, project_ids: builtins.list[str]) -> dict[str, ProjectJobCounts]:
+        """Count persisted owners, including pending decisions on archived Jobs."""
+        if not project_ids:
             return {}
-
-        stmt = select(JobRow.repo, JobRow.state, JobRow.resolution, JobRow.updated_at).where(
-            JobRow.repo.in_(repo_paths)
+        pending = exists(
+            select(ApprovalRow.id).where(
+                ApprovalRow.job_id == JobRow.id,
+                ApprovalRow.resolution.is_(None),
+            )
         )
+        stmt = select(
+            JobRow.project_id,
+            JobRow.state,
+            JobRow.resolution,
+            JobRow.updated_at,
+            JobRow.archived_at,
+            pending,
+        ).where(JobRow.project_id.in_(project_ids))
         result = await self._session.execute(stmt)
-
-        counts: dict[str, RepoJobCounts] = {}
-        for repo, state, resolution, updated_at in result.all():
-            bucket = counts.setdefault(repo, RepoJobCounts())
-            if state in ("preparing", "queued", "running"):
+        counts: dict[str, ProjectJobCounts] = {}
+        for project_id, state, resolution, updated_at, archived_at, has_pending in result.all():
+            bucket = counts.setdefault(project_id, ProjectJobCounts())
+            if has_pending:
+                bucket.awaiting += 1
+            elif archived_at is not None:
+                pass
+            elif state in ("preparing", "queued", "running"):
                 bucket.active += 1
             elif state in ("waiting_for_approval", "review") or (
                 state == "completed" and (not resolution or resolution == "unresolved")
