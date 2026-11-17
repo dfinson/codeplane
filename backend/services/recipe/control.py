@@ -6,11 +6,13 @@ import asyncio
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from backend.models.domain import StateConflictError
+from backend.models.domain import ApprovalResolution, StateConflictError
 from backend.models.events import EventKind, EventMetadata, new_event
 from backend.models.schemas.recipes import (
     RecipeAttemptControl,
     RecipeControlAction,
+    RecipeDecisionReceipt,
+    RecipeGateDecisionRequest,
     RecipeMessageReceipt,
     RecipeOperationReceipt,
     RecipeReconcileRequest,
@@ -19,6 +21,7 @@ from backend.persistence.database import serialized_write
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.services.adapters.integration_policy import IntegrationDisabledError, IntegrationPolicy
+from backend.services.recipe.validation import value_matches
 from backend.services.runtime.attempt_bindings import AttemptBindingConflictError
 
 if TYPE_CHECKING:
@@ -327,4 +330,58 @@ class RecipeControlService:
                 "Stopped effects reconciled. Original results remain immutable; "
                 "no success or retry approval was granted."
             ),
+        )
+
+    async def decide(
+        self, job_id: str, run_id: str, step_id: str, attempt_id: str, request: RecipeGateDecisionRequest
+    ) -> RecipeOperationReceipt:
+        host = self._runtime
+        async with host._execution_control.hold(job_id):
+            run = await self._inspection.run(job_id, run_id)
+            step = await self._inspection._step(job_id, run_id, step_id)
+            detail = await self._inspection.attempt(job_id, run_id, step_id, attempt_id)
+            attempt, gate = detail.attempt, detail.gate
+            job = await host._get_job(job_id)
+            if (
+                job is None
+                or job.state not in {"running", "waiting_for_approval"}
+                or run.resolved_at is not None
+                or run.cancel_requested_at is not None
+                or step.version != request.expected_version
+                or step.current_attempt_id != attempt_id
+                or step.state != "needs_decision"
+                or attempt.result is not None
+                or attempt.runner.kind != "human"
+                or request.decision not in attempt.runner.decisions
+                or gate is None
+                or gate.resolution is not None
+                or gate.binding.approval_id != request.approval_id
+                or gate.binding.input_checksum != request.input_checksum
+            ):
+                return RecipeOperationReceipt(
+                    attempt_id=attempt_id,
+                    status="conflict",
+                    reason="The exact gate proposal or decision target changed.",
+                )
+            if set(request.outputs) != set(step.definition.outputs) or any(
+                not value_matches(value, step.definition.outputs[name].type) for name, value in request.outputs.items()
+            ):
+                raise StateConflictError("Decision outputs must match the pinned output names and types.")
+            if host._approval_service is None:
+                raise StateConflictError("Canonical approval decisions are unavailable.")
+            receipt = RecipeDecisionReceipt(
+                attempt_id=attempt_id,
+                input_checksum=request.input_checksum,
+                outputs=request.outputs,
+                notes=request.notes,
+            )
+            await host._approval_service.resolve(
+                request.approval_id,
+                ApprovalResolution(request.decision),
+                notes=receipt.model_dump_json(),
+            )
+        return RecipeOperationReceipt(
+            attempt_id=attempt_id,
+            status="decided",
+            reason="The exact proposal decision was recorded. It does not approve any other attempt or delivery.",
         )

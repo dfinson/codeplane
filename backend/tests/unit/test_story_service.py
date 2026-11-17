@@ -381,8 +381,17 @@ class TestBuildReferencesDedup:
 
 class TestEstimateTokens:
     def test_basic_estimate(self):
+        from backend.services.story import service
+
         text = "a" * 400
-        assert _estimate_tokens(text) == 50
+        expected = 50 if service._tok_enc is not None else 100
+        assert _estimate_tokens(text) == expected
+
+    def test_unavailable_tokenizer_uses_character_estimate(self, monkeypatch):
+        from backend.services.story import service
+
+        monkeypatch.setattr(service, "_tok_enc", None)
+        assert _estimate_tokens("a" * 400) == 100
 
     def test_empty(self):
         assert _estimate_tokens("") == 0
