@@ -535,7 +535,7 @@ export function JobDetailScreen() {
   }
 
   const canCancel = ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
-  const canResume = job.state === "failed";
+  const canResume = job.state === "failed" && recipeRun === null;
   const isRunning = job.state === "running";
   const isPreparing = job.state === "preparing";
 
