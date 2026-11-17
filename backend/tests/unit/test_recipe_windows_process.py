@@ -139,7 +139,7 @@ def test_windows_job_records_positive_no_command_start_and_isolates_bootstrap(ke
     owner = windows_process.WindowsCommandJob()
     assert owner.active_processes() == 0 and owner.command_started is False
     launch = owner.launch_argv(["program.exe", "literal; argument"])
-    assert launch[:3] == [sys.executable, "-I", "-S"]
+    assert launch[:3] == [getattr(sys, "_base_executable", sys.executable), "-I", "-S"]
     assert launch[-3:] == [owner.name, "program.exe", "literal; argument"]
     owner.close()
 
@@ -155,18 +155,26 @@ async def test_native_windows_child_is_contained_after_exited_command_leader(tmp
         "p.write_text('started');\nwhile True:\n p.write_text(str(time.time())); time.sleep(.05)"
     )
     streams = "None" if active_leader else "subprocess.DEVNULL"
+    interpreter = getattr(sys, "_base_executable", sys.executable)
     leader = (
-        "import subprocess,sys; "
-        f"p=subprocess.Popen([sys.executable,'-I','-S','-c',{child!r}],"
-        f"stdin=subprocess.DEVNULL,stdout={streams},stderr={streams}); print(p.pid,flush=True)"
+        "import subprocess,sys,time,pathlib; "
+        f"p=subprocess.Popen([{interpreter!r},'-I','-S','-c',{child!r}],"
+        f"stdin=subprocess.DEVNULL,stdout={streams},stderr={streams}); "
+        f"heartbeat=pathlib.Path({str(heartbeat)!r}); "
+        "\nfor _ in range(100):\n"
+        " if heartbeat.exists(): break\n"
+        " if p.poll() is not None: raise RuntimeError('Child exited before readiness')\n"
+        " time.sleep(.02)\n"
+        "assert heartbeat.exists(), 'Child failed to become ready'\n"
+        "print(p.pid,flush=True)\n"
     )
     if active_leader:
-        leader += "; import time; time.sleep(60)"
+        leader += "time.sleep(60)"
     owner = windows_process.WindowsCommandJob()
     process = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *owner.launch_argv([sys.executable, "-I", "-S", "-c", leader]),
+            *owner.launch_argv([interpreter, "-I", "-S", "-c", leader]),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

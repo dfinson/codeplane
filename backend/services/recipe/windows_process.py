@@ -122,7 +122,10 @@ class WindowsCommandJob:
 
     def launch_argv(self, argv: list[str]) -> list[str]:
         # Isolated Python starts no site/custom startup code before self-enrollment.
-        return [sys.executable, "-I", "-S", str(Path(__file__).resolve()), self.name, *argv]
+        # A Windows venv launcher adds another process and its own descendant
+        # lifetime. Use the base interpreter for this stdlib-only bootstrap.
+        interpreter = getattr(sys, "_base_executable", sys.executable)
+        return [interpreter, "-I", "-S", str(Path(__file__).resolve()), self.name, *argv]
 
     def terminate(self) -> None:
         _require(self._kernel.TerminateJobObject(self._handle, 1), "TerminateJobObject")
