@@ -26,6 +26,7 @@ import type {
   RecipeMessageReceipt,
   RecipeOperationReceipt,
   RecipeReconcileRequest,
+  RecipeResumeResponse,
   ReviewPreparation,
   ReviewRecord,
   ReviewHistoryPage,
@@ -102,6 +103,12 @@ function recipeRunPath(jobId: string, runId: string): string {
 
 export function fetchCurrentRecipeRun(jobId: string): Promise<RecipeCurrentRun> {
   return request(`/jobs/${encodeURIComponent(jobId)}/recipe/current`);
+}
+
+export function resumeSelectedRecipeRun(jobId: string, expectedRunId: string, startRequestKey: string, instruction: string): Promise<RecipeResumeResponse> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/resume`, {
+    method: "POST", body: JSON.stringify({ expectedRunId, startRequestKey, instruction }),
+  });
 }
 
 export function prepareReview(jobId: string, selection: PrepareReviewRequest): Promise<ReviewPreparation> {

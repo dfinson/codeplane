@@ -69,7 +69,7 @@ export function ViewTabBar({
   const visibleTabs: ViewTabBarItem[] = items
     ? items.filter((item) => !item.hidden)
     : DEFAULT_TAB_ITEMS.filter((tab) => {
-        if (tab.id === "review") return hasChanges;
+        if (tab.id === "review") return hasChanges || hasRecipe;
         if (tab.id === "artifacts") return hasArtifacts;
         return true;
       }).map((tab) => ({

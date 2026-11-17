@@ -292,6 +292,8 @@ class ReviewService:
                     or current.version != snapshot.job_version
                     or (run.id if run else None) != snapshot.run_id
                     or (run.version if run else None) != snapshot.run_version
+                    or (run.revision_id if run else None) != snapshot.recipe_revision_id
+                    or (run.snapshot_checksum if run else None) != snapshot.recipe_snapshot_checksum
                 ):
                     raise StateConflictError("The Job or run changed after evidence capture.")
                 for selected_attempt in snapshot.attempts:

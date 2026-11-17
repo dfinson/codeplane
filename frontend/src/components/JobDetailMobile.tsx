@@ -233,7 +233,7 @@ export function MobileBottomNav({
       </button>}
       {[
         { id: "live", icon: Radio, label: hasRecipe ? "Run" : "Live" },
-        ...(hasChanges ? [{ id: "review", icon: ScanSearch, label: "Review" }] : []),
+        ...(hasChanges || hasRecipe ? [{ id: "review", icon: ScanSearch, label: "Review" }] : []),
         { id: "files", icon: FolderTree, label: "Files" },
       ].map(({ id, icon: Icon, label }) => (
         <button

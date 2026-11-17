@@ -8,13 +8,14 @@ vi.mock("../../api/client", () => ({
   fetchRecipeRun: vi.fn(),
   fetchRecipeRunHistory: vi.fn(),
   fetchRecipeRunSteps: vi.fn(),
+  resumeSelectedRecipeRun: vi.fn(),
   resumeJob: vi.fn(),
 }));
 vi.mock("../RecipeStepInspector", () => ({
   RecipeStepInspector: ({ runId, stepId }: { runId: string; stepId: string }) => <div>Selected {runId} / {stepId}</div>,
 }));
 
-import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob } from "../../api/client";
+import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob, resumeSelectedRecipeRun } from "../../api/client";
 import { RecipeRunPanel } from "../RecipeRunPanel";
 
 function run(number: number, jobId = "job"): RecipeRun {
@@ -93,5 +94,20 @@ it("never displays the current definition for a pending or failed historical sel
   expect(screen.getByRole("alert")).toHaveTextContent("Historical record unavailable");
   expect(screen.queryByText("View pinned definition")).not.toBeInTheDocument();
   expect(useStore.getState().recipeCurrentRuns.job?.id).toBe("job-run-2");
+  expect(resumeJob).not.toHaveBeenCalled();
+});
+
+it("retains the exact continuation request after an unconfirmed response", async () => {
+  vi.mocked(resumeSelectedRecipeRun).mockRejectedValue(new Error("Response lost"));
+  render(<RecipeRunPanel jobId="job" />);
+  const field = await screen.findByLabelText("Recipe continuation instruction");
+  fireEvent.change(field, { target: { value: "Continue from current code" } });
+  fireEvent.click(screen.getByText("Resume Job with new run"));
+  await screen.findByRole("alert");
+  const first = vi.mocked(resumeSelectedRecipeRun).mock.calls[0];
+  fireEvent.click(screen.getByText("Retry same Resume receipt"));
+  await waitFor(() => expect(resumeSelectedRecipeRun).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(resumeSelectedRecipeRun).mock.calls[1]).toEqual(first);
+  expect(first?.[1]).toBe("job-run-2");
   expect(resumeJob).not.toHaveBeenCalled();
 });

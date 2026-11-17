@@ -180,11 +180,11 @@ export function JobDetailScreen() {
   // ── Mobile swipe-to-switch-tab ──
   const mobileTabOrder = useMemo(() => {
     const tabs = ["live"];
-    if (hasChanges) tabs.push("review");
+    if (hasChanges || recipeRun) tabs.push("review");
     tabs.push("files", "metrics");
     tabs.push("artifacts");
     return tabs;
-  }, [hasChanges]);
+  }, [hasChanges, recipeRun]);
   const touchRef = useRef<{ x: number; y: number; t: number; el: EventTarget | null } | null>(null);
   const [slideDir, setSlideDir] = useState<"left" | "right" | null>(null);
 

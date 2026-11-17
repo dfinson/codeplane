@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps } from "../api/client";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeSelectedRecipeRun } from "../api/client";
 import type { RecipeRun } from "../api/types";
 import { useStore } from "../store";
 import { Button } from "./ui/button";
@@ -110,9 +110,52 @@ function RecipeRunBrowser({ jobId, current, requestedRunId, requestedStepId, req
       <p className="break-all text-xs text-muted-foreground">{selected.id} / snapshot {selected.snapshotChecksum}</p>
       {selected.id !== current.id && <p className="rounded-md border border-border bg-card p-3 text-sm">Historical run. Current instructions, approvals and completion are not inherited from this record.</p>}
       {selected.instruction && <p className="whitespace-pre-wrap text-sm">{selected.instruction}</p>}
-      <RunSteps key={selected.id} jobId={jobId} run={selected} initialStepId={(!requestedRunId || selected.id === requestedRunId) ? requestedStepId : undefined} initialAttemptId={(!requestedRunId || selected.id === requestedRunId) ? requestedAttemptId : undefined} />
+      {selected.id === current.id && selected.resolvedAt && <RecipeContinuation key={`continue:${selected.id}`} jobId={jobId} run={selected} />}
+      <RunSteps key={`steps:${selected.id}`} jobId={jobId} run={selected} initialStepId={(!requestedRunId || selected.id === requestedRunId) ? requestedStepId : undefined} initialAttemptId={(!requestedRunId || selected.id === requestedRunId) ? requestedAttemptId : undefined} />
     </> : null}
   </div>;
+}
+
+function RecipeContinuation({ jobId, run }: { jobId: string; run: RecipeRun }) {
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef<{ key: string; instruction: string } | null>(null);
+  const active = useRef(true);
+  const reserved = useRef(false);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  async function resume() {
+    if (!instruction.trim() || reserved.current) return;
+    reserved.current = true;
+    setBusy(true);
+    setError(null);
+    pending.current ??= { key: crypto.randomUUID(), instruction };
+    try {
+      const receipt = await resumeSelectedRecipeRun(jobId, run.id, pending.current.key, pending.current.instruction);
+      if (!active.current) return;
+      if (receipt.recipeRun.jobId !== jobId || receipt.recipeRun.continuationOfId !== run.id) throw new Error("Resume returned a different run identity.");
+      useStore.setState((state) => ({
+        recipeCurrentRuns: { ...state.recipeCurrentRuns, [jobId]: receipt.recipeRun },
+        recipeRuns: { ...state.recipeRuns, [receipt.recipeRun.id]: receipt.recipeRun },
+        recipeVersions: { ...state.recipeVersions, [jobId]: (state.recipeVersions[jobId] ?? 0) + 1 },
+      }));
+    } catch (cause: unknown) {
+      if (active.current) setError(`${String(cause)}. The same Resume request is retained; no new run is assumed.`);
+    } finally {
+      reserved.current = false;
+      if (active.current) setBusy(false);
+    }
+  }
+  return <section className="space-y-2 rounded-lg border border-border bg-card p-3" aria-label="Explicit recipe continuation">
+    <p className="text-sm font-medium">Continue this Job with a new pinned run</p>
+    <p className="text-xs text-muted-foreground">Retains this recipe revision and current code. Prior attempts, approvals and completion remain historical. This is separate from messaging a running attempt.</p>
+    <textarea aria-label="Recipe continuation instruction" value={instruction} disabled={busy || pending.current !== null} onChange={(event) => setInstruction(event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-sm" />
+    <Button size="sm" disabled={busy || !instruction.trim()} onClick={() => void resume()}>{pending.current ? "Retry same Resume receipt" : "Resume Job with new run"}</Button>
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+  </section>;
 }
 
 function RunSteps({ jobId, run, initialStepId, initialAttemptId }: { jobId: string; run: RecipeRun; initialStepId?: string; initialAttemptId?: string }) {
