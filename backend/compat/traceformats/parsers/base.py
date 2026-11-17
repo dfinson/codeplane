@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import tree_sitter as ts
 import tree_sitter_markdown as tsmd
@@ -55,7 +57,8 @@ def try_parse_json(text: str) -> dict[str, Any] | list[Any] | None:
     if not text or text[0] not in ("{", "["):
         return None
     try:
-        return json.loads(text)
+        value = json.loads(text)
+        return value if isinstance(value, (dict, list)) else None
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -171,9 +174,7 @@ class MarkdownPreParser(ABC):
         """Return the tree-sitter Query used by this parser."""
 
     @abstractmethod
-    def _classify_match(
-        self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes
-    ) -> list[Block]:
+    def _classify_match(self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes) -> list[Block]:
         """Convert a single query match into zero or more Blocks."""
 
     @abstractmethod
@@ -182,6 +183,7 @@ class MarkdownPreParser(ABC):
 
     def _reset_state(self) -> None:
         """Reset any parser-specific state. Override if needed."""
+        return None
 
     # ─── Shared infrastructure ───────────────────────────────────────────
 
@@ -214,7 +216,7 @@ class MarkdownPreParser(ABC):
     ) -> dict[str, Any]:
         """Construct a standard event dict."""
         if timestamp is None:
-            ts_str = datetime.now(timezone.utc).isoformat()
+            ts_str = datetime.now(UTC).isoformat()
         elif isinstance(timestamp, datetime):
             ts_str = timestamp.isoformat()
         else:

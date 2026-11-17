@@ -224,7 +224,9 @@ async def _reenrich_locked(
                 await repo.delete_event(m.id)
 
         # Re-enrich through a fresh TF Enricher in batches
-        enricher = TFEnricher(flush_on_session_end=True)
+        from backend.compat.traceforge_bridge import LegacyEnrichment
+
+        enricher = LegacyEnrichment(TFEnricher(flush_on_session_end=True))
         updated = 0
         failed = 0
         offset = 0

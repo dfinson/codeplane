@@ -18,11 +18,13 @@ Query-based AST classification:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import tree_sitter as ts
 
@@ -229,9 +231,7 @@ class AiderPreParser(MarkdownPreParser):
     def _reset_state(self) -> None:
         self._state = None
 
-    def _classify_match(
-        self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes
-    ) -> list[Block]:
+    def _classify_match(self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes) -> list[Block]:
         blocks: list[Block] = []
 
         if pattern_index == _ROLE_SESSION:
@@ -301,9 +301,8 @@ class AiderPreParser(MarkdownPreParser):
                 yield from self._start_session(block.text)
             elif block.role == _BLOCK_USER:
                 yield from self._emit_user_input(block.text)
-            elif block.role == _BLOCK_TOOL:
-                if block.node:
-                    yield from self._handle_block_quote(block.node, source)
+            elif block.role == _BLOCK_TOOL and block.node:
+                yield from self._handle_block_quote(block.node, source)
 
         if ai_nodes:
             yield from self._emit_ai_from_nodes(ai_nodes, source)
@@ -312,16 +311,13 @@ class AiderPreParser(MarkdownPreParser):
 
     def _start_session(self, content: str) -> Iterator[dict[str, Any]]:
         prefix = "aider chat started at"
-        if content.startswith(prefix):
-            datetime_str = content[len(prefix) :].strip()
-        else:
-            datetime_str = content
+        datetime_str = content[len(prefix) :].strip() if content.startswith(prefix) else content
 
         try:
             dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         except ValueError:
-            dt = datetime.now(timezone.utc)
+            dt = datetime.now(UTC)
 
         session_id = f"aider-{dt.strftime('%Y%m%dT%H%M%S')}"
         self._state = _SessionState(session_id=session_id, start_time=dt)
@@ -371,9 +367,7 @@ class AiderPreParser(MarkdownPreParser):
                 },
             )
 
-    def _tool_result_to_event(
-        self, result: ToolOutputResult, raw_text: str
-    ) -> Iterator[dict[str, Any]]:
+    def _tool_result_to_event(self, result: ToolOutputResult, raw_text: str) -> Iterator[dict[str, Any]]:
         match result.kind:
             case ToolOutputKind.VERSION:
                 yield self._make_event("version_info", result.fields)
@@ -401,7 +395,7 @@ class AiderPreParser(MarkdownPreParser):
 
     def _make_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         state = self._state
-        timestamp = state.next_timestamp() if state else datetime.now(timezone.utc)
+        timestamp = state.next_timestamp() if state else datetime.now(UTC)
 
         event: dict[str, Any] = {
             "type": event_type,

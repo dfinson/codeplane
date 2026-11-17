@@ -75,10 +75,19 @@ class IntegrationRepository(BaseRepository):
     ) -> tuple[IntegrationBinding, bool]:
         now = datetime.now(UTC)
         result = await self._session.execute(
-            insert(IntegrationBindingRow).values(
-                id=binding_id, project_id=project_id, adapter_id=adapter_id, mode="observation",
-                enabled=False, config_json=json.dumps(config, sort_keys=True), created_at=now, updated_at=now,
-            ).on_conflict_do_nothing(index_elements=["id"]).returning(IntegrationBindingRow.id)
+            insert(IntegrationBindingRow)
+            .values(
+                id=binding_id,
+                project_id=project_id,
+                adapter_id=adapter_id,
+                mode="observation",
+                enabled=False,
+                config_json=json.dumps(config, sort_keys=True),
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["id"])
+            .returning(IntegrationBindingRow.id)
         )
         created = result.scalar_one_or_none() is not None
         binding = await self.get(binding_id)
@@ -108,16 +117,23 @@ class IntegrationRepository(BaseRepository):
         if row is None:
             return None
         return SourceCheckpoint(
-            row.record_count, row.prefix_sha256, row.canonical_sha256, row.parser_sha256,
-            json.loads(row.buffer_json), row.state, row.version,
+            row.record_count,
+            row.prefix_sha256,
+            row.canonical_sha256,
+            row.parser_sha256,
+            json.loads(row.buffer_json),
+            row.state,
+            row.version,
         )
 
     async def has_checkpoint(self, binding_id: str, source_key: str) -> bool:
         result = await self._session.execute(
-            select(IntegrationSourceCheckpointRow.binding_id).where(
+            select(IntegrationSourceCheckpointRow.binding_id)
+            .where(
                 IntegrationSourceCheckpointRow.binding_id == binding_id,
                 IntegrationSourceCheckpointRow.source_key == source_key,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.first() is not None
 
@@ -129,20 +145,30 @@ class IntegrationRepository(BaseRepository):
         if row is None:
             return None
         return ProjectionCheckpoint(
-            row.parser_revision, row.parser_sha256, row.canonical_sha256,
-            json.loads(row.buffer_json), row.state, row.version,
+            row.parser_revision,
+            row.parser_sha256,
+            row.canonical_sha256,
+            json.loads(row.buffer_json),
+            row.state,
+            row.version,
         )
 
     async def has_binding_checkpoints(self, binding_id: str) -> bool:
         result = await self._session.execute(
-            select(IntegrationSourceCheckpointRow.binding_id).where(
+            select(IntegrationSourceCheckpointRow.binding_id)
+            .where(
                 IntegrationSourceCheckpointRow.binding_id == binding_id,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.first() is not None
 
     async def require_projection_reconciliation(
-        self, binding_id: str, reason: str, *, expected_version: int,
+        self,
+        binding_id: str,
+        reason: str,
+        *,
+        expected_version: int,
     ) -> None:
         try:
             await self._fence_projection(binding_id, reason, expected_version=expected_version)
@@ -152,37 +178,57 @@ class IntegrationRepository(BaseRepository):
             raise
 
     async def _fence_projection(
-        self, binding_id: str, reason: str, *, expected_version: int,
+        self,
+        binding_id: str,
+        reason: str,
+        *,
+        expected_version: int,
     ) -> None:
         result = await self._session.execute(
-            update(IntegrationProjectionCheckpointRow).where(
+            update(IntegrationProjectionCheckpointRow)
+            .where(
                 IntegrationProjectionCheckpointRow.binding_id == binding_id,
                 IntegrationProjectionCheckpointRow.version == expected_version,
                 IntegrationProjectionCheckpointRow.state == "accepted",
-            ).values(
-                state="reconciliation_required", error_code=reason, updated_at=datetime.now(UTC),
+            )
+            .values(
+                state="reconciliation_required",
+                error_code=reason,
+                updated_at=datetime.now(UTC),
                 version=expected_version + 1,
-            ).returning(IntegrationProjectionCheckpointRow.version)
+            )
+            .returning(IntegrationProjectionCheckpointRow.version)
         )
         if result.scalar_one_or_none() is None:
             raise StateConflictError("Binding projection changed concurrently")
 
     async def require_reconciliation(
-        self, binding_id: str, source_key: str, revision: str, reason: str, *, expected_version: int,
+        self,
+        binding_id: str,
+        source_key: str,
+        revision: str,
+        reason: str,
+        *,
+        expected_version: int,
         projection_version: int | None = None,
     ) -> None:
         try:
             result = await self._session.execute(
-                update(IntegrationSourceCheckpointRow).where(
+                update(IntegrationSourceCheckpointRow)
+                .where(
                     IntegrationSourceCheckpointRow.binding_id == binding_id,
                     IntegrationSourceCheckpointRow.source_key == source_key,
                     IntegrationSourceCheckpointRow.parser_revision == revision,
                     IntegrationSourceCheckpointRow.version == expected_version,
                     IntegrationSourceCheckpointRow.state == "accepted",
-                ).values(
-                    state="reconciliation_required", error_code=reason, updated_at=datetime.now(UTC),
+                )
+                .values(
+                    state="reconciliation_required",
+                    error_code=reason,
+                    updated_at=datetime.now(UTC),
                     version=expected_version + 1,
-                ).returning(IntegrationSourceCheckpointRow.version)
+                )
+                .returning(IntegrationSourceCheckpointRow.version)
             )
             if result.scalar_one_or_none() is None:
                 raise StateConflictError("Source checkpoint changed concurrently")
@@ -194,61 +240,97 @@ class IntegrationRepository(BaseRepository):
             raise
 
     async def commit_records(
-        self, *, binding_id: str, source_key: str, revision: str, expected_version: int,
-        record_count: int, prefix_sha256: str, canonical_sha256: str, parser_sha256: str,
-        buffer: dict[str, Any], events: list[SessionEvent],
-        projection_version: int, projection_parser_sha256: str,
-        projection_canonical_sha256: str, projection_buffer: dict[str, Any],
+        self,
+        *,
+        binding_id: str,
+        source_key: str,
+        revision: str,
+        expected_version: int,
+        record_count: int,
+        prefix_sha256: str,
+        canonical_sha256: str,
+        parser_sha256: str,
+        buffer: dict[str, Any],
+        events: list[SessionEvent],
+        projection_version: int,
+        projection_parser_sha256: str,
+        projection_canonical_sha256: str,
+        projection_buffer: dict[str, Any],
     ) -> int:
         encoded_projection = json.dumps(projection_buffer, sort_keys=True, ensure_ascii=False, allow_nan=False)
         if len(encoded_projection.encode("utf-8")) > 8 * 1024 * 1024:
             raise ValueError("Binding projection exceeds its 8 MiB bound")
         values = {
-            "record_count": record_count, "prefix_sha256": prefix_sha256,
-            "canonical_sha256": canonical_sha256, "parser_sha256": parser_sha256,
-            "buffer_json": json.dumps(buffer, sort_keys=True), "state": "accepted", "error_code": None,
-            "version": expected_version + 1, "updated_at": datetime.now(UTC),
+            "record_count": record_count,
+            "prefix_sha256": prefix_sha256,
+            "canonical_sha256": canonical_sha256,
+            "parser_sha256": parser_sha256,
+            "buffer_json": json.dumps(buffer, sort_keys=True),
+            "state": "accepted",
+            "error_code": None,
+            "version": expected_version + 1,
+            "updated_at": datetime.now(UTC),
         }
         try:
             projection_values = {
-                "parser_revision": revision, "parser_sha256": projection_parser_sha256,
-                "canonical_sha256": projection_canonical_sha256, "buffer_json": encoded_projection,
-                "state": "accepted", "error_code": None,
-                "version": projection_version + 1, "updated_at": datetime.now(UTC),
+                "parser_revision": revision,
+                "parser_sha256": projection_parser_sha256,
+                "canonical_sha256": projection_canonical_sha256,
+                "buffer_json": encoded_projection,
+                "state": "accepted",
+                "error_code": None,
+                "version": projection_version + 1,
+                "updated_at": datetime.now(UTC),
             }
             if projection_version == 0:
                 if await self.has_binding_checkpoints(binding_id):
                     raise StateConflictError("Existing source projections require explicit reconciliation")
                 projection_result = await self._session.execute(
-                    insert(IntegrationProjectionCheckpointRow).values(
-                        binding_id=binding_id, **projection_values,
-                    ).on_conflict_do_nothing().returning(IntegrationProjectionCheckpointRow.version)
+                    insert(IntegrationProjectionCheckpointRow)
+                    .values(
+                        binding_id=binding_id,
+                        **projection_values,
+                    )
+                    .on_conflict_do_nothing()
+                    .returning(IntegrationProjectionCheckpointRow.version)
                 )
             else:
                 projection_result = await self._session.execute(
-                    update(IntegrationProjectionCheckpointRow).where(
+                    update(IntegrationProjectionCheckpointRow)
+                    .where(
                         IntegrationProjectionCheckpointRow.binding_id == binding_id,
                         IntegrationProjectionCheckpointRow.version == projection_version,
                         IntegrationProjectionCheckpointRow.state == "accepted",
-                    ).values(**projection_values).returning(IntegrationProjectionCheckpointRow.version)
+                    )
+                    .values(**projection_values)
+                    .returning(IntegrationProjectionCheckpointRow.version)
                 )
             if projection_result.scalar_one_or_none() is None:
                 raise StateConflictError("Binding projection changed concurrently")
             if expected_version == 0:
                 result = await self._session.execute(
-                    insert(IntegrationSourceCheckpointRow).values(
-                        binding_id=binding_id, source_key=source_key, parser_revision=revision, **values,
-                    ).on_conflict_do_nothing().returning(IntegrationSourceCheckpointRow.version)
+                    insert(IntegrationSourceCheckpointRow)
+                    .values(
+                        binding_id=binding_id,
+                        source_key=source_key,
+                        parser_revision=revision,
+                        **values,
+                    )
+                    .on_conflict_do_nothing()
+                    .returning(IntegrationSourceCheckpointRow.version)
                 )
             else:
                 result = await self._session.execute(
-                    update(IntegrationSourceCheckpointRow).where(
+                    update(IntegrationSourceCheckpointRow)
+                    .where(
                         IntegrationSourceCheckpointRow.binding_id == binding_id,
                         IntegrationSourceCheckpointRow.source_key == source_key,
                         IntegrationSourceCheckpointRow.parser_revision == revision,
                         IntegrationSourceCheckpointRow.version == expected_version,
                         IntegrationSourceCheckpointRow.state == "accepted",
-                    ).values(**values).returning(IntegrationSourceCheckpointRow.version)
+                    )
+                    .values(**values)
+                    .returning(IntegrationSourceCheckpointRow.version)
                 )
             accepted = result.scalar_one_or_none()
             if accepted is None:

@@ -56,9 +56,7 @@ def preprocess_copilot(obj: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         requests = entry.get("requests")
         nano_aiu = entry.get("totalNanoAiu")
-        usage_blocks.append(
-            _usage_block(str(model), usage, requests, nano_aiu, shutdown_id, timestamp)
-        )
+        usage_blocks.append(_usage_block(str(model), usage, requests, nano_aiu, shutdown_id, timestamp))
 
     return [obj, *usage_blocks]
 

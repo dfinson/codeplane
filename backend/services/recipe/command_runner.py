@@ -107,6 +107,19 @@ class CommandStepRunner:
             workspace=attempt.workspace.path,
             argv=argv,
         )
+        if self._host._standalone_governance is not None:
+            controller = self._host._recipe_controllers.get(run.job_id)
+            owned = controller.owned_attempt(attempt.id) if controller else None
+            if owned is None:
+                raise StateConflictError("The recipe command has no current owned task")
+            await self._host.authorize_attempt_command(
+                run.job_id,
+                attempt.id,
+                owned.token,
+                argv,
+                attempt.workspace.path,
+            )
+            return
         command = shlex.join(argv)
         # Literal interpreter programs must reach the existing hard gate too.
         candidates = [command]

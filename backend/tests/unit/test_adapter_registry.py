@@ -33,27 +33,46 @@ class TestAdapterRegistry:
         from backend.tests.unit.test_execution_contracts import _contract
 
         pin = ExecutionContractPin(
-            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned"),
+            job_id="job-1",
+            admission_id="admission",
+            budget_id="job-1",
+            contract=_contract("pinned"),
         )
         registry = AdapterRegistry(session_factory=session_factory)
         adapter = registry.get_adapter("copilot")
         usage = UsageAmount(
-            amount=Decimal("1"), unit="copilot_cost_unit", producer="copilot", model="served-model",
-            role="utility", job_id="job-1", execution_epoch="epoch", source="assistant.usage",
+            amount=Decimal("1"),
+            unit="copilot_cost_unit",
+            producer="copilot",
+            model="served-model",
+            role="utility",
+            job_id="job-1",
+            execution_epoch="epoch",
+            source="assistant.usage",
         )
-        adapter.complete = AsyncMock(return_value=CompletionResult(
-            text="private completion content", model="served-model", usage=(usage,),
-        ))
-        with completion_context(CompletionContext(
-            job_id="job-1", execution_epoch="epoch", execution_contract=pin,
-        )):
+        adapter.complete = AsyncMock(
+            return_value=CompletionResult(
+                text="private completion content",
+                model="served-model",
+                usage=(usage,),
+            )
+        )
+        with completion_context(
+            CompletionContext(
+                job_id="job-1",
+                execution_epoch="epoch",
+                execution_contract=pin,
+            )
+        ):
             result = await registry.get_completion_provider("copilot").complete(
-                "private input", model="requested-model",
+                "private input",
+                model="requested-model",
             )
         async with session_factory() as session:
             recorded = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
         assert [str(event.kind) for event in recorded] == [
-            "utility.completion.requested", "utility.completion.completed",
+            "utility.completion.requested",
+            "utility.completion.completed",
         ]
         completed = recorded[-1]
         assert result.usage_event_id == completed.id
@@ -67,14 +86,20 @@ class TestAdapterRegistry:
 
     @pytest.mark.parametrize("failure_phase", ["requested", "completed"])
     async def test_utility_receipt_failure_distinguishes_no_call_from_retained_completion(
-        self, session_factory, monkeypatch, failure_phase,
+        self,
+        session_factory,
+        monkeypatch,
+        failure_phase,
     ) -> None:
         from backend.models.execution_contracts import ExecutionContractPin
         from backend.services.adapters.completion_context import CompletionContext, completion_context
         from backend.tests.unit.test_execution_contracts import _contract
 
         pin = ExecutionContractPin(
-            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned"),
+            job_id="job-1",
+            admission_id="admission",
+            budget_id="job-1",
+            contract=_contract("pinned"),
         )
         registry = AdapterRegistry(session_factory=session_factory)
         adapter = registry.get_adapter("copilot")
@@ -100,36 +125,59 @@ class TestAdapterRegistry:
             assert caught.value.completion.input_tokens == 7
             assert caught.value.completion.usage_event_id is not None
 
-    @pytest.mark.parametrize("work_sdk,utility_sdk,expected", [
-        ("claude", None, "copilot"), ("copilot", "claude", "claude"),
-    ])
+    @pytest.mark.parametrize(
+        "work_sdk,utility_sdk,expected",
+        [
+            ("claude", None, "copilot"),
+            ("copilot", "claude", "claude"),
+        ],
+    )
     async def test_runtime_monitor_uses_text_binding_not_work_harness(
-        self, session_factory, tmp_path, work_sdk, utility_sdk, expected,
+        self,
+        session_factory,
+        tmp_path,
+        work_sdk,
+        utility_sdk,
+        expected,
     ) -> None:
         from backend.services.events.event_bus import EventBus
         from backend.services.job.approval_service import ApprovalService
         from backend.services.runtime import RuntimeService
 
-        config = CPLConfig(runtime=RuntimeConfig(
-            copilot_only=False, default_sdk="copilot", utility_sdk=utility_sdk, utility_model="claude-explicit",
-        ))
+        config = CPLConfig(
+            runtime=RuntimeConfig(
+                copilot_only=False,
+                default_sdk="copilot",
+                utility_sdk=utility_sdk,
+                utility_model="claude-explicit",
+            )
+        )
         registry = AdapterRegistry(config=config)
         text_adapter = registry.get_adapter(expected)
         text_adapter.complete = AsyncMock(return_value=CompletionResult(text="text result"))
         runtime = RuntimeService(
-            session_factory=session_factory, event_bus=EventBus(), adapter_registry=registry, config=config,
-            approval_service=ApprovalService(session_factory), git_service=MagicMock(),
+            session_factory=session_factory,
+            event_bus=EventBus(),
+            adapter_registry=registry,
+            config=config,
+            approval_service=ApprovalService(session_factory),
+            git_service=MagicMock(),
         )
         runtime._governance_decider = MagicMock()
         await runtime._setup_action_policy(
-            "job", SessionConfig(workspace_path=str(tmp_path), prompt="", sdk=work_sdk),
-            str(tmp_path), repo=str(tmp_path),
+            "job",
+            SessionConfig(workspace_path=str(tmp_path), prompt="", sdk=work_sdk),
+            str(tmp_path),
+            repo=str(tmp_path),
         )
         router = runtime._policy_routers["job"]
         assert registry.get_adapter(work_sdk)._policy_router["job"] is router
         assert (await router._monitor._completer.complete("context")).text == "text result"
         text_adapter.complete.assert_awaited_once_with(
-            "context", model="claude-explicit", system_message=None, excluded_tools=["*"],
+            "context",
+            model="claude-explicit",
+            system_message=None,
+            excluded_tools=["*"],
         )
 
     def test_completion_provider_resolution_does_not_create_an_execution_session(self) -> None:
@@ -147,15 +195,27 @@ class TestAdapterRegistry:
 
     @pytest.mark.parametrize(
         "default_sdk,copilot_only,override,expected",
-        [("claude", True, None, "copilot"), ("claude", False, None, "claude"),
-         ("copilot", False, "claude", "claude"), ("claude", False, "copilot", "copilot")],
+        [
+            ("claude", True, None, "copilot"),
+            ("claude", False, None, "claude"),
+            ("copilot", False, "claude", "claude"),
+            ("claude", False, "copilot", "copilot"),
+        ],
     )
     async def test_completion_uses_enabled_default_or_explicit_text_binding(
-        self, default_sdk, copilot_only, override, expected,
+        self,
+        default_sdk,
+        copilot_only,
+        override,
+        expected,
     ) -> None:
-        config = CPLConfig(runtime=RuntimeConfig(
-            default_sdk=default_sdk, copilot_only=copilot_only, utility_sdk=override,
-        ))
+        config = CPLConfig(
+            runtime=RuntimeConfig(
+                default_sdk=default_sdk,
+                copilot_only=copilot_only,
+                utility_sdk=override,
+            )
+        )
         registry = AdapterRegistry(config=config)
         adapter = MagicMock(spec=AgentAdapterInterface)
         completion = CompletionResult(text="reply", model="claude-observed", input_tokens=7)
@@ -165,7 +225,10 @@ class TestAdapterRegistry:
             assert await provider.complete("prompt", model="claude-explicit", system_message="system") is completion
         create.assert_called_once_with(AgentSDK(expected))
         adapter.complete.assert_awaited_once_with(
-            "prompt", model="claude-explicit", system_message="system", excluded_tools=["*"],
+            "prompt",
+            model="claude-explicit",
+            system_message="system",
+            excluded_tools=["*"],
         )
         adapter.create_session.assert_not_called()
 

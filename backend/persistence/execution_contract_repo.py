@@ -22,15 +22,23 @@ _PIN_NAMESPACE = ("control", "execution-contract")
 
 
 def _identity(job_id: str, admission_id: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
-        ["codeplane-contract-pin-v1", job_id, admission_id], separators=(",", ":"),
-    )))
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            json.dumps(
+                ["codeplane-contract-pin-v1", job_id, admission_id],
+                separators=(",", ":"),
+            ),
+        )
+    )
 
 
 def _decode(event: SessionEvent, job_id: str, admission_id: str) -> ExecutionContractPin:
     if (
-        event.kind != _PIN_KIND or event.session_id != job_id
-        or event.metadata.source_framework != "codeplane" or event.metadata.namespace != _PIN_NAMESPACE
+        event.kind != _PIN_KIND
+        or event.session_id != job_id
+        or event.metadata.source_framework != "codeplane"
+        or event.metadata.namespace != _PIN_NAMESPACE
         or event.metadata.integration_binding_id is not None
     ):
         raise StateConflictError("Execution contract pin has untrusted provenance")
@@ -67,15 +75,26 @@ class ExecutionContractRepository:
                 if retained != pin:
                     raise StateConflictError("Conflicting execution contract pin")
                 return retained
-            await events.append(new_event(
-                pin.job_id, _PIN_KIND, pin.model_dump(mode="json"), event_id=identity,
-                metadata=EventMetadata(source_framework="codeplane", namespace=_PIN_NAMESPACE),
-            ))
+            await events.append(
+                new_event(
+                    pin.job_id,
+                    _PIN_KIND,
+                    pin.model_dump(mode="json"),
+                    event_id=identity,
+                    metadata=EventMetadata(source_framework="codeplane", namespace=_PIN_NAMESPACE),
+                )
+            )
         return pin
 
     async def bind_handle(
-        self, pin: ExecutionContractPin, *, sdk: str, session_id: str,
-        live_epoch: str, execution_token: str, attempt_id: str | None = None,
+        self,
+        pin: ExecutionContractPin,
+        *,
+        sdk: str,
+        session_id: str,
+        live_epoch: str,
+        execution_token: str,
+        attempt_id: str | None = None,
     ) -> None:
         if not sdk or not session_id or not live_epoch or not execution_token:
             raise ValueError("A handle binding requires actual provider, session and live fencing identities")
@@ -84,19 +103,41 @@ class ExecutionContractRepository:
             source = await events.get(_identity(pin.job_id, pin.admission_id))
             if source is None or _decode(source, pin.job_id, pin.admission_id) != pin:
                 raise StateConflictError("A handle cannot bind a missing or different admission contract")
-            identity = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps([
-                "codeplane-contract-handle-v1", pin.job_id, pin.admission_id, execution_token,
-            ], separators=(",", ":"))))
-            await events.append(new_event(
-                pin.job_id, "execution.contract.handle_bound",
-                {
-                    "admission_id": pin.admission_id, "budget_id": pin.budget_id,
-                    "sdk": sdk, "session_id": session_id, "live_epoch": live_epoch,
-                    "execution_token": execution_token, "attempt_id": attempt_id,
-                },
-                event_id=identity,
-                metadata=EventMetadata(
-                    source_framework="codeplane", namespace=_PIN_NAMESPACE, run_id=session_id,
-                    execution_epoch=live_epoch, execution_token=execution_token, attempt_id=attempt_id,
-                ),
-            ))
+            identity = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    json.dumps(
+                        [
+                            "codeplane-contract-handle-v1",
+                            pin.job_id,
+                            pin.admission_id,
+                            execution_token,
+                        ],
+                        separators=(",", ":"),
+                    ),
+                )
+            )
+            await events.append(
+                new_event(
+                    pin.job_id,
+                    "execution.contract.handle_bound",
+                    {
+                        "admission_id": pin.admission_id,
+                        "budget_id": pin.budget_id,
+                        "sdk": sdk,
+                        "session_id": session_id,
+                        "live_epoch": live_epoch,
+                        "execution_token": execution_token,
+                        "attempt_id": attempt_id,
+                    },
+                    event_id=identity,
+                    metadata=EventMetadata(
+                        source_framework="codeplane",
+                        namespace=_PIN_NAMESPACE,
+                        run_id=session_id,
+                        execution_epoch=live_epoch,
+                        execution_token=execution_token,
+                        attempt_id=attempt_id,
+                    ),
+                )
+            )

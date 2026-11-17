@@ -76,8 +76,13 @@ class ObservationRecords:
         if path is None:
             raise StateConflictError("Configured mapping is unavailable")
         decoder = NativeMappingDecoder(
-            path, job_id=job.id, external_session_id=external_id, binding_id=binding.id,
-            anchor=job.created_at, framework_id=format_id, source_key=batch.source_key,
+            path,
+            job_id=job.id,
+            external_session_id=external_id,
+            binding_id=binding.id,
+            anchor=job.created_at,
+            framework_id=format_id,
+            source_key=batch.source_key,
         )
         checkpoint = await self._bindings.checkpoint(binding_id, batch.source_key, PARSER_REVISION)
         prefix = bytes.fromhex(batch.prefix_sha256)
@@ -85,8 +90,14 @@ class ObservationRecords:
             prefix = _advance(prefix, canonical_record(raw))
         next_index = batch.start_index + len(batch.records)
         receipt_identity = [
-            "codeplane-ingest-receipt-v1", job.id, binding.id, batch.source_key,
-            batch.start_index, batch.prefix_sha256, next_index, prefix.hex(),
+            "codeplane-ingest-receipt-v1",
+            job.id,
+            binding.id,
+            batch.source_key,
+            batch.start_index,
+            batch.prefix_sha256,
+            next_index,
+            prefix.hex(),
         ]
         if batch.end_session:
             receipt_identity.append("end_session")
@@ -106,7 +117,9 @@ class ObservationRecords:
                 raise StateConflictError("Binding projection requires reconciliation")
             if projection.parser_revision != PARSER_REVISION or projection.parser_sha256 != projection_digest:
                 await self._bindings.require_projection_reconciliation(
-                    binding.id, "projection_changed", expected_version=projection.version,
+                    binding.id,
+                    "projection_changed",
+                    expected_version=projection.version,
                 )
                 raise StateConflictError("Binding projection implementation changed")
             if projection.buffer.get("closed"):
@@ -116,14 +129,20 @@ class ObservationRecords:
                 raise StateConflictError("Source requires reconciliation before parser progress")
             if checkpoint.parser_sha256 != decoder.mapping_digest:
                 await self._bindings.require_reconciliation(
-                    binding.id, batch.source_key, PARSER_REVISION, "parser_changed",
+                    binding.id,
+                    batch.source_key,
+                    PARSER_REVISION,
+                    "parser_changed",
                     expected_version=checkpoint.version,
                     projection_version=projection.version if projection else None,
                 )
                 raise StateConflictError("Source requires reconciliation before parser progress")
             if checkpoint.record_count != batch.start_index or checkpoint.prefix_sha256 != batch.prefix_sha256:
                 await self._bindings.require_reconciliation(
-                    binding.id, batch.source_key, PARSER_REVISION, "prefix_changed",
+                    binding.id,
+                    batch.source_key,
+                    PARSER_REVISION,
+                    "prefix_changed",
                     expected_version=checkpoint.version,
                     projection_version=projection.version if projection else None,
                 )
@@ -142,10 +161,16 @@ class ObservationRecords:
                 raise StateConflictError("Observation event belongs to another source owner")
             if not acquired and is_observation_history(event):
                 return event
-            return event.model_copy(update={"metadata": event.metadata.model_copy(update={
-                "integration_binding_id": binding.id,
-                "namespace": (OBSERVATION_NAMESPACE, batch.source_key, *(event.metadata.namespace or ())),
-            })})
+            return event.model_copy(
+                update={
+                    "metadata": event.metadata.model_copy(
+                        update={
+                            "integration_binding_id": binding.id,
+                            "namespace": (OBSERVATION_NAMESPACE, batch.source_key, *(event.metadata.namespace or ())),
+                        }
+                    )
+                }
+            )
 
         async def collect(event: SessionEvent) -> None:
             nonlocal staged_bytes
@@ -157,23 +182,34 @@ class ObservationRecords:
 
         staging_bus.subscribe(collect, required=True)
         pairing = ToolPairing()
-        tracker = StepTracker(staging_bus, source_timestamps=True, metadata=EventMetadata(
-            integration_binding_id=binding.id, run_id=external_id, namespace=(OBSERVATION_NAMESPACE,),
-        ))
+        tracker = StepTracker(
+            staging_bus,
+            source_timestamps=True,
+            metadata=EventMetadata(
+                integration_binding_id=binding.id,
+                run_id=external_id,
+                namespace=(OBSERVATION_NAMESPACE,),
+            ),
+        )
         activities = ActivityProjection(staging_bus)
         owner = {"binding_id": binding.id, "job_id": job.id, "external_session_id": external_id}
         if projection is not None:
             saved = projection.buffer
             if saved.get("version") != 1 or saved.get("owner") != owner:
                 raise StateConflictError("Binding projection ownership or format changed")
-            decoder.restore(DecoderState(
-                saved["decoder"]["intent"], saved["decoder"]["reasoning"],
-                tuple(saved["decoder"]["references"]), saved["decoder"]["turn"],
-                saved["decoder"].get("active_turn"),
-            ))
+            decoder.restore(
+                DecoderState(
+                    saved["decoder"]["intent"],
+                    saved["decoder"]["reasoning"],
+                    tuple(saved["decoder"]["references"]),
+                    saved["decoder"]["turn"],
+                    saved["decoder"].get("active_turn"),
+                )
+            )
             pending = tuple(SessionEvent.model_validate(item) for item in saved["pairing"])
             if any(
-                event.session_id != job.id or event.metadata.integration_binding_id != binding.id
+                event.session_id != job.id
+                or event.metadata.integration_binding_id != binding.id
                 or event.metadata.run_id != external_id
                 for event in pending
             ):
@@ -182,8 +218,12 @@ class ObservationRecords:
             tracker.restore_snapshot(job.id, saved["steps"])
             activities.restore(saved["activities"])
         processor = EventProcessor(
-            staging_bus, step_tracker=tracker, enricher=pairing, activity_projection=activities,
-            retain_source_events=True, fail_on_enrichment_error=True,
+            staging_bus,
+            step_tracker=tracker,
+            enricher=pairing,
+            activity_projection=activities,
+            retain_source_events=True,
+            fail_on_enrichment_error=True,
         )
         # Complete validation/normalization precedes any durable event or checkpoint write.
         normalized = []
@@ -212,7 +252,9 @@ class ObservationRecords:
             await activities.close(job.id, tracker.source_end_timestamp(job.id) or job.created_at)
             closed = True
         buffer = {
-            "version": 1, "owner": owner, "closed": closed,
+            "version": 1,
+            "owner": owner,
+            "closed": closed,
             "decoder": asdict(decoder.checkpoint()),
             "pairing": [event.model_dump(mode="json") for event in pairing.checkpoint().starts],
             "steps": tracker.snapshot(job.id),
@@ -228,26 +270,40 @@ class ObservationRecords:
         for event in staged:
             projection_prefix = _advance(projection_prefix, canonical_record(event.model_dump(mode="json")))
         receipt = ObservationRecordReceipt(
-            accepted_records=len(batch.records), next_index=next_index,
-            prefix_sha256=prefix.hex(), checkpoint_version=checkpoint.version + 1 if checkpoint else 1,
-            projection_version=projection.version + 1 if projection else 1, session_closed=closed,
+            accepted_records=len(batch.records),
+            next_index=next_index,
+            prefix_sha256=prefix.hex(),
+            checkpoint_version=checkpoint.version + 1 if checkpoint else 1,
+            projection_version=projection.version + 1 if projection else 1,
+            session_closed=closed,
         )
         # Receipts make an older accepted batch replayable after later progress.
         # They are durable history, not transcript input or control-plane commands.
         receipt_event = SessionEvent(
-            id=receipt_id, session_id=job.id, timestamp=datetime.now(UTC), kind="integration.batch.accepted",
+            id=receipt_id,
+            session_id=job.id,
+            timestamp=datetime.now(UTC),
+            kind="integration.batch.accepted",
             payload=receipt.model_dump(mode="json"),
             metadata=EventMetadata(
-                integration_binding_id=binding.id, namespace=(OBSERVATION_NAMESPACE, batch.source_key),
+                integration_binding_id=binding.id,
+                namespace=(OBSERVATION_NAMESPACE, batch.source_key),
             ),
         )
         await self._bindings.commit_records(
-            binding_id=binding.id, source_key=batch.source_key, revision=PARSER_REVISION,
-            expected_version=checkpoint.version if checkpoint else 0, record_count=next_index,
-            prefix_sha256=prefix.hex(), canonical_sha256=canonical_prefix.hex(),
-            parser_sha256=decoder.mapping_digest, buffer={}, events=[*staged, receipt_event],
+            binding_id=binding.id,
+            source_key=batch.source_key,
+            revision=PARSER_REVISION,
+            expected_version=checkpoint.version if checkpoint else 0,
+            record_count=next_index,
+            prefix_sha256=prefix.hex(),
+            canonical_sha256=canonical_prefix.hex(),
+            parser_sha256=decoder.mapping_digest,
+            buffer={},
+            events=[*staged, receipt_event],
             projection_version=projection.version if projection else 0,
-            projection_parser_sha256=projection_digest, projection_canonical_sha256=projection_prefix.hex(),
+            projection_parser_sha256=projection_digest,
+            projection_canonical_sha256=projection_prefix.hex(),
             projection_buffer=buffer,
         )
         # Imported control-looking records are history, never control-plane commands.

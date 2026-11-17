@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from backend.models.usage import UsageAmount
@@ -28,6 +28,23 @@ class GovernanceTotals:
     @property
     def budget_accountable(self) -> bool:
         return self.unaccounted == 0
+
+
+@dataclass(frozen=True, slots=True)
+class AuditDecision:
+    id: str
+    job_id: str
+    epoch: str
+    action_digest: str
+    decision: str
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AuditHead:
+    segment: int
+    key_id: str
+    content_hash: str
 
 
 class GovernanceLedger:
@@ -86,6 +103,14 @@ class GovernanceLedger:
                     id TEXT PRIMARY KEY, job_id TEXT NOT NULL, epoch TEXT NOT NULL,
                     action_digest TEXT NOT NULL, decision TEXT NOT NULL, metadata_json TEXT NOT NULL,
                     delivered INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS cp_audit_head (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    segment INTEGER NOT NULL, key_id TEXT NOT NULL, content_hash TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS cp_event_cursor (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    storage_cursor INTEGER NOT NULL
                 );
             """)
 
@@ -214,24 +239,106 @@ class GovernanceLedger:
     async def totals(self, job_id: str, epoch: str) -> GovernanceTotals:
         return await asyncio.to_thread(self._totals, job_id, epoch)
 
-    def _totals(self, job_id: str, epoch: str) -> GovernanceTotals:
+    async def job_totals(self, job_id: str) -> GovernanceTotals:
+        """Carry the Job budget across process epochs and continuation admissions."""
+        if not job_id:
+            raise ValueError("Budget accounting requires a Job identity")
+        return await asyncio.to_thread(self._totals, job_id, None)
+
+    async def record_uncertainty(self, job_id: str, epoch: str, event_id: str, reason: str) -> None:
+        if not all((job_id, epoch, event_id, reason)):
+            raise ValueError("Unresolved accounting requires exact source context")
+        await asyncio.to_thread(self._record_uncertainty, job_id, epoch, event_id, reason)
+
+    def _record_uncertainty(self, job_id: str, epoch: str, event_id: str, reason: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO cp_unaccounted_tools VALUES(?,?,?,?)",
+                (job_id, epoch, event_id, reason),
+            )
+
+    async def event_cursor(self) -> int:
+        return await asyncio.to_thread(self._event_cursor)
+
+    def _event_cursor(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute("SELECT storage_cursor FROM cp_event_cursor WHERE singleton=1").fetchone()
+            return int(row[0]) if row is not None else 0
+
+    async def advance_event_cursor(self, previous: int, current: int) -> None:
+        if not 0 <= previous < current:
+            raise ValueError("Governance event cursor must advance monotonically")
+        await asyncio.to_thread(self._advance_event_cursor, previous, current)
+
+    def _advance_event_cursor(self, previous: int, current: int) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT storage_cursor FROM cp_event_cursor WHERE singleton=1").fetchone()
+            retained = int(row[0]) if row is not None else 0
+            if retained != previous:
+                raise ValueError("Concurrent governance event replay requires rereading its cursor")
+            connection.execute(
+                "INSERT INTO cp_event_cursor VALUES(1,?) "
+                "ON CONFLICT(singleton) DO UPDATE SET storage_cursor=excluded.storage_cursor",
+                (current,),
+            )
+
+    async def authorized_tool(
+        self,
+        job_id: str,
+        epoch: str,
+        execution_token: str,
+        tool_call_id: str,
+    ) -> AuditDecision | None:
+        return await asyncio.to_thread(self._authorized_tool, job_id, epoch, execution_token, tool_call_id)
+
+    def _authorized_tool(
+        self,
+        job_id: str,
+        epoch: str,
+        execution_token: str,
+        tool_call_id: str,
+    ) -> AuditDecision | None:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id,job_id,epoch,action_digest,decision,metadata_json FROM cp_decision_outbox
+                   WHERE job_id=? AND epoch=?
+                   AND json_extract(metadata_json,'$.execution.execution_token')=?
+                   AND json_extract(metadata_json,'$.tool_call_id')=? ORDER BY rowid DESC LIMIT 2""",
+                (job_id, epoch, execution_token, tool_call_id),
+            ).fetchall()
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        return AuditDecision(
+            row["id"],
+            row["job_id"],
+            row["epoch"],
+            row["action_digest"],
+            row["decision"],
+            json.loads(row["metadata_json"]),
+        )
+
+    def _totals(self, job_id: str, epoch: str | None) -> GovernanceTotals:
+        scope = "job_id=?" if epoch is None else "job_id=? AND epoch=?"
+        parameters = (job_id,) if epoch is None else (job_id, epoch)
         with self._connect() as connection:
             connection.execute("BEGIN")
             counts = connection.execute(
-                "SELECT executed_calls, destructive_calls FROM cp_governance_totals WHERE job_id=? AND epoch=?",
-                (job_id, epoch),
+                f"SELECT SUM(executed_calls), SUM(destructive_calls) FROM cp_governance_totals WHERE {scope}",
+                parameters,
             ).fetchone()
             costs = connection.execute(
-                "SELECT amount FROM cp_usage WHERE job_id=? AND epoch=? AND unit='USD' AND verified=1",
-                (job_id, epoch),
+                f"SELECT amount FROM cp_usage WHERE {scope} AND unit='USD' AND verified=1",
+                parameters,
             ).fetchall()
             missing = connection.execute(
-                "SELECT COUNT(*) FROM cp_unaccounted_tools WHERE job_id=? AND epoch=?",
-                (job_id, epoch),
+                f"SELECT COUNT(*) FROM cp_unaccounted_tools WHERE {scope}",
+                parameters,
             ).fetchone()[0]
             return GovernanceTotals(
-                counts["executed_calls"] if counts else 0,
-                counts["destructive_calls"] if counts else 0,
+                counts[0] or 0,
+                counts[1] or 0,
                 sum((Decimal(row["amount"]) for row in costs), Decimal(0)),
                 missing,
                 bool(costs),
@@ -271,3 +378,37 @@ class GovernanceLedger:
                 "VALUES(?,?,?,?,?,?)",
                 values,
             )
+
+    async def deliver_audit(self, write: Callable[[AuditDecision, AuditHead | None], AuditHead]) -> bool:
+        """Serialize delivery across processes; the writer reconciles an unacknowledged file tail."""
+        return await asyncio.to_thread(self._deliver_audit, write)
+
+    def _deliver_audit(self, write: Callable[[AuditDecision, AuditHead | None], AuditHead]) -> bool:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT id,job_id,epoch,action_digest,decision,metadata_json "
+                "FROM cp_decision_outbox WHERE delivered=0 ORDER BY rowid LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return False
+            stored_head = connection.execute(
+                "SELECT segment,key_id,content_hash FROM cp_audit_head WHERE singleton=1"
+            ).fetchone()
+            head = AuditHead(*tuple(stored_head)) if stored_head is not None else None
+            decision = AuditDecision(
+                row["id"],
+                row["job_id"],
+                row["epoch"],
+                row["action_digest"],
+                row["decision"],
+                json.loads(row["metadata_json"]),
+            )
+            advanced = write(decision, head)
+            connection.execute(
+                "INSERT INTO cp_audit_head VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET "
+                "segment=excluded.segment,key_id=excluded.key_id,content_hash=excluded.content_hash",
+                (advanced.segment, advanced.key_id, advanced.content_hash),
+            )
+            connection.execute("UPDATE cp_decision_outbox SET delivered=1 WHERE id=?", (decision.id,))
+            return True

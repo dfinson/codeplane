@@ -130,7 +130,8 @@ async def get_job_diff(
     if (
         not job.observation_only
         and job.state in (JobState.running, JobState.waiting_for_approval)
-        and job.worktree_path and job.base_ref
+        and job.worktree_path
+        and job.base_ref
     ):
         try:
             files = await diff_service.calculate_diff(job.worktree_path, job.base_ref)
@@ -182,7 +183,8 @@ async def get_job_diff_file(
     if (
         not job.observation_only
         and job.state in (JobState.running, JobState.waiting_for_approval)
-        and job.worktree_path and job.base_ref
+        and job.worktree_path
+        and job.base_ref
     ):
         try:
             file = await diff_service.calculate_diff_single_file(job.worktree_path, job.base_ref, path)
@@ -252,9 +254,10 @@ async def get_job_transcript(
             arguments=_stringify_tool_args(p.get("arguments")),
             result=_stringify_tool_args(p.get("result")),
             success=False if event.kind == EventKind.tool_call_failed else p.get("success"),
-            tool_issue=_stringify_tool_args(p.get("tool_issue") or (
-                p.get("error") or p.get("message") if event.kind == EventKind.tool_call_failed else None
-            )),
+            tool_issue=_stringify_tool_args(
+                p.get("tool_issue")
+                or (p.get("error") or p.get("message") if event.kind == EventKind.tool_call_failed else None)
+            ),
             tool_intent=(event.metadata.motivation.intent if event.metadata.motivation else None),
             tool_title=p.get("tool_title"),
             tool_display=p.get("tool_display") or event.metadata.tool_display,

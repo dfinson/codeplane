@@ -57,11 +57,21 @@ def test_missing_id_and_duplicate_call_identity_remain_visible_unresolved() -> N
 def test_failed_tool_pairs_without_fabricating_duration_from_fallback_timestamps(duration) -> None:
     pairing = ToolPairing()
     source = {"timestamp_fallback": True}
-    pairing.process(new_event("job", EventKind.tool_call_started, {
-        "tool_call_id": "call", "tool_name": "write", "arguments": {"path": "file"}, "_codeplane_source": source,
-    }))
+    pairing.process(
+        new_event(
+            "job",
+            EventKind.tool_call_started,
+            {
+                "tool_call_id": "call",
+                "tool_name": "write",
+                "arguments": {"path": "file"},
+                "_codeplane_source": source,
+            },
+        )
+    )
     failure = new_event(
-        "job", EventKind.tool_call_failed,
+        "job",
+        EventKind.tool_call_failed,
         {"tool_call_id": "call", "error": "Denied", "_codeplane_source": source},
         metadata=EventMetadata(duration_ms=duration),
     )
@@ -77,14 +87,25 @@ def test_reused_native_session_and_call_ids_remain_scoped_by_registered_executio
     pairing = ToolPairing()
     metadata = EventMetadata(run_id="reused-session", attempt_id="attempt", execution_epoch="epoch")
     for token in ("first", "second"):
-        assert pairing.process(new_event(
-            "job", EventKind.tool_call_started, {"tool_call_id": "same", "tool_name": token},
-            metadata=metadata.model_copy(update={"execution_token": token}),
-        )) is None
-    result = pairing.process(new_event(
-        "job", EventKind.tool_call_failed, {"tool_call_id": "same"},
-        metadata=metadata.model_copy(update={"execution_token": "first"}),
-    ))
+        assert (
+            pairing.process(
+                new_event(
+                    "job",
+                    EventKind.tool_call_started,
+                    {"tool_call_id": "same", "tool_name": token},
+                    metadata=metadata.model_copy(update={"execution_token": token}),
+                )
+            )
+            is None
+        )
+    result = pairing.process(
+        new_event(
+            "job",
+            EventKind.tool_call_failed,
+            {"tool_call_id": "same"},
+            metadata=metadata.model_copy(update={"execution_token": "first"}),
+        )
+    )
     assert result.payload["tool_name"] == "first"
     assert len(pairing.checkpoint().starts) == 1
     assert pairing.checkpoint().starts[0].metadata.execution_token == "second"

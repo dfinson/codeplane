@@ -121,9 +121,9 @@ def filter_credentials(text: str) -> FilteredText:
             # entire value line rather than interpreting it as shell words.
             newline = text.find("\n", match.end())
             end = newline if newline >= 0 else len(text)
-            if text[match.end():end].strip() in {"|", "|-", "|+", ">", ">-", ">+"}:
+            if text[match.end() : end].strip() in {"|", "|-", "|+", ">", ">-", ">+"}:
                 line_start = text.rfind("\n", 0, match.start()) + 1
-                prefix = text[line_start:match.start()]
+                prefix = text[line_start : match.start()]
                 indent = len(prefix) - len(prefix.lstrip())
                 cursor = end + 1
                 for line in text[cursor:].splitlines(keepends=True):

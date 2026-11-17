@@ -133,11 +133,13 @@ class ApprovalRepository(BaseRepository):
         # Tool arguments in proposed_action are not authority to declare scope.
         # Older SDK requests obtain scope only from their persisted app event.
         result = await self._session.execute(
-            select(EventRow).where(
+            select(EventRow)
+            .where(
                 EventRow.job_id == approval.job_id,
                 EventRow.kind == EventKind.approval_requested.value,
                 func.json_extract(EventRow.payload, "$.approval_id") == approval.id,
-            ).limit(2)
+            )
+            .limit(2)
         )
         events = result.scalars().all()
         if len(events) != 1:
@@ -152,8 +154,10 @@ class ApprovalRepository(BaseRepository):
         if (
             metadata.integration_binding_id is not None
             or bool(metadata.namespace)
-            or not metadata.attempt_id or not metadata.step_instance_id
-            or not metadata.recipe_run_id or not metadata.execution_epoch
+            or not metadata.attempt_id
+            or not metadata.step_instance_id
+            or not metadata.recipe_run_id
+            or not metadata.execution_epoch
             or metadata.source_framework not in {"copilot", "claude", "codeplane.recipe"}
             or json.loads(events[0].payload).get("proposed_action") != approval.proposed_action
         ):
@@ -179,10 +183,13 @@ class ApprovalRepository(BaseRepository):
         execution = await self._session.scalar(
             select(RecipeAttemptExecutionRow)
             .where(RecipeAttemptExecutionRow.attempt_id == attempt.id)
-            .order_by(RecipeAttemptExecutionRow.sequence.desc()).limit(1)
+            .order_by(RecipeAttemptExecutionRow.sequence.desc())
+            .limit(1)
         )
         if (
-            execution is None or not metadata.execution_token or not metadata.run_id
+            execution is None
+            or not metadata.execution_token
+            or not metadata.run_id
             or execution.execution_token != metadata.execution_token
             or execution.session_id != metadata.run_id
             or execution.provider != metadata.source_framework

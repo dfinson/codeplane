@@ -48,9 +48,9 @@ class StepPersistenceSubscriber:
             turn_id=p.get("turn_id"),
             intent=p.get("intent", ""),
             trigger=p["trigger"],
-            started_at=(
-                datetime.fromisoformat(source_start) if source_start is not None else None
-            ) if timing_source == "source" else event.timestamp,
+            started_at=(datetime.fromisoformat(source_start) if source_start is not None else None)
+            if timing_source == "source"
+            else event.timestamp,
             timing_source=timing_source,
         )
         await self._step_repo.create(row)
@@ -61,8 +61,10 @@ class StepPersistenceSubscriber:
         assert step_id is not None
         source_end = p.get("source_completed_at")
         completed_at = (
-            datetime.fromisoformat(source_end) if source_end is not None else None
-        ) if p.get("timing_source") == "source" else event.timestamp
+            (datetime.fromisoformat(source_end) if source_end is not None else None)
+            if p.get("timing_source") == "source"
+            else event.timestamp
+        )
 
         # Derive title from files_written or agent_message
         title = _derive_step_title(

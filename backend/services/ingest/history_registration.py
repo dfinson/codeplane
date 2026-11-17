@@ -25,8 +25,10 @@ class HistoryRegistration:
 
     async def _existing_job(self, binding: IntegrationBinding, project_id: str, config: dict[str, str]) -> Job:
         if (
-            binding.project_id != project_id or binding.adapter_id != "native"
-            or binding.mode != "observation" or binding.config != config
+            binding.project_id != project_id
+            or binding.adapter_id != "native"
+            or binding.mode != "observation"
+            or binding.config != config
         ):
             raise StateConflictError("Binding identity already belongs to another source")
         if binding.job_id is None:

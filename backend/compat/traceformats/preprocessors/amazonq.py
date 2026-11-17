@@ -152,18 +152,12 @@ def preprocess_amazonq(obj: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Current Amazon Q format: history is a list of {user, assistant, request_metadata}
     # pairs, with externally-tagged Rust enums for content. Detect and expand.
-    if value.get("history") and any(
-        isinstance(e, dict) and ("user" in e or "assistant" in e) for e in messages
-    ):
+    if value.get("history") and any(isinstance(e, dict) and ("user" in e or "assistant" in e) for e in messages):
         for entry in messages:
             if not isinstance(entry, dict):
                 continue
             results.extend(_expand_amazonq_pair(entry, conversation_id))
-        return (
-            results
-            if results
-            else [{"block_type": "raw.empty", "conversation_id": conversation_id}]
-        )
+        return results if results else [{"block_type": "raw.empty", "conversation_id": conversation_id}]
 
     for msg in messages:
         if not isinstance(msg, dict):
@@ -209,9 +203,7 @@ def preprocess_amazonq(obj: dict[str, Any]) -> list[dict[str, Any]]:
                 elif block_type == "tool_result":
                     result_content = block.get("content", "")
                     if isinstance(result_content, list):
-                        result_content = " ".join(
-                            b.get("text", "") for b in result_content if isinstance(b, dict)
-                        )
+                        result_content = " ".join(b.get("text", "") for b in result_content if isinstance(b, dict))
                     results.append(
                         {
                             "block_type": "tool.result",

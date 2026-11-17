@@ -128,9 +128,7 @@ class RuntimeConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.copilot_only, bool):
             raise ValueError("runtime.copilot_only must be a boolean")
-        if self.utility_sdk is not None and (
-            not isinstance(self.utility_sdk, str) or not self.utility_sdk.strip()
-        ):
+        if self.utility_sdk is not None and (not isinstance(self.utility_sdk, str) or not self.utility_sdk.strip()):
             raise ValueError("runtime.utility_sdk must be a nonempty adapter ID or null")
         if not self.utility_model or not self.utility_model.strip():
             provider = self.utility_sdk or ("copilot" if self.copilot_only else self.default_sdk)

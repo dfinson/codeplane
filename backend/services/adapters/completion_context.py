@@ -45,8 +45,7 @@ def completion_context(context: CompletionContext) -> Iterator[None]:
     if not 1 <= context.max_output_bytes <= 64 * 1024:
         raise ValueError("Completion output limit must be between 1 and 65536 bytes")
     if context.execution_contract is not None and (
-        context.execution_contract.job_id != context.job_id
-        or context.execution_contract.budget_id != context.job_id
+        context.execution_contract.job_id != context.job_id or context.execution_contract.budget_id != context.job_id
     ):
         raise ValueError("Utility contract must retain the originating Job and budget")
     token = _CURRENT.set(context)

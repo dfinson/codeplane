@@ -37,19 +37,26 @@ async def _context(sessions, kind):
     left = agent("gate")
     if kind == "human":
         left = RecipeStep(
-            id="gate", title="Human gate", runner=RecipeHumanRunner(proposed_action="Review the exact inputs"),
+            id="gate",
+            title="Human gate",
+            runner=RecipeHumanRunner(proposed_action="Review the exact inputs"),
             workspace=RecipeWorkspacePolicy(mode="none"),
             routes={"approved": RecipeRoute(terminal="succeeded"), "rejected": RecipeRoute(terminal="failed")},
         )
     elif kind == "command":
         left = RecipeStep(
-            id="gate", title="Command gate", runner=RecipeCommandRunner(argv=["echo", "fixture"]),
+            id="gate",
+            title="Command gate",
+            runner=RecipeCommandRunner(argv=["echo", "fixture"]),
             capabilities=["read", "shell"],
             routes={"succeeded": RecipeRoute(terminal="succeeded"), "failed": RecipeRoute(terminal="failed")},
         )
     run = await create_run(
-        sessions, RecipeDefinition(
-            name="Independent attempts", entry_steps=["gate", "work"], steps=[left, agent("work")],
+        sessions,
+        RecipeDefinition(
+            name="Independent attempts",
+            entry_steps=["gate", "work"],
+            steps=[left, agent("work")],
         ),
     )
     async with sessions() as session:
@@ -69,8 +76,11 @@ async def _context(sessions, kind):
     registry = MagicMock()
     registry.get_adapter.return_value = adapter
     runtime = RuntimeService(
-        session_factory=sessions, event_bus=EventBus(), adapter_registry=registry,
-        config=CPLConfig(), approval_service=approvals,
+        session_factory=sessions,
+        event_bus=EventBus(),
+        adapter_registry=registry,
+        config=CPLConfig(),
+        approval_service=approvals,
     )
     runtime._policy_routers[run.job_id] = MagicMock()
     runtime._repo_policies[run.job_id] = RepoPolicy()
@@ -85,12 +95,18 @@ async def _gate(sessions, approvals, run, owner, kind, epoch, *, alteration=None
         async with sessions() as session:
             instance = await RecipeRunRepository(session).get_step(owner.step_instance_id)
         proposal = RecipeGateProposal(
-            recipe_run_id=run.id, step_instance_id=owner.step_instance_id, attempt_id=owner.id,
-            input_checksum=content_checksum({}), proposed_action=owner.runner.proposed_action,
+            recipe_run_id=run.id,
+            step_instance_id=owner.step_instance_id,
+            attempt_id=owner.id,
+            input_checksum=content_checksum({}),
+            proposed_action=owner.runner.proposed_action,
             next_steps={key: value.next_steps for key, value in instance.definition.routes.items()},
         )
         approval = await approvals.create_request(
-            run.job_id, "Human gate", proposal.model_dump_json(), requires_explicit_approval=True,
+            run.job_id,
+            "Human gate",
+            proposal.model_dump_json(),
+            requires_explicit_approval=True,
         )
         async with sessions() as session:
             await RecipeRunRepository(session).bind_gate(proposal, approval.id)
@@ -99,17 +115,23 @@ async def _gate(sessions, approvals, run, owner, kind, epoch, *, alteration=None
     approval = await approvals.create_request(run.job_id, "Scoped gate", "exact action")
     metadata = EventMetadata(
         source_framework="codeplane.recipe" if kind == "command" else "copilot",
-        recipe_run_id=run.id, step_instance_id=owner.step_instance_id,
-        attempt_id=owner.id, execution_epoch=epoch,
+        recipe_run_id=run.id,
+        step_instance_id=owner.step_instance_id,
+        attempt_id=owner.id,
+        execution_epoch=epoch,
         execution_token=None if kind == "command" else "owner-token",
         run_id=None if kind == "command" else "owner-session",
     )
     async with sessions() as session:
         if kind == "sdk":
             await RecipeRunRepository(session).record_execution(
-                owner.id, RecipeAttemptExecution(
-                    execution_token="owner-token", session_id="owner-session", provider="copilot",
-                    model=None, started_at=datetime.now(UTC),
+                owner.id,
+                RecipeAttemptExecution(
+                    execution_token="owner-token",
+                    session_id="owner-session",
+                    provider="copilot",
+                    model=None,
+                    started_at=datetime.now(UTC),
                 ),
             )
         if alteration == "observation":
@@ -121,15 +143,23 @@ async def _gate(sessions, approvals, run, owner, kind, epoch, *, alteration=None
         elif alteration == "wrong_step":
             metadata = metadata.model_copy(update={"step_instance_id": "unrecorded-step"})
         if alteration != "missing":
-            await EventRepository(session).append(new_event(
-                run.job_id, EventKind.approval_requested,
-                {"approval_id": approval.id, "proposed_action": approval.proposed_action}, metadata=metadata,
-            ))
+            await EventRepository(session).append(
+                new_event(
+                    run.job_id,
+                    EventKind.approval_requested,
+                    {"approval_id": approval.id, "proposed_action": approval.proposed_action},
+                    metadata=metadata,
+                )
+            )
             if alteration == "ambiguous":
-                await EventRepository(session).append(new_event(
-                    run.job_id, EventKind.approval_requested,
-                    {"approval_id": approval.id, "proposed_action": approval.proposed_action}, metadata=metadata,
-                ))
+                await EventRepository(session).append(
+                    new_event(
+                        run.job_id,
+                        EventKind.approval_requested,
+                        {"approval_id": approval.id, "proposed_action": approval.proposed_action},
+                        metadata=metadata,
+                    )
+                )
         await session.commit()
     return approval
 
@@ -140,8 +170,12 @@ async def test_independent_bound_gate_does_not_block_open_bind_attach_or_dispatc
     approval = await _gate(sessions, approvals, run, owner, kind, runtime.execution_epoch)
     assert await approvals.has_blocking_approvals(run.job_id)
     config = SessionConfig(
-        workspace_path=target.workspace.path, prompt="target", job_id=run.job_id,
-        recipe_run_id=run.id, step_instance_id=target.step_instance_id, attempt_id=target.id,
+        workspace_path=target.workspace.path,
+        prompt="target",
+        job_id=run.job_id,
+        recipe_run_id=run.id,
+        step_instance_id=target.step_instance_id,
+        attempt_id=target.id,
         execution_epoch=runtime.execution_epoch,
     )
     with pytest.raises(AttemptBindingConflictError, match="pending approval"):
@@ -150,7 +184,10 @@ async def test_independent_bound_gate_does_not_block_open_bind_attach_or_dispatc
         await runtime.bind_attempt_contract(pin, target.id, execution.execution_token)
         await runtime.attach_attempt_policy(run.job_id, target.id, execution.execution_token)
         result = await runtime.dispatch_current_execution(
-            run.job_id, execution.execution_token, "Only the target", attempt_id=target.id,
+            run.job_id,
+            execution.execution_token,
+            "Only the target",
+            attempt_id=target.id,
         )
         assert result.status == "accepted"
         adapter.send_message.assert_awaited_once_with("target-session", "Only the target")
@@ -158,7 +195,8 @@ async def test_independent_bound_gate_does_not_block_open_bind_attach_or_dispatc
 
 
 @pytest.mark.parametrize(
-    "alteration", ["missing", "observation", "namespace", "stale_token", "wrong_step", "ambiguous"],
+    "alteration",
+    ["missing", "observation", "namespace", "stale_token", "wrong_step", "ambiguous"],
 )
 async def test_missing_or_untrusted_sdk_scope_remains_job_blocking(sessions, alteration):
     runtime, adapter, approvals, run, owner, target, _ = await _context(sessions, "sdk")
@@ -171,7 +209,8 @@ async def test_missing_or_untrusted_sdk_scope_remains_job_blocking(sessions, alt
 async def test_tool_json_cannot_declare_its_own_approval_scope(sessions):
     runtime, adapter, approvals, run, owner, target, _ = await _context(sessions, "sdk")
     await approvals.create_request(
-        run.job_id, "Unscoped approval",
+        run.job_id,
+        "Unscoped approval",
         json.dumps({"kind": "recipe_gate", "attempt_id": owner.id, "recipe_run_id": run.id}),
     )
     with pytest.raises(AttemptBindingConflictError, match="pending approval"):

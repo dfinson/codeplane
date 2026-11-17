@@ -216,7 +216,9 @@ async def test_continuation_handoff_utility_runs_after_new_pin_and_policy(runtim
 
 
 async def test_legacy_resume_cannot_declare_a_new_admission_before_previous_task_releases(
-    runtime, session_factory, config,
+    runtime,
+    session_factory,
+    config,
 ):
     from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
 

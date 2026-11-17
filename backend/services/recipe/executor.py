@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import structlog
 
@@ -53,6 +55,14 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+@dataclass(frozen=True)
+class OwnedRecipeStep:
+    token: str
+    run_id: str
+    step_id: str
+    task: asyncio.Task[None]
+
+
 class RecipeExecutor:
     def __init__(
         self,
@@ -69,6 +79,11 @@ class RecipeExecutor:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._resumed_instances: set[str] = set()
         self._wake = asyncio.Event()
+        self._owned_attempts: dict[str, OwnedRecipeStep] = {}
+
+    def owned_attempt(self, attempt_id: str) -> OwnedRecipeStep | None:
+        owned = self._owned_attempts.get(attempt_id)
+        return owned if owned is not None and not owned.task.done() else None
 
     async def _changed(self, run_id: str, step_id: str | None = None) -> None:
         self._wake.set()
@@ -375,6 +390,29 @@ class RecipeExecutor:
             await self._run_claimed(run, instance, attempt)
 
     async def _run_claimed(
+        self,
+        run: RecipeRunResponse,
+        instance: RecipeStepInstanceResponse,
+        attempt: RecipeAttemptResponse,
+    ) -> None:
+        task = asyncio.current_task()
+        if task is None:
+            raise StateConflictError("A recipe runner requires an owned execution task.")
+        owned = OwnedRecipeStep(
+            token=f"{self._host.execution_epoch}:{uuid4().hex}",
+            run_id=run.id,
+            step_id=instance.id,
+            task=task,
+        )
+        self._owned_attempts[attempt.id] = owned
+        try:
+            await self._execute_claimed(run, instance, attempt)
+        finally:
+            if self._owned_attempts.get(attempt.id) is owned:
+                self._owned_attempts.pop(attempt.id, None)
+            self._wake.set()
+
+    async def _execute_claimed(
         self,
         run: RecipeRunResponse,
         instance: RecipeStepInstanceResponse,

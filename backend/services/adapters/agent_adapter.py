@@ -42,7 +42,11 @@ class UtilityCompletionError(OSError):
     """
 
     def __init__(
-        self, message: str, *, reason: str = "sdk_error", completion: CompletionResult | None = None,
+        self,
+        message: str,
+        *,
+        reason: str = "sdk_error",
+        completion: CompletionResult | None = None,
     ) -> None:
         super().__init__(message)
         self.reason = reason

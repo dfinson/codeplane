@@ -362,6 +362,19 @@ retained historical context without treating old outcomes as current approvals.
 
 ### Existing runtime guarantees
 
+The normal lifespan now selects the local standalone catalogue and AGT policy
+authority before recovery, using the existing canonical event store for admission
+pins, the durable ApprovalService for decisions, and the separate governance
+ledger/audit outbox. SDK permission and pre-tool boundaries carry immutable
+session/attempt ownership and actual arguments into that authority. Optional
+voice model loading is deferred to an explicit voice request.
+
+This cutover is not full qualification: native-source compatibility paths,
+historical budget/trust reconciliation, bounded model-refined activity titles,
+optional export and complete interoperability/acceptance gates remain open.
+Deterministic activity labels and known native usage units are retained without
+claiming a model-refinement result or a native cost unit as verified USD.
+
 `start_or_enqueue` admits or queues work without invoking sidecars. Startup is
 reserved before the first database await, then `_start_reserved_job` configures
 policy before built-in/custom sidecars or Scout can run. The contract-pin hook

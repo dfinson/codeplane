@@ -17,9 +17,15 @@ def test_0081_preserves_old_timing_bytes_and_refuses_lossy_rollback(tmp_path):
     try:
         with engine.begin() as connection:
             projects = Table("projects", MetaData(), autoload_with=connection)
-            connection.execute(projects.insert().values(
-                id="project", name="Existing", repo_paths="[]", created_at=now, updated_at=now,
-            ))
+            connection.execute(
+                projects.insert().values(
+                    id="project",
+                    name="Existing",
+                    repo_paths="[]",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
             connection.exec_driver_sql(
                 """INSERT INTO jobs
                    (id,project_id,repo,prompt,state,base_ref,permission_mode,session_count,sdk,created_at,updated_at)

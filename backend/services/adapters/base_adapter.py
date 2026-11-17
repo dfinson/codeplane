@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from backend.models.domain import (
 )
 from backend.models.events import EventKind, SessionEvent, new_event
 from backend.models.session_event import EventMetadata
+from backend.models.usage import UsageAmount
 from backend.services.adapters.agent_adapter import AgentAdapterInterface, normalize_model_name
 from backend.services.auth.permission_policy import (
     PermissionRequest,
@@ -98,6 +100,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds: dict[str, str] = {}  # session_id → session_kind for telemetry
         self._session_metadata: dict[str, EventMetadata] = {}
         self._session_workspaces: dict[str, str] = {}
+        self._session_protected_paths: dict[str, tuple[str, ...]] = {}
         self._permission_generations: dict[str, object] = {}
         self._paused_sessions: set[str] = set()
         self._approval_service = approval_service
@@ -154,6 +157,39 @@ class BaseAgentAdapter(AgentAdapterInterface):
             update={"source_framework": self._source_framework, "run_id": session_id},
         )
 
+    def _native_usage(
+        self,
+        session_id: str,
+        values: dict[str, int | float | None],
+        source: str,
+        *,
+        model: str | None,
+    ) -> list[dict[str, Any]]:
+        metadata = self._event_metadata(session_id)
+        kind = self.get_session_kind(session_id)
+        role = "scout" if kind == "preflight" else "primary" if kind == "job" else "utility"
+        result = []
+        for unit, amount in values.items():
+            if amount is None:
+                continue
+            result.append(
+                UsageAmount.model_validate(
+                    {
+                        "unit": unit,
+                        "amount": amount,
+                        "currency": "USD" if unit == "USD" else None,
+                        "verified": unit == "USD" and self._source_framework == "claude",
+                        "job_id": self._session_to_job.get(session_id),
+                        "execution_epoch": metadata.execution_epoch,
+                        "producer": self._source_framework,
+                        "model": model,
+                        "role": role,
+                        "source": source,
+                    }
+                ).model_dump(mode="json")
+            )
+        return result
+
     def _emit_log_line(self, session_id: str, job_id: str, message: str, level: str = "info") -> None:
         """Emit a native ``log`` event (re-homed from EventPipeline._emit_log)."""
         seq = self._log_seqs.get(job_id, 0) + 1
@@ -181,14 +217,23 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_kinds[session_id] = kind
 
     def set_session_metadata(self, session_id: str, config: SessionConfig) -> None:
+        from backend.services.action_policy.session_policy import SessionPolicy
+
         self._permission_generations[session_id] = object()
         self._session_workspaces[session_id] = config.workspace_path
+        self._session_protected_paths[session_id] = tuple(config.protected_paths)
+        router = self._policy_router.get(config.job_id)
+        epoch, token = config.execution_epoch, config.execution_token
+        if isinstance(router, SessionPolicy) and config.attempt_id is None:
+            epoch = epoch or router.execution_epoch
+            token = token or uuid.uuid4().hex
         self._session_metadata[session_id] = EventMetadata(
             recipe_run_id=config.recipe_run_id,
             recipe_revision=config.recipe_revision,
             step_instance_id=config.step_instance_id,
             attempt_id=config.attempt_id,
-            execution_epoch=config.execution_epoch,
+            execution_epoch=epoch,
+            execution_token=token,
         )
 
     def get_session_kind(self, session_id: str) -> str:
@@ -243,6 +288,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         self._session_metadata.pop(session_id, None)
         self._permission_generations.pop(session_id, None)
         self._session_workspaces.pop(session_id, None)
+        self._session_protected_paths.pop(session_id, None)
         self._session_models.pop(session_id, None)
         job_id = self._session_to_job.pop(session_id, None)
         self._clients.pop(session_id, None)
@@ -384,12 +430,15 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 return
             self._session_models[session_id] = actual_model
             self._emit_tf(
-                session_id, job_id, EventKind.model_observed,
+                session_id,
+                job_id,
+                EventKind.model_observed,
                 {
                     "requested_model": requested_model or None,
                     "actual_model": actual_model,
                     "model_match": normalize_model_name(actual_model) == normalize_model_name(requested_model)
-                    if requested_model and requested_model != "auto" else None,
+                    if requested_model and requested_model != "auto"
+                    else None,
                 },
             )
         else:
@@ -411,7 +460,9 @@ class BaseAgentAdapter(AgentAdapterInterface):
                 job_id=job_id,
             )
             self._emit_tf(
-                session_id, job_id, EventKind.model_downgraded,
+                session_id,
+                job_id,
+                EventKind.model_downgraded,
                 {"requested_model": requested_model, "actual_model": actual_model},
             )
         else:
@@ -456,16 +507,31 @@ class BaseAgentAdapter(AgentAdapterInterface):
         """Hot-swap the RepoPolicy for a running job (mid-job policy reload)."""
         if job_id in self._repo_policies:
             self._repo_policies[job_id] = policy
+        from backend.services.action_policy.standalone_router import StandalonePolicyRouter
+
+        router = self._policy_router.get(job_id)
+        if isinstance(router, StandalonePolicyRouter):
+            router.update_policy(policy)
 
     def attach_attempt_policy(
-        self, session_id: str, job_id: str, attempt_id: str, epoch: str,
-        router: PolicyRouter, policy: RepoPolicy, *, execution_token: str,
+        self,
+        session_id: str,
+        job_id: str,
+        attempt_id: str,
+        epoch: str,
+        router: PolicyRouter,
+        policy: RepoPolicy,
+        *,
+        execution_token: str,
     ) -> None:
         metadata = self._session_metadata.get(session_id)
         if (
             self._session_to_job.get(session_id) != job_id
-            or metadata is None or metadata.attempt_id != attempt_id or metadata.execution_epoch != epoch
-            or not self._session_workspaces.get(session_id) or not execution_token
+            or metadata is None
+            or metadata.attempt_id != attempt_id
+            or metadata.execution_epoch != epoch
+            or not self._session_workspaces.get(session_id)
+            or not execution_token
         ):
             raise ValueError("Policy attachment requires the exact attributed session and trusted workspace")
         self._policy_router[job_id] = router
@@ -507,6 +573,9 @@ class BaseAgentAdapter(AgentAdapterInterface):
         tool_name: str = "",
         tool_input: dict[str, Any] | None = None,
         fence: tuple[str | None, object] | None = None,
+        tool_call_id: str | None = None,
+        dialect: str | None = None,
+        tool_definition: str = "",
     ) -> PermissionDecision:
         """Evaluate a tool permission request against CodePlane's policy.
 
@@ -523,6 +592,43 @@ class BaseAgentAdapter(AgentAdapterInterface):
         if owner is not None and owner != job_id:
             log.error("permission_session_owner_mismatch", session_id=session_id, job_id=job_id)
             return PermissionDecision.deny
+        from backend.services.action_policy.session_policy import PermissionInvocation, SessionPolicy
+
+        router = self._policy_router.get(job_id) if job_id is not None else None
+        if isinstance(router, SessionPolicy):
+            workspace = self._session_workspaces.get(session_id)
+            if not job_id or not workspace:
+                log.error("permission_session_context_missing", session_id=session_id, job_id=job_id)
+                return PermissionDecision.deny
+
+            async def current() -> bool:
+                return (
+                    self._permission_fence_is_current(session_id, fence) and self._policy_router.get(job_id) is router
+                )
+
+            try:
+                arguments_json = json.dumps(tool_input or {}, sort_keys=True, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                log.error("permission_arguments_invalid", session_id=session_id, job_id=job_id)
+                return PermissionDecision.deny
+            allowed = await router.authorize_permission(
+                PermissionInvocation(
+                    job_id=job_id,
+                    session_id=session_id,
+                    provider=self._source_framework,
+                    metadata=self._event_metadata(session_id),
+                    workspace=workspace,
+                    protected_paths=self._session_protected_paths.get(session_id, ()),
+                    request=request,
+                    tool_name=tool_name,
+                    arguments_json=arguments_json,
+                    is_current=current,
+                    tool_call_id=tool_call_id,
+                    dialect=dialect,
+                    tool_definition=tool_definition,
+                )
+            )
+            return PermissionDecision.allow if allowed and await current() else PermissionDecision.deny
 
         # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
         # reset --hard, force-push) always reach the operator — this pre-check
@@ -557,7 +663,10 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
         else:
             log.error(
-                "no_policy_router_for_job", job_id=job_id, session_id=session_id, tool_name=tool_name,
+                "no_policy_router_for_job",
+                job_id=job_id,
+                session_id=session_id,
+                tool_name=tool_name,
             )
             return PermissionDecision.deny
         if not self._permission_fence_is_current(session_id, fence):
@@ -694,14 +803,18 @@ class BaseAgentAdapter(AgentAdapterInterface):
         return resolution
 
     async def _retire_approval_if_stale(
-        self, session_id: str, fence: tuple[str | None, object], approval_id: str,
+        self,
+        session_id: str,
+        fence: tuple[str | None, object],
+        approval_id: str,
     ) -> bool:
         if self._permission_fence_is_current(session_id, fence):
             return False
         assert self._approval_service is not None
         try:
             await self._approval_service.resolve(
-                approval_id, ApprovalResolution.rejected,
+                approval_id,
+                ApprovalResolution.rejected,
                 notes="Originating execution changed before permission release",
             )
         except (ApprovalAlreadyResolvedError, ApprovalNotFoundError):

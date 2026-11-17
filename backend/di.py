@@ -170,13 +170,19 @@ class RequestProvider(Provider):
 
     @provide
     def history_registration(
-        self, bindings: IntegrationRepository, jobs: JobRepository, projects: ProjectRepository,
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        projects: ProjectRepository,
     ) -> HistoryRegistration:
         return HistoryRegistration(bindings, jobs, projects)
 
     @provide
     def observation_records(
-        self, bindings: IntegrationRepository, jobs: JobRepository, event_bus: EventBus,
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        event_bus: EventBus,
     ) -> ObservationRecords:
         return ObservationRecords(bindings, jobs, event_bus)
 

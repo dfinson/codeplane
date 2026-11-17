@@ -15,8 +15,11 @@ if TYPE_CHECKING:
 
 class ExecutionContracts:
     def __init__(
-        self, repository: ExecutionContractRepository, *,
-        available: Mapping[str, ExecutionContract], selected_for_new: str,
+        self,
+        repository: ExecutionContractRepository,
+        *,
+        available: Mapping[str, ExecutionContract],
+        selected_for_new: str,
     ) -> None:
         self._repository = repository
         self._available = {key: value.model_copy(deep=True) for key, value in available.items()}
@@ -39,7 +42,9 @@ class ExecutionContracts:
             self.require_available(retained)
             return retained
         pin = ExecutionContractPin(
-            job_id=job_id, admission_id=admission_id, budget_id=job_id,
+            job_id=job_id,
+            admission_id=admission_id,
+            budget_id=job_id,
             contract=self._available[self._selected].model_copy(deep=True),
         )
         return await self._repository.create(pin)
@@ -52,11 +57,21 @@ class ExecutionContracts:
         return pin
 
     async def bind_handle(
-        self, pin: ExecutionContractPin, *, sdk: str, session_id: str,
-        live_epoch: str, execution_token: str, attempt_id: str | None = None,
+        self,
+        pin: ExecutionContractPin,
+        *,
+        sdk: str,
+        session_id: str,
+        live_epoch: str,
+        execution_token: str,
+        attempt_id: str | None = None,
     ) -> None:
         self.require_available(pin)
         await self._repository.bind_handle(
-            pin, sdk=sdk, session_id=session_id, live_epoch=live_epoch,
-            execution_token=execution_token, attempt_id=attempt_id,
+            pin,
+            sdk=sdk,
+            session_id=session_id,
+            live_epoch=live_epoch,
+            execution_token=execution_token,
+            attempt_id=attempt_id,
         )

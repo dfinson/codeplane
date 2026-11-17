@@ -4,14 +4,19 @@ from backend.services.events.sse_manager import SSEConnection
 
 
 async def test_observation_registration_and_readback_never_launch_workspace_or_sdk(
-    client, session_factory, mock_runtime_service, mock_git_service,
+    client,
+    session_factory,
+    mock_runtime_service,
+    mock_git_service,
 ):
     async with session_factory() as session:
         await ProjectRepository(session).create("observations", "Observations", [])
         await session.commit()
     body = {
-        "bindingId": "source-binding", "projectId": "observations",
-        "formatId": "copilot", "externalSessionId": "external-vendor-label",
+        "bindingId": "source-binding",
+        "projectId": "observations",
+        "formatId": "copilot",
+        "externalSessionId": "external-vendor-label",
     }
     response = await client.post("/api/integrations/observations", json=body)
     assert response.status_code == 201, response.text
@@ -29,7 +34,9 @@ async def test_observation_registration_and_readback_never_launch_workspace_or_s
 
 async def test_observation_registration_rejects_unowned_project_and_invalid_format(client):
     body = {
-        "bindingId": "binding", "projectId": "missing", "formatId": "copilot",
+        "bindingId": "binding",
+        "projectId": "missing",
+        "formatId": "copilot",
         "externalSessionId": "external",
     }
     missing = await client.post("/api/integrations/observations", json=body)
@@ -39,14 +46,25 @@ async def test_observation_registration_rejects_unowned_project_and_invalid_form
 
 
 async def test_records_use_processor_and_durable_checkpoint_without_retry_duplicates(
-    client, session_factory, mock_runtime_service, mock_git_service, event_bus, sse_manager,
+    client,
+    session_factory,
+    mock_runtime_service,
+    mock_git_service,
+    event_bus,
+    sse_manager,
 ):
     async with session_factory() as session:
         await ProjectRepository(session).create("observations", "Observations", [])
         await session.commit()
-    created = await client.post("/api/integrations/observations", json={
-        "bindingId": "records", "projectId": "observations", "formatId": "copilot", "externalSessionId": "source",
-    })
+    created = await client.post(
+        "/api/integrations/observations",
+        json={
+            "bindingId": "records",
+            "projectId": "observations",
+            "formatId": "copilot",
+            "externalSessionId": "source",
+        },
+    )
     job_id = created.json()["id"]
     connection = SSEConnection(job_id=job_id)
     sse_manager.register(connection)
@@ -58,12 +76,21 @@ async def test_records_use_processor_and_durable_checkpoint_without_retry_duplic
         await sse_manager.broadcast_domain_event(event, storage_cursor=cursor)
 
     event_bus.subscribe(deliver, required=True)
-    first = {"sourceKey": "events", "startIndex": 0, "records": [
-        {"type": "user.message", "data": {"content": "Read the project"}},
-        {"type": "tool.execution_start", "data": {
-            "toolCallId": "tool", "toolName": "view", "arguments": {"path": "a"},
-        }},
-    ]}
+    first = {
+        "sourceKey": "events",
+        "startIndex": 0,
+        "records": [
+            {"type": "user.message", "data": {"content": "Read the project"}},
+            {
+                "type": "tool.execution_start",
+                "data": {
+                    "toolCallId": "tool",
+                    "toolName": "view",
+                    "arguments": {"path": "a"},
+                },
+            },
+        ],
+    }
     accepted = await client.post("/api/integrations/records/records", json=first)
     assert accepted.status_code == 200, accepted.text
     receipt = accepted.json()
@@ -72,11 +99,21 @@ async def test_records_use_processor_and_durable_checkpoint_without_retry_duplic
     repeat = await client.post("/api/integrations/records/records", json=first)
     assert repeat.status_code == 200 and repeat.json()["replay"]
     assert connection.queue.qsize() == first_frame_count
-    second = {"sourceKey": "events", "startIndex": 2, "prefixSha256": receipt["prefixSha256"], "records": [
-        {"type": "tool.execution_complete", "data": {
-            "toolCallId": "tool", "success": True, "result": {"content": "data"},
-        }},
-    ]}
+    second = {
+        "sourceKey": "events",
+        "startIndex": 2,
+        "prefixSha256": receipt["prefixSha256"],
+        "records": [
+            {
+                "type": "tool.execution_complete",
+                "data": {
+                    "toolCallId": "tool",
+                    "success": True,
+                    "result": {"content": "data"},
+                },
+            },
+        ],
+    }
     finished = await client.post("/api/integrations/records/records", json=second)
     assert finished.status_code == 200, finished.text
     earlier_retry = await client.post("/api/integrations/records/records", json=first)
@@ -111,24 +148,37 @@ async def test_whole_invalid_batch_and_oversized_body_write_nothing(client, sess
     async with session_factory() as session:
         await ProjectRepository(session).create("observations", "Observations", [])
         await session.commit()
-    await client.post("/api/integrations/observations", json={
-        "bindingId": "invalid", "projectId": "observations", "formatId": "copilot", "externalSessionId": "source",
-    })
-    invalid = await client.post("/api/integrations/invalid/records", json={
-        "sourceKey": "events", "startIndex": 0, "records": [
-            {"type": "user.message", "data": {"content": "Valid prefix"}},
-            {"type": "assistant.message", "timestamp": "invalid-time", "data": {"content": "Invalid suffix"}},
-        ],
-    })
+    await client.post(
+        "/api/integrations/observations",
+        json={
+            "bindingId": "invalid",
+            "projectId": "observations",
+            "formatId": "copilot",
+            "externalSessionId": "source",
+        },
+    )
+    invalid = await client.post(
+        "/api/integrations/invalid/records",
+        json={
+            "sourceKey": "events",
+            "startIndex": 0,
+            "records": [
+                {"type": "user.message", "data": {"content": "Valid prefix"}},
+                {"type": "assistant.message", "timestamp": "invalid-time", "data": {"content": "Invalid suffix"}},
+            ],
+        },
+    )
     assert invalid.status_code == 400
     assert (await client.get("/api/integrations/invalid/events")).json()["events"] == []
     oversized = await client.post(
-        "/api/integrations/invalid/records", content=b" " * (1024 * 1024 + 1),
+        "/api/integrations/invalid/records",
+        content=b" " * (1024 * 1024 + 1),
         headers={"content-type": "application/json"},
     )
     assert oversized.status_code == 413
     at_limit = await client.post(
-        "/api/integrations/invalid/records", content=b" " * (1024 * 1024),
+        "/api/integrations/invalid/records",
+        content=b" " * (1024 * 1024),
         headers={"content-type": "application/json"},
     )
     assert at_limit.status_code == 422  # Bounded, but not a JSON record batch.
@@ -140,17 +190,23 @@ async def test_binding_ids_are_addressable_without_restricting_source_identities
         await ProjectRepository(session).create("observations", "Observations", [])
         await session.commit()
     body = {
-        "bindingId": "team/session", "projectId": "observations",
-        "formatId": "copilot", "externalSessionId": "vendor/session",
+        "bindingId": "team/session",
+        "projectId": "observations",
+        "formatId": "copilot",
+        "externalSessionId": "vendor/session",
     }
     rejected = await client.post("/api/integrations/observations", json=body)
     assert rejected.status_code == 422
     created = await client.post("/api/integrations/observations", json={**body, "bindingId": "team_session"})
     assert created.status_code == 201
-    accepted = await client.post("/api/integrations/team_session/records", json={
-        "sourceKey": "channel/with/slashes", "startIndex": 0,
-        "records": [{"type": "assistant.message", "data": {"content": "Retained"}}],
-    })
+    accepted = await client.post(
+        "/api/integrations/team_session/records",
+        json={
+            "sourceKey": "channel/with/slashes",
+            "startIndex": 0,
+            "records": [{"type": "assistant.message", "data": {"content": "Retained"}}],
+        },
+    )
     assert accepted.status_code == 200
     retained = (await client.get("/api/integrations/team_session/events")).json()["events"]
     message = next(event for event in retained if event["kind"] == "message.assistant")

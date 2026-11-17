@@ -115,8 +115,15 @@ class TestSessionState:
             adapter._queues[sid] = asyncio.Queue()
             adapter.set_job_id(sid, "job")
             adapter.set_session_metadata(
-                sid, SessionConfig(workspace_path="/repo", prompt="", job_id="job", attempt_id=attempt,
-                                   execution_epoch="epoch", recipe_run_id="run"),
+                sid,
+                SessionConfig(
+                    workspace_path="/repo",
+                    prompt="",
+                    job_id="job",
+                    attempt_id=attempt,
+                    execution_epoch="epoch",
+                    recipe_run_id="run",
+                ),
             )
         adapter._verify_and_set_model("first", "job", "served-one", "requested-one")
         adapter._verify_and_set_model("second", "job", "served-two", "requested-two")
@@ -125,7 +132,8 @@ class TestSessionState:
         assert adapter._job_main_models["job"] == "primary-model"
         adapter._schedule_db_write.assert_not_called()
         for sid, attempt, actual in (
-            ("first", "attempt-one", "served-one"), ("second", "attempt-two", "served-two"),
+            ("first", "attempt-one", "served-one"),
+            ("second", "attempt-two", "served-two"),
         ):
             observed = adapter._queues[sid].get_nowait()
             mismatch = adapter._queues[sid].get_nowait()

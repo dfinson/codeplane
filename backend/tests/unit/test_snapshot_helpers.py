@@ -105,11 +105,17 @@ class TestBuildLogs:
 class TestBuildTranscript:
     def test_failed_tool_keeps_scope_identity_and_error_even_when_normally_hidden(self) -> None:
         metadata = EventMetadata(
-            integration_binding_id="binding", run_id="source", namespace=("observation-source", "events"),
+            integration_binding_id="binding",
+            run_id="source",
+            namespace=("observation-source", "events"),
         )
         failure = _event(
-            kind=EventKind.tool_call_failed, tool_name="report_intent", tool_call_id="call",
-            error={"message": "Denied"}, result={"detail": "No execution proof"}, metadata=metadata,
+            kind=EventKind.tool_call_failed,
+            tool_name="report_intent",
+            tool_call_id="call",
+            error={"message": "Denied"},
+            result={"detail": "No execution proof"},
+            metadata=metadata,
         )
         transcript = _build_transcript([failure], [], None, None, filter_deltas=True)
         assert len(transcript) == 1

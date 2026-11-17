@@ -149,15 +149,19 @@ class StepTracker:
             state = asdict(current)
             state["started_at"] = current.started_at.isoformat()
         return {
-            "version": 1, "counter": self._counters.get(job_id, 0), "current": state,
+            "version": 1,
+            "counter": self._counters.get(job_id, 0),
+            "current": state,
             "buffer": [dict(entry) for entry in self._transcript_buffers.get(job_id, ())],
             "source_timestamps": self._source_timestamps,
             "source_clock": (
                 {
                     "timestamp": self._source_clock[job_id].timestamp.isoformat(),
-                    "event_id": self._source_clock[job_id].event_id, "known": self._source_clock[job_id].known,
+                    "event_id": self._source_clock[job_id].event_id,
+                    "known": self._source_clock[job_id].known,
                 }
-                if job_id in self._source_clock else None
+                if job_id in self._source_clock
+                else None
             ),
         }
 
@@ -453,7 +457,11 @@ class StepTracker:
         )
         self._current[job_id] = state
         payload: StepStartedPayloadDict = {
-            "step_id": step_id, "step_number": n, "turn_id": turn_id, "intent": intent, "trigger": trigger,
+            "step_id": step_id,
+            "step_number": n,
+            "turn_id": turn_id,
+            "intent": intent,
+            "trigger": trigger,
             "timing_source": "source" if self._source_timestamps else "live",
         }
         if self._source_timestamps:
@@ -483,12 +491,13 @@ class StepTracker:
             clock = self._source_clock.get(job_id)
             now = clock.timestamp if clock is not None else state.started_at
             end_known = (
-                clock is not None and clock.known and clock.event_id != state.source_start_event_id
+                clock is not None
+                and clock.known
+                and clock.event_id != state.source_start_event_id
                 and (not state.source_start_known or now >= state.started_at)
             )
             duration_ms = (
-                int((now - state.started_at).total_seconds() * 1000)
-                if state.source_start_known and end_known else None
+                int((now - state.started_at).total_seconds() * 1000) if state.source_start_known and end_known else None
             )
             timing = {
                 "timing_source": "source",

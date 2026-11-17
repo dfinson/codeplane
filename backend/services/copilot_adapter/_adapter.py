@@ -275,6 +275,8 @@ class CopilotAdapter(BaseAgentAdapter):
             tool_name=tool_name,
             tool_input=tool_input or None,
             fence=fence,
+            tool_call_id=getattr(request, "tool_call_id", None),
+            dialect="powershell" if tool_name == "powershell" else "bash" if tool_name in {"bash", "Bash"} else None,
         )
         if decision == PermissionDecision.allow:
             return PermissionDecisionApproveOnce()
@@ -531,6 +533,18 @@ class CopilotAdapter(BaseAgentAdapter):
                         "is_subagent": is_subagent,
                         "advance_turn": True,
                         "num_turns": 1,
+                        "native_usage": self._native_usage(
+                            session_id,
+                            {
+                                "input_tokens": au.input_tokens,
+                                "output_tokens": au.output_tokens,
+                                "cache_read_tokens": au.cache_read_tokens,
+                                "cache_write_tokens": au.cache_write_tokens,
+                                "copilot_cost_unit": au.cost,
+                            },
+                            "assistant.usage",
+                            model=actual_model or None,
+                        ),
                     },
                 )
 
@@ -583,9 +597,13 @@ class CopilotAdapter(BaseAgentAdapter):
         elif kind_str == "session.model_change":
             mc = cast("SessionModelChangeData", data) if data else None
             metadata = self._session_metadata.get(session_id)
-            if mc and mc.new_model and (
-                self.get_session_kind(session_id) != "preflight"
-                or (metadata is not None and metadata.attempt_id is not None)
+            if (
+                mc
+                and mc.new_model
+                and (
+                    self.get_session_kind(session_id) != "preflight"
+                    or (metadata is not None and metadata.attempt_id is not None)
+                )
             ):
                 if metadata is not None and metadata.attempt_id is not None:
                     self._verify_and_set_model(session_id, job_id, mc.new_model, requested_model)
@@ -679,6 +697,8 @@ class CopilotAdapter(BaseAgentAdapter):
     async def _create_owned_session(self, client: CopilotClient, lease_id: str, config: SessionConfig) -> str:
         from copilot._jsonrpc import JsonRpcError, ProcessExitedError
 
+        from backend.services.action_policy.session_policy import SessionPolicy
+
         # Thin closure that delegates to the instance method, capturing only `config`.
         async def _on_permission(
             request: PermissionRequest, invocation: PermissionInvocation
@@ -688,11 +708,12 @@ class CopilotAdapter(BaseAgentAdapter):
         async def _guard_invocation(
             request: PreToolUseHookInput, invocation: dict[str, str]
         ) -> PreToolUseHookOutput | None:
-            from backend.services.adapters.capability_guard import enforce_invocation_capabilities
+            from backend.services.adapters.capability_guard import (
+                enforce_tool_capabilities,
+                invocation_permission_request,
+            )
             from backend.services.adapters.contracts import CapabilityDeniedError
 
-            if config.execution_capabilities is None:
-                return None
             sid = invocation.get("session_id", "")
             fence = self._capture_permission_fence(sid)
             try:
@@ -701,22 +722,46 @@ class CopilotAdapter(BaseAgentAdapter):
                 arguments = request.get("toolArgs")
                 if not isinstance(arguments, dict):
                     raise CapabilityDeniedError("Tool arguments are unavailable for capability enforcement")
-                await enforce_invocation_capabilities(
+                permission_request = invocation_permission_request(
+                    config.workspace_path,
+                    request["toolName"],
+                    arguments,
+                )
+                await enforce_tool_capabilities(
                     config.execution_capabilities,
                     workspace=config.workspace_path,
+                    kind=permission_request.kind,
                     tool_name=request["toolName"],
-                    arguments=arguments,
+                    paths=permission_request.possible_paths or (),
+                    command=permission_request.full_command_text,
                     dialect="powershell" if request["toolName"] == "powershell" else None,
                 )
                 if not self._permission_fence_is_current(sid, fence):
                     raise CapabilityDeniedError("Tool callback no longer owns the current execution")
+                if isinstance(self._policy_router.get(config.job_id), SessionPolicy):
+                    decision = await self._evaluate_permission(
+                        sid,
+                        config.job_id,
+                        permission_request,
+                        tool_name=request["toolName"],
+                        tool_input=arguments,
+                        fence=fence,
+                        tool_call_id=request.get("toolCallId"),
+                        dialect="powershell"
+                        if request["toolName"] == "powershell"
+                        else "bash"
+                        if request["toolName"].lower() == "bash"
+                        else None,
+                    )
+                    return {"permissionDecision": "allow" if decision == PermissionDecision.allow else "deny"}
             except CapabilityDeniedError as exc:
                 log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
                 return {"permissionDecision": "deny", "permissionDecisionReason": str(exc)}
             return None
 
+        standalone = isinstance(self._policy_router.get(config.job_id), SessionPolicy)
         hooks: SessionHooks | None = (
-            {"on_pre_tool_use": _guard_invocation} if config.execution_capabilities is not None else None
+            {"on_pre_tool_use": _guard_invocation} if config.execution_capabilities is not None or standalone else None
         )
         if config.system_prompt_override:
             # Sidecar/preflight sessions define their own identity — skip the

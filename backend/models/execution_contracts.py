@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Identity = Annotated[str, Field(min_length=1, max_length=256)]
@@ -45,6 +45,27 @@ class ExecutionContractPin(BaseModel):
     contract: ExecutionContract
 
 
+class LegacyStartIntent(BaseModel):
+    """Accepted start inputs, independent of whether invocation has begun."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instruction: str
+    source_session_number: int | None = Field(default=None, ge=1)
+    target_session_number: int = Field(ge=1)
+    resume_sdk_session_id: str | None = None
+    handoff_required: bool = False
+    dispatch_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def valid_handoff(self) -> LegacyStartIntent:
+        if self.handoff_required and (self.source_session_number is None or self.resume_sdk_session_id is not None):
+            raise ValueError("A deferred handoff requires an exact source session and no native-history target")
+        if self.handoff_required and self.dispatch_prompt is not None:
+            raise ValueError("Deferred handoff text cannot be presented as an already prepared prompt")
+        return self
+
+
 class ExecutionAdmission(BaseModel):
     """A declared legacy invocation, not a successful execution or SDK session."""
 
@@ -54,3 +75,4 @@ class ExecutionAdmission(BaseModel):
     job_id: Identity
     origin: Literal["creation", "continuation"]
     previous_admission_id: Identity | None = None
+    start_intent: LegacyStartIntent | None = None

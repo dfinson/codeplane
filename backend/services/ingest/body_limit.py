@@ -16,8 +16,10 @@ class ObservationBodyLimit:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
-        if scope["type"] != "http" or scope.get("method") != "POST" or not (
-            path.startswith("/api/integrations/") and path.endswith("/records")
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or not (path.startswith("/api/integrations/") and path.endswith("/records"))
         ):
             await self.app(scope, receive, send)
             return

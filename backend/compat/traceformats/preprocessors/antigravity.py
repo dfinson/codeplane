@@ -73,7 +73,10 @@ def preprocess_antigravity(obj: dict[str, Any]) -> list[dict[str, Any]]:
     base = _common(obj)
 
     if stype == _TEXT:
-        event_type = _TEXT_BY_SOURCE.get(obj.get("source"), "assistant_message")
+        source = obj.get("source")
+        event_type = (
+            _TEXT_BY_SOURCE.get(source, "assistant_message") if isinstance(source, str) else "assistant_message"
+        )
         return [{**base, "event_type": event_type, "content": obj.get("content")}]
 
     if stype == _THINKING:

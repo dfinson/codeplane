@@ -39,8 +39,12 @@ class UnavailableTextCompletion:
         self.reason = reason
 
     async def complete(
-        self, prompt: str, *, model: str | None = None,
-        system_message: str | None = None, excluded_tools: list[str] | None = None,
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system_message: str | None = None,
+        excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
         raise UtilityCompletionError(self.reason, reason="provider_unavailable")
 
@@ -51,8 +55,12 @@ class _RegisteredTextCompletion:
         self._sdk = sdk
 
     async def complete(
-        self, prompt: str, *, model: str | None = None,
-        system_message: str | None = None, excluded_tools: list[str] | None = None,
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        system_message: str | None = None,
+        excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
         # Cached text wrappers must not outlive a provider's enablement.
         adapter = self._registry._resolve_completion_adapter(self._sdk)
@@ -69,7 +77,9 @@ class _RegisteredTextCompletion:
 
             try:
                 await self._registry.record_utility_receipt(
-                    operation_id, "requested", context,
+                    operation_id,
+                    "requested",
+                    context,
                     {"provider": str(self._sdk), "requested_model": model},
                 )
             except (OSError, SQLAlchemyError) as exc:
@@ -79,16 +89,22 @@ class _RegisteredTextCompletion:
                     reason="receipt_persistence_failed",
                 ) from exc
         result = await adapter.complete(
-            prompt, model=model, system_message=system_message,
+            prompt,
+            model=model,
+            system_message=system_message,
             excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
         )
         if context.execution_contract is not None:
             result = replace(result, usage_event_id=_utility_receipt_id(operation_id, "completed"))
             try:
                 await self._registry.record_utility_receipt(
-                    operation_id, "completed", context,
+                    operation_id,
+                    "completed",
+                    context,
                     {
-                        "provider": str(self._sdk), "requested_model": model, "actual_model": result.model or None,
+                        "provider": str(self._sdk),
+                        "requested_model": model,
+                        "actual_model": result.model or None,
                         "usage": [amount.model_dump(mode="json") for amount in result.usage],
                     },
                 )
@@ -96,7 +112,8 @@ class _RegisteredTextCompletion:
                 log.error("utility_receipt_persistence_failed", job_id=context.job_id, operation_id=operation_id)
                 raise UtilityCompletionError(
                     "Utility ran, but its completion receipt could not be persisted",
-                    reason="receipt_persistence_failed", completion=result,
+                    reason="receipt_persistence_failed",
+                    completion=result,
                 ) from exc
         return result
 
@@ -220,12 +237,17 @@ class AdapterRegistry:
         readiness = self.dependency_readiness(selected)
         if not readiness.ready:
             raise UtilityCompletionError(
-                readiness.reason or "The selected completion provider is unavailable", reason="provider_unavailable",
+                readiness.reason or "The selected completion provider is unavailable",
+                reason="provider_unavailable",
             )
         return self.get_adapter(selected)
 
     async def record_utility_receipt(
-        self, operation_id: str, phase: str, context: CompletionContext, payload: dict[str, object],
+        self,
+        operation_id: str,
+        phase: str,
+        context: CompletionContext,
+        payload: dict[str, object],
     ) -> str:
         from backend.models.events import new_event
         from backend.models.session_event import EventMetadata
@@ -237,19 +259,27 @@ class AdapterRegistry:
             raise UtilityCompletionError("Governed utility provenance is unavailable", reason="provider_unavailable")
         event_id = _utility_receipt_id(operation_id, phase)
         body: dict[str, object] = {
-            **payload, "operation_id": operation_id, "role": context.role,
-            "admission_id": pin.admission_id, "budget_id": pin.budget_id,
+            **payload,
+            "operation_id": operation_id,
+            "role": context.role,
+            "admission_id": pin.admission_id,
+            "budget_id": pin.budget_id,
             "contract": pin.contract.model_dump(mode="json"),
         }
         async with serialized_write(self._session_factory) as session:
-            await EventRepository(session).append(new_event(
-                context.job_id, f"utility.completion.{phase}", body,
-                event_id=event_id,
-                metadata=EventMetadata(
-                    source_framework="codeplane", namespace=("control", "utility"),
-                    execution_epoch=context.execution_epoch,
-                ),
-            ))
+            await EventRepository(session).append(
+                new_event(
+                    context.job_id,
+                    f"utility.completion.{phase}",
+                    body,
+                    event_id=event_id,
+                    metadata=EventMetadata(
+                        source_framework="codeplane",
+                        namespace=("control", "utility"),
+                        execution_epoch=context.execution_epoch,
+                    ),
+                )
+            )
         return event_id
 
     def _create(self, sdk: AgentSDK) -> AgentAdapterInterface:

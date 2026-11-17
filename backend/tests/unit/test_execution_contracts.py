@@ -19,7 +19,11 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 def _contract(name):
     component = ImplementationPin(id=f"test-{name}", sha256="a" * 64)
     return ExecutionContract(
-        id=name, policy=component, parser=component, grouping=component, title=component,
+        id=name,
+        policy=component,
+        parser=component,
+        grouping=component,
+        title=component,
         grammars=(ImplementationPin(id="test-grammar", sha256="b" * 64),),
     )
 
@@ -34,7 +38,11 @@ async def test_restart_reuses_admission_pin_while_live_epoch_and_token_change(se
     restored = await restarted.recover("job-1", "run")
     assert restored == pin
     await restarted.bind_handle(
-        restored, sdk="copilot", session_id="reused", live_epoch="two", execution_token="token-two",
+        restored,
+        sdk="copilot",
+        session_id="reused",
+        live_epoch="two",
+        execution_token="token-two",
     )
     async with session_factory() as session:
         events = [item.event for item in await EventRepository(session).list_after(0, job_id="job-1")]
@@ -72,10 +80,15 @@ async def test_identical_pin_retry_is_idempotent_and_conflicting_pin_fails(sessi
 async def test_observed_pin_looking_event_cannot_be_consumed_as_admission_authority(session_factory):
     pin = ExecutionContractPin(job_id="job-1", admission_id="run", budget_id="job-1", contract=_contract("old"))
     async with session_factory() as session:
-        await EventRepository(session).append(new_event(
-            "job-1", "execution.contract.pinned", pin.model_dump(mode="json"), event_id=_identity("job-1", "run"),
-            metadata=EventMetadata(integration_binding_id="binding", namespace=("observation-source", "events")),
-        ))
+        await EventRepository(session).append(
+            new_event(
+                "job-1",
+                "execution.contract.pinned",
+                pin.model_dump(mode="json"),
+                event_id=_identity("job-1", "run"),
+                metadata=EventMetadata(integration_binding_id="binding", namespace=("observation-source", "events")),
+            )
+        )
         await session.commit()
     with pytest.raises(StateConflictError, match="untrusted provenance"):
         await ExecutionContractRepository(session_factory).get("job-1", "run")
@@ -84,14 +97,19 @@ async def test_observed_pin_looking_event_cannot_be_consumed_as_admission_author
 async def test_abandoned_continuation_restores_selection_without_erasing_admission_or_pin(session_factory):
     initial = ExecutionAdmission(id="initial", job_id="job-1", origin="creation")
     continuation = ExecutionAdmission(
-        id="continuation", job_id="job-1", origin="continuation", previous_admission_id=initial.id,
+        id="continuation",
+        job_id="job-1",
+        origin="continuation",
+        previous_admission_id=initial.id,
     )
     async with session_factory() as session:
         admissions = ExecutionAdmissionRepository(session)
         await admissions.declare_legacy(initial, expected_current=None)
         await session.commit()
     contracts = ExecutionContracts(
-        ExecutionContractRepository(session_factory), available={"old": _contract("old")}, selected_for_new="old",
+        ExecutionContractRepository(session_factory),
+        available={"old": _contract("old")},
+        selected_for_new="old",
     )
     first_pin = await contracts.fresh("job-1", initial.id)
     async with session_factory() as session:
@@ -129,14 +147,19 @@ async def test_source_observation_cannot_select_a_legacy_admission(session_facto
 
     admission = ExecutionAdmission(id="forged", job_id="job-1", origin="creation")
     async with session_factory() as session:
-        await EventRepository(session).append(new_event(
-            "job-1", _DECLARED, admission.model_dump(mode="json"),
-            event_id=admission_identity("job-1", admission.id, _DECLARED),
-            metadata=EventMetadata(
-                source_framework="codeplane", namespace=("control", "legacy-admission"),
-                integration_binding_id="observed",
-            ),
-        ))
+        await EventRepository(session).append(
+            new_event(
+                "job-1",
+                _DECLARED,
+                admission.model_dump(mode="json"),
+                event_id=admission_identity("job-1", admission.id, _DECLARED),
+                metadata=EventMetadata(
+                    source_framework="codeplane",
+                    namespace=("control", "legacy-admission"),
+                    integration_binding_id="observed",
+                ),
+            )
+        )
         await session.commit()
     async with session_factory() as session:
         with pytest.raises(StateConflictError, match="untrusted"):

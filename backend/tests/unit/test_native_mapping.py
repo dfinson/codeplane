@@ -71,9 +71,13 @@ def test_assistant_and_metadata_records_without_native_identity_share_one_source
     decoder = _decoder("copilot", binding_id="binding")
     events = [
         decoder.decode({"type": kind, "data": {"content": content}}, index)[0]
-        for index, (kind, content) in enumerate((
-            ("assistant.message", "First"), ("session.info", "Metadata"), ("assistant.message", "Second"),
-        ))
+        for index, (kind, content) in enumerate(
+            (
+                ("assistant.message", "First"),
+                ("session.info", "Metadata"),
+                ("assistant.message", "Second"),
+            )
+        )
     ]
     assert len({event.payload["turn_id"] for event in events}) == 1
     assert all(event.payload["_codeplane_grouping"] == {"derived": True, "basis": "source_session"} for event in events)
@@ -104,7 +108,12 @@ def test_native_request_groups_are_source_scoped_and_explicit_turns_take_precede
 
     def decoder(binding, source):
         return NativeMappingDecoder(
-            path, job_id="job", external_session_id="session", binding_id=binding, source_key=source, anchor=ANCHOR,
+            path,
+            job_id="job",
+            external_session_id="session",
+            binding_id=binding,
+            source_key=source,
+            anchor=ANCHOR,
         )
 
     first = decoder("binding", "first")

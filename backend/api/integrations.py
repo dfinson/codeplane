@@ -24,8 +24,13 @@ async def register_observation(
 ) -> JobResponse:
     try:
         job = await service.register(
-            binding_id=body.binding_id, project_id=body.project_id, format_id=body.format_id,
-            external_session_id=body.external_session_id, title=body.title, repo=body.repo, base_ref=body.base_ref,
+            binding_id=body.binding_id,
+            project_id=body.project_id,
+            format_id=body.format_id,
+            external_session_id=body.external_session_id,
+            title=body.title,
+            repo=body.repo,
+            base_ref=body.base_ref,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -34,7 +39,9 @@ async def register_observation(
 
 @router.post("/{binding_id}/records", response_model=ObservationRecordReceipt)
 async def append_observation_records(
-    binding_id: str, body: ObservationRecordBatch, service: FromDishka[ObservationRecords],
+    binding_id: str,
+    body: ObservationRecordBatch,
+    service: FromDishka[ObservationRecords],
 ) -> ObservationRecordReceipt:
     try:
         return await service.append(binding_id, body)
@@ -44,8 +51,11 @@ async def append_observation_records(
 
 @router.get("/{binding_id}/events", response_model=ObservationEventList)
 async def get_observation_events(
-    binding_id: str, bindings: FromDishka[IntegrationRepository], events: FromDishka[EventRepository],
-    after: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=1000),
+    binding_id: str,
+    bindings: FromDishka[IntegrationRepository],
+    events: FromDishka[EventRepository],
+    after: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
 ) -> ObservationEventList:
     binding = await bindings.get(binding_id)
     if binding is None or binding.job_id is None:

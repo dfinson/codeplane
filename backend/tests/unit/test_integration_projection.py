@@ -32,7 +32,9 @@ async def test_concurrent_channels_cas_one_shared_projection_without_partial_pro
             projects = ProjectRepository(session)
             await projects.create("project", "Project", [])
             job = await HistoryRegistration(
-                IntegrationRepository(session), JobRepository(session), projects,
+                IntegrationRepository(session),
+                JobRepository(session),
+                projects,
             ).register(binding_id="binding", project_id="project", format_id="copilot", external_session_id="source")
             await session.commit()
         ready = asyncio.Event()
@@ -50,11 +52,17 @@ async def test_concurrent_channels_cas_one_shared_projection_without_partial_pro
         async def append(source):
             async with factory() as session:
                 return await ObservationRecords(
-                    IntegrationRepository(session), JobRepository(session), EventBus(),
-                ).append("binding", ObservationRecordBatch(
-                    source_key=source, start_index=0,
-                    records=[{"type": "assistant.message", "data": {"content": source}}],
-                ))
+                    IntegrationRepository(session),
+                    JobRepository(session),
+                    EventBus(),
+                ).append(
+                    "binding",
+                    ObservationRecordBatch(
+                        source_key=source,
+                        start_index=0,
+                        records=[{"type": "assistant.message", "data": {"content": source}}],
+                    ),
+                )
 
         with monkeypatch.context() as scoped:
             scoped.setattr(IntegrationRepository, "commit_records", simultaneous_commit)
@@ -84,20 +92,42 @@ def test_0080_retains_ambiguous_source_checkpoints_and_refuses_lossy_downgrade(t
         with engine.begin() as connection:
             old = MetaData()
             projects = Table("projects", old, autoload_with=connection)
-            connection.execute(projects.insert().values(
-                id="project", name="Existing", repo_paths="[]", created_at=now, updated_at=now,
-            ))
+            connection.execute(
+                projects.insert().values(
+                    id="project",
+                    name="Existing",
+                    repo_paths="[]",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
             bindings = Table("integration_bindings", old, autoload_with=connection)
-            connection.execute(bindings.insert().values(
-                id="binding", project_id="project", adapter_id="native", mode="observation",
-                created_at=now, updated_at=now,
-            ))
+            connection.execute(
+                bindings.insert().values(
+                    id="binding",
+                    project_id="project",
+                    adapter_id="native",
+                    mode="observation",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
             sources = Table("integration_source_checkpoints", old, autoload_with=connection)
-            connection.execute(sources.insert().values(
-                binding_id="binding", source_key="old-source", parser_revision="old-parser",
-                record_count=1, prefix_sha256="a" * 64, canonical_sha256="b" * 64, parser_sha256="c" * 64,
-                buffer_json='{ "unresolved_projection": true }', state="accepted", version=3, updated_at=now,
-            ))
+            connection.execute(
+                sources.insert().values(
+                    binding_id="binding",
+                    source_key="old-source",
+                    parser_revision="old-parser",
+                    record_count=1,
+                    prefix_sha256="a" * 64,
+                    canonical_sha256="b" * 64,
+                    parser_sha256="c" * 64,
+                    buffer_json='{ "unresolved_projection": true }',
+                    state="accepted",
+                    version=3,
+                    updated_at=now,
+                )
+            )
             before = tuple(connection.exec_driver_sql("SELECT * FROM integration_source_checkpoints").one())
         command.upgrade(config, "0080")
         with engine.connect() as connection:
@@ -108,11 +138,19 @@ def test_0080_retains_ambiguous_source_checkpoints_and_refuses_lossy_downgrade(t
         command.upgrade(config, "0080")
         with engine.begin() as connection:
             projection = Table("integration_projection_checkpoints", MetaData(), autoload_with=connection)
-            connection.execute(projection.insert().values(
-                binding_id="binding", parser_revision="new-parser", parser_sha256="a" * 64,
-                canonical_sha256="b" * 64, buffer_json="{}", state="reconciliation_required",
-                error_code="explicit_comparison_required", version=1, updated_at=now,
-            ))
+            connection.execute(
+                projection.insert().values(
+                    binding_id="binding",
+                    parser_revision="new-parser",
+                    parser_sha256="a" * 64,
+                    canonical_sha256="b" * 64,
+                    buffer_json="{}",
+                    state="reconciliation_required",
+                    error_code="explicit_comparison_required",
+                    version=1,
+                    updated_at=now,
+                )
+            )
         with pytest.raises(RuntimeError, match="projection history is present"):
             command.downgrade(config, "0079")
         with engine.connect() as connection:

@@ -38,18 +38,26 @@ from backend.services.sidecar.dispatcher import (
 
 async def test_observation_history_cannot_trigger_another_jobs_sidecar() -> None:
     dispatcher = SidecarDispatcher(AsyncMock(), AsyncMock())
-    definition = hydrate_definition({
-        "name": "observer", "lifetime": "ephemeral",
-        "triggers": [{"condition": {"kind": "event", "eventKind": "message.assistant", "once": True}}],
-    })
+    definition = hydrate_definition(
+        {
+            "name": "observer",
+            "lifetime": "ephemeral",
+            "triggers": [{"condition": {"kind": "event", "eventKind": "message.assistant", "once": True}}],
+        }
+    )
     dispatcher.activate("managed-job", [definition])
     dispatcher._try_execute = AsyncMock()
-    await dispatcher.handle_event(new_event(
-        "observation-job", EventKind.message_assistant, {"content": "Imported history"},
-        metadata=EventMetadata(integration_binding_id="binding", namespace=("observation-source", "log")),
-    ))
+    await dispatcher.handle_event(
+        new_event(
+            "observation-job",
+            EventKind.message_assistant,
+            {"content": "Imported history"},
+            metadata=EventMetadata(integration_binding_id="binding", namespace=("observation-source", "log")),
+        )
+    )
     dispatcher._try_execute.assert_not_awaited()
     assert dispatcher._jobs["managed-job"].fired_once == set()
+
 
 # ── _SafeFormatter ──
 

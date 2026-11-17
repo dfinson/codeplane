@@ -82,14 +82,19 @@ async def job_service(
 class TestRuntimeContract:
     @pytest.mark.parametrize("recipe_admission", [False, True])
     async def test_prepared_creation_uses_explicit_admission_owner(
-        self, job_service, session, recipe_admission,
+        self,
+        job_service,
+        session,
+        recipe_admission,
     ):
         from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
         from backend.tests.unit.conftest import make_job
 
         prepared = make_job(project_id="proj-default", repo="/repos/test")
         job = await job_service.persist_prepared_job(
-            prepared, revalidate_project=False, recipe_admission=recipe_admission,
+            prepared,
+            revalidate_project=False,
+            recipe_admission=recipe_admission,
         )
         await session.commit()
         admission = await ExecutionAdmissionRepository(session).current(job.id)

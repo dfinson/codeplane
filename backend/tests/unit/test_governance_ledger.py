@@ -105,3 +105,51 @@ async def test_sibling_vendor_call_ids_are_distinct_and_each_replay_is_deduplica
         assert not await ledger.record_completion(**arguments)
     totals = await ledger.totals("job", "epoch")
     assert totals.executed_calls == 2 and totals.unaccounted == 0
+
+
+async def test_job_budget_retains_prior_epochs_and_uncertainty_after_restart(tmp_path) -> None:
+    path = tmp_path / "governance.db"
+    ledger = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    await ledger.initialize()
+    for job_id, epoch, call_id in (
+        ("job", "first-process", "first"),
+        ("job", "second-process", "second"),
+        ("job", "first-process", None),
+        ("other-job", "first-process", "unrelated"),
+    ):
+        await ledger.record_completion(
+            job_id=job_id,
+            epoch=epoch,
+            event_id=call_id or "unknown",
+            source_id="actual-session",
+            tool_call_id=call_id,
+            action_digest="digest",
+            executed=True,
+            succeeded=False,
+            destructive=True,
+        )
+        await ledger.record_usage(
+            call_id or "unknown",
+            UsageAmount(
+                amount=Decimal("0.125"),
+                unit="USD",
+                currency="USD",
+                verified=True,
+                producer="sdk",
+                role="primary",
+                source="provider.cost",
+                model=None,
+                job_id=job_id,
+                execution_epoch=epoch,
+            ),
+        )
+    restored = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    carried = await restored.job_totals("job")
+    assert carried.executed_calls == carried.destructive_calls == 2
+    assert carried.verified_usd == Decimal("0.375") and carried.verified_usd_present
+    assert carried.unaccounted == 1 and not carried.budget_accountable
+    current = await restored.totals("job", "second-process")
+    assert current.executed_calls == 1 and current.verified_usd == Decimal("0.125")
+    assert current.budget_accountable
+    empty = await restored.job_totals("new-job")
+    assert empty.executed_calls == 0 and not empty.verified_usd_present

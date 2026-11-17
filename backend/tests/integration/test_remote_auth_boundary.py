@@ -105,6 +105,8 @@ class TestRuntimeContract:
                 response = await client.get("/api/events", headers={"cf-access-jwt-assertion": "invalid"})
         assert response.status_code == 401
         verify.assert_called_once_with("invalid")
+
+
 def _access_only_process_fixture():
     """Owned synthetic verifier and real detached helper; never a public tunnel."""
     import json
@@ -153,11 +155,16 @@ def _access_only_process_fixture():
                 pass
 
             def do_GET(self):
-                request = Request({
-                    "type": "http", "method": "GET", "path": self.path.split("?")[0],
-                    "headers": [(k.lower().encode(), v.encode()) for k, v in self.headers.items()],
-                    "client": ("127.0.0.1", 1), "app": app,
-                })
+                request = Request(
+                    {
+                        "type": "http",
+                        "method": "GET",
+                        "path": self.path.split("?")[0],
+                        "headers": [(k.lower().encode(), v.encode()) for k, v in self.headers.items()],
+                        "client": ("127.0.0.1", 1),
+                        "app": app,
+                    }
+                )
                 authenticated = middleware.is_request_authenticated(request)
                 status = 200 if authenticated or self.path == "/api/health" else 401
                 self.send_response(status)
@@ -165,11 +172,16 @@ def _access_only_process_fixture():
                 self.wfile.write(json.dumps({"items": [{"id": "job-1"}], "hasMore": False}).encode())
 
             def do_POST(self):
-                request = Request({
-                    "type": "http", "method": "POST", "path": self.path,
-                    "headers": [(k.lower().encode(), v.encode()) for k, v in self.headers.items()],
-                    "client": ("127.0.0.1", 1), "app": app,
-                })
+                request = Request(
+                    {
+                        "type": "http",
+                        "method": "POST",
+                        "path": self.path,
+                        "headers": [(k.lower().encode(), v.encode()) for k, v in self.headers.items()],
+                        "client": ("127.0.0.1", 1),
+                        "app": app,
+                    }
+                )
                 allowed = middleware.is_request_authenticated(request) and self.path == "/api/jobs/job-1/pause"
                 if allowed:
                     write_json_atomic(Path(config["home"]) / "mutation.json", {"paused": True})
@@ -178,11 +190,21 @@ def _access_only_process_fixture():
 
         server = ThreadingHTTPServer(("127.0.0.1", config["port"]), Handler)
         profile = build_active_launch_profile(
-            executable=sys.executable, working_directory=config["root"], host="127.0.0.1",
-            port=server.server_port, dev=True, remote=True, provider="cloudflare",
-            tunnel_ownership="external", tunnel_name=None, tunnel_origin="https://access.example.test",
-            password_source=SecretSource.not_required(), tunnel_credential_source=SecretSource.not_required(),
-            started_pid=os.getpid(), started_process_time=psutil.Process().create_time(), auth_mode="access_only",
+            executable=sys.executable,
+            working_directory=config["root"],
+            host="127.0.0.1",
+            port=server.server_port,
+            dev=True,
+            remote=True,
+            provider="cloudflare",
+            tunnel_ownership="external",
+            tunnel_name=None,
+            tunnel_origin="https://access.example.test",
+            password_source=SecretSource.not_required(),
+            tunnel_credential_source=SecretSource.not_required(),
+            started_pid=os.getpid(),
+            started_process_time=psutil.Process().create_time(),
+            auth_mode="access_only",
         )
         write_active_launch_profile(profile)
         write_json_atomic(Path(config["home"]) / f"{role}.json", profile.to_dict())
@@ -202,8 +224,10 @@ def _access_only_process_fixture():
                 kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
             write_json_atomic(Path(config["home"]) / "replacement-channel.json", {"stdin": "DEVNULL", "scrubbed": True})
             child = real_popen([args[0], __file__, "server", config_path, "new"], **kwargs)
-            write_json_atomic(Path(config["home"]) / "replacement-identity.json",
-                              {"pid": child.pid, "processTime": psutil.Process(child.pid).create_time()})
+            write_json_atomic(
+                Path(config["home"]) / "replacement-identity.json",
+                {"pid": child.pid, "processTime": psutil.Process(child.pid).create_time()},
+            )
             return child
 
         rh.subprocess.Popen = replacement
@@ -212,22 +236,29 @@ def _access_only_process_fixture():
         write_json_atomic(Path(config["home"]) / "helper-result.json", {"code": code})
         raise SystemExit(code)
     else:
-        write_json_atomic(Path(config["home"]) / "parent-identity.json",
-                          {"pid": os.getpid(), "processTime": psutil.Process().create_time()})
+        write_json_atomic(
+            Path(config["home"]) / "parent-identity.json",
+            {"pid": os.getpid(), "processTime": psutil.Process().create_time()},
+        )
         frame = json.load(sys.stdin)
         # The generated helper shim carries only nonsecret fixture paths.
         helper_path = Path(config["home"]) / "helper-entry.py"
         with (Path(config["home"]) / "helper.log").open("a", encoding="utf-8") as log:
             handle = rh.spawn_detached_helper(
-                Path(config["helper_executable"]), helper_path, paths.pending, log,
-                handoff=frame, adoption_seconds=15,
+                Path(config["helper_executable"]),
+                helper_path,
+                paths.pending,
+                log,
+                handoff=frame,
+                adoption_seconds=15,
             )
         frame.clear()
         if not handle.wait_ready(paths):
             handle.close()
             raise SystemExit(4)
-        write_json_atomic(Path(config["home"]) / "helper-identity.json",
-                          {"pid": handle.pid, "processTime": handle.process_time})
+        write_json_atomic(
+            Path(config["home"]) / "helper-identity.json", {"pid": handle.pid, "processTime": handle.process_time}
+        )
         write_json_atomic(Path(config["home"]) / "parent-ready.json", {"ready": True})
         if role == "die":
             while True:
@@ -265,13 +296,17 @@ class TestAccessOnlyRestart:
         script.write_text(
             "import sys\nfrom pathlib import Path\n"
             f"sys.path[:0] = {[str(root), *sys.path]!r}\n"
-            + inspect.getsource(_access_only_process_fixture) + "\n_access_only_process_fixture()\n",
+            + inspect.getsource(_access_only_process_fixture)
+            + "\n_access_only_process_fixture()\n",
             encoding="utf-8",
         )
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         config_path = tmp_path / "fixture.json"
         config = {
-            "home": str(tmp_path), "root": str(root), "port": 0, "request_id": "owned-handoff",
+            "home": str(tmp_path),
+            "root": str(root),
+            "port": 0,
+            "request_id": "owned-handoff",
             "helper_executable": sys.executable,
             "public_key": jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True),
         }
@@ -280,13 +315,15 @@ class TestAccessOnlyRestart:
         (tmp_path / "helper-entry.py").write_text(
             "import runpy,sys\n"
             f"sys.argv=[{str(script)!r},'helper',{str(config_path)!r},'helper']\n"
-            f"runpy.run_path({str(script)!r},run_name='__main__')\n", encoding="utf-8",
+            f"runpy.run_path({str(script)!r},run_name='__main__')\n",
+            encoding="utf-8",
         )
         identities = []
         processes = []
         isolation = (
             {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
-            if sys.platform == "win32" else {"start_new_session": True}
+            if sys.platform == "win32"
+            else {"start_new_session": True}
         )
 
         def wait_file(name, seconds=25):
@@ -306,7 +343,10 @@ class TestAccessOnlyRestart:
             with (tmp_path / "old-process.log").open("wb") as output:
                 old = subprocess.Popen(
                     [executable, str(script), "server", str(config_path), "old"],
-                    stdin=subprocess.DEVNULL, stdout=output, stderr=output, **isolation,
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=output,
+                    **isolation,
                 )
             processes.append(old)
             old_profile = wait_file("old.json")
@@ -315,27 +355,51 @@ class TestAccessOnlyRestart:
             config_path.write_text(json.dumps(config), encoding="utf-8")
             pending_dir = tmp_path / "dev-restart"
             pending_dir.mkdir(exist_ok=True)
-            (pending_dir / "owned-handoff.pending.json").write_text(json.dumps({
-                "requestId": "owned-handoff", "targetSourceRoot": str(root), "launchProfile": old_profile,
-                "timeouts": RestartTimeouts(
-                    adoption_seconds=15, response_grace_seconds=0, pause_wait_seconds=0,
-                    stop_seconds=5, readiness_seconds=15, remote_probe_seconds=1,
-                ).to_dict(),
-            }), encoding="utf-8")
+            (pending_dir / "owned-handoff.pending.json").write_text(
+                json.dumps(
+                    {
+                        "requestId": "owned-handoff",
+                        "targetSourceRoot": str(root),
+                        "launchProfile": old_profile,
+                        "timeouts": RestartTimeouts(
+                            adoption_seconds=15,
+                            response_grace_seconds=0,
+                            pause_wait_seconds=0,
+                            stop_seconds=5,
+                            readiness_seconds=15,
+                            remote_probe_seconds=1,
+                        ).to_dict(),
+                    }
+                ),
+                encoding="utf-8",
+            )
             now = int(time.time())
-            token = jwt.encode({
-                "iss": "https://example.cloudflareaccess.com", "aud": "audience",
-                "iat": now, "exp": now + 120,
-            }, key, algorithm="RS256")
+            token = jwt.encode(
+                {
+                    "iss": "https://example.cloudflareaccess.com",
+                    "aud": "audience",
+                    "iat": now,
+                    "exp": now + 120,
+                },
+                key,
+                algorithm="RS256",
+            )
             frame = {
-                "version": 1, "kind": "credential", "requestId": "owned-handoff",
-                "serverPid": old_profile["startedPid"], "serverProcessTime": old_profile["startedProcessTime"],
-                "origin": old_profile["tunnelOrigin"], "jwt": token,
+                "version": 1,
+                "kind": "credential",
+                "requestId": "owned-handoff",
+                "serverPid": old_profile["startedPid"],
+                "serverProcessTime": old_profile["startedProcessTime"],
+                "origin": old_profile["tunnelOrigin"],
+                "jwt": token,
             }
             with (tmp_path / "parent-process.log").open("wb") as output:
                 parent = subprocess.Popen(
                     [executable, str(script), "parent", str(config_path), "commit" if commit else "die"],
-                    stdin=subprocess.PIPE, stdout=output, stderr=output, **isolation,
+                    stdin=subprocess.PIPE,
+                    stdout=output,
+                    stderr=output,
+                    **isolation,
                 )
             processes.append(parent)
             parent.stdin.write(json.dumps(frame).encode())

@@ -114,9 +114,14 @@ async def test_accepted_dispatch_is_a_receipt_not_a_second_operator_boundary(ses
     tracker, activities = StepTracker(bus), ActivityProjection(bus)
     titles = SimpleNamespace(push=AsyncMock())
     processor = EventProcessor(bus, step_tracker=tracker, activity_projection=activities, title_pipeline=titles)
-    await processor.process_event("job-1", new_event(
-        "job-1", EventKind.message_user, {"content": "Actual input", "turn_id": "observed-turn"},
-    ))
+    await processor.process_event(
+        "job-1",
+        new_event(
+            "job-1",
+            EventKind.message_user,
+            {"content": "Actual input", "turn_id": "observed-turn"},
+        ),
+    )
     step = tracker.current_step("job-1")
     activity = activities.snapshot()
     titles.push.reset_mock()
@@ -201,10 +206,16 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
         sid = f"session-{attempt}"
         adapter.set_job_id(sid, "job-1")
         adapter._queues[sid] = asyncio.Queue()
-        adapter.set_session_metadata(sid, SessionConfig(
-            workspace_path=workspace, prompt="", job_id="job-1",
-            attempt_id=attempt, execution_epoch=runtime.execution_epoch,
-        ))
+        adapter.set_session_metadata(
+            sid,
+            SessionConfig(
+                workspace_path=workspace,
+                prompt="",
+                job_id="job-1",
+                attempt_id=attempt,
+                execution_epoch=runtime.execution_epoch,
+            ),
+        )
         context = await runtime.register_attempt_execution("job-1", attempt, adapter, sid, sdk=provider)
         await runtime.attach_attempt_policy("job-1", attempt, context.execution_token)
         assert adapter._policy_router["job-1"] is router
@@ -214,8 +225,11 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
         assert observed.metadata.run_id == sid
         assert observed.metadata.execution_token == context.execution_token
         await adapter._evaluate_with_policy_router(
-            sid, "job-1", PermissionRequest(kind="write", workspace_path="/untrusted", file_name="file"),
-            tool_name="write", tool_input={"path": "file"},
+            sid,
+            "job-1",
+            PermissionRequest(kind="write", workspace_path="/untrusted", file_name="file"),
+            tool_name="write",
+            tool_input={"path": "file"},
         )
         action = router.route.call_args.args[0]
         assert action.workspace_path == workspace
@@ -245,10 +259,16 @@ async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort
     runtime._adapter_registry.get_adapter.return_value = adapter
     sid = "controlled-session"
     adapter.set_job_id(sid, "job-1")
-    adapter.set_session_metadata(sid, SessionConfig(
-        workspace_path="/test", prompt="", job_id="job-1",
-        attempt_id="attempt", execution_epoch=runtime.execution_epoch,
-    ))
+    adapter.set_session_metadata(
+        sid,
+        SessionConfig(
+            workspace_path="/test",
+            prompt="",
+            job_id="job-1",
+            attempt_id="attempt",
+            execution_epoch=runtime.execution_epoch,
+        ),
+    )
     adapter._queues[sid] = asyncio.Queue()
     deciding, decide, aborting, finish_abort = (asyncio.Event() for _ in range(4))
 
@@ -268,13 +288,18 @@ async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort
 
     adapter._sessions[sid] = SimpleNamespace(abort=slow_abort)
     context = await runtime.register_attempt_execution("job-1", "attempt", adapter, sid)
-    permission = asyncio.create_task(adapter._evaluate_permission(
-        sid, "job-1", PermissionRequest(
-            kind="shell" if hard_gate else "read", workspace_path="/test",
-            full_command_text="git reset --hard HEAD" if hard_gate else None,
-        ),
-        tool_name="Bash" if hard_gate else "Read",
-    ))
+    permission = asyncio.create_task(
+        adapter._evaluate_permission(
+            sid,
+            "job-1",
+            PermissionRequest(
+                kind="shell" if hard_gate else "read",
+                workspace_path="/test",
+                full_command_text="git reset --hard HEAD" if hard_gate else None,
+            ),
+            tool_name="Bash" if hard_gate else "Read",
+        )
+    )
     await asyncio.wait_for(deciding.wait(), timeout=2)
     cancellation = asyncio.create_task(runtime.cancel_attempt_execution("job-1", "attempt", context.execution_token))
     try:
@@ -296,7 +321,11 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
 
     adapter = CopilotAdapter()
     config = SessionConfig(
-        workspace_path="/test", prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
+        workspace_path="/test",
+        prompt="",
+        job_id="job",
+        attempt_id="attempt",
+        execution_epoch="epoch",
     )
     adapter.set_job_id("same-id", "job")
     adapter.set_session_metadata("same-id", config)
@@ -312,7 +341,8 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
     else:
         adapter._policy_router["job"] = SimpleNamespace(route=AsyncMock(side_effect=wait_for_decision))
     request = PermissionRequest(
-        kind="shell" if hard_gate else "read", workspace_path="/test",
+        kind="shell" if hard_gate else "read",
+        workspace_path="/test",
         full_command_text="git reset --hard HEAD" if hard_gate else None,
     )
     pending = asyncio.create_task(adapter._evaluate_permission("same-id", "job", request, tool_name="Read"))
@@ -326,7 +356,12 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
         adapter.resume_tools("same-id")
     else:
         adapter.attach_attempt_policy(
-            "same-id", "job", "attempt", "epoch", adapter._policy_router.get("job", MagicMock()), RepoPolicy(),
+            "same-id",
+            "job",
+            "attempt",
+            "epoch",
+            adapter._policy_router.get("job", MagicMock()),
+            RepoPolicy(),
             execution_token="new-execution",
         )
     release.set()
@@ -338,7 +373,11 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
 @pytest.mark.parametrize("boundary", ["permission", "hard_gate", "pre_tool"])
 @pytest.mark.parametrize("transition", ["pause_resume", "replacement", "new_token"])
 async def test_sdk_callback_ownership_spans_capability_parser_wait(
-    tmp_path, monkeypatch, provider, boundary, transition,
+    tmp_path,
+    monkeypatch,
+    provider,
+    boundary,
+    transition,
 ):
     from backend.models.domain import ApprovalResolution
     from backend.services.action_policy.syntax import analyze_syntax
@@ -348,8 +387,13 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
     command = "git reset --hard HEAD" if boundary == "hard_gate" else "echo test"
     adapter._hard_block_approval = AsyncMock(return_value=ApprovalResolution.approved)
     config = SessionConfig(
-        workspace_path=str(tmp_path), prompt="", job_id="job", attempt_id="attempt", execution_epoch="epoch",
-        defer_start=True, execution_capabilities=frozenset({"read", "write", "shell", "external_access"}),
+        workspace_path=str(tmp_path),
+        prompt="",
+        job_id="job",
+        attempt_id="attempt",
+        execution_epoch="epoch",
+        defer_start=True,
+        execution_capabilities=frozenset({"read", "write", "shell", "external_access"}),
     )
     client = MagicMock()
     client.stop = AsyncMock()
@@ -366,14 +410,18 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
         async def invoke():
             if boundary == "pre_tool":
                 return await callbacks["hooks"]["on_pre_tool_use"](
-                    {"toolName": "bash", "toolArgs": {"command": command},
-                     "cwd": str(tmp_path), "timestamp": 0},
+                    {"toolName": "bash", "toolArgs": {"command": command}, "cwd": str(tmp_path), "timestamp": 0},
                     {"session_id": sid},
                 )
             return await callbacks["on_permission_request"](
                 SimpleNamespace(
-                    kind="shell", tool_name="bash", full_command_text=command,
-                    file_name=None, path=None, possible_paths=None, read_only=False,
+                    kind="shell",
+                    tool_name="bash",
+                    full_command_text=command,
+                    file_name=None,
+                    path=None,
+                    possible_paths=None,
+                    read_only=False,
                 ),
                 {"session_id": sid},
             )
@@ -395,7 +443,9 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
         async def invoke():
             if boundary == "pre_tool":
                 return await options.hooks["PreToolUse"][0].hooks[0](
-                    {"tool_name": "Bash", "tool_input": {"command": command}}, "call", {},
+                    {"tool_name": "Bash", "tool_input": {"command": command}},
+                    "call",
+                    {},
                 )
             return await options.can_use_tool("Bash", {"command": command}, None)
 
@@ -424,7 +474,13 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
             adapter.set_session_metadata(sid, config)
         else:
             adapter.attach_attempt_policy(
-                sid, "job", "attempt", "epoch", router, RepoPolicy(), execution_token="replacement",
+                sid,
+                "job",
+                "attempt",
+                "epoch",
+                router,
+                RepoPolicy(),
+                execution_token="replacement",
             )
         release.set()
         assert denied(await asyncio.wait_for(pending, timeout=2))
@@ -441,13 +497,25 @@ def _scoped_permission_adapter(session_factory, *, event_bus=None):
     approvals = ApprovalService(session_factory)
     adapter = CopilotAdapter(approval_service=approvals, event_bus=event_bus)
     config = SessionConfig(
-        workspace_path="/test", prompt="", job_id="job-1", recipe_run_id="recipe-run",
-        recipe_revision=1, step_instance_id="step-instance", attempt_id="attempt", execution_epoch="epoch",
+        workspace_path="/test",
+        prompt="",
+        job_id="job-1",
+        recipe_run_id="recipe-run",
+        recipe_revision=1,
+        step_instance_id="step-instance",
+        attempt_id="attempt",
+        execution_epoch="epoch",
     )
     adapter.set_job_id("same-session", "job-1")
     adapter.set_session_metadata("same-session", config)
     adapter.attach_attempt_policy(
-        "same-session", "job-1", "attempt", "epoch", MagicMock(), RepoPolicy(), execution_token="original-token",
+        "same-session",
+        "job-1",
+        "attempt",
+        "epoch",
+        MagicMock(),
+        RepoPolicy(),
+        execution_token="original-token",
     )
     adapter._queues["same-session"] = asyncio.Queue()
     return adapter, approvals, config
@@ -460,7 +528,8 @@ async def test_permission_request_event_retains_originating_attempt_metadata(ses
     adapter, approvals, _ = _scoped_permission_adapter(session_factory)
     call = (
         adapter._hard_block_approval("same-session", "job-1", "git reset --hard HEAD")
-        if hard_gate else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
+        if hard_gate
+        else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
     )
     pending = asyncio.create_task(call)
     try:
@@ -482,7 +551,10 @@ async def test_permission_request_event_retains_originating_attempt_metadata(ses
 @pytest.mark.parametrize("hard_gate", [False, True])
 @pytest.mark.parametrize("transition", ["replacement", "pause_resume"])
 async def test_stale_approval_creation_is_retired_without_publishing_to_replacement(
-    session_factory, monkeypatch, hard_gate, transition,
+    session_factory,
+    monkeypatch,
+    hard_gate,
+    transition,
 ):
     from backend.models.domain import ApprovalResolution
 
@@ -501,7 +573,8 @@ async def test_stale_approval_creation_is_retired_without_publishing_to_replacem
     monkeypatch.setattr(approvals, "create_request", delayed)
     call = (
         adapter._hard_block_approval("same-session", "job-1", "git reset --hard HEAD")
-        if hard_gate else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
+        if hard_gate
+        else adapter._route_to_operator("same-session", "job-1", "Review this action", "action")
     )
     pending = asyncio.create_task(call)
     try:
@@ -538,29 +611,46 @@ async def test_classification_keeps_original_scope_across_policy_wait_and_replac
     adapter, _, config = _scoped_permission_adapter(session_factory, event_bus=events)
     entered, release = asyncio.Event(), asyncio.Event()
     classification = Classification(
-        RecommendedAction.ALLOW, "known_read", 0, "unknown", "read_only", "file", "Read",
+        RecommendedAction.ALLOW,
+        "known_read",
+        0,
+        "unknown",
+        "read_only",
+        "file",
+        "Read",
     )
 
     async def delayed(*args, **kwargs):
         entered.set()
         await release.wait()
-        return SimpleNamespace(proceed=True, classification=classification,
-                               recommended_action=RecommendedAction.ALLOW, checkpoint_ref=None)
+        return SimpleNamespace(
+            proceed=True, classification=classification, recommended_action=RecommendedAction.ALLOW, checkpoint_ref=None
+        )
 
     adapter._policy_router["job-1"] = SimpleNamespace(route=AsyncMock(side_effect=delayed))
-    pending = asyncio.create_task(adapter._evaluate_permission(
-        "same-session", "job-1", PermissionRequest(kind="read", workspace_path="/test"), tool_name="Read",
-    ))
+    pending = asyncio.create_task(
+        adapter._evaluate_permission(
+            "same-session",
+            "job-1",
+            PermissionRequest(kind="read", workspace_path="/test"),
+            tool_name="Read",
+        )
+    )
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
         adapter.set_session_metadata("same-session", config)
         adapter.attach_attempt_policy(
-            "same-session", "job-1", "attempt", "epoch", adapter._policy_router["job-1"], RepoPolicy(),
+            "same-session",
+            "job-1",
+            "attempt",
+            "epoch",
+            adapter._policy_router["job-1"],
+            RepoPolicy(),
             execution_token="replacement-token",
         )
         release.set()
         assert await asyncio.wait_for(pending, timeout=2) == PermissionDecision.deny
-        event, = observed
+        (event,) = observed
         assert event.kind == EventKind.action_classified
         assert event.metadata.execution_token == "original-token"
         assert event.metadata.recipe_run_id == "recipe-run"

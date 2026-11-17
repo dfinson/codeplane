@@ -37,7 +37,7 @@ def preprocess_opencode(obj: dict[str, Any]) -> list[dict[str, Any]]:
     norm["_timestamp"] = _timestamp(data, norm)
 
     if norm["type"] == "message.updated":
-        info = data.get("info") if isinstance(data.get("info"), dict) else {}
+        info = value if isinstance(value := data.get("info"), dict) else {}
         session_id = str(data.get("sessionID") or info.get("sessionID") or "")
         message_id = str(info.get("id") or "")
         role = str(info.get("role") or "unknown")
@@ -48,7 +48,7 @@ def preprocess_opencode(obj: dict[str, Any]) -> list[dict[str, Any]]:
         return [norm]
 
     if norm["type"] == "message.part.updated":
-        part = data.get("part") if isinstance(data.get("part"), dict) else {}
+        part = value if isinstance(value := data.get("part"), dict) else {}
         part_type = str(part.get("type") or "unknown")
         session_id = str(data.get("sessionID") or part.get("sessionID") or "")
         message_id = str(part.get("messageID") or "")
@@ -59,7 +59,7 @@ def preprocess_opencode(obj: dict[str, Any]) -> list[dict[str, Any]]:
             text_role = role if role in {"user", "assistant"} else "unknown"
             norm["type"] = f"message.part.text.{text_role}"
         elif part_type == "tool":
-            state = part.get("state") if isinstance(part.get("state"), dict) else {}
+            state = value if isinstance(value := part.get("state"), dict) else {}
             status = str(state.get("status") or "unknown")
             if status == "pending":
                 # OpenCode emits a provisional tool row before input/timing exists;
@@ -74,11 +74,11 @@ def preprocess_opencode(obj: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _timestamp(data: dict[str, Any], obj: dict[str, Any]) -> Any:
-    props = obj.get("properties") if isinstance(obj.get("properties"), dict) else {}
-    info = data.get("info") if isinstance(data.get("info"), dict) else {}
-    info_time = info.get("time") if isinstance(info.get("time"), dict) else {}
-    part = data.get("part") if isinstance(data.get("part"), dict) else {}
-    part_time = part.get("time") if isinstance(part.get("time"), dict) else {}
+    props = value if isinstance(value := obj.get("properties"), dict) else {}
+    info = value if isinstance(value := data.get("info"), dict) else {}
+    info_time = value if isinstance(value := info.get("time"), dict) else {}
+    part = value if isinstance(value := data.get("part"), dict) else {}
+    part_time = value if isinstance(value := part.get("time"), dict) else {}
 
     return (
         data.get("timestamp")

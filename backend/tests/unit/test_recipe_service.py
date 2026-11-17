@@ -32,8 +32,6 @@ def _make_project(project_id: str, repo_paths: list[str]) -> Project:
     )
 
 
-
-
 @pytest.fixture
 def mock_task_link_repo() -> AsyncMock:
     mock = AsyncMock()
@@ -43,10 +41,6 @@ def mock_task_link_repo() -> AsyncMock:
 @pytest.fixture
 def mock_project_service() -> AsyncMock:
     return AsyncMock()
-
-
-
-
 
 
 class TestListTaskLinks:

@@ -8,7 +8,6 @@ from typing import Any
 
 from backend.compat.traceformats.preprocessors.registry import register_preprocessor
 
-
 _AGENT_STATUS_TAGS = frozenset(
     {
         "pending_init",
@@ -45,13 +44,9 @@ def _sanitize_agent_statuses(value: Any) -> Any:
     return value
 
 
-def _sanitize_collab_event(
-    block_type: str, payload: dict[str, Any], base: dict[str, Any]
-) -> dict[str, Any]:
+def _sanitize_collab_event(block_type: str, payload: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
     normalized = {
-        key: _sanitize_agent_statuses(value)
-        if key in {"status", "agent_statuses", "statuses"}
-        else value
+        key: _sanitize_agent_statuses(value) if key in {"status", "agent_statuses", "statuses"} else value
         for key, value in payload.items()
         if key not in {"type", "block_type"}
     }
@@ -137,9 +132,7 @@ def preprocess_codex(obj: dict[str, Any]) -> list[dict[str, Any]]:
             "recipient": payload.get("recipient"),
             "other_recipients": payload.get("other_recipients", []),
             "trigger_turn": payload.get("trigger_turn"),
-            "turn_id": (payload.get("internal_chat_message_metadata_passthrough") or {}).get(
-                "turn_id"
-            ),
+            "turn_id": (payload.get("internal_chat_message_metadata_passthrough") or {}).get("turn_id"),
         }
         if "encrypted_content" in payload and payload["encrypted_content"] is not None:
             normalized["content_encrypted"] = True
@@ -178,9 +171,7 @@ def _handle_response_item(payload: dict[str, Any], base: dict[str, Any]) -> list
         arguments_raw = payload.get("arguments", "{}")
         # arguments is a JSON-encoded string for function_call
         try:
-            arguments = (
-                json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
-            )
+            arguments = json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
         except (json.JSONDecodeError, TypeError):
             arguments = {"_raw": arguments_raw}
 
@@ -250,9 +241,7 @@ def _handle_response_item(payload: dict[str, Any], base: dict[str, Any]) -> list
             "id": payload.get("id"),
             "author": payload.get("author"),
             "recipient": payload.get("recipient"),
-            "turn_id": (payload.get("internal_chat_message_metadata_passthrough") or {}).get(
-                "turn_id"
-            ),
+            "turn_id": (payload.get("internal_chat_message_metadata_passthrough") or {}).get("turn_id"),
         }
         if content_encrypted:
             normalized["content_encrypted"] = True
@@ -398,8 +387,7 @@ def _handle_event_msg(payload: dict[str, Any], base: dict[str, Any]) -> list[dic
                 "call_id": payload.get("call_id", ""),
                 "tool_name": invocation.get("tool", ""),
                 "server": invocation.get("server", ""),
-                "is_error": err_val is not None
-                or (isinstance(ok_val, dict) and ok_val.get("is_error", False)),
+                "is_error": err_val is not None or (isinstance(ok_val, dict) and ok_val.get("is_error", False)),
                 "output": err_val if err_val else ok_val,
             }
         ]

@@ -39,8 +39,13 @@ class ActivityProjection:
 
     def snapshot(self) -> list[dict[str, object]]:
         return [
-            {"key": list(key), "id": value.id, "label": value.label, "plan_step_id": value.plan_step_id,
-             "source_event": value.source_event.model_dump(mode="json")}
+            {
+                "key": list(key),
+                "id": value.id,
+                "label": value.label,
+                "plan_step_id": value.plan_step_id,
+                "source_event": value.source_event.model_dump(mode="json"),
+            }
             for key, value in self._active.items()
         ]
 
@@ -97,7 +102,7 @@ class ActivityProjection:
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.version}:{key}:{event.id}"))
         activity = _Activity(identity, label, plan_id, event)
         if not replay:
-            if current is not None and event.metadata.integration_binding_id is not None:
+            if current is not None:
                 await self._close_activity(current, event.timestamp)
             await self._event_bus.publish(
                 new_event(
@@ -125,18 +130,28 @@ class ActivityProjection:
 
     async def _close_activity(self, activity: _Activity, timestamp: datetime) -> None:
         source = activity.source_event
-        await self._event_bus.publish(new_event(
-            source.session_id, EventKind.turn_summary,
-            {
-                "title": activity.label, "activity_id": activity.id, "activity_label": activity.label,
-                "activity_status": "closed", "is_new_activity": False, "plan_item_id": activity.plan_step_id,
-                "grouping_version": self.version, "version": 2,
-                "step_id": source.payload.get("step_id"), "turn_id": source.payload.get("turn_id"),
-                "grouping": source.payload.get("_codeplane_grouping"),
-            },
-            metadata=source.metadata,
-            event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{activity.id}:activity:2")), timestamp=timestamp,
-        ))
+        await self._event_bus.publish(
+            new_event(
+                source.session_id,
+                EventKind.turn_summary,
+                {
+                    "title": activity.label,
+                    "activity_id": activity.id,
+                    "activity_label": activity.label,
+                    "activity_status": "closed",
+                    "is_new_activity": False,
+                    "plan_item_id": activity.plan_step_id,
+                    "grouping_version": self.version,
+                    "version": 2,
+                    "step_id": source.payload.get("step_id"),
+                    "turn_id": source.payload.get("turn_id"),
+                    "grouping": source.payload.get("_codeplane_grouping"),
+                },
+                metadata=source.metadata,
+                event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{activity.id}:activity:2")),
+                timestamp=timestamp,
+            )
+        )
 
     async def close(self, job_id: str, timestamp: datetime) -> None:
         for key in tuple(self._active):

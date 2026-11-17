@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine, Iterator
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-    from traceforge.types import SessionEvent
 
+    from backend.models.session_event import SessionEvent
     from backend.services.events.event_processor import EventProcessor
     from backend.services.runtime import RuntimeService
 
@@ -110,14 +110,18 @@ class _NativeIdentity:
             timestamp = (
                 event.timestamp if timestamp_value is not None else self.anchor + timedelta(microseconds=ordinal)
             )
-            yield event.model_copy(
-                update={
-                    "id": stable_id,
-                    "session_id": self.job_id,
-                    "metadata": metadata,
-                    "payload": payload,
-                    "timestamp": timestamp,
-                }
+            from backend.models.session_event import SessionEvent
+
+            yield SessionEvent.model_validate(
+                event.model_copy(
+                    update={
+                        "id": stable_id,
+                        "session_id": self.job_id,
+                        "metadata": metadata,
+                        "payload": payload,
+                        "timestamp": timestamp,
+                    }
+                ).model_dump(mode="json")
             )
 
 

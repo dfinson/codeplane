@@ -8,7 +8,6 @@ from typing import Any
 
 from backend.compat.traceformats.preprocessors.registry import register_preprocessor
 
-
 _COMPACTION_STATUSES = frozenset({"started", "completed", "skipped", "failed", "cancelled"})
 
 
@@ -35,11 +34,7 @@ def preprocess_cline(obj: dict[str, Any]) -> list[dict[str, Any]]:
                 if isinstance(parsed, dict):
                     normalized["parsed"] = parsed
                     status = parsed.get("status")
-                    if (
-                        subtype == "compaction"
-                        and isinstance(status, str)
-                        and status in _COMPACTION_STATUSES
-                    ):
+                    if subtype == "compaction" and isinstance(status, str) and status in _COMPACTION_STATUSES:
                         normalized["type"] = f"{normalized['type']}.{status}"
             except (json.JSONDecodeError, ValueError):
                 pass

@@ -265,10 +265,14 @@ class NativeMappingDecoder:
             self._active_turn = None
         explicit = payload.get("turn_id")
         if not isinstance(explicit, str) or not explicit.strip():
-            explicit = next((
-                value for path in ("turn_id", "turnId", "data.turnId")
-                if isinstance(value := _path(raw, path), str) and value.strip()
-            ), None)
+            explicit = next(
+                (
+                    value
+                    for path in ("turn_id", "turnId", "data.turnId")
+                    if isinstance(value := _path(raw, path), str) and value.strip()
+                ),
+                None,
+            )
         if explicit is not None:
             payload["turn_id"] = explicit
             self._active_turn = None if kind == "turn.ended" else explicit
@@ -278,14 +282,31 @@ class NativeMappingDecoder:
             payload["turn_id"] = self._active_turn
             payload["_codeplane_grouping"] = {"derived": True, "basis": "producer_turn"}
             return
-        native = next((
-            (field, value) for field in ("request_id", "operation_id", "run_id")
-            if isinstance(value := payload.get(field, raw.get(field)), str) and value.strip()
-        ), None)
+        native = next(
+            (
+                (field, value)
+                for field in ("request_id", "operation_id", "run_id")
+                if isinstance(value := payload.get(field, raw.get(field)), str) and value.strip()
+            ),
+            None,
+        )
         if native is not None:
-            payload["turn_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps([
-                "codeplane-source-operation-v1", self._session_scope(), self.framework, self.external_id, *native,
-            ], sort_keys=True, separators=(",", ":"))))
+            payload["turn_id"] = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    json.dumps(
+                        [
+                            "codeplane-source-operation-v1",
+                            self._session_scope(),
+                            self.framework,
+                            self.external_id,
+                            *native,
+                        ],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            )
             basis = native[0]
         else:
             payload["turn_id"] = self._turn_id()
@@ -293,8 +314,13 @@ class NativeMappingDecoder:
         payload["_codeplane_grouping"] = {"derived": True, "basis": basis}
 
     def _source(
-        self, raw: dict[str, Any], record_index: int, output_index: int, digest: str,
-        *, timestamp_fallback: bool = False,
+        self,
+        raw: dict[str, Any],
+        record_index: int,
+        output_index: int,
+        digest: str,
+        *,
+        timestamp_fallback: bool = False,
     ) -> dict[str, Any]:
         source = {
             "contract": "codeplane-native-v1" if self.legacy_identity else "codeplane-native-v2",
@@ -351,10 +377,20 @@ class NativeMappingDecoder:
             )
             payload = dict(event.payload)
             payload["_codeplane_source"] = self._source(
-                raw, record_index, 0, digest,
+                raw,
+                record_index,
+                0,
+                digest,
                 timestamp_fallback=not any(
-                    raw.get(key) is not None for key in ("startTimeUnixNano", "start_time_unix_nano", "start_time",
-                                                       "endTimeUnixNano", "end_time_unix_nano", "end_time")
+                    raw.get(key) is not None
+                    for key in (
+                        "startTimeUnixNano",
+                        "start_time_unix_nano",
+                        "start_time",
+                        "endTimeUnixNano",
+                        "end_time_unix_nano",
+                        "end_time",
+                    )
                 ),
             )
             if self.legacy_identity:
@@ -425,7 +461,11 @@ class NativeMappingDecoder:
                 self.anchor + timedelta(microseconds=record_index),
             )
             payload["_codeplane_source"] = self._source(
-                raw, record_index, index, digest, timestamp_fallback=raw_timestamp is None,
+                raw,
+                record_index,
+                index,
+                digest,
+                timestamp_fallback=raw_timestamp is None,
             )
             self._group_payload(payload, kind, obj)
             event = SessionEvent(

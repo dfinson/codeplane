@@ -57,10 +57,7 @@ def _snapshot(db_path: Path) -> dict[str, Any]:
     with sqlite3.connect(db_path) as db:
         db.row_factory = sqlite3.Row
         schema = [tuple(row) for row in db.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name")]
-        tables = [
-            row[0]
-            for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        ]
+        tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
         rows = {name: [dict(row) for row in db.execute(f'SELECT * FROM "{name}" ORDER BY rowid')] for name in tables}
         return {"schema": schema, "rows": rows}
 
@@ -133,52 +130,172 @@ def _seed_predecessor(db_path: Path) -> None:
             def insert(table: str, **values: Any) -> None:
                 conn.execute(Base.metadata.tables[table].insert().values(**values))
 
-            insert("projects", id="project", name="Preserved", repo_paths='["fixture-repo"]',
-                   created_at=now, updated_at=now)
+            insert(
+                "projects",
+                id="project",
+                name="Preserved",
+                repo_paths='["fixture-repo"]',
+                created_at=now,
+                updated_at=now,
+            )
             for job_id, parent in (("parent", None), ("job", "parent")):
-                insert("jobs", id=job_id, project_id="project", repo="fixture-repo", prompt="Preserve evidence",
-                       state="review", base_ref="main", parent_job_id=parent, model="primary-model",
-                       story_text="Narrative mentions structural analysis without owning its data.",
-                       created_at=now, updated_at=now)
+                insert(
+                    "jobs",
+                    id=job_id,
+                    project_id="project",
+                    repo="fixture-repo",
+                    prompt="Preserve evidence",
+                    state="review",
+                    base_ref="main",
+                    parent_job_id=parent,
+                    model="primary-model",
+                    story_text="Narrative mentions structural analysis without owning its data.",
+                    created_at=now,
+                    updated_at=now,
+                )
             conn.exec_driver_sql(
                 "UPDATE jobs SET review_story_json = ?, review_story_hash = ?, structural_coupling_delta = ?, "
                 "structural_cycle_count = ?, structural_changes_touch_tests = ?, structural_change_count = ?, "
                 "structural_merge_confidence = ?",
                 ('{"verdict":"historic"}', "a" * 64, 1.5, 2, 1, 3, "high"),
             )
-            insert("steps", id="step", job_id="job", step_number=1, trigger="operator",
-                   intent="Inspect worker", agent_message="Keep this transcript", started_at=now)
-            insert("trail_nodes", id="trail", job_id="job", seq=9, anchor_seq=4, kind="write", timestamp=now,
-                   step_id="step", rationale="Keep safety checks", write_summary="Preserve cancellation",
-                   edit_motivations='[{"reason":"Keep user control"}]', preceding_context='["original context"]')
+            insert(
+                "steps",
+                id="step",
+                job_id="job",
+                step_number=1,
+                trigger="operator",
+                intent="Inspect worker",
+                agent_message="Keep this transcript",
+                started_at=now,
+            )
+            insert(
+                "trail_nodes",
+                id="trail",
+                job_id="job",
+                seq=9,
+                anchor_seq=4,
+                kind="write",
+                timestamp=now,
+                step_id="step",
+                rationale="Keep safety checks",
+                write_summary="Preserve cancellation",
+                edit_motivations='[{"reason":"Keep user control"}]',
+                preceding_context='["original context"]',
+            )
             conn.exec_driver_sql("UPDATE trail_nodes SET semantic_targets = ?", ('[{"symbol":"Worker.run"}]',))
-            insert("approvals", id="approval", job_id="job", description="Approve launch",
-                   proposed_action='{"tool":"edit"}', requested_at=now, notes="Operator evidence")
-            insert("artifacts", id="artifact", job_id="job", name="report", type="file", mime_type="text/plain",
-                   size_bytes=42, disk_path="fixture-artifact.txt", phase="review", step_id="step", created_at=now)
+            insert(
+                "approvals",
+                id="approval",
+                job_id="job",
+                description="Approve launch",
+                proposed_action='{"tool":"edit"}',
+                requested_at=now,
+                notes="Operator evidence",
+            )
+            insert(
+                "artifacts",
+                id="artifact",
+                job_id="job",
+                name="report",
+                type="file",
+                mime_type="text/plain",
+                size_bytes=42,
+                disk_path="fixture-artifact.txt",
+                phase="review",
+                step_id="step",
+                created_at=now,
+            )
             for task_id, depends_on in (("task-root", "[]"), ("task-child", '["task-root"]')):
-                insert("task_links", id=task_id, project_id="project", repo_path="fixture-repo",
-                       depends_on=depends_on, chain_root_id="task-root", job_id="job", prompt_override="Keep override",
-                       output_routes='[{"destination":"tracker"}]', created_at=now, updated_at=now)
-            insert("chats", id="chat", project_id="project", task_link_id="task-child", title="Task discussion",
-                   created_at=now, last_message_at=now)
-            insert("chat_messages", id="message", chat_id="chat", role="user", content="Keep requirements",
-                   created_at=now)
+                insert(
+                    "task_links",
+                    id=task_id,
+                    project_id="project",
+                    repo_path="fixture-repo",
+                    depends_on=depends_on,
+                    chain_root_id="task-root",
+                    job_id="job",
+                    prompt_override="Keep override",
+                    output_routes='[{"destination":"tracker"}]',
+                    created_at=now,
+                    updated_at=now,
+                )
+            insert(
+                "chats",
+                id="chat",
+                project_id="project",
+                task_link_id="task-child",
+                title="Task discussion",
+                created_at=now,
+                last_message_at=now,
+            )
+            insert(
+                "chat_messages", id="message", chat_id="chat", role="user", content="Keep requirements", created_at=now
+            )
             for session_id, kind in (("scout", "preflight"), ("sidecar", "sidecar")):
-                insert("secondary_sessions", id=session_id, job_id="job", kind=kind, name=session_id,
-                       status="completed", started_at=now, completed_at=now, output=_BRIEF,
-                       input_tokens=123, output_tokens=45, cost_usd=0.012, metadata_json='{"model":"utility-model"}')
-                insert("secondary_session_entries", session_id=session_id, seq=1, timestamp=now, kind="tool_call",
-                       content="Historical exploration", tool_name="coderecon.search", tool_args='{"query":"Worker"}',
-                       tool_result='{"symbols":["Worker"]}', tool_success=True)
-                insert("job_telemetry_summary", job_id="job", session_kind=kind, sdk="copilot", model="utility-model",
-                       repo="fixture-repo", input_tokens=123, output_tokens=45, total_cost_usd=0.012,
-                       premium_requests=0.25, created_at=now, updated_at=now)
-                insert("job_telemetry_spans", job_id="job", session_kind=kind, span_type="llm", name="scout-call",
-                       started_at="1.0", duration_ms="2.0", attrs_json='{"model":"utility-model"}', created_at=now)
+                insert(
+                    "secondary_sessions",
+                    id=session_id,
+                    job_id="job",
+                    kind=kind,
+                    name=session_id,
+                    status="completed",
+                    started_at=now,
+                    completed_at=now,
+                    output=_BRIEF,
+                    input_tokens=123,
+                    output_tokens=45,
+                    cost_usd=0.012,
+                    metadata_json='{"model":"utility-model"}',
+                )
+                insert(
+                    "secondary_session_entries",
+                    session_id=session_id,
+                    seq=1,
+                    timestamp=now,
+                    kind="tool_call",
+                    content="Historical exploration",
+                    tool_name="coderecon.search",
+                    tool_args='{"query":"Worker"}',
+                    tool_result='{"symbols":["Worker"]}',
+                    tool_success=True,
+                )
+                insert(
+                    "job_telemetry_summary",
+                    job_id="job",
+                    session_kind=kind,
+                    sdk="copilot",
+                    model="utility-model",
+                    repo="fixture-repo",
+                    input_tokens=123,
+                    output_tokens=45,
+                    total_cost_usd=0.012,
+                    premium_requests=0.25,
+                    created_at=now,
+                    updated_at=now,
+                )
+                insert(
+                    "job_telemetry_spans",
+                    job_id="job",
+                    session_kind=kind,
+                    span_type="llm",
+                    name="scout-call",
+                    started_at="1.0",
+                    duration_ms="2.0",
+                    attrs_json='{"model":"utility-model"}',
+                    created_at=now,
+                )
             insert("job_file_cost", job_id="job", file_path="src/worker.py", cost_usd=0.012, created_at=now)
-            insert("job_cost_attribution", job_id="job", dimension="session_kind", bucket="preflight",
-                   cost_usd=0.012, input_tokens=123, output_tokens=45, created_at=now)
+            insert(
+                "job_cost_attribution",
+                job_id="job",
+                dimension="session_kind",
+                bucket="preflight",
+                cost_usd=0.012,
+                input_tokens=123,
+                output_tokens=45,
+                created_at=now,
+            )
             events = [
                 (101, "repo.index_progress", {"progress": 10}),
                 (102, "secondary_session.started", {"session_id": "scout", "kind": "preflight"}),
@@ -189,16 +306,25 @@ def _seed_predecessor(db_path: Path) -> None:
                 (107, "job.setup_progress", {"step": "worktree_indexed"}),
                 (108, "job.setup_progress", {"step": "exploring_codebase", "message": "Scout running"}),
                 (109, "context.handoff", {"source": "preflight", "content": _BRIEF}),
-                (110, "diff.updated", {
-                    "symbols": ["top-level-value-must-stay"],
-                    "churn": {"total": 7},
-                    "changed_files": [
-                        {"path": "src/worker.py", "status": "modified", "additions": 4, "deletions": 3,
-                         "hunks": [{"text": "+keep", "symbols": ["nested-value-must-stay"]}],
-                         "symbols": [{"name": "Worker.run"}]},
-                        {"path": "README.md", "status": "added", "hunks": []},
-                    ],
-                }),
+                (
+                    110,
+                    "diff.updated",
+                    {
+                        "symbols": ["top-level-value-must-stay"],
+                        "churn": {"total": 7},
+                        "changed_files": [
+                            {
+                                "path": "src/worker.py",
+                                "status": "modified",
+                                "additions": 4,
+                                "deletions": 3,
+                                "hunks": [{"text": "+keep", "symbols": ["nested-value-must-stay"]}],
+                                "symbols": [{"name": "Worker.run"}],
+                            },
+                            {"path": "README.md", "status": "added", "hunks": []},
+                        ],
+                    },
+                ),
                 (111, "telemetry.usage", {"session_kind": "preflight", "input_tokens": 123, "cost": 0.012}),
                 (112, "message.assistant", {"content": "Historical coderecon analysis", "symbols": ["keep"]}),
                 (113, "repo.index_progress.extra", {"step": "worktree_indexed"}),
@@ -207,11 +333,18 @@ def _seed_predecessor(db_path: Path) -> None:
                 (116, "diff.updated", {"changed_files": [{"path": "untouched.py", "hunks": []}]}),
             ]
             for cursor, kind, payload in events:
-                insert("events", id=cursor, event_id=f"event-{cursor}", job_id="job", kind=kind, timestamp=now,
-                       payload=json.dumps(payload, indent=2),
-                       event_metadata=json.dumps({
-                           "turn_id": "turn-1", "motivation": {"intent": "Preserve exact metadata"}
-                       }))
+                insert(
+                    "events",
+                    id=cursor,
+                    event_id=f"event-{cursor}",
+                    job_id="job",
+                    kind=kind,
+                    timestamp=now,
+                    payload=json.dumps(payload, indent=2),
+                    event_metadata=json.dumps(
+                        {"turn_id": "turn-1", "motivation": {"intent": "Preserve exact metadata"}}
+                    ),
+                )
     finally:
         engine.dispose()
 
@@ -270,7 +403,12 @@ def test_failure_after_column_drop_rolls_back_schema_data_and_version(predecesso
     dropped: list[str] = []
 
     def fail_after_drop(
-        conn: Connection, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool,
+        conn: Connection,
+        cursor: Any,
+        statement: str,
+        parameters: Any,
+        context: Any,
+        executemany: bool,
     ) -> None:
         if "DROP COLUMN" in statement.upper():
             dropped.append(statement)
@@ -298,7 +436,9 @@ def test_failure_after_column_drop_rolls_back_schema_data_and_version(predecesso
     ],
 )
 def test_invalid_target_json_aborts_without_partial_retirement(
-    predecessor_db: Path, kind: str, payload: str,
+    predecessor_db: Path,
+    kind: str,
+    payload: str,
 ) -> None:
     with sqlite3.connect(predecessor_db) as db:
         db.execute("UPDATE events SET kind = ?, payload = ? WHERE id = 110", (kind, payload))

@@ -1,28 +1,15 @@
-"""Shared event processing pipeline for agent sessions.
+"""Canonical event pairing, scoped transcript projection, diffs and publication.
 
-Both RuntimeService (managed SDK sessions) and the imported-ingestion sources
-funnel ``traceforge.SessionEvent`` values through this single processor. Events
-arrive already in TF-native shape (dotted ``kind``, TF payload fields); this
-processor enriches via TraceForge, annotates, and publishes:
-
-  1. **TraceForge Enricher** — tool pairing, classification, visibility, phases,
-     duration, risk scoring.  ``metadata.tool_display`` is derived from the
-     native classification so no per-tool-name alias table is needed.
-  2. Diff triggering on file edits / tool completions
-  3. turn_id synthesis + rotation for producers that don't supply one
-  4. StepTracker annotation (step boundaries, step_number)
-  5. TrailService step_id enrichment
-  6. EventBus publishing
-  7. **Title pipeline** — boundary + title inference producing
-     ``TitleUpdate`` → ``turn_summary`` events via EventBus.
-
-This is the one funnel for both producers — there is exactly one event shape.
+The production root supplies application-owned pairing and deterministic activity
+projection. Historical implementations can still be supplied through the explicit
+enrichment/title contracts without changing the canonical event model.
 """
 
 from __future__ import annotations
 
 import uuid
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -59,8 +46,7 @@ class EventProcessor:
     """Event processing shared between managed and imported sessions.
 
     Callers provide the per-job context (worktree_path, base_ref) and this
-    class applies the full processing pipeline — including TraceForge
-    enrichment — to each ``SessionEvent``.
+    class applies the configured projections to each ``SessionEvent``.
     """
 
     def __init__(
@@ -413,6 +399,8 @@ class EventProcessor:
         for key, processor in tuple(self._attempt_processors.items()):
             if key[0] == job_id:
                 await processor.on_job_terminal(job_id, outcome)
+        if self._activity_projection is not None and not self._retain_source_events:
+            await self._activity_projection.close(job_id, datetime.now(UTC))
         # Finalize this session's title streams (per-session, not global)
         if self._title_pipeline is not None:
             try:

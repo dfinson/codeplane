@@ -95,14 +95,16 @@ from backend.validators import REF_PATTERN
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
-    from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
+    from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin, LegacyStartIntent
     from backend.models.schemas.recipes import RecipeRunResponse, RecipeSelection
     from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.governance import GovernanceDecider
+    from backend.services.action_policy.production import StandaloneGovernance
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+    from backend.services.recipe.executor import RecipeExecutor
     from backend.services.runtime.execution_contracts import ExecutionContracts
     from backend.services.runtime.handoff import PendingHandoff
     from backend.services.sidecar.dispatcher import SidecarDispatcher
@@ -118,6 +120,7 @@ class AgentSession:
     def __init__(self) -> None:
         self._session_id: str | None = None
         self._adapter: AgentAdapterInterface | None = None
+        self.execution_token: str | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -129,7 +132,10 @@ class AgentSession:
         adapter: AgentAdapterInterface,
     ) -> AsyncIterator[SessionEvent]:
         self._adapter = adapter
-        self._session_id = await adapter.create_session(config)
+        self.execution_token = uuid.uuid4().hex
+        self._session_id = await adapter.create_session(
+            dataclass_replace(config, execution_token=self.execution_token),
+        )
         async for event in adapter.stream_events(self._session_id):
             yield event
 
@@ -319,8 +325,10 @@ class RuntimeService:
         # three preset pipelines) and its accrual bus-subscriber, both wired late
         # from the composition root so the store path / spend reader are injectable.
         self._governance_decider: GovernanceDecider | None = None
+        self._standalone_governance: StandaloneGovernance | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._recipe_controllers: dict[str, RecipeExecutor] = {}
         self._recipe_runner_slots = asyncio.Semaphore(config.runtime.max_concurrent_jobs)
         self._legacy_runner_slots: set[str] = set()
         self._queued_session_tokens: dict[str, str] = {}
@@ -786,6 +794,7 @@ class RuntimeService:
         if job.state != JobState.running:
             await self._publish_state_event(job.id, job.state, JobState.running)
 
+        restored_handoff: PendingHandoff | None = None
         try:
             if recipe_run is not None and (not job.worktree_path or not Path(job.worktree_path).is_dir()):
                 raise StateConflictError("Recipe execution requires the Job's existing prepared worktree.")
@@ -806,8 +815,28 @@ class RuntimeService:
                     recovery=recovering,
                 )
 
-            if self._execution_contracts is not None:
-                await self._prepare_legacy_execution_contract(job.id)
+            if recipe_run is None:
+                pending_intent = await self._prepare_legacy_execution_contract(job.id)
+                if pending_intent is not None and job.id in self._legacy_recoveries:
+                    if job.session_count != pending_intent.target_session_number:
+                        raise StateConflictError("Pending admission summary numbering differs from its owning Job")
+                    session_config = dataclass_replace(
+                        session_config,
+                        prompt=pending_intent.dispatch_prompt or pending_intent.instruction,
+                        resume_sdk_session_id=pending_intent.resume_sdk_session_id,
+                    )
+                    if pending_intent.handoff_required:
+                        from backend.services.runtime.handoff import PendingHandoff
+
+                        assert pending_intent.source_session_number is not None
+                        pin = self._job_contract_pins.get(job.id)
+                        restored_handoff = PendingHandoff(
+                            pin.admission_id if pin is not None else None,
+                            pending_intent.instruction,
+                            pending_intent.source_session_number,
+                            pending_intent.target_session_number,
+                        )
+                        self._legacy_handoffs[job.id] = restored_handoff
 
             # Plan mode: wrap the prompt for the planning session
             if (
@@ -879,6 +908,8 @@ class RuntimeService:
                 name=f"job-{job.id}",
             )
         except asyncio.CancelledError:
+            if restored_handoff is not None and self._legacy_handoffs.get(job.id) is restored_handoff:
+                self._legacy_handoffs.pop(job.id, None)
             self._recipe_contract_pins.pop(job.id, None)
             self._agent_sessions.pop(job.id, None)
             self._starting_tasks.pop(job.id, None)
@@ -890,6 +921,8 @@ class RuntimeService:
         except Exception:
             # Task creation failed after the DB CAS set state to running.
             # Revert to the pre-claim state so the job isn't orphaned.
+            if restored_handoff is not None and self._legacy_handoffs.get(job.id) is restored_handoff:
+                self._legacy_handoffs.pop(job.id, None)
             self._agent_sessions.pop(job.id, None)
             self._recipe_contract_pins.pop(job.id, None)
             self._starting_tasks.pop(job.id, None)
@@ -936,12 +969,18 @@ class RuntimeService:
                 try:
                     if job.id not in self._recipe_contract_pins:
                         raise StateConflictError("Recipe execution has no prepared admission contract.")
-                    await RecipeExecutor(
+                    controller = RecipeExecutor(
                         self,
                         job,
                         config,
                         contract_pin=self._recipe_contract_pins[job.id],
-                    ).execute()
+                    )
+                    self._recipe_controllers[job_id] = controller
+                    try:
+                        await controller.execute()
+                    finally:
+                        if self._recipe_controllers.get(job_id) is controller:
+                            self._recipe_controllers.pop(job_id, None)
                 except Exception as exc:
                     log.error("recipe_execution_failed", job_id=job_id, exc_info=True)
                     await self._fail_job(job_id, str(exc))
@@ -1318,7 +1357,7 @@ class RuntimeService:
         from backend.services.action_policy.monitor import MonitorSession
         from backend.services.action_policy.router import PolicyRouter
 
-        if self._governance_decider is None:
+        if self._governance_decider is None and self._standalone_governance is None:
             raise RuntimeError("governance decider not wired — set_governance() must run at startup")
 
         async with self._session_factory() as session:
@@ -1341,6 +1380,24 @@ class RuntimeService:
             mcp_configs=mcp_configs,
         )
 
+        if self._standalone_governance is not None:
+            pin = self._recipe_contract_pins.get(job_id) or self._job_contract_pins.get(job_id)
+            if pin is None:
+                raise StateConflictError("Standalone policy requires the exact durable admission contract")
+            standalone = self._standalone_governance.for_job(pin, policy)
+            adapter = self._resolve_adapter(config.sdk)
+            adapter.set_policy_router(standalone, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
+            if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
+                self._preflight_curator.adapter.set_policy_router(  # type: ignore[attr-defined]
+                    standalone,
+                    policy,
+                    job_id,
+                    worktree_path or "",
+                )
+            self._policy_routers[job_id] = standalone
+            self._repo_policies[job_id] = policy
+            return
+
         # Create router components
         if self._git_service is None:
             return
@@ -1352,6 +1409,7 @@ class RuntimeService:
 
         # Bind this job to its preset so the shared decider's decision (read) and
         # accrual (write) paths select the right preset pipeline.
+        assert self._governance_decider is not None
         self._governance_decider.register_job(job_id, Preset(effective_preset))
 
         # Create monitor for non-locked presets
@@ -1940,7 +1998,10 @@ class RuntimeService:
         made_progress = False
         downgrade: tuple[str, str] | None = None
 
-        async for session_event in agent_session.execute(config, self._resolve_adapter(config.sdk)):
+        async for session_event in agent_session.execute(
+            dataclass_replace(config, execution_epoch=self._execution_epoch),
+            self._resolve_adapter(config.sdk),
+        ):
             made_progress = made_progress or _session_event_counts_as_resume_progress(session_event)
 
             action, evt_error = await self._process_agent_event(
@@ -2296,10 +2357,107 @@ class RuntimeService:
         if self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
             raise AttemptBindingConflictError("Job execution is gated")
         if self._approval_service is not None and await self._approval_service.has_blocking_approvals(
-            job_id, attempt_id=attempt_id,
+            job_id,
+            attempt_id=attempt_id,
         ):
             raise AttemptBindingConflictError("Job has a pending approval")
         return job
+
+    async def authorize_attempt_command(
+        self,
+        job_id: str,
+        attempt_id: str,
+        expected_execution: str,
+        argv: list[str],
+        workspace: str,
+    ) -> None:
+        import json
+
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.action_policy.session_policy import PermissionInvocation
+        from backend.services.action_policy.standalone_router import StandalonePolicyRouter
+        from backend.services.auth.permission_policy import PermissionRequest
+
+        controller = self._recipe_controllers.get(job_id)
+        owned = controller.owned_attempt(attempt_id) if controller else None
+        if owned is None or owned.token != expected_execution or owned.task is not asyncio.current_task():
+            raise StateConflictError("Command admission requires the actual owning recipe task token")
+        async with self._session_factory() as session:
+            repository = RecipeRunRepository(session)
+            attempt = await repository.get_attempt(attempt_id)
+            step = await repository.get_step(owned.step_id)
+            run = await repository.get(owned.run_id)
+        if (
+            attempt is None
+            or step is None
+            or run is None
+            or run.job_id != job_id
+            or attempt.step_instance_id != step.id
+            or step.run_id != run.id
+            or step.current_attempt_id != attempt_id
+            or attempt.result is not None
+            or attempt.runner.kind != "command"
+            or attempt.runner.argv != argv
+            or attempt.workspace.path != workspace
+        ):
+            raise StateConflictError("Command arguments or owning attempt changed before policy")
+        await self._require_attempt_job(job_id, attempt_id)
+        router = self._policy_routers.get(job_id)
+        if not isinstance(router, StandalonePolicyRouter):
+            raise StateConflictError("Exact command authorization requires standalone admission policy")
+
+        async def current() -> bool:
+            now = controller.owned_attempt(attempt_id) if controller else None
+            if now is not owned or now.task.cancelling():
+                return False
+            async with self._session_factory() as session:
+                repository = RecipeRunRepository(session)
+                latest = await repository.get(owned.run_id)
+                current_step = await repository.get_step(owned.step_id)
+            return bool(
+                latest is not None
+                and latest.cancel_requested_at is None
+                and latest.resolved_at is None
+                and current_step is not None
+                and current_step.current_attempt_id == attempt_id
+            )
+
+        command = ""
+        dialect = None
+        executable = Path(argv[0]).name.lower()
+        if executable in {"sh", "bash", "pwsh", "powershell"}:
+            for index, value in enumerate(argv[:-1]):
+                if value.lower() in {"-c", "-command"}:
+                    command, dialect = argv[index + 1], "powershell" if executable in {"pwsh", "powershell"} else "bash"
+                    break
+        metadata = EventMetadata(
+            source_framework="codeplane.recipe",
+            run_id=owned.run_id,
+            recipe_run_id=run.id,
+            recipe_revision=run.snapshot.revision,
+            step_instance_id=step.id,
+            attempt_id=attempt_id,
+            execution_epoch=self.execution_epoch,
+            execution_token=owned.token,
+        )
+        permitted = await router.authorize_permission(
+            PermissionInvocation(
+                job_id=job_id,
+                session_id=owned.run_id,
+                provider="codeplane.command",
+                metadata=metadata,
+                workspace=workspace,
+                protected_paths=(),
+                request=PermissionRequest(kind="shell", workspace_path=workspace, full_command_text=command or None),
+                tool_name=argv[0],
+                arguments_json=json.dumps({"argv": argv}, ensure_ascii=False),
+                is_current=current,
+                dialect=dialect,
+                tool_call_id=owned.token,
+            )
+        )
+        if not permitted or not await current():
+            raise StateConflictError("The exact command invocation was not authorized")
 
     @contextlib.asynccontextmanager
     async def open_attempt_execution(
@@ -2356,7 +2514,10 @@ class RuntimeService:
             return CurrentExecutionContext(job_id, binding.token)
 
     def configure_execution_contracts(
-        self, *, available: Mapping[str, ExecutionContract], selected_for_new: str,
+        self,
+        *,
+        available: Mapping[str, ExecutionContract],
+        selected_for_new: str,
     ) -> None:
         """Trusted composition selects available implementations separately from new admission."""
         from backend.persistence.execution_contract_repo import ExecutionContractRepository
@@ -2364,11 +2525,16 @@ class RuntimeService:
 
         self._execution_contracts = ExecutionContracts(
             ExecutionContractRepository(self._session_factory),
-            available=available, selected_for_new=selected_for_new,
+            available=available,
+            selected_for_new=selected_for_new,
         )
 
     async def prepare_execution_contract(
-        self, job_id: str, admission_id: str, *, recovery: bool,
+        self,
+        job_id: str,
+        admission_id: str,
+        *,
+        recovery: bool,
     ) -> ExecutionContractPin | None:
         """Persist fresh admission or retrieve recovery provenance before governed invocation."""
         if self._execution_contracts is None:
@@ -2377,22 +2543,36 @@ class RuntimeService:
             return await self._execution_contracts.recover(job_id, admission_id)
         return await self._execution_contracts.fresh(job_id, admission_id)
 
-    async def _prepare_legacy_execution_contract(self, job_id: str) -> None:
+    async def _prepare_legacy_execution_contract(self, job_id: str) -> LegacyStartIntent | None:
+        from backend.persistence.database import serialized_write
         from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
         from backend.persistence.recipe_run_repo import RecipeRunRepository
 
         async with self._session_factory() as session:
             if await RecipeRunRepository(session).get_for_job(job_id) is not None:
-                return
-            admission = await ExecutionAdmissionRepository(session).current(job_id)
+                return None
+            admissions = ExecutionAdmissionRepository(session)
+            admission = await admissions.current(job_id)
+            unstarted = admission is not None and await admissions.is_unstarted(admission)
         if admission is None:
-            raise StateConflictError("Legacy execution admission is unrecorded; explicit continuation is required")
-        pin = await self.prepare_execution_contract(
-            job_id, admission.id, recovery=job_id in self._legacy_recoveries,
-        )
-        if pin is None:
-            raise StateConflictError("Recovery cannot create a missing historical execution contract")
-        self._job_contract_pins[job_id] = pin
+            if self._execution_contracts is not None:
+                raise StateConflictError("Legacy execution admission is unrecorded; explicit continuation is required")
+            return None
+        if self._execution_contracts is not None:
+            pin = await self.prepare_execution_contract(
+                job_id,
+                admission.id,
+                recovery=job_id in self._legacy_recoveries and not unstarted,
+            )
+            if pin is None:
+                raise StateConflictError("Recovery cannot create a missing historical execution contract")
+            self._job_contract_pins[job_id] = pin
+        async with serialized_write(self._session_factory) as session:
+            await ExecutionAdmissionRepository(session).mark_started(
+                admission,
+                contract_recorded=self._execution_contracts is not None,
+            )
+        return admission.start_intent if unstarted else None
 
     async def _complete_legacy_handoff(self, job: Job, config: SessionConfig) -> SessionConfig:
         from backend.services.adapters.completion_context import CompletionContext, completion_context
@@ -2402,22 +2582,33 @@ class RuntimeService:
             return config
         pin = self._job_contract_pins.get(job.id)
         if (
-            pin is None or pin.admission_id != pending.admission_id
+            pin is None
+            or pin.admission_id != pending.admission_id
             or job.session_count != pending.target_session_number
         ):
             raise StateConflictError("Deferred handoff does not belong to the pinned admission")
         source_job = dataclass_replace(job, session_count=pending.source_session_number)
-        with completion_context(CompletionContext(
-            job_id=job.id, execution_epoch=self._execution_epoch, execution_contract=pin,
-        )):
+        with completion_context(
+            CompletionContext(
+                job_id=job.id,
+                execution_epoch=self._execution_epoch,
+                execution_contract=pin,
+            )
+        ):
             async with self._session_factory() as session:
                 prompt = await self._build_resume_handoff_prompt_for_job(
-                    session, source_job, pending.instruction, pending.target_session_number,
+                    session,
+                    source_job,
+                    pending.instruction,
+                    pending.target_session_number,
                 )
         return dataclass_replace(config, prompt=prompt)
 
     async def bind_attempt_contract(
-        self, pin: ExecutionContractPin, attempt_id: str, expected_execution: str,
+        self,
+        pin: ExecutionContractPin,
+        attempt_id: str,
+        expected_execution: str,
     ) -> None:
         if self._execution_contracts is None:
             raise RuntimeError("Execution contract implementations have not been configured")
@@ -2427,8 +2618,12 @@ class RuntimeService:
             if binding is None or binding.token != expected_execution or binding.cancel_requested:
                 raise AttemptBindingConflictError("Contract binding requires the current execution token")
             await self._execution_contracts.bind_handle(
-                pin, sdk=str(binding.sdk), session_id=binding.session_id,
-                live_epoch=self._execution_epoch, execution_token=binding.token, attempt_id=attempt_id,
+                pin,
+                sdk=str(binding.sdk),
+                session_id=binding.session_id,
+                live_epoch=self._execution_epoch,
+                execution_token=binding.token,
+                attempt_id=attempt_id,
             )
 
     async def attach_attempt_policy(self, job_id: str, attempt_id: str, expected_execution: str) -> None:
@@ -2447,7 +2642,12 @@ class RuntimeService:
             if not isinstance(binding.adapter, SessionPolicyAdapter):
                 raise AttemptBindingConflictError("The selected execution adapter cannot attach Job policy")
             binding.adapter.attach_attempt_policy(
-                binding.session_id, job_id, attempt_id, self._execution_epoch, router, policy,
+                binding.session_id,
+                job_id,
+                attempt_id,
+                self._execution_epoch,
+                router,
+                policy,
                 execution_token=binding.token,
             )
 
@@ -2511,6 +2711,9 @@ class RuntimeService:
             handle = self._agent_sessions.get(job.id)
             if handle is None or not handle.session_id:
                 return None
+            owned_token = getattr(handle, "execution_token", None)
+            if isinstance(owned_token, str) and owned_token:
+                return owned_token
             identity = f"{id(handle)}:{handle.session_id}"
         elif job.source == JobSource.copilot_cli:
             # Publication and permission markers do not identify a live CLI execution.
@@ -2540,7 +2743,8 @@ class RuntimeService:
             elif token != expected_execution:
                 reason = "stale_execution"
             elif self._approval_service is not None and await self._approval_service.has_blocking_approvals(
-                job_id, attempt_id=attempt_id,
+                job_id,
+                attempt_id=attempt_id,
             ):
                 reason = "approval_pending"
             elif self._active_gates.get(job_id) or job_id in self._waiting_for_approval:
@@ -2550,8 +2754,10 @@ class RuntimeService:
             assert job is not None
             binding = self._attempt_bindings.get(job_id, attempt_id) if attempt_id is not None else None
             target_session_id = (
-                binding.session_id if binding is not None
-                else self._agent_sessions[job_id].session_id if job.source == JobSource.managed
+                binding.session_id
+                if binding is not None
+                else self._agent_sessions[job_id].session_id
+                if job.source == JobSource.managed
                 else job.external_session_id
             )
             try:
@@ -2582,8 +2788,10 @@ class RuntimeService:
                 "Instruction admitted to the message channel. Execution unconfirmed.\n\n"
                 f"{content}"
             ),
-            "operator_content": content, "dispatch": "coordinated",
-            "admission_status": "accepted", "execution_status": "unconfirmed",
+            "operator_content": content,
+            "dispatch": "coordinated",
+            "admission_status": "accepted",
+            "execution_status": "unconfirmed",
             "target_session_id": target_session_id,
         }
         if attempt_id is not None:
@@ -2594,9 +2802,12 @@ class RuntimeService:
             payload,
             event_id=receipt_id,
             metadata=EventMetadata(
-                attempt_id=attempt_id, execution_epoch=self._execution_epoch,
-                execution_token=expected_execution, run_id=target_session_id,
-                source_framework="codeplane", namespace=("control", "admission-receipt"),
+                attempt_id=attempt_id,
+                execution_epoch=self._execution_epoch,
+                execution_token=expected_execution,
+                run_id=target_session_id,
+                source_framework="codeplane",
+                namespace=("control", "admission-receipt"),
             ),
         )
         from backend.persistence.database import serialized_write
@@ -2607,14 +2818,20 @@ class RuntimeService:
                 await EventRepository(session).append(message)
         except DBAPIError:
             log.error(
-                "coordinated_admission_receipt_persist_failed", job_id=job_id, receipt_id=message.id, exc_info=True,
+                "coordinated_admission_receipt_persist_failed",
+                job_id=job_id,
+                receipt_id=message.id,
+                exc_info=True,
             )
             return CurrentExecutionDispatchResult(job_id, token, "uncertain", "receipt_persistence_failed")
         try:
             await self._event_bus.publish(message)
         except (DBAPIError, OSError, RuntimeError):
             log.error(
-                "coordinated_admission_receipt_publish_failed", job_id=job_id, receipt_id=message.id, exc_info=True,
+                "coordinated_admission_receipt_publish_failed",
+                job_id=job_id,
+                receipt_id=message.id,
+                exc_info=True,
             )
         return CurrentExecutionDispatchResult(job_id, token, "accepted", message_event_id=message.id)
 

@@ -65,9 +65,7 @@ def preprocess_goose(obj: dict[str, Any]) -> list[dict[str, Any]]:
                     "content": (tool_result.get("value") or {}).get("content", "")
                     if isinstance(tool_result, dict)
                     else "",
-                    "is_success": tool_result.get("status") == "success"
-                    if isinstance(tool_result, dict)
-                    else False,
+                    "is_success": tool_result.get("status") == "success" if isinstance(tool_result, dict) else False,
                 }
             )
         elif item_type == "thinking":
@@ -143,11 +141,7 @@ def preprocess_goose(obj: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Always emit the message itself (with role)
     if has_text or not results:
-        text_parts = [
-            i.get("text", "")
-            for i in content_items
-            if isinstance(i, dict) and i.get("type") == "text"
-        ]
+        text_parts = [i.get("text", "") for i in content_items if isinstance(i, dict) and i.get("type") == "text"]
         results.insert(
             0,
             {

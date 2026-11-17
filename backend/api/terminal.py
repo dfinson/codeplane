@@ -221,12 +221,11 @@ async def terminal_ws(ws: WebSocket) -> None:
                     if isinstance(cols, int) and isinstance(rows, int) and 0 < cols <= 500 and 0 < rows <= 200:
                         svc.resize(attached_session_id, cols, rows)
 
-            elif msg_type == "detach":
-                if attached_session_id:
-                    session = svc.get_session(attached_session_id)
-                    if session:
-                        session.clients.discard(ws)
-                    attached_session_id = None
+            elif msg_type == "detach" and attached_session_id:
+                session = svc.get_session(attached_session_id)
+                if session:
+                    session.clients.discard(ws)
+                attached_session_id = None
 
     except WebSocketDisconnect:
         log.debug("terminal_ws_disconnected", session_id=attached_session_id)

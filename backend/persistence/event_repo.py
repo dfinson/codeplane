@@ -54,7 +54,8 @@ class EventRepository(BaseRepository):
             kind=str(event.kind),
             timestamp=(
                 event.timestamp.replace(tzinfo=UTC)
-                if event.timestamp.tzinfo is None else event.timestamp.astimezone(UTC)
+                if event.timestamp.tzinfo is None
+                else event.timestamp.astimezone(UTC)
             ),
             payload=json.dumps(dict(event.payload)),
             event_metadata=json.dumps(event.metadata.model_dump(mode="json")),

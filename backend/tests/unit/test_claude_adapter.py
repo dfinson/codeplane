@@ -597,7 +597,8 @@ class TestProcessAssistantMessage:
         observed = adapter._queues[sid].get_nowait()
         assert observed.kind == EventKind.model_observed
         assert observed.payload == {
-            "requested_model": requested_model or None, "actual_model": "reported-model",
+            "requested_model": requested_model or None,
+            "actual_model": "reported-model",
             "model_match": False if requested_model else None,
         }
         assert observed.metadata.attempt_id == "attempt"

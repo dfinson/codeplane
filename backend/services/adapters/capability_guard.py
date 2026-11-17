@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from backend.services.action_policy.syntax import analyze_syntax_async
 from backend.services.adapters.contracts import Capability, CapabilityDeniedError, CapabilityGrant
+from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.auth.workspace_paths import workspace_target
 
 if TYPE_CHECKING:
@@ -54,6 +55,36 @@ _DELEGATE_TOOLS = frozenset({"task", "agent", "runsubagent", "search_subagent"})
 _NETWORK_TOOLS = frozenset({"webfetch", "websearch", "web_fetch", "web_search", "fetch_webpage"})
 _SHELL_TOOLS = frozenset({"bash", "powershell", "shell", "terminal", "run_in_terminal"})
 _PURE_BASH_BUILTINS = frozenset({"pwd", "echo", "printf", "true", "false", ":"})
+
+
+def invocation_permission_request(workspace: str, tool_name: str, arguments: dict[str, Any]) -> PermissionRequest:
+    """Translate actual invocation fields without trusting producer read-only hints."""
+    name = tool_name.lower()
+    kind = (
+        "shell"
+        if name in _SHELL_TOOLS
+        else "write"
+        if name in _WRITE_TOOLS
+        else "read"
+        if name in _READ_TOOLS
+        else "url"
+        if name in _NETWORK_TOOLS
+        else "custom-tool"
+    )
+    command = arguments.get("command")
+    if kind == "shell" and not isinstance(command, str):
+        raise CapabilityDeniedError("Shell invocation has no complete command string")
+    paths = [
+        value
+        for key in ("path", "file_path", "filePath", "file_name", "pattern" if name == "glob" else "path")
+        if isinstance(value := arguments.get(key), str) and value
+    ]
+    return PermissionRequest(
+        kind=kind,
+        workspace_path=workspace,
+        possible_paths=paths,
+        full_command_text=command if kind == "shell" and isinstance(command, str) else None,
+    )
 
 
 async def enforce_invocation_capabilities(

@@ -34,9 +34,7 @@ def preprocess_pydantic_ai(obj: dict[str, Any]) -> list[dict[str, Any]]:
                 normalized["type"] = "tool_call_error"
             else:
                 normalized["type"] = (
-                    "tool_call_end"
-                    if event_kind == "function_tool_result"
-                    else "stream.output_tool_result"
+                    "tool_call_end" if event_kind == "function_tool_result" else "stream.output_tool_result"
                 )
         else:
             normalized["type"] = f"stream.{event_kind}"
@@ -49,11 +47,7 @@ def preprocess_pydantic_ai(obj: dict[str, Any]) -> list[dict[str, Any]]:
         normalized["type"] = "model_response"
         # Extract text from parts for convenience
         parts = normalized.get("parts") or []
-        text_parts = [
-            p.get("content", "")
-            for p in parts
-            if isinstance(p, dict) and p.get("part_kind") == "text"
-        ]
+        text_parts = [p.get("content", "") for p in parts if isinstance(p, dict) and p.get("part_kind") == "text"]
         if text_parts:
             normalized["content"] = "\n".join(text_parts)
         return [normalized]
@@ -62,9 +56,7 @@ def preprocess_pydantic_ai(obj: dict[str, Any]) -> list[dict[str, Any]]:
         normalized["type"] = "model_request"
         parts = normalized.get("parts") or []
         user_parts = [
-            p.get("content", "")
-            for p in parts
-            if isinstance(p, dict) and p.get("part_kind") == "user-prompt"
+            p.get("content", "") for p in parts if isinstance(p, dict) and p.get("part_kind") == "user-prompt"
         ]
         if user_parts:
             normalized["content"] = "\n".join(user_parts)

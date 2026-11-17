@@ -148,7 +148,7 @@ def preprocess_copilot_vscode(obj: dict[str, Any]) -> list[dict[str, Any]]:
     # ── Snapshot: session start (+ any requests already present) ──────────────
     if kind == 0:
         _reset()
-        snap = obj.get("v") if isinstance(obj.get("v"), dict) else {}
+        snap = value if isinstance(value := obj.get("v"), dict) else {}
         out: list[dict[str, Any]] = [
             {
                 "event_type": "session_started",
@@ -197,11 +197,7 @@ def preprocess_copilot_vscode(obj: dict[str, Any]) -> list[dict[str, Any]]:
             idx = path[1]
             if path[2] == "codeCitations":
                 return _emit_citations(value, idx)
-            if (
-                path[2] == "elapsedMs"
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-            ):
+            if path[2] == "elapsedMs" and isinstance(value, (int, float)) and not isinstance(value, bool):
                 return [_emit_completion(value, idx)]
         return []
 

@@ -695,6 +695,7 @@ class SessionConfig:
     step_instance_id: str | None = None
     attempt_id: str | None = None
     execution_epoch: str | None = None
+    execution_token: str | None = None
     defer_start: bool = False
 
 
@@ -892,7 +893,6 @@ class Job:
     version: int = 1
     parent_job_id: str | None = None
     source: str = "managed"
-    observation_only: bool = False
     external_session_id: str | None = None
     integration_binding_id: str | None = None
     observation_only: bool = False

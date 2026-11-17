@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-    from traceforge.types import SessionEvent
 
+    from backend.models.session_event import SessionEvent
     from backend.services.analytics.model_pricing import ModelPricingService
     from backend.services.events.event_bus import EventBus
 

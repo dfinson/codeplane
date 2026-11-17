@@ -72,8 +72,10 @@ def _is_hidden_tool_event(e: Any) -> bool:
     if e.kind == EventKind.tool_call_failed or e.payload.get("success") is False:
         return False
     if e.kind not in (
-        EventKind.tool_call_started, EventKind.tool_call_completed,
-        EventKind.tool_call_failed, EventKind.tool_result_chunk,
+        EventKind.tool_call_started,
+        EventKind.tool_call_completed,
+        EventKind.tool_call_failed,
+        EventKind.tool_result_chunk,
     ):
         return False
     return _tool_visibility(e) == "hidden"
@@ -161,9 +163,12 @@ def _build_transcript(
             arguments=_tool_args_to_str(e.payload.get("arguments")),
             result=_tool_args_to_str(e.payload.get("result")),
             success=False if e.kind == EventKind.tool_call_failed else e.payload.get("success"),
-            tool_issue=_tool_args_to_str(e.payload.get("tool_issue") or (
-                e.payload.get("error") or e.payload.get("message") if e.kind == EventKind.tool_call_failed else None
-            )),
+            tool_issue=_tool_args_to_str(
+                e.payload.get("tool_issue")
+                or (
+                    e.payload.get("error") or e.payload.get("message") if e.kind == EventKind.tool_call_failed else None
+                )
+            ),
             tool_intent=_metadata_tool_intent(e),
             tool_title=e.payload.get("tool_title"),
             tool_display=_metadata_tool_display(e),
@@ -232,7 +237,8 @@ async def _build_diff(
     if (
         getattr(job, "observation_only", False) is not True
         and job.state in (JobState.running, JobState.waiting_for_approval)
-        and job.worktree_path and job.base_ref
+        and job.worktree_path
+        and job.base_ref
     ):
         with contextlib.suppress(GitError, OSError):
             diff = await diff_service.calculate_diff(job.worktree_path, job.base_ref)

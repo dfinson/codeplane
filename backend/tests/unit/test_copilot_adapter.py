@@ -1246,7 +1246,7 @@ class TestEventTelemetry:
         events = self._drain_queue(queue)
         usage = [e for e in events if e.kind == EventKind.telemetry_usage]
         assert len(usage) == 1
-        assert usage[0].payload == {
+        assert {key: value for key, value in usage[0].payload.items() if key != "native_usage"} == {
             "model": "gpt-4o",
             "input_tokens": 100,
             "output_tokens": 50,
@@ -1258,6 +1258,15 @@ class TestEventTelemetry:
             "advance_turn": True,
             "num_turns": 1,
         }
+        native = usage[0].payload["native_usage"]
+        assert {item["unit"]: item["amount"] for item in native} == {
+            "input_tokens": "100",
+            "output_tokens": "50",
+            "cache_read_tokens": "10",
+            "cache_write_tokens": "5",
+            "copilot_cost_unit": "0.002",
+        }
+        assert all(item["currency"] is None and not item["verified"] for item in native)
 
     @pytest.mark.asyncio
     async def test_assistant_usage_model_mismatch(self, adapter: CopilotAdapter) -> None:
@@ -1754,8 +1763,7 @@ class TestComplete:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("excluded_tools", "sdk_exclusions"),
-        [(None, ["builtin:*", "mcp:*", "custom:*"]), (["bash"], ["bash"]),
-         (["*"], ["builtin:*", "mcp:*", "custom:*"])],
+        [(None, ["builtin:*", "mcp:*", "custom:*"]), (["bash"], ["bash"]), (["*"], ["builtin:*", "mcp:*", "custom:*"])],
     )
     async def test_collects_response(
         self, adapter: CopilotAdapter, excluded_tools: list[str] | None, sdk_exclusions: list[str] | None
@@ -2178,12 +2186,25 @@ class TestScoutAccounting:
         adapter.set_session_metadata(sid, _make_config(attempt_id="attempt", execution_epoch="epoch"))
         adapter._job_main_models["job-1"] = "job-default"
         await adapter._process_sdk_event_inner(
-            _FakeSdkSessionEvent(event_kind, _FakeEventData(
-                model="reported-model", new_model="reported-model",
-                input_tokens=1, output_tokens=1, cache_read_tokens=0,
-                cache_write_tokens=0, cost=0, duration=timedelta(milliseconds=1), quota_snapshots=None,
-            )),
-            sid, "job-1", requested_model, [False], adapter._queues[sid],
+            _FakeSdkSessionEvent(
+                event_kind,
+                _FakeEventData(
+                    model="reported-model",
+                    new_model="reported-model",
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    cost=0,
+                    duration=timedelta(milliseconds=1),
+                    quota_snapshots=None,
+                ),
+            ),
+            sid,
+            "job-1",
+            requested_model,
+            [False],
+            adapter._queues[sid],
         )
         events = []
         while not adapter._queues[sid].empty():
@@ -2191,7 +2212,8 @@ class TestScoutAccounting:
         observed = [event for event in events if event and event.kind == EventKind.model_observed]
         assert len(observed) == 1
         assert observed[0].payload == {
-            "requested_model": requested_model or None, "actual_model": "reported-model",
+            "requested_model": requested_model or None,
+            "actual_model": "reported-model",
             "model_match": False if requested_model else None,
         }
         assert observed[0].metadata.attempt_id == "attempt"
@@ -2304,6 +2326,7 @@ class TestScoutPermissions:
         )
         assert allowed is None, "Capability approval must not override ordinary permission policy"
         await adapter.abort_session(sid)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("request_fields", "expected"),

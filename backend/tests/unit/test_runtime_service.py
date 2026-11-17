@@ -1553,7 +1553,8 @@ class TestResumeFallback:
             assert row is not None
             assert row.sdk_session_id == "resume-2"
             declarations = [
-                item.event for item in await EventRepository(session).list_after(0, job_id=job.id)
+                item.event
+                for item in await EventRepository(session).list_after(0, job_id=job.id)
                 if item.event.kind == "execution.admission.declared"
             ]
             assert len(declarations) == 1, "Native fallback must retain the accepted admission"

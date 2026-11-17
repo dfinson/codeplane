@@ -70,10 +70,14 @@ class TestStepLifecycle:
         await tracker.on_transcript_event("job-1", _make_event(role="operator"))
         current = tracker.current_step("job-1")
         event_bus.publish.reset_mock()
-        await tracker.on_transcript_event("job-1", new_event(
-            "job-1", EventKind.tool_call_failed,
-            {"turn_id": "turn-1", "tool_name": "write", "arguments": {"path": "not-written"}, "error": "Denied"},
-        ))
+        await tracker.on_transcript_event(
+            "job-1",
+            new_event(
+                "job-1",
+                EventKind.tool_call_failed,
+                {"turn_id": "turn-1", "tool_name": "write", "arguments": {"path": "not-written"}, "error": "Denied"},
+            ),
+        )
         assert tracker.current_step("job-1") is current
         assert current.tool_count == 1 and current.files_written == []
         event_bus.publish.assert_not_awaited()

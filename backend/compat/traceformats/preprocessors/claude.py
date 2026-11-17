@@ -61,9 +61,7 @@ def preprocess_claude(obj: dict[str, Any]) -> list[dict[str, Any]]:
             return _stamp_cwd([{"block_type": "user.text", "content": content}], cwd)
         if isinstance(content, list):
             return _stamp_cwd(_flatten_blocks(content, "user"), cwd)
-        return _stamp_cwd(
-            [{"block_type": "user.text", "content": str(content) if content else ""}], cwd
-        )
+        return _stamp_cwd([{"block_type": "user.text", "content": str(content) if content else ""}], cwd)
 
     if msg_type == "assistant":
         if isinstance(content, list):

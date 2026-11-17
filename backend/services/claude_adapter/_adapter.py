@@ -194,6 +194,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                 tool_name=tool_name,
                 tool_input=input_data,
                 fence=fence,
+                dialect="bash" if tool_name == "Bash" else None,
             )
             if decision == PermissionDecision.allow:
                 return PermissionResultAllow()
@@ -365,6 +366,8 @@ class ClaudeAdapter(BaseAgentAdapter):
         is_scout = self.get_session_kind(session_id) == "preflight"
         if is_scout and model:
             self._scout_models[session_id] = model
+            if not is_attempt:
+                self._session_models[session_id] = model
 
         # Lock in the main model from the first AssistantMessage that carries one
         if job_id and model and (self.get_session_kind(session_id) != "preflight" or is_attempt):
@@ -503,11 +506,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         cache_write = usage.get("cache_creation_input_tokens", 0) if isinstance(usage, dict) else 0
 
         if job_id:
-            model = (
-                self._scout_models.get(session_id, "")
-                if self.get_session_kind(session_id) == "preflight"
-                else self._job_main_models.get(job_id, "")
-            )
+            model = self._session_models.get(session_id, "")
             num_turns = getattr(message, "num_turns", 0) or 1
 
             self._emit_tf(
@@ -525,6 +524,22 @@ class ClaudeAdapter(BaseAgentAdapter):
                     "is_subagent": False,
                     "advance_turn": True,
                     "num_turns": int(num_turns),
+                    "native_usage": self._native_usage(
+                        session_id,
+                        {
+                            "input_tokens": usage.get("input_tokens") if isinstance(usage, dict) else None,
+                            "output_tokens": usage.get("output_tokens") if isinstance(usage, dict) else None,
+                            "cache_read_tokens": usage.get("cache_read_input_tokens")
+                            if isinstance(usage, dict)
+                            else None,
+                            "cache_write_tokens": (
+                                usage.get("cache_creation_input_tokens") if isinstance(usage, dict) else None
+                            ),
+                            "USD": getattr(message, "total_cost_usd", None),
+                        },
+                        "sdk.result",
+                        model=model or None,
+                    ),
                 },
             )
 
@@ -615,6 +630,8 @@ class ClaudeAdapter(BaseAgentAdapter):
     async def create_session(self, config: SessionConfig) -> str:
         from claude_code_sdk import ClaudeCodeOptions, ClaudeSDKClient
 
+        from backend.services.action_policy.session_policy import SessionPolicy
+
         session_id = str(uuid.uuid4())
         queue: asyncio.Queue[SessionEvent | None] = asyncio.Queue()
         self._queues[session_id] = queue
@@ -663,13 +680,17 @@ class ClaudeAdapter(BaseAgentAdapter):
         excluded_tools = excluded_tools_for_capabilities(config.execution_capabilities, config.disallowed_tools)
         if excluded_tools:
             options.disallowed_tools = excluded_tools
-        if config.execution_capabilities is not None:
+        standalone = isinstance(self._policy_router.get(config.job_id), SessionPolicy)
+        if config.execution_capabilities is not None or standalone:
             from claude_code_sdk import HookMatcher
 
             async def _guard_invocation(
                 request: dict[str, Any], tool_use_id: str | None, context: HookContext
             ) -> HookJSONOutput:
-                from backend.services.adapters.capability_guard import enforce_invocation_capabilities
+                from backend.services.adapters.capability_guard import (
+                    enforce_tool_capabilities,
+                    invocation_permission_request,
+                )
                 from backend.services.adapters.contracts import CapabilityDeniedError
 
                 fence = self._capture_permission_fence(session_id)
@@ -680,16 +701,35 @@ class ClaudeAdapter(BaseAgentAdapter):
                     arguments = request.get("tool_input")
                     if not isinstance(tool_name, str) or not isinstance(arguments, dict):
                         raise CapabilityDeniedError("Tool invocation is unavailable for capability enforcement")
-                    assert config.execution_capabilities is not None
-                    await enforce_invocation_capabilities(
+                    permission_request = invocation_permission_request(config.workspace_path, tool_name, arguments)
+                    await enforce_tool_capabilities(
                         config.execution_capabilities,
                         workspace=config.workspace_path,
+                        kind=permission_request.kind,
                         tool_name=tool_name,
-                        arguments=arguments,
+                        paths=permission_request.possible_paths or (),
+                        command=permission_request.full_command_text,
                         dialect="bash" if tool_name == "Bash" else None,
                     )
                     if not self._permission_fence_is_current(session_id, fence):
                         raise CapabilityDeniedError("Tool callback no longer owns the current execution")
+                    if isinstance(self._policy_router.get(config.job_id), SessionPolicy):
+                        decision = await self._evaluate_permission(
+                            session_id,
+                            config.job_id,
+                            permission_request,
+                            tool_name=tool_name,
+                            tool_input=arguments,
+                            fence=fence,
+                            tool_call_id=tool_use_id,
+                            dialect="bash" if tool_name == "Bash" else None,
+                        )
+                        return {
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "allow" if decision == PermissionDecision.allow else "deny",
+                            }
+                        }
                 except CapabilityDeniedError as exc:
                     log.warning("execution_capability_denied", job_id=config.job_id, reason=str(exc))
                     return {

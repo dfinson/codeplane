@@ -669,11 +669,7 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
             task = asyncio.current_task()
             # resolve() may read an extra request before rejecting it. Only a
             # canonical read marks the worker's next iteration after retirement.
-            if (
-                self.first_returned.is_set()
-                and task is self.first_worker
-                and approval_id == self.canonical_id
-            ):
+            if self.first_returned.is_set() and task is self.first_worker and approval_id == self.canonical_id:
                 self.stale_worker_resumed.set()
             if (
                 approval is not None
@@ -718,7 +714,9 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
             await ProjectRepository(session).create("writer-proof", "Unrelated writer", ["/unrelated-writer"])
             now = datetime.now(UTC)
             expired = await repo.compare_and_set(
-                claimed, now=now, changes={"claim_expires_at": now - timedelta(seconds=1)},
+                claimed,
+                now=now,
+                changes={"claim_expires_at": now - timedelta(seconds=1)},
             )
             assert expired is not None and expired.claim_token == claimed.claim_token
         return expired
@@ -757,8 +755,7 @@ async def test_competing_workers_fence_stale_approval_creator(tracker_db, monkey
         assert len(rows) == (2 if pause_at == "before_commit" else 1)
         assert all(row.resolution == ApprovalResolution.rejected for row in extras)
         assert {
-            approval_id for approval_id, decision, _ in approvals.resolutions
-            if decision == ApprovalResolution.rejected
+            approval_id for approval_id, decision, _ in approvals.resolutions if decision == ApprovalResolution.rejected
         } == {row.id for row in extras}
         assert all(f"canonical tracker approval {canonical.id}" in row.notes for row in extras)
         after_stale_creator = await first.get_operation(original.id)

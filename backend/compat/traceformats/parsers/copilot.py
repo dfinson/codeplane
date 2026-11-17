@@ -16,10 +16,12 @@ Output: Structured event dicts suitable for copilot_markdown.yaml mapping.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import tree_sitter as ts
 
@@ -105,9 +107,7 @@ class CopilotPreParser(MarkdownPreParser):
     def _get_query(self) -> ts.Query:
         return _BLOCK_QUERY
 
-    def _classify_match(
-        self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes
-    ) -> list[Block]:
+    def _classify_match(self, pattern_index: int, captures: dict[str, list[ts.Node]], source: bytes) -> list[Block]:
         blocks: list[Block] = []
 
         if pattern_index in (_PAT_H1, _PAT_H2, _PAT_H3):
@@ -256,9 +256,8 @@ class CopilotPreParser(MarkdownPreParser):
             yield self._turn_event(state, "table_output", {"content": block.text})
         elif block.role == "quote":
             yield self._turn_event(state, "quoted_output", {"content": block.text})
-        elif block.role == "list":
-            if block.text:
-                yield self._turn_event(state, "assistant_text", {"content": block.text})
+        elif block.role == "list" and block.text:
+            yield self._turn_event(state, "assistant_text", {"content": block.text})
 
     # ─── Mode 1: Parse a turn row from SQLite ────────────────────────────
 
@@ -270,7 +269,7 @@ class CopilotPreParser(MarkdownPreParser):
         """
         session_id = row.get("session_id", "unknown")
         turn_index = row.get("turn_index")
-        timestamp = row.get("timestamp", datetime.now(timezone.utc).isoformat())
+        timestamp = row.get("timestamp", datetime.now(UTC).isoformat())
 
         self._turn_state = _TurnState(
             session_id=session_id,
@@ -301,12 +300,10 @@ class CopilotPreParser(MarkdownPreParser):
     # ─── Event construction ──────────────────────────────────────────────
 
     @staticmethod
-    def _turn_event(
-        state: _TurnState | None, event_type: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _turn_event(state: _TurnState | None, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         event: dict[str, Any] = {
             "type": event_type,
-            "timestamp": state.timestamp if state else datetime.now(timezone.utc).isoformat(),
+            "timestamp": state.timestamp if state else datetime.now(UTC).isoformat(),
             "session_id": state.session_id if state else "unknown",
         }
         if state and state.turn_index is not None:

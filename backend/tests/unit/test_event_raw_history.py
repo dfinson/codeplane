@@ -17,7 +17,11 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 @pytest.mark.parametrize("zone", [UTC, timezone(timedelta(hours=2))])
 async def test_canonical_raw_round_trip_and_sse_replay_preserve_supplied_data(session_factory, raw, zone) -> None:
     event = new_event(
-        "job-1", "message.assistant", {"content": "Observed"}, raw_event=raw, timestamp=datetime.now(zone),
+        "job-1",
+        "message.assistant",
+        {"content": "Observed"},
+        raw_event=raw,
+        timestamp=datetime.now(zone),
     )
     async with session_factory() as session:
         events = EventRepository(session)
@@ -60,9 +64,15 @@ def test_0079_preserves_old_bytes_and_refuses_lossy_downgrade(tmp_path) -> None:
         with engine.begin() as connection:
             old = MetaData()
             projects = Table("projects", old, autoload_with=connection)
-            connection.execute(projects.insert().values(
-                id="project", name="Existing", repo_paths='["/repo"]', created_at=now, updated_at=now,
-            ))
+            connection.execute(
+                projects.insert().values(
+                    id="project",
+                    name="Existing",
+                    repo_paths='["/repo"]',
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
             connection.exec_driver_sql(
                 """INSERT INTO jobs
                    (id,project_id,repo,prompt,state,base_ref,permission_mode,session_count,sdk,created_at,updated_at)
@@ -94,11 +104,9 @@ def test_0079_preserves_old_bytes_and_refuses_lossy_downgrade(tmp_path) -> None:
         with pytest.raises(RuntimeError, match="Raw event history is present"):
             command.downgrade(config, "0078")
         with engine.connect() as connection:
-            assert connection.exec_driver_sql(
-                "SELECT raw_event FROM events WHERE event_id='new-event'"
-            ).scalar() == "{}"
-            assert connection.exec_driver_sql(
-                "SELECT raw_event FROM events WHERE event_id='event'"
-            ).scalar() is None
+            assert (
+                connection.exec_driver_sql("SELECT raw_event FROM events WHERE event_id='new-event'").scalar() == "{}"
+            )
+            assert connection.exec_driver_sql("SELECT raw_event FROM events WHERE event_id='event'").scalar() is None
     finally:
         engine.dispose()

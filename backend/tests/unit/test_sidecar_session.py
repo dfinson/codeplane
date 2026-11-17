@@ -66,11 +66,16 @@ class _FakeSidecarConfig:
 class TestUtilityModelContract:
     async def test_text_provider_does_not_need_execution_methods(self) -> None:
         execution_adapter = _mock_adapter("wrong provider")
-        provider = SimpleNamespace(complete=AsyncMock(
-            return_value=_CompletionResult(text="selected provider", input_tokens=1, output_tokens=1, cost_usd=0),
-        ))
+        provider = SimpleNamespace(
+            complete=AsyncMock(
+                return_value=_CompletionResult(text="selected provider", input_tokens=1, output_tokens=1, cost_usd=0),
+            )
+        )
         manager = SidecarSessionManager(
-            execution_adapter, model="utility-model", completion_provider=provider, pool_size=0,
+            execution_adapter,
+            model="utility-model",
+            completion_provider=provider,
+            pool_size=0,
         )
         assert await manager.complete("Request", system_prompt="Text only") == "selected provider"
         assert await manager.open("job", "named").complete("Another request") == "selected provider"

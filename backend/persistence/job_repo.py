@@ -35,10 +35,24 @@ class JobRepository(BaseRepository):
         """Join the caller's new-Job transaction without owning its commit."""
         import uuid
 
-        from backend.models.execution_contracts import ExecutionAdmission
+        from backend.models.execution_contracts import ExecutionAdmission, LegacyStartIntent
         from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
 
-        admission = ExecutionAdmission(id=str(uuid.uuid4()), job_id=job_id, origin="creation")
+        job = await self.get(job_id)
+        if job is None:
+            raise JobNotFoundError(f"Job {job_id!r} is missing from its admission transaction")
+        admission = ExecutionAdmission(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            origin="creation",
+            start_intent=LegacyStartIntent(
+                instruction=job.prompt,
+                dispatch_prompt=job.prompt,
+                target_session_number=job.session_count,
+            )
+            if job.state in {JobState.preparing, JobState.queued}
+            else None,
+        )
         return await ExecutionAdmissionRepository(self._session).declare_legacy(admission, expected_current=None)
 
     async def _update_row(self, job_id: str, **updates: Any) -> None:
