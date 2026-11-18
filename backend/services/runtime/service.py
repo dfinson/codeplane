@@ -311,6 +311,9 @@ class RuntimeService:
         self._execution_epoch = uuid.uuid4().hex
         self._attempt_bindings = AttemptBindings(self._execution_epoch)
         self._native_executions = NativeExecutions(self)
+        from backend.services.runtime.external_gate import ExternalGates
+
+        self.external_gates = ExternalGates(self)
         self._external_generations: dict[str, str] = {}
         self._starting_tasks: dict[str, asyncio.Task[Any]] = {}
         self._diff_service = diff_service
@@ -2405,7 +2408,16 @@ class RuntimeService:
 
     async def reconcile_native_observers(self) -> None:
         """Apply an effective profile disable and drain only its native subscriptions."""
-        await self._native_executions.reconcile_observers()
+        if self._config.runtime.copilot_only:
+            self.external_gates.revoke_all()
+            results = await asyncio.gather(
+                self._native_executions.reconcile_observers(), self.external_gates.close(), return_exceptions=True
+            )
+            errors = [value for value in results if isinstance(value, Exception)]
+            if errors:
+                raise ExceptionGroup("Disabled integrations require reconciliation", errors)
+        else:
+            await self._native_executions.reconcile_observers()
 
     async def invoke_native[T](
         self,
@@ -3632,6 +3644,7 @@ class RuntimeService:
 
     async def recover_on_startup(self) -> None:
         """Recover from a previous crash by restarting active jobs and re-enqueueing queued ones."""
+        await self.external_gates.reconcile_stale()
         # Restore in-memory futures for approvals that survived the restart
         # so that recovered jobs in waiting_for_approval can be unblocked.
         if self._approval_service is not None:
@@ -3706,6 +3719,7 @@ class RuntimeService:
         instead of marking them as canceled (which confused users).
         """
         self._shutting_down = True
+        self.external_gates.revoke_all()
         for job_id in tuple(self._tasks):
             await self._native_executions.cancel_job(job_id)
         for starting_task in tuple(self._starting_tasks.values()):
@@ -3733,6 +3747,7 @@ class RuntimeService:
         tasks = list(set(self._tasks.values()) | set(self._starting_tasks.values()) | set(self._scout_tasks.values()))
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self.external_gates.close()
         self._queued_session_tokens.clear()
 
     # -- Preflight context curation ------------------------------------------

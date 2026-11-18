@@ -32,6 +32,7 @@ from backend.services.steps.tracker import StepTracker
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from backend.models.domain import Job
     from backend.services.runtime.native_execution import NativeExecution, NativeExecutions
 
 
@@ -61,6 +62,7 @@ async def open_native_observation(
     if selected != expected:
         raise StateConflictError("Native observation mapping differs from the original admission pin")
     owner: NativeObservationOwner
+    job: Job
     index = version = 0
     prefix = canonical_prefix = projection_prefix = bytes(32)
     registered = closed = failed = False
