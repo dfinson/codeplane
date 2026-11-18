@@ -183,7 +183,9 @@ class AssessmentService:
                 "not positions in their serialized JSON, JSON escapes or the whole prompt. "
                 "Spans must be nonempty and within that source field. "
                 "Do not invent evidence or claim missing facts are known. Use unknown when evidence is unavailable. "
-                "You do not decide permission.\n"
+                "You do not decide permission.\nSource codepoint lengths: "
+                + json.dumps({name: len(value) for name, value in context.items()}, separators=(",", ":"))
+                + "\n"
                 + json.dumps(ActionAssessment.model_json_schema(), separators=(",", ":"))
             )
             prompt = json.dumps(context, ensure_ascii=False, separators=(",", ":"))

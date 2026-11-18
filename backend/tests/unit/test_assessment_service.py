@@ -62,17 +62,21 @@ async def test_single_text_only_attempt_binds_sources_and_rechecks_epoch() -> No
     provider.complete.side_effect = complete
     service = AssessmentService()
     current = AsyncMock(return_value=True)
-    binding = _binding()
-    result = await service.assess(binding, FIELDS, provider=provider, model="approved-model", is_current=current)
+    fields = dict(FIELDS, context="\u03b1\U0001f4a1")
+    binding = _binding(fields=fields)
+    result = await service.assess(binding, fields, provider=provider, model="approved-model", is_current=current)
     assert result.assessment is not None and result.reason is None
     assert result.binding_sha256 == binding.sha256
     assert len(result.sources) == 4
     provider.complete.assert_awaited_once()
     assert provider.complete.call_args.kwargs["excluded_tools"] == ["*"]
     assert contexts[0].response_schema == ActionAssessment.model_json_schema()
+    system = provider.complete.call_args.kwargs["system_message"]
+    lengths = system.split("Source codepoint lengths: ", 1)[1].splitlines()[0]
+    assert json.loads(lengths) == {"command": 3, "arguments": 0, "tool_definition": 0, "context": 2}
     assert current.await_count == 2
-    assert binding.matches({"tool": "bash", "policy": "v1"}, fields=FIELDS)
-    assert not binding.matches({"tool": "bash", "policy": "v2"}, fields=FIELDS)
+    assert binding.matches({"tool": "bash", "policy": "v1"}, fields=fields)
+    assert not binding.matches({"tool": "bash", "policy": "v2"}, fields=fields)
     assert not service._jobs and not service._tasks
 
 
