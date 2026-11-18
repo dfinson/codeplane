@@ -191,7 +191,7 @@ jobs:
         run: |
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v backend/tests/unit/test_vapid_keys.py --timeout=60 --junitxml=vapid-windows-results.xml --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run --no-project python -c "from xml.etree import ElementTree as E; cases=E.parse('vapid-windows-results.xml').findall('.//testcase'); assert len(cases)==20, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases); print('All 20 VAPID key/publication cases passed without skips.')"
+          uv run --no-project python -c "from xml.etree import ElementTree as E; cases=E.parse('vapid-windows-results.xml').findall('.//testcase'); assert len(cases)==21, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases); print('All 21 VAPID key/publication cases passed without skips.')"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
