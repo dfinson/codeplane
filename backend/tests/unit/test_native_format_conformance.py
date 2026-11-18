@@ -1,9 +1,11 @@
-"""Independent TF 0.1.5 contract goldens, not a claim of live producer qualification."""
+"""Independent contract goldens and retained producer evidence with explicit fidelity limits."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import sqlite3
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,6 +37,8 @@ MAPPINGS = Path(__file__).parents[2] / "compat" / "traceformats" / "mappings"
 SHAPES = yaml.safe_load((FIXTURES / "shapes.yaml").read_text(encoding="utf-8"))
 RETAINED = yaml.safe_load((FIXTURES / "retained_expected.yaml").read_text(encoding="utf-8"))
 SDK_LOCAL = yaml.safe_load((FIXTURES / "sdk_local" / "expected.yaml").read_text(encoding="utf-8"))
+PRODUCED = FIXTURES / "produced"
+PRODUCED_EXPECTED = yaml.safe_load((PRODUCED / "expected.yaml").read_text(encoding="utf-8"))
 ANCHOR = datetime(2026, 1, 2, tzinfo=UTC)
 
 
@@ -374,6 +378,185 @@ def test_copilot_sqlite_markdown_turn_preserves_medium_fidelity():
     ]
     assert all(event.timestamp.isoformat() == "2026-01-02T03:04:05+00:00" for event in events)
     assert all("tool_call_id" not in event.payload and "success" not in event.payload for event in events)
+
+
+def _transferred_bytes(name):
+    manifest = json.loads((PRODUCED / "transferred-provenance.json").read_text())
+    source = manifest[name]
+    raw = (PRODUCED / source["file"]).read_bytes()
+    assert len(raw) == source["bytes"] and hashlib.sha256(raw).hexdigest() == source["sha256"]
+    return raw
+
+
+def test_actual_antigravity_connection_history_payload_identity_replay_and_partial_tool():
+    records = [json.loads(line) for line in _transferred_bytes("antigravity").splitlines()]
+    assert len(records) == 5
+    groups = _decode("antigravity", records)
+    events = [event for group in groups for event in group]
+    assert _semantic(events) == PRODUCED_EXPECTED["antigravity"]
+    assert groups == _decode("antigravity", records)
+    assert len({event.id for event in events}) == 5
+    assert not {event.id for event in events}.intersection(
+        event.id for group in _decode("antigravity", records, source_key="other-history") for event in group
+    )
+    for index, event in enumerate(events):
+        source = event.payload["_codeplane_source"]
+        assert source["vendor_event_id"] == f"inert-native-capture:{index + 1}"
+        assert source["record_index"] == index and source["output_index"] == 0
+        assert source["record_sha256"] == hashlib.sha256(_canonical_record(records[index])).hexdigest()
+        assert source["timestamp_fallback"] is True and event.timestamp == ANCHOR + timedelta(microseconds=index)
+        assert not {"usage", "input_tokens", "output_tokens", "cost_usd", "success"} & event.payload.keys()
+    resumed = _decoder("antigravity")
+    for index, record in enumerate(records[:3]):
+        resumed.decode(record, index)
+    checkpoint = resumed.checkpoint()
+    restored = _decoder("antigravity")
+    restored.restore(checkpoint)
+    assert [restored.decode(raw, index) for index, raw in enumerate(records[3:], 3)] == groups[3:]
+    pairing = ToolPairing()
+    for event in events[:3]:
+        pairing.process(event)
+    (unresolved,) = pairing.flush()
+    assert unresolved.payload["tool_call_id"] == "inert-native-capture:3"
+    assert unresolved.payload["_codeplane_pairing"] == {"status": "unresolved", "reason": "missing_completion"}
+    assert not any(event.kind in {"tool.call.completed", "tool.call.failed"} for event in events)
+
+
+async def test_actual_antigravity_history_acquisition_keeps_original_prefix_and_rewrites_fail(
+    session_factory, tmp_path
+):
+    from backend.services.ingest.acquisition import AcquisitionChannel
+    from backend.services.ingest.acquisition_sources import file_journal
+    from backend.tests.unit.test_native_acquisition import _channel, _history
+
+    raw = _transferred_bytes("antigravity")
+    path = tmp_path / "native-history.jsonl"
+    path.write_bytes(b"\n".join(raw.splitlines()[:3]) + b"\n")
+    channel, job_id = await _channel(session_factory, "antigravity")
+    first = await file_journal(path)
+    assert first.physical_count == 3
+    receipt = await channel.accept(first)
+    assert receipt.accepted_records == receipt.next_index == 3
+    path.write_bytes(raw)
+    page = await file_journal(path)
+    assert page.physical_count == 5
+    receipt = await channel.accept(page)
+    assert receipt.accepted_records == 2 and receipt.next_index == 5
+    history = await _history(session_factory, job_id)
+    retained = [
+        record
+        for row in history
+        if row.event.kind == "integration.batch.accepted"
+        for record in row.event.raw_event["records"]
+    ]
+    assert retained == [json.loads(line) for line in raw.splitlines()]
+    restarted = AcquisitionChannel(session_factory, EventBus(), binding_id="binding", source_key="source")
+    assert await restarted.accept(page) is None
+    assert await _history(session_factory, job_id) == history
+    path.write_bytes(raw.replace(b"synthetic fixture", b"rewritten fixture", 1))
+    with pytest.raises(StateConflictError, match="rewritten"):
+        await restarted.accept(await file_journal(path))
+    assert await _history(session_factory, job_id) == history
+
+
+def _sqlite_field_bytes(field):
+    raw = base64.b64decode(field["sqlite_bytes_base64"], validate=True)
+    assert len(raw) == field["bytes"] and hashlib.sha256(raw).hexdigest() == field["sha256"]
+    return raw
+
+
+@pytest.mark.parametrize("session_index", [0, 1])
+async def test_actual_copilot_sqlite_bytes_acquisition_preparser_and_independent_golden(session_index, tmp_path):
+    from backend.compat.traceformats.parsers import CopilotPreParser
+    from backend.services.ingest.acquisition_sources import sqlite_snapshot
+
+    artifact = json.loads(_transferred_bytes("copilot_markdown"))
+    assert artifact["native_cli_version"] == "1.0.108" and not artifact["jsonl_used_to_generate_rows"]
+    captured = artifact["sessions"][session_index]
+    native_id = captured["native_session_id"]
+    assert captured["native_session_start"]["sessionId"] == native_id
+    path = tmp_path / "retained-field-reconstruction.db"
+    tables = {
+        "sessions": ("id", "cwd", "repository", "host_type", "branch", "summary", "created_at", "updated_at"),
+        "turns": ("id", "session_id", "turn_index", "user_message", "assistant_response", "timestamp"),
+    }
+    rows = {}
+    with sqlite3.connect(path) as database:
+        for table, columns in tables.items():
+            database.execute(_sqlite_field_bytes(artifact["schema_sql_bytes"][table]).decode())
+            (source_row,) = captured["selected_native_sqlite_rows"][table]
+            row = {
+                name: _sqlite_field_bytes(value).decode("utf-8") if isinstance(value, dict) else value
+                for name, value in source_row.items()
+            }
+            assert set(row) == set(columns)
+            placeholders = ",".join("?" for _ in columns)
+            database.execute(f"INSERT INTO {table} VALUES ({placeholders})", tuple(row[name] for name in columns))
+            rows[table] = row
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    page = await sqlite_snapshot(
+        path,
+        table="turns",
+        identity_column="id",
+        sequence_column="turn_index",
+        filters={"session_id": native_id},
+    )
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+    assert page.physical_count == len(page.records) == 1
+    assert page.records[0].identity == str((2, 5)[session_index])
+    assert page.records[0].sequence == 0 and page.records[0].raw == rows["turns"]
+    records = list(CopilotPreParser().parse_turn(page.records[0].raw))
+    groups = _decode("copilot_markdown", records, external_session_id=native_id)
+    events = [event for group in groups for event in group]
+    expected = [
+        ["message.user", {"content": rows["turns"]["user_message"], "turn_index": 0}],
+        *PRODUCED_EXPECTED["copilot_markdown"][native_id],
+    ]
+    assert _semantic(events) == expected
+    assert len(events) == len(records) == (8, 3)[session_index]
+    assert len({event.id for event in events}) == len(events)
+    assert groups == _decode(
+        "copilot_markdown",
+        list(CopilotPreParser().parse_turn(page.records[0].raw)),
+        external_session_id=native_id,
+    )
+    assert _semantic([event for group in groups[:-1] for event in group]) == expected[:-1]
+    timestamp = datetime.fromisoformat(rows["turns"]["timestamp"].replace("Z", "+00:00"))
+    for event in events:
+        assert event.timestamp == timestamp and not event.payload["_codeplane_source"]["timestamp_fallback"]
+        assert event.metadata.ingestion_mode == "sqlite" and event.metadata.run_id == native_id
+        assert (
+            not {"tool_call_id", "success", "usage", "input_tokens", "output_tokens", "cost_usd"} & event.payload.keys()
+        )
+        assert not event.kind.startswith(("tool.call.", "telemetry.", "llm."))
+
+
+def test_actual_cline_ui_minter_ids_are_not_timestamps_or_tool_correlation():
+    records = [json.loads(line) for line in _transferred_bytes("cline").splitlines()]
+    assert [raw["ts"] for raw in records] == [1, 1, 2, 2, 3, 3, 3]
+    groups = _decode("cline", records)
+    assert groups == _decode("cline", records)
+    events = [event for group in groups for event in group]
+    assert len({event.id for event in events}) == len(events)
+    for event in events:
+        source = event.payload["_codeplane_source"]
+        index = source["record_index"]
+        assert source["timestamp_fallback"] is True, "Native UI minter IDs are not Unix dates"
+        assert event.timestamp == ANCHOR + timedelta(microseconds=index)
+        assert source["vendor_event_id"] == records[index]["ts"], "Preserve the actual native UI identity"
+        assert not {"tool_call_id", "input_tokens", "output_tokens", "cost_usd", "success"} & event.payload.keys()
+
+
+def test_actual_cline_partial_ui_tool_update_does_not_claim_completion():
+    records = [json.loads(line) for line in _transferred_bytes("cline").splitlines()]
+    assert records[2]["say"] == "tool" and records[2]["partial"] is True
+    before_final = [event for group in _decode("cline", records[:3]) for event in group]
+    assert not any(event.kind in {"tool.call.completed", "tool.call.failed"} for event in before_final)
+    events = [event for group in _decode("cline", records) for event in group]
+    completed = [event for event in events if event.kind == "tool.call.completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["tool_name"] == "readFile" and completed[0].payload["path"] == "fixture.txt"
+    assert completed[0].payload["_codeplane_source"]["record_index"] == 3
 
 
 @pytest.mark.parametrize(
