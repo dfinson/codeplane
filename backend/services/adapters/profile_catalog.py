@@ -97,7 +97,7 @@ def _operation(
         evidence = ["backend/tests/unit/test_ai_card.py"]
         limitations.append("Identity evidence grants no execution, steering, tool or cancellation authority")
         limitations.append("Registration verifies supplied cards; it does not fetch arbitrary discovery URLs")
-    elif profile.id in {"flowise", "mcp"}:
+    elif profile.id in {"flowise", "mcp", "a2a"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
         selected = select_installation(profile.id)
@@ -112,6 +112,9 @@ def _operation(
                 if operation == "observe"
                 else "backend.services.runtime.RuntimeService.detach_native"
             )
+            if profile.id == "a2a" and operation in {"steer", "cancel"}:
+                method = "send_message" if operation == "steer" else "cancel_task"
+                producer = f"{selected.module}.A2ATarget.{method}"
             evidence = [
                 f"backend/tests/unit/test_{profile.id}_bridge.py",
                 "backend/tests/unit/test_profile_bridge_revocation.py",
@@ -122,12 +125,20 @@ def _operation(
         limitations.append("Raw native results are retained; undocumented token or currency conversion is not inferred")
         if profile.id == "flowise":
             limitations.append("Stop is local: in-flight synchronous requests drain without claiming remote abort")
-        else:
+        elif profile.id == "mcp":
             limitations.append(
                 "Streamable HTTP client qualified; stdio and upstream server trust middleware are not qualified"
             )
             limitations.append(
                 "MCP cancellation is requested until native acknowledgment or a separately observed result"
+            )
+        else:
+            limitations.append("Task input requires a source-confirmed input-required task/context")
+            limitations.append(
+                "Explicit tasks/cancel records the returned native state; Runtime revocation only stops local waiting"
+            )
+            limitations.append(
+                "Uncertain request delivery is not automatically retried; tasks/get reconciles known task IDs"
             )
     elif profile.id in _GATES and operation in {"invoke", "gate", "cancel"}:
         readiness = _native_readiness(profile)
@@ -161,12 +172,20 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
         channels = sorted(managed.channels) if managed else ["historical-records"] if formats else []
         bridge_versions: list[str] = []
         bridge_hooks: list[str] = []
-        if profile.id in {"flowise", "mcp"}:
+        if profile.id in {"flowise", "mcp", "a2a"}:
             from backend.services.adapters.native_gates.selection import select_installation
 
             selected = select_installation(profile.id)
             bridge_versions = [f"{package}=={pin}" for package, pin in selected.dependencies]
-            bridge_hooks = ["predict", "upsert"] if profile.id == "flowise" else ["ClientSession.call_tool"]
+            bridge_hooks = (
+                ["predict", "upsert"]
+                if profile.id == "flowise"
+                else ["ClientSession.call_tool"]
+                if profile.id == "mcp"
+                else ["message/send", "message/stream", "tasks/get", "tasks/cancel"]
+            )
+            if profile.id == "a2a":
+                bridge_versions.append("A2A JSON-RPC 0.3.0")
             channels.extend(("native-request-boundary", "pinned-canonical-observations"))
         if profile.id == "generic-otel":
             channels.extend(("otlp-http-json", "otlp-http-protobuf"))

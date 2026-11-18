@@ -36,6 +36,13 @@ BRIDGES = MappingProxyType(
             operations=frozenset({"invoke", "gate", "observe", "stop-waiting"}),
             observation_mapping=True,
         ),
+        "a2a": BridgeSpec(
+            id="a2a",
+            module="backend.services.adapters.profile_bridges.a2a",
+            dependencies=(("agent-governance-toolkit-core", "5.0.0"), ("httpx", "0.28.1")),
+            operations=frozenset({"invoke", "observe", "steer", "cancel", "gate"}),
+            observation_mapping=True,
+        ),
         "mcp": BridgeSpec(
             id="mcp",
             module="backend.services.adapters.profile_bridges.mcp",
