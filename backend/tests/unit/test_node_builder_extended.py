@@ -531,7 +531,7 @@ class TestJobTerminal:
         event = _make_event(EventKind.job_review, payload={})
         await builder.handle_event(event)
         nodes = await trail_repo.get_by_job("job-1")
-        assert nodes[0].intent == "Job failed"
+        assert nodes[0].intent == "Job ready for review"
         assert "job-1" not in job_state
 
     async def test_job_terminal_no_state_ignored(self, builder, trail_repo, job_state):

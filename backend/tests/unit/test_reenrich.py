@@ -140,6 +140,8 @@ class TestReenrichConcurrency:
     @pytest.mark.asyncio
     async def test_marker_events_excluded_from_replay(self, mock_session_factory):
         """Marker events in the stream are skipped during re-enrichment."""
+        from traceforge.types import SessionEvent as LegacyEvent
+
         marker_event = new_event(
             session_id="j1",
             kind=_REENRICH_MARKER_KIND,
@@ -167,7 +169,9 @@ class TestReenrichConcurrency:
 
                 # Enricher.process should only be called with the normal event
                 # (marker is skipped)
-                enricher.process.assert_called_once_with(normal_event)
+                enricher.process.assert_called_once_with(
+                    LegacyEvent.model_validate(normal_event.model_dump(mode="json"))
+                )
 
 
 class TestReenrichBatching:
