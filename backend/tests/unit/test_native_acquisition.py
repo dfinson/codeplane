@@ -1,6 +1,7 @@
 """Real local acquisition through registration, canonical receipts and replay."""
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 from contextlib import asynccontextmanager
@@ -8,7 +9,9 @@ from copy import deepcopy
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from backend.models.db import Base
 from backend.models.domain import StateConflictError
 from backend.models.schemas.integrations import ObservationRecordBatch
 from backend.persistence.event_repo import EventRepository
@@ -17,6 +20,7 @@ from backend.persistence.job_repo import JobRepository
 from backend.persistence.project_repo import ProjectRepository
 from backend.services.events.event_bus import EventBus
 from backend.services.ingest.acquisition import AcquisitionChannel
+from backend.services.ingest.acquisition_checkpoint import AcquisitionCheckpoint
 from backend.services.ingest.acquisition_sources import (
     MAX_BYTES,
     AcquiredPage,
@@ -30,7 +34,7 @@ from backend.services.ingest.acquisition_sources import (
     sse_page,
 )
 from backend.services.ingest.history_registration import HistoryRegistration
-from backend.services.ingest.mapping import PARSER_REVISION
+from backend.services.ingest.mapping import PARSER_REVISION, canonical_record
 from backend.services.ingest.record_service import ObservationRecords
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
@@ -120,7 +124,12 @@ async def test_file_snapshots_diff_stable_records_across_replacement_and_restart
     receipts = [row.event for row in history if row.event.kind == "integration.batch.accepted"]
     assert [event.raw_event["records"] for event in receipts] == [[first], [second]]
     state = (await _checkpoint(session_factory)).buffer["acquisition"]["state"]
-    assert len(state["records"]) == 2
+    assert state["contract"] == "native-acquisition-records-v2"
+    assert len(state["records"]) == 1
+    assert [event.raw_event["acquisition"]["state"]["records"][0]["identity"] for event in receipts] == [
+        '"first"',
+        '"second"',
+    ]
 
 
 @pytest.mark.parametrize("defect", ["rewrite", "truncate", "sequence"])
@@ -221,7 +230,13 @@ async def test_sqlite_rows_are_read_only_snapshot_bound_and_keep_sequence(sessio
     assert completion.payload["tool_call_id"] == "call"
     assert completion.payload["tool_name"] == "view" and completion.payload["result"] == "Body"
     state = (await _checkpoint(session_factory)).buffer["acquisition"]["state"]
-    assert [record["sequence"] for record in state["records"]] == [41, 42]
+    assert [record["sequence"] for record in state["records"]] == [42]
+    assert [
+        record["sequence"]
+        for row in events
+        if row.event.kind == "integration.batch.accepted"
+        for record in row.event.raw_event["acquisition"]["state"]["records"]
+    ] == [41, 42]
     with sqlite3.connect(path) as database:
         assert database.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 3
         assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -509,3 +524,180 @@ async def test_explicit_finish_preserves_partial_tool_evidence_without_managed_o
     assert tools[0].payload["_codeplane_pairing"]["reason"] == "missing_completion"
     async with session_factory() as session:
         assert (await JobRepository(session).get(job)).state.value == "running"
+
+
+async def _history_fingerprint(factory, job_id):
+    digest = hashlib.sha256()
+    messages = 0
+    cursor = 0
+    async with factory() as session:
+        repository = EventRepository(session)
+        while rows := await repository.list_after(cursor, job_id=job_id, limit=200):
+            for row in rows:
+                digest.update(row.event.model_dump_json().encode())
+                messages += int(row.event.kind == "message.assistant")
+            cursor = rows[-1].storage_cursor
+    return messages, cursor, digest.hexdigest()
+
+
+@pytest.mark.parametrize("defect", ["rewrite", "resequence"])
+async def test_long_lived_source_keeps_old_identity_after_disk_restart_and_retry(tmp_path, defect):
+    database = tmp_path / "long-lived.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database}")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as session:
+            await ProjectRepository(session).create("proj-1", "Long-lived acquisition", [])
+            await session.commit()
+        channel, job = await _channel(factory)
+        first_page = None
+        for start, count in ((0, 400), (400, 400), (800, 205)):
+            page = callback_page(
+                "long-lived",
+                tuple(
+                    SourceRecord(str(index), _message(str(index), f"Record {index}"), index)
+                    for index in range(start, start + count)
+                ),
+            )
+            page = AcquiredPage(page.source, page.records, mode="stream", physical_count=count)
+            if first_page is None:
+                first_page = page
+            receipt = await channel.accept(page)
+            assert receipt.accepted_records == count and receipt.next_index == start + count
+        checkpoint = await _checkpoint(factory)
+        assert len(checkpoint.buffer["acquisition"]["state"]["records"]) <= 400
+        before = await _history_fingerprint(factory, job)
+        assert before[0] == 1005
+    finally:
+        await engine.dispose()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database}")
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        restarted = AcquisitionChannel(factory, EventBus(), binding_id="binding", source_key="source")
+        assert first_page is not None
+        assert await restarted.accept(first_page) is None
+        assert await _history_fingerprint(factory, job) == before
+        queue: asyncio.Queue[SourceRecord] = asyncio.Queue(maxsize=1)
+        await queue.put(SourceRecord("1005", _message("1005", "Record 1005"), 1005))
+        assert (await restarted.accept_queue(QueueSource(queue, identity="long-lived"))).next_index == 1006
+        await asyncio.wait_for(queue.join(), 1)
+        after = await _history_fingerprint(factory, job)
+        assert after[0] == 1006
+        old = first_page.records[0]
+        changed = (
+            SourceRecord(old.identity, _message("0", "Rewritten"), old.sequence)
+            if defect == "rewrite"
+            else SourceRecord(old.identity, old.raw, 99999)
+        )
+        with pytest.raises(StateConflictError, match="rewritten or resequenced"):
+            await restarted.accept(callback_page("long-lived", (changed,)))
+        assert await _history_fingerprint(factory, job) == after
+        assert (await _checkpoint(factory)).state == "reconciliation_required"
+    finally:
+        await engine.dispose()
+
+
+async def test_old_cumulative_receipts_remain_authoritative_after_checkpoint_compaction(session_factory):
+    channel, job = await _channel(session_factory)
+    first = SourceRecord("a", _message("a", "A"), 41)
+    second = SourceRecord("b", _message("b", "B"), 42)
+    source = callback_page("legacy", (first,))
+    inventory = []
+    prefix = "0" * 64
+    async with session_factory() as session:
+        service = ObservationRecords(IntegrationRepository(session), JobRepository(session), EventBus())
+        for index, record in enumerate((first, second)):
+            inventory.append(
+                {
+                    "identity": record.identity,
+                    "sequence": record.sequence,
+                    "sha256": hashlib.sha256(canonical_record(record.raw)).hexdigest(),
+                }
+            )
+            receipt = await service.append(
+                "binding",
+                ObservationRecordBatch(
+                    source_key="source",
+                    start_index=index,
+                    prefix_sha256=prefix,
+                    records=[record.raw],
+                ),
+                acquisition=AcquisitionCheckpoint(
+                    source_identity_sha256=source.source_digest,
+                    expected_checkpoint_version=index,
+                    state={"contract": "native-acquisition-records-v1", "records": deepcopy(inventory)},
+                ),
+            )
+            prefix = receipt.prefix_sha256
+    third = SourceRecord("c", _message("c", "C"), 43)
+    assert (await channel.accept(callback_page("legacy", (first, second, third)))).accepted_records == 1
+    state = (await _checkpoint(session_factory)).buffer["acquisition"]["state"]
+    assert state["contract"] == "native-acquisition-records-v2"
+    assert [record["identity"] for record in state["records"]] == ["c"]
+    before = await _history_fingerprint(session_factory, job)
+    assert before[0] == 3
+    assert await channel.accept(callback_page("legacy", (first, second))) is None
+    assert await _history_fingerprint(session_factory, job) == before
+
+
+async def test_snapshot_truncation_checks_all_receipts_not_only_last_checkpoint_page(session_factory, tmp_path):
+    channel, job = await _channel(session_factory)
+    path = tmp_path / "snapshot.json"
+    first, second = _message("a", "A"), _message("b", "B")
+    path.write_text(json.dumps([first]))
+    await channel.accept(await file_snapshot(path, identity_field="id"))
+    path.write_text(json.dumps([first, second]))
+    await channel.accept(await file_snapshot(path, identity_field="id"))
+    before = await _history_fingerprint(session_factory, job)
+    path.write_text(json.dumps([second]))
+    with pytest.raises(StateConflictError, match="truncated"):
+        await channel.accept(await file_snapshot(path, identity_field="id"))
+    assert await _history_fingerprint(session_factory, job) == before
+
+
+async def test_missing_receipt_history_is_not_treated_as_fresh_identity(session_factory):
+    channel, job = await _channel(session_factory)
+    first = callback_page("callbacks", (SourceRecord("first", _message("first", "First")),))
+    await channel.accept(first)
+    async with session_factory() as session:
+        repository = EventRepository(session)
+        receipt = next(
+            row for row in await repository.list_after(0, job_id=job) if row.event.kind == "integration.batch.accepted"
+        )
+        await repository.delete_event(receipt.event.id)
+        await session.commit()
+    before = await _history_fingerprint(session_factory, job)
+    with pytest.raises(StateConflictError, match="receipt history"):
+        await channel.accept(first)
+    assert await _history_fingerprint(session_factory, job) == before
+
+
+@pytest.mark.parametrize("limit", ["records", "bytes"])
+async def test_per_page_bounds_remain_independent_of_source_lifetime(session_factory, limit):
+    channel, job = await _channel(session_factory)
+    records = (
+        tuple(SourceRecord(str(index), _message(str(index), "Small")) for index in range(1001))
+        if limit == "records"
+        else (SourceRecord("large", _message("large", "x" * MAX_BYTES)),)
+    )
+    with pytest.raises(ValueError, match="1000 records|1 MiB"):
+        await channel.accept(callback_page("bounded", records))
+    assert await _checkpoint(session_factory) is None
+    assert await _history(session_factory, job) == []
+
+
+async def test_receipt_identity_lookup_is_scoped_to_the_acquisition_channel(session_factory):
+    first, job = await _channel(session_factory, source="first-channel")
+    second, same_job = await _channel(session_factory, source="second-channel")
+    assert same_job == job
+    await first.accept(callback_page("shared-origin", (SourceRecord("same-id", _message("same-id", "First"), 1),)))
+    await second.accept(callback_page("shared-origin", (SourceRecord("same-id", _message("same-id", "Second"), 2),)))
+    before = await _history_fingerprint(session_factory, job)
+    assert before[0] == 2
+    assert (
+        await first.accept(callback_page("shared-origin", (SourceRecord("same-id", _message("same-id", "First"), 1),)))
+        is None
+    )
+    assert await _history_fingerprint(session_factory, job) == before
