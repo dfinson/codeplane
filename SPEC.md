@@ -55,9 +55,11 @@ being passed to legacy USD rollups without typed accounting qualification.
 
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
-`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
-the compatibility transition until decoder, policy and integration qualification
-permits retirement. Existing history is never discarded to complete migration.
+`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge is an explicit
+`codeplane[legacy-traceforge]` compatibility extra for version-1 native checkpoints
+and historical re-enrichment, and remains installed for the legacy CI tests.
+The default dependency graph omits it; this does not establish full default-core
+qualification or retirement. Existing history is never discarded to complete migration.
 Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
 and replay. Historical NULL remains unknown, never reconstructed, and downgrade
 refuses to erase retained raw data. Event timestamps are stored as UTC instants.
@@ -215,8 +217,14 @@ if a record fails. Configured
 mapping directories override migrated user definitions, legacy user definitions
 and bundled assets in that order. Inbound OTLP JSON is independent of exporter
 packages and bounds raw input to 1 MiB/1000 spans, nesting to 32 levels and
-10,000 nodes, and normalized expansion to 8 MiB. Complete format parity and
-checkpoint conversion remain qualification gates before live parser cutover.
+10,000 nodes, and normalized expansion to 8 MiB. Fresh Copilot/Claude JSONL
+watchers use the standalone decoder with the retained `codeplane-native-v1`
+identity seed and explicit version-2 acquisition checkpoints. Physical records,
+decoded outputs, emitted events and storage cursors remain separate counts.
+Version-1 checkpoints retain their optional legacy decoder; absence of that
+implementation reports readiness failure without converting or erasing history.
+Complete format, acquisition and checkpoint-conversion qualification remain
+separate gates.
 
 ### Recipe definitions and publication
 
