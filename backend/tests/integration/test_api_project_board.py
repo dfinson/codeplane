@@ -2,6 +2,9 @@
 
 from datetime import UTC, datetime
 
+import pytest
+from sqlalchemy import update
+
 from backend.models.db import ApprovalRow, JobRow, TaskLinkRow
 
 
@@ -166,3 +169,93 @@ async def test_inspecting_task_retains_full_prompt_and_never_creates_work(
         assert await session.scalar(select(func.count(JobRow.id))) == 0
         assert await session.scalar(select(func.count(ApprovalRow.id))) == 0
     mock_runtime_service.setup_and_start.assert_not_awaited()
+
+
+@pytest.fixture
+async def board_disk_factory(tmp_path):
+    from backend.models.db import Base
+    from backend.persistence.database import create_engine, create_session_factory
+    from backend.persistence.project_repo import ProjectRepository
+
+    engine = create_engine(tmp_path / "board.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    async with factory() as session:
+        await ProjectRepository(session).create("owner", "Board owner", ["/historical/repo"])
+        session.add(job("moving", "owner"))
+        await session.flush()
+        session.add(task("linked-task", "owner", job_id="moving", state="running"))
+        await session.commit()
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("boundary", ["totals", "in_progress"])
+async def test_board_keeps_one_snapshot_while_job_changes_columns(board_disk_factory, monkeypatch, boundary):
+    from backend.persistence.project_board_repo import ProjectBoardRepository
+    from backend.persistence.project_repo import ProjectRepository
+    from backend.services.project.board_service import ProjectBoardService
+
+    async def move_job():
+        async with board_disk_factory() as writer:
+            await writer.execute(update(JobRow).where(JobRow.id == "moving").values(state="review"))
+            await writer.commit()
+
+    async with board_disk_factory() as reader:
+        repository = ProjectBoardRepository(reader)
+        service = ProjectBoardService(ProjectRepository(reader), repository)
+        totals, page = repository.totals, repository.page
+
+        async def read_totals(project_id):
+            result = await totals(project_id)
+            if boundary == "totals":
+                await move_job()
+            return result
+
+        async def read_page(project_id, column, **kwargs):
+            result = await page(project_id, column, **kwargs)
+            if boundary == "in_progress" and column == boundary:
+                await move_job()
+            return result
+
+        monkeypatch.setattr(repository, "totals", read_totals)
+        monkeypatch.setattr(repository, "page", read_page)
+        result = await service.get("owner")
+        cards = [item for column in result.columns.values() for item in column.items]
+        assert len(cards) == 1
+        assert cards[0].job.state == "running"
+        assert cards[0].column == "in_progress"
+        assert result.totals.work_counts["in_progress"] == 1
+        assert result.totals.work_counts["needs_decision"] == result.totals.review_job_count == 0
+
+    async with board_disk_factory() as reader:
+        current = await ProjectBoardService(ProjectRepository(reader), ProjectBoardRepository(reader)).get("owner")
+        assert current.totals.work_counts["in_progress"] == 0
+        assert current.totals.work_counts["needs_decision"] == current.totals.review_job_count == 1
+        assert current.columns["needs_decision"].items[0].job.state == "review"
+
+
+async def test_board_page_keeps_selected_column_and_job_in_one_snapshot(board_disk_factory, monkeypatch):
+    from backend.persistence.job_repo import JobRepository
+    from backend.persistence.project_board_repo import ProjectBoardRepository
+    from backend.persistence.project_repo import ProjectRepository
+    from backend.services.project.board_service import ProjectBoardService
+
+    get_job = JobRepository.get
+
+    async def get_after_transition(repository, job_id):
+        async with board_disk_factory() as writer:
+            await writer.execute(update(JobRow).where(JobRow.id == job_id).values(state="review"))
+            await writer.commit()
+        return await get_job(repository, job_id)
+
+    monkeypatch.setattr(JobRepository, "get", get_after_transition)
+    async with board_disk_factory() as reader:
+        service = ProjectBoardService(ProjectRepository(reader), ProjectBoardRepository(reader))
+        page = await service.page("owner", "in_progress", after="", limit=20)
+        assert len(page.items) == 1
+        assert page.items[0].job.state == "running"
+        assert page.items[0].column == "in_progress"

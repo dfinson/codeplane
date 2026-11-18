@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from sqlalchemy import case, exists, func, literal, or_, select, union_all
@@ -27,6 +28,8 @@ from backend.persistence.repository import BaseRepository
 from backend.persistence.tracker_operation_repo import TrackerOperationRepository
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from sqlalchemy.sql.selectable import Subquery
 
 BOARD_COLUMNS: tuple[ProjectBoardColumn, ...] = ("ready_blocked", "in_progress", "needs_decision", "failed")
@@ -34,6 +37,13 @@ _DELIVERY_ATTENTION = ("awaiting_approval", "approved", "dispatching", "uncertai
 
 
 class ProjectBoardRepository(BaseRepository):
+    @asynccontextmanager
+    async def read_snapshot(self) -> AsyncIterator[None]:
+        # SQLite's legacy transaction mode does not BEGIN on SELECT. A savepoint
+        # pins these bounded reads without serializing concurrent WAL writers.
+        async with self._session.begin_nested():
+            yield
+
     @staticmethod
     def _work(project_id: str) -> Subquery:
         pending = (

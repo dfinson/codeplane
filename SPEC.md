@@ -492,6 +492,9 @@ Ready / blocked, In Progress, Needs a decision and Failed. A linked Task and Job
 share one work card; recipe steps are nested evidence, not extra work items.
 Full-scope totals name task, linked-Job, standalone-Job and approval units.
 Column, approval and tracker-delivery reads are bounded and paginated.
+Each Board response reads its totals, columns and hydrated items from one
+database snapshot. A column page also retains one snapshot while hydrating its
+items; later page requests remain live reads, not a frozen multi-page view.
 Pending approvals remain visible on completed or archived Jobs. Tracker
 approval and delivery states remain distinct from code completion.
 
