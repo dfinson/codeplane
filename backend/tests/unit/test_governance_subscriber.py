@@ -10,10 +10,9 @@ covers ``action_from_completed_tool`` reconstruction across tool-name buckets.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
-from backend.models.events import EventKind
+from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.action_policy.classifier import Action, ActionKind
 from backend.services.events.governance_subscriber import (
     GovernanceSubscriber,
@@ -35,9 +34,8 @@ class _SpyDecider:
         self.observed.append((action, tool_call_id))
 
 
-def _event(kind: Any, *, session_id: str = "j1", payload: dict[str, Any] | None = None) -> SimpleNamespace:
-    """A SessionEvent stand-in — handle_event only reads kind/session_id/payload."""
-    return SimpleNamespace(kind=kind, session_id=session_id, payload=payload or {})
+def _event(kind: Any, *, session_id: str = "j1", payload: dict[str, Any] | None = None) -> SessionEvent:
+    return new_event(session_id=session_id, kind=kind, payload=payload or {})
 
 
 # ---------------------------------------------------------------------------
