@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from backend.models.session_event import EventMetadata
+    from backend.services.adapters.contracts import ExecutionIdentity
     from backend.services.auth.permission_policy import PermissionRequest
 
 
@@ -28,6 +29,8 @@ class PermissionInvocation:
     dialect: str | None = None
     tool_definition: str = ""
     hard_gate: bool = False
+    native_execution: ExecutionIdentity | None = None
+    native_tool_call_id: str | None = None
 
 
 @runtime_checkable
