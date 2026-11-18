@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from backend.models.domain import StateConflictError
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
@@ -47,6 +49,13 @@ class AuditHead:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class GovernanceAdmission:
+    generation: int
+    blocked: bool
+    reason: str
+
+
 class GovernanceLedger:
     def __init__(self, path: Path, *, application_database: Path) -> None:
         if path.resolve() == application_database.resolve() or (
@@ -56,8 +65,9 @@ class GovernanceLedger:
         self.path = path
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=5)
+    def _connect(self, *, read_only: bool = False) -> Iterator[sqlite3.Connection]:
+        target = self.path.resolve().as_uri() + "?mode=ro" if read_only else str(self.path)
+        connection = sqlite3.connect(target, timeout=5, uri=read_only)
         try:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
@@ -112,7 +122,68 @@ class GovernanceLedger:
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                     storage_cursor INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS cp_admission_control (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    generation INTEGER NOT NULL CHECK(generation >= 0),
+                    blocked INTEGER NOT NULL CHECK(blocked IN (0, 1)),
+                    reason TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO cp_admission_control VALUES(1,0,0,'');
             """)
+
+    async def admission_state(self) -> GovernanceAdmission:
+        return await asyncio.to_thread(self._admission_state)
+
+    def _admission_state(self) -> GovernanceAdmission:
+        if not self.path.is_file():
+            raise StateConflictError("Governance admission gate has not been initialized")
+        with self._connect(read_only=True) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_admission_control'"
+            ).fetchone()
+            row = (
+                connection.execute(
+                    "SELECT generation,blocked,reason FROM cp_admission_control WHERE singleton=1"
+                ).fetchone()
+                if exists
+                else None
+            )
+        if row is None:
+            raise StateConflictError("Governance admission gate has not been initialized")
+        return GovernanceAdmission(row["generation"], bool(row["blocked"]), row["reason"])
+
+    async def require_admission(self) -> None:
+        state = await self.admission_state()
+        if state.blocked:
+            raise StateConflictError(f"New governance admission is blocked: {state.reason}")
+
+    async def set_admission_control(
+        self, *, expected_generation: int, blocked: bool, reason: str
+    ) -> GovernanceAdmission:
+        """Fence new admissions without interrupting existing outcome/audit writes."""
+        if (
+            isinstance(expected_generation, bool)
+            or not isinstance(expected_generation, int)
+            or expected_generation < 0
+            or not isinstance(blocked, bool)
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 1024
+        ):
+            raise ValueError("Admission control requires a generation, boolean state and bounded reason")
+        return await asyncio.to_thread(self._set_admission_control, expected_generation, blocked, reason)
+
+    def _set_admission_control(self, expected_generation: int, blocked: bool, reason: str) -> GovernanceAdmission:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            changed = connection.execute(
+                """UPDATE cp_admission_control SET generation=generation+1, blocked=?, reason=?
+                   WHERE singleton=1 AND generation=?""",
+                (int(blocked), reason, expected_generation),
+            )
+            if changed.rowcount != 1:
+                raise StateConflictError("Governance admission generation changed; reread before retrying")
+        return GovernanceAdmission(expected_generation + 1, blocked, reason)
 
     async def record_completion(
         self,
