@@ -28,7 +28,7 @@ def isolate_sessions(monkeypatch):
 
 
 @asynccontextmanager
-async def application(framework, *, block=False, actor=False, synchronous=False):
+async def application(framework, *, block=False, actor=False, synchronous=False, response_size=None, stream=False):
     calls = []
     entered, release = asyncio.Event(), asyncio.Event()
     thread_release = threading.Event()
@@ -38,6 +38,23 @@ async def application(framework, *, block=False, actor=False, synchronous=False)
         thread_release.set()
     controls = {("POST", "/run"): "run"}
     override = None
+
+    def stream_body():
+        try:
+            yield b"first"
+            assert thread_release.wait(10)
+            yield b"last"
+        finally:
+            calls.append("stream_closed")
+
+    async def async_stream_body():
+        try:
+            yield b"first"
+            await release.wait()
+            yield b"last"
+        finally:
+            calls.append("stream_closed")
+
     if framework == "fastapi":
         sdk = load_sdk("fastapi")
         app = sdk.FastAPI()
@@ -56,7 +73,11 @@ async def application(framework, *, block=False, actor=False, synchronous=False)
             async def handler():
                 calls.append("body")
                 entered.set()
+                if stream:
+                    return load_sdk("starlette.responses").StreamingResponse(async_stream_body())
                 await release.wait()
+                if response_size is not None:
+                    return load_sdk("starlette.responses").Response(b"x" * response_size)
                 return {"result": "local"}
     elif framework == "flask":
         sdk = load_sdk("flask")
@@ -66,7 +87,11 @@ async def application(framework, *, block=False, actor=False, synchronous=False)
         def handler():
             calls.append("body")
             loop.call_soon_threadsafe(entered.set)
+            if stream:
+                return sdk.Response(stream_body())
             assert thread_release.wait(10)
+            if response_size is not None:
+                return sdk.Response(b"x" * response_size)
             return {"result": "local"}
     else:
         settings = load_sdk("django.conf").settings
@@ -78,7 +103,11 @@ async def application(framework, *, block=False, actor=False, synchronous=False)
         def handler(request):
             calls.append("body")
             loop.call_soon_threadsafe(entered.set)
+            if stream:
+                return load_sdk("django.http").StreamingHttpResponse(stream_body())
             assert thread_release.wait(10)
+            if response_size is not None:
+                return load_sdk("django.http").HttpResponse(b"x" * response_size)
             return load_sdk("django.http").JsonResponse({"result": "local"})
 
         urls.urlpatterns = [load_sdk("django.urls").path("run", handler)]
