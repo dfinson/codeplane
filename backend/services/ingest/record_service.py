@@ -37,8 +37,8 @@ from backend.services.ingest.mapping import (
     DecoderState,
     NativeMappingDecoder,
     canonical_record,
-    resolve_mapping_path,
 )
+from backend.services.ingest.mapping_registry import MappingRegistry
 from backend.services.ingest.otel_decoder import decode_json_body, otlp_spans
 from backend.services.ingest.otel_observation import (
     OTEL_FORMAT,
@@ -67,10 +67,18 @@ def _projection_digest(decoder: NativeMappingDecoder | OtelObservationDecoder) -
 
 
 class ObservationRecords:
-    def __init__(self, bindings: IntegrationRepository, jobs: JobRepository, event_bus: EventBus) -> None:
+    def __init__(
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        event_bus: EventBus,
+        *,
+        mapping_registry: MappingRegistry | None = None,
+    ) -> None:
         self._bindings = bindings
         self._jobs = jobs
         self._event_bus = event_bus
+        self._mapping_registry = mapping_registry or MappingRegistry()
 
     async def append(
         self, binding_id: str, batch: ObservationRecordBatch, *, acquisition: AcquisitionCheckpoint | None = None
@@ -189,19 +197,6 @@ class ObservationRecords:
                 source_key=batch.source_key,
                 anchor=job.created_at,
             )
-        else:
-            path = resolve_mapping_path(format_id)
-            if path is None:
-                raise StateConflictError("Configured mapping is unavailable")
-            decoder = NativeMappingDecoder(
-                path,
-                job_id=job.id,
-                external_session_id=external_id,
-                binding_id=binding.id,
-                anchor=job.created_at,
-                framework_id=format_id,
-                source_key=batch.source_key,
-            )
         checkpoint = await self._bindings.checkpoint(binding_id, batch.source_key, PARSER_REVISION)
         prefix = bytes.fromhex(batch.prefix_sha256)
         for raw in batch.records:
@@ -229,6 +224,16 @@ class ObservationRecords:
             if ingest_fence is not None:
                 await self._bindings.acknowledge_ingest_retry(ingest_fence)
             return ObservationRecordReceipt.model_validate(accepted_batch.payload).model_copy(update={"replay": True})
+        if format_id != OTEL_FORMAT:
+            decoder = self._mapping_registry.decoder(
+                format_id,
+                pin=binding.config.get("mapping_pin"),
+                job_id=job.id,
+                external_session_id=external_id,
+                binding_id=binding.id,
+                anchor=job.created_at,
+                source_key=batch.source_key,
+            )
         saved_acquisition = checkpoint.buffer.get("acquisition") if checkpoint is not None else None
         if acquisition is None:
             if saved_acquisition is not None:
