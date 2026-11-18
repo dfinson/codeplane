@@ -179,11 +179,14 @@ async def create_tracker_link(
     async with sf() as session:
         if await ProjectRepository(session).get(project_id) is None:
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' does not exist")
-        if await CredentialRepository(session).get(body.credential_id) is None:
+        credential = await CredentialRepository(session).get(body.credential_id)
+        if credential is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Credential '{body.credential_id}' does not exist",
             )
+        if credential["provider"] not in {"github", "jira", "azure_devops"}:
+            raise HTTPException(status_code=422, detail="Credential is not a tracker credential")
 
     try:
         await tracker_sync_service.test_link(

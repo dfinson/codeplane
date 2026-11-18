@@ -8,6 +8,8 @@
 import type {
   ArtifactListResponse,
   CreateJobRequest,
+  CreateCredentialRequest as CredentialInput,
+  CredentialResponse,
   CreateJobResponse,
   CreateSidecarTemplateRequest,
   RecipeDefinition,
@@ -932,25 +934,9 @@ export function updateUsdCeilings(
 
 // --- Credentials (Story 3.1, global Settings > Integrations) ---
 
-export type CredentialProvider = "github" | "jira" | "azure_devops";
-
-export interface Credential {
-  id: string;
-  provider: CredentialProvider;
-  label: string;
-  baseUrl: string;
-  email: string | null;
-  requiresEmailUpdate: boolean;
-  createdAt: string;
-}
-
-export interface CreateCredentialRequest {
-  provider: CredentialProvider;
-  label: string;
-  baseUrl: string;
-  pat: string;
-  email?: string | null;
-}
+export type CredentialProvider = CredentialInput["provider"];
+export type Credential = CredentialResponse;
+export type CreateCredentialRequest = CredentialInput;
 
 export function fetchCredentials(): Promise<{ credentials: Credential[] }> {
   return request("/settings/credentials");

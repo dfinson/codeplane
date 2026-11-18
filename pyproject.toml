@@ -51,7 +51,7 @@ push = ["pywebpush>=2.3.0", "py-vapid>=1.9.4", "qrcode>=7.0,<9"]
 telemetry = ["opentelemetry-api>=1.20,<2", "opentelemetry-sdk>=1.20,<2"]
 tokenizer = ["tiktoken>=0.12.0,<1", "anthropic-tokenizer>=0.1.0,<1"]
 all = [
-    "codeplane[otlp-ingest,push,telemetry,tokenizer,voice]",
+    "codeplane[otlp-export-grpc,otlp-export-http,otlp-ingest,push,telemetry,tokenizer,voice]",
 ]
 legacy-traceforge = [
     # Explicit opt-in for version-1 native checkpoints and historical re-enrichment.
@@ -61,6 +61,14 @@ legacy-traceforge = [
 otlp-ingest = [
     "opentelemetry-proto==1.45.2",
     "protobuf==7.35.0",
+]
+otlp-export-http = [
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+]
+otlp-export-grpc = [
+    "opentelemetry-exporter-otlp-proto-grpc==1.45.2",
+    "opentelemetry-sdk==1.45.2",
 ]
 
 [project.scripts]

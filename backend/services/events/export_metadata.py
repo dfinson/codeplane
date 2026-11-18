@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import math
-from typing import TYPE_CHECKING, Literal
+import re
+from typing import TYPE_CHECKING
 
 from backend.models.events import EventKind
 from backend.services.action_policy.credential_filter import filter_credentials
@@ -18,6 +20,23 @@ if TYPE_CHECKING:
 
 _KNOWN_KINDS = frozenset(kind.value for kind in EventKind)
 _ROLES = frozenset({"primary", "scout", "monitor", "assessment", "title", "utility"})
+_IDENTIFIERS = frozenset(
+    {
+        "job_id",
+        "event_id",
+        "execution_id",
+        "source_id",
+        "source_run_id",
+        "source_trace_id",
+        "turn_id",
+        "tool_call_id",
+        "span_id",
+        "parent_span_id",
+        "parent_event_id",
+    }
+)
+_VERSIONS = frozenset({"schema_version", "policy_version", "rule_version", "grammar_version", "title_version"})
+_COUNTS = frozenset({"tool_count", "input_tokens", "output_tokens"})
 
 
 class ExportDisclosureError(ValueError):
@@ -33,6 +52,12 @@ def _string(value: str) -> str:
         raise ExportDisclosureError("Credential-shaped metadata withheld")
     if len(value) > 128:
         raise ExportDisclosureError("Metadata string exceeds its disclosure bound")
+    if (
+        re.search(r"[A-Za-z][A-Za-z0-9+.-]*://", value)
+        or value.startswith(("/", "\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", value)
+    ):
+        raise ExportDisclosureError("Address or path metadata withheld")
     return value
 
 
@@ -50,7 +75,7 @@ def export_metadata(
     identity_key: bytes,
     integration: str,
     provider: str,
-    role: Literal["primary", "scout", "monitor", "assessment", "title", "utility"],
+    role: str,
     approved_models: frozenset[str],
     usage: Sequence[UsageAmount] = (),
     versions: dict[str, str] | None = None,
@@ -63,6 +88,48 @@ def export_metadata(
     if len(usage) > 1000:
         raise ExportDisclosureError("Usage metadata exceeds its disclosure bound")
     metadata = event.metadata
+    trace_id = event.payload.get("trace_id") or (metadata.correlation_id if metadata.span_id is not None else None)
+    identifiers = {
+        "execution_id": metadata.execution_token or metadata.execution_epoch,
+        "source_id": metadata.integration_binding_id,
+        "source_run_id": metadata.run_id,
+        "source_trace_id": trace_id,
+        "turn_id": metadata.turn_id or event.payload.get("turn_id"),
+        "tool_call_id": event.payload.get("tool_call_id"),
+        "span_id": metadata.span_id,
+        "parent_span_id" if metadata.span_id else "parent_event_id": metadata.parent_id,
+    }
+    if any(value is not None and not isinstance(value, str) for value in identifiers.values()):
+        raise ExportDisclosureError("Unsupported export identity representation")
+    provided_model = event.payload.get("model")
+    selected_input = {
+        "job_id": event.session_id,
+        "event_id": event.id,
+        "identifiers": identifiers,
+        "integration": integration,
+        "provider": provider,
+        "role": role,
+        "versions": versions,
+        "model": provided_model if isinstance(provided_model, str) and provided_model in approved_models else None,
+        "usage": [
+            {
+                "amount": str(item.amount),
+                "unit": item.unit,
+                "model": item.model,
+                "producer": item.producer,
+                "role": item.role,
+                "verified": item.verified,
+                "currency": item.currency,
+            }
+            for item in usage
+        ],
+    }
+    try:
+        input_size = len(json.dumps(selected_input, ensure_ascii=False, allow_nan=False).encode())
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ExportDisclosureError("Unsupported export representation") from exc
+    if input_size > 32 * 1024:
+        raise ExportDisclosureError("Export inspection input exceeds 32 KiB")
     output: dict[str, object] = {
         "schema": "cp-export-v1",
         "integration": _string(integration),
@@ -72,18 +139,29 @@ def export_metadata(
         "job_id": _opaque(identity_key, "job", event.session_id),
         "event_id": _opaque(identity_key, "event", event.id),
     }
-    identifiers = {
-        "execution_id": metadata.execution_token or metadata.execution_epoch,
-        "source_id": metadata.integration_binding_id,
-        "turn_id": metadata.turn_id or event.payload.get("turn_id"),
-        "tool_call_id": event.payload.get("tool_call_id"),
-        "span_id": metadata.span_id,
-        "parent_span_id" if metadata.span_id else "parent_event_id": metadata.parent_id,
-    }
+    owner_scope = [
+        event.session_id,
+        metadata.integration_binding_id,
+        metadata.execution_token or metadata.execution_epoch,
+    ]
+    source_scope = [*owner_scope, metadata.run_id, trace_id]
     for field, value in identifiers.items():
         if isinstance(value, str) and value:
             namespace = "span" if "span" in field else "event" if field == "parent_event_id" else field
-            output[field] = _opaque(identity_key, namespace, value)
+            scope = owner_scope if field == "source_run_id" else source_scope
+            scoped = (
+                json.dumps([scope, value], separators=(",", ":"))
+                if field
+                in {
+                    "source_run_id",
+                    "source_trace_id",
+                    "tool_call_id",
+                    "span_id",
+                    "parent_span_id",
+                }
+                else value
+            )
+            output[field] = _opaque(identity_key, namespace, scoped)
     if metadata.duration_ms is not None:
         if not math.isfinite(metadata.duration_ms) or metadata.duration_ms < 0:
             raise ExportDisclosureError("Invalid event duration")
@@ -94,10 +172,11 @@ def export_metadata(
     for field in ("tool_count", "input_tokens", "output_tokens"):
         value = event.payload.get(field)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            if value > 2**63 - 1:
+                raise ExportDisclosureError("Export count exceeds the OTLP integer representation")
             output[field] = value
-    allowed_versions = {"schema_version", "policy_version", "rule_version", "grammar_version", "title_version"}
     for field, value in (versions or {}).items():
-        if field not in allowed_versions:
+        if field not in _VERSIONS:
             raise ExportDisclosureError("Unapproved version metadata field")
         output[field] = _string(value)
     model = event.payload.get("model")
@@ -132,4 +211,86 @@ def export_metadata(
             pending.extend(value.values())
         elif isinstance(value, list):
             pending.extend(value)
+    if len(json.dumps(output, ensure_ascii=False, allow_nan=False).encode()) > 8 * 1024:
+        raise ExportDisclosureError("Export projection exceeds 8 KiB")
     return output
+
+
+def validate_projection(projection: dict[str, object], approved_models: frozenset[str]) -> dict[str, object]:
+    """Validate an already keyed native sink projection before any SDK object exists."""
+    from backend.models.usage import UsageAmount
+
+    try:
+        encoded = json.dumps(projection, ensure_ascii=False, allow_nan=False).encode()
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ExportDisclosureError("Unsupported export projection") from exc
+    if len(encoded) > 8192:
+        raise ExportDisclosureError("Export projection exceeds 8 KiB")
+    allowed = (
+        _IDENTIFIERS
+        | _VERSIONS
+        | _COUNTS
+        | {
+            "schema",
+            "integration",
+            "provider",
+            "role",
+            "kind",
+            "model",
+            "outcome",
+            "duration_ms",
+            "usage",
+        }
+    )
+    if projection.keys() - allowed or any(
+        field not in projection for field in ("schema", "integration", "provider", "role", "kind", "job_id", "event_id")
+    ):
+        raise ExportDisclosureError("Unapproved or incomplete export projection")
+    if (
+        projection["schema"] != "cp-export-v1"
+        or not isinstance(projection["role"], str)
+        or projection["role"] not in _ROLES
+        or not isinstance(projection["kind"], str)
+        or projection["kind"] not in _KNOWN_KINDS | {"integration.event"}
+    ):
+        raise ExportDisclosureError("Unapproved export projection schema or role")
+    for key, value in projection.items():
+        if key in _IDENTIFIERS:
+            if not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None:
+                raise ExportDisclosureError("Export identity was not locally keyed")
+        elif key in _COUNTS:
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < 2**63:
+                raise ExportDisclosureError("Invalid projected count")
+        elif key == "duration_ms":
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                raise ExportDisclosureError("Invalid projected duration")
+        elif key == "usage":
+            if not isinstance(value, list):
+                raise ExportDisclosureError("Invalid projected usage")
+            for item in value:
+                fields = {"amount", "unit", "model", "producer", "role", "verified", "currency"}
+                if not isinstance(item, dict) or set(item) != fields:
+                    raise ExportDisclosureError("Unapproved projected usage field")
+                amount = UsageAmount.model_validate(
+                    {
+                        **item,
+                        "job_id": None,
+                        "execution_epoch": None,
+                        "source": "sanitized-canonical-event",
+                    }
+                )
+                if amount.model is not None and amount.model not in approved_models:
+                    raise ExportDisclosureError("Unapproved projected usage model")
+                for part in item.values():
+                    if isinstance(part, str):
+                        _string(part)
+        else:
+            if not isinstance(value, str):
+                raise ExportDisclosureError("Invalid projected metadata")
+            _string(value)
+    if "model" in projection and projection["model"] not in approved_models:
+        raise ExportDisclosureError("Unapproved projected model")
+    if "outcome" in projection and projection["outcome"] not in {"succeeded", "failed"}:
+        raise ExportDisclosureError("Unapproved projected outcome")
+    restored: dict[str, object] = json.loads(encoded)
+    return restored

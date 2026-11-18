@@ -1,17 +1,21 @@
 """Opt-in codec qualification, excluded from default core test collection."""
 
 import json
-
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
-    ExportTraceServiceRequest,
-    ExportTraceServiceResponse,
-)
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 from backend.services.events.telemetry_subscriber import TelemetrySubscriber
 from backend.services.ingest.otlp_codec import protobuf_to_json
 from backend.tests.integration.test_api_otlp import otlp_http as otlp_http
 from backend.tests.integration.test_api_otlp import register
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
+_codec = import_module("opentelemetry.proto.collector.trace.v1.trace_service_pb2")
+ExportTraceServiceRequest = _codec.ExportTraceServiceRequest
+ExportTraceServiceResponse = _codec.ExportTraceServiceResponse
 
 
 async def test_real_protobuf_http_ingest_uses_same_scope_receipts_and_hex_identity(
@@ -21,7 +25,7 @@ async def test_real_protobuf_http_ingest_uses_same_scope_receipts_and_hex_identi
 ):
     operator, source, _ = otlp_http
     job, token = await register(operator, "binary")
-    pending = []
+    pending: list[Awaitable[None]] = []
     subscriber = TelemetrySubscriber(session_factory=session_factory, schedule_write=pending.append)
     subscriber.subscribe(event_bus)
     request = ExportTraceServiceRequest()

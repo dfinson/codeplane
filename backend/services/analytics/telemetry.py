@@ -1,10 +1,7 @@
 """OTEL-native telemetry for CodePlane.
 
-Provides OpenTelemetry instruments (counters, histograms, gauges) that agent
-adapters call directly.  An in-process ``InMemoryMetricReader`` is always
-active so the API can serve live telemetry with zero config.  An optional
-OTLP exporter can be activated by setting ``OTEL_EXPORTER_ENDPOINT`` to push
-to Grafana / Jaeger / Prometheus.
+Provides local OpenTelemetry instruments. Outbound export is separately owned by
+the explicit metadata-only binding; environment endpoints never bypass it.
 
 Adapters import the instruments and call them with standard OTEL attributes::
 
@@ -16,8 +13,6 @@ Adapters import the instruments and call them with standard OTEL attributes::
 """
 
 from __future__ import annotations
-
-import os
 
 try:
     from opentelemetry import metrics, trace
@@ -68,32 +63,10 @@ def init_telemetry() -> None:
     _memory_reader = InMemoryMetricReader()
     _span_exporter = InMemorySpanExporter()
     metric_readers: list[MetricReader] = [_memory_reader]
-    otlp_span_processor = None
-
-    endpoint = os.environ.get("OTEL_EXPORTER_ENDPOINT", "")
-    if endpoint:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (  # type: ignore[import-not-found]
-                OTLPMetricExporter,
-            )
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # type: ignore[import-not-found]
-                OTLPSpanExporter,
-            )
-            from opentelemetry.sdk.metrics.export import (
-                PeriodicExportingMetricReader,
-            )
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-            metric_readers.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=endpoint)))
-            otlp_span_processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-        except ImportError:
-            pass
 
     meter_provider = MeterProvider(metric_readers=metric_readers)
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(_span_exporter))
-    if otlp_span_processor is not None:
-        tracer_provider.add_span_processor(otlp_span_processor)
 
     metrics.set_meter_provider(meter_provider)
     trace.set_tracer_provider(tracer_provider)
