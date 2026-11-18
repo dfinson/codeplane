@@ -95,6 +95,15 @@ uses the native cancellation notification and retains acknowledgment or a late
 result separately. Stdio and upstream MCP server trust middleware are not
 qualified by the Streamable HTTP client implementation.
 
+The Haystack bridge qualifies `haystack-ai==3.5.0` with the core 5.0.0
+`TrustedPipeline`/blocking `TrustGateComponent`. The actual caller-owned
+`Pipeline` schedules synchronous or asynchronous components. Each real handler
+passes trust verification and the existing Runtime policy before entry, with
+component identity retained in canonical history. Missing handlers and changed
+graph/trust configuration fail closed. Detach restores the host's exact methods.
+Cancellation remains requested while an entered handler is still running.
+The component bridge neither invents model usage nor supplies live steering.
+
 The fixed A2A bridge uses the 0.3 JSON-RPC transport contract rather than
 upstream local `create_task` objects. Signed peer identity and the independent
 endpoint pin are checked before delegation. Actual task/context IDs, status,
