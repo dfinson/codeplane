@@ -87,7 +87,7 @@ def test_optional_protobuf_readiness_fails_before_loading_codec(monkeypatch, ins
 
 def test_qualified_request_bridges_are_reported_without_claiming_unqualified_transports():
     rows = {row.profile_id: row for row in AdapterRegistry().list_profiles().profiles}
-    for profile in ("flowise", "mcp"):
+    for profile in ("flowise", "mcp", "a2a"):
         row = rows[profile]
         assert not row.admission_enabled and not row.live_ready
         assert row.supported_versions and row.hooks
@@ -96,3 +96,7 @@ def test_qualified_request_bridges_are_reported_without_claiming_unqualified_tra
     mcp = rows["mcp"]
     assert all("stdio" in " ".join(operation.limitations) for operation in mcp.operations)
     assert not rows["flowise"].utility_completion and not rows["mcp"].utility_completion
+    a2a = rows["a2a"]
+    cancel = next(operation for operation in a2a.operations if operation.id == "cancel")
+    assert cancel.producer.endswith("A2ATarget.cancel_task")
+    assert "only stops local waiting" in " ".join(cancel.limitations)

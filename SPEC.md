@@ -95,6 +95,16 @@ uses the native cancellation notification and retains acknowledgment or a late
 result separately. Stdio and upstream MCP server trust middleware are not
 qualified by the Streamable HTTP client implementation.
 
+The fixed A2A bridge uses the 0.3 JSON-RPC transport contract rather than
+upstream local `create_task` objects. Signed peer identity and the independent
+endpoint pin are checked before delegation. Actual task/context IDs, status,
+artifacts and JSON-RPC response identities are retained on the same Runtime Job.
+Input requires a source-confirmed `input-required` task/context. Explicit
+`tasks/cancel` records the returned state or refusal, while Runtime revocation
+only stops local waiting. Response loss is not retried. Known-task uncertainty
+must be reconciled with `tasks/get` before another send, and an unbound uncertain
+submission cannot be automatically reconciled into permission to resubmit.
+
 `POST /api/integrations/observations` registers a binding-owned history Job
 without launching an SDK, creating a workspace or attaching runtime sidecars.
 Repeated registration of the same binding/source returns the same Job. These
