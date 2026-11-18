@@ -111,6 +111,15 @@ method. Real graph edges, node IDs, flow/run IDs and component DIDs remain sourc
 evidence. Runtime retains entered work until completion and exact detach leaves
 the host graph intact. Trust configuration export alone is not execution.
 
+Swarm qualifies original `openai/swarm` commit
+`6af0b4caf37dca4526dfd98e9fbd8ce36e7eeb22` (distribution 0.1.0), OpenAI 2.38.0
+and core 5.0.0. Original streamed/nonstreamed dispatch remains intact. Actual
+function entry is gated, and returned peers must be exact bound objects verified
+by `HandoffVerifier` before context transfer. Native call/response IDs and
+source-present typed usage, including zero, remain local. Missing streamed usage
+stays unknown. Cancellation retains synchronous work, and live input is not
+inferred from a handoff or a subsequent run.
+
 The fixed A2A bridge uses the 0.3 JSON-RPC transport contract rather than
 upstream local `create_task` objects. Signed peer identity and the independent
 endpoint pin are checked before delegation. Actual task/context IDs, status,
