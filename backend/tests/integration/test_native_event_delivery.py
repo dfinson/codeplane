@@ -9,14 +9,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from traceforge.adapters.mapped_json import MappedJsonAdapter
-from traceforge.config.mappings import resolve_mapping_path
 
 from backend.persistence.event_repo import EventRepository
 from backend.services.events.event_bus import EventBus
 from backend.services.events.event_processor import EventProcessor
 from backend.services.events.sse_manager import SSEConnection, SSEManager
+from backend.services.events.tool_pairing import ToolPairing
 from backend.services.ingest._base import TraceForgeIngestBase
+from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
 from backend.tests.unit.test_approval_service import session_factory as _source_factory
 from backend.tests.unit.test_ingest_sources import _LOCAL_ID, _TASK_ID, _write_native_metadata
 
@@ -241,8 +241,14 @@ class TestRuntimeContract:
 
         bus.subscribe(persist)
         ingest = TraceForgeIngestBase(EventProcessor(bus), AsyncMock(), native_factory, "copilot")
-        adapter = MappedJsonAdapter.from_yaml(str(resolve_mapping_path("copilot")), session_id="native-1")
-        event = next(adapter.parse_dict({"type": "assistant.message", "data": {"content": "native output"}}))
+        adapter = NativeMappingDecoder(
+            resolve_mapping_path("copilot"),
+            job_id="job-1",
+            external_session_id="native-1",
+            anchor=datetime.now(UTC),
+            framework_id="copilot",
+        )
+        (event,) = adapter.decode({"type": "assistant.message", "data": {"content": "native output"}}, 0)
         await ingest._handle_tf_event("job-1", event)
         async with native_factory() as session:
             stored = await EventRepository(session).list_after(0, job_id="job-1")
@@ -293,8 +299,6 @@ class TestRuntimeContract:
 
 
 async def test_restart_reconstructs_buffered_start_without_duplicate_output(native_disk_factory, tmp_path):
-    from traceforge.enricher import Enricher
-
     from backend.persistence.job_repo import JobRepository
 
     native_factory = native_disk_factory
@@ -327,7 +331,7 @@ async def test_restart_reconstructs_buffered_start_without_duplicate_output(nati
 
         bus.subscribe(persist, required=True)
         return TraceForgeIngestBase(
-            EventProcessor(bus, enricher=Enricher(), persisted=exists),
+            EventProcessor(bus, enricher=ToolPairing(), persisted=exists),
             AsyncMock(),
             native_factory,
             "copilot",
