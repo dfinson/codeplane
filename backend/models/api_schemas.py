@@ -450,6 +450,19 @@ class ApprovalListResponse(CamelModel):
     items: list[ApprovalResponse]
 
 
+class JobPendingDecision(CamelModel):
+    approval: ApprovalResponse
+    recipe_run_id: str | None
+    step_instance_id: str | None
+    attempt_id: str | None
+    human_gate: bool
+
+
+class JobPendingDecisionPage(CamelModel):
+    items: list[JobPendingDecision]
+    next_cursor: str | None
+
+
 class TranscriptSearchListResponse(CamelModel):
     items: list[TranscriptSearchResult]
 

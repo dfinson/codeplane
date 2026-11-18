@@ -364,6 +364,11 @@ durable admission receipt, not observed execution. Read refreshes do not resend,
 resume or clear gates. Receipts capture the original canonical recipe scope,
 native session and execution fence before provider awaits.
 
+The Run tab retains bounded pending Job decisions and the existing permission
+Approve/Reject controls. Positively bound human recipe gates link to their exact
+input/output decision inspector instead. Unknown scope is shown as a Job-wide
+blocker, never silently excluded or treated as an agent message.
+
 Selected stop targets the exact owned runner task, not the Job or sibling
 attempts. A safe read-only/no-dispatch stop requires explicit attempt Resume.
 Uncertain command or writer effects retain ownership until an operator records
@@ -383,6 +388,9 @@ snapshot metadata is limited to 1 MiB and copied artifact evidence to 256 MiB.
 Copies are checksummed before short metadata writes; original mutable artifact
 IDs alone are not review evidence. Captures follow ordinary artifact retention,
 while the recorded event keeps the selected structured evidence and checksums.
+A canonical app-owned preparation receipt binds the snapshot artifact to its
+original checksum, so replacing bytes and supplying a replacement checksum
+cannot manufacture a new trusted capture.
 
 `POST /api/jobs/{jobId}/reviews` records rationale with a stable request key,
 snapshot identity and checksum after revalidating Job/run versions, code and

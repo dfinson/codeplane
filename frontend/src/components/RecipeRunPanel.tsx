@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { Button } from "./ui/button";
 import { RecipeStepInspector } from "./RecipeStepInspector";
 import { cn } from "../lib/utils";
+import { RecipePendingDecisions } from "./RecipePendingDecisions";
 
 interface RecipeRunTarget {
   jobId: string;
@@ -47,6 +48,7 @@ function JobRecipePanel({ jobId, ...target }: RecipeRunTarget) {
   if (run === null) return null;
   if (!run) return <p role="status" className="mx-3 mt-2 text-xs text-muted-foreground">Reading pinned recipe...</p>;
   return <section aria-label="Job recipe" className="min-w-0">
+    <RecipePendingDecisions key={jobId} jobId={jobId} />
     <RecipeRunBrowser jobId={jobId} current={run} {...target} />
   </section>;
 }

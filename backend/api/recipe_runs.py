@@ -4,6 +4,7 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Query, Response
 
 from backend.models.api_schemas import (
+    JobPendingDecisionPage,
     RecipeAttemptControl,
     RecipeAttemptInspection,
     RecipeAttemptResumeRequest,
@@ -32,6 +33,16 @@ router = APIRouter(
 @router.get("/current", response_model=RecipeCurrentRunResponse, response_model_exclude_unset=True)
 async def current_run(job_id: str, service: FromDishka[RecipeInspectionService]) -> RecipeCurrentRunResponse:
     return await service.current(job_id)
+
+
+@router.get("/decisions", response_model=JobPendingDecisionPage)
+async def pending_decisions(
+    job_id: str,
+    service: FromDishka[RecipeInspectionService],
+    after: str = Query("", max_length=128),
+    limit: int = Query(20, ge=1, le=100),
+) -> JobPendingDecisionPage:
+    return await service.pending_decisions(job_id, after=after, limit=limit)
 
 
 @router.get("/runs", response_model=RecipeRunListResponse, response_model_exclude_unset=True)
