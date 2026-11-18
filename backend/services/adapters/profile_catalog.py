@@ -151,7 +151,8 @@ def _operation(
         )
         if profile.id == "openai-client":
             limitations.append(
-                "Explicit native runs.cancel retains the returned run state; Runtime detach only stops local waiting"
+                "Runtime cancel/detach sends native runs.cancel for observed runs, retaining acknowledged, "
+                "requested or uncertain outcomes; local stop alone never proves remote completion"
             )
         else:
             limitations.append("Cancellation stops local waiting, not unconfirmed remote provider execution")
