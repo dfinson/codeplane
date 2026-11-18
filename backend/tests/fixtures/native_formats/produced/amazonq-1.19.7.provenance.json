@@ -1,0 +1,49 @@
+{
+  "capture_kind": "actual-chat-session/native-sqlite/inert-model",
+  "format_id": "amazonq",
+  "producer": {
+    "source_repository": "https://github.com/aws/amazon-q-developer-cli",
+    "source_release": "v1.19.7",
+    "source_commit": "cf39ab6297ee7654fcbeed253445d35fe5c92b07",
+    "source_tree": "1c154af7ca91c88326f7602ccc7f83107bf7009a",
+    "package": "chat_cli",
+    "version": "1.19.7",
+    "license": "MIT OR Apache-2.0",
+    "retained_license": "amazonq-LICENSE.MIT"
+  },
+  "build": {
+    "rustc": "rustc 1.87.0 (17067e9ac 2025-05-09)",
+    "cargo_lock_sha256": "af9def33b716f5d58d66b1ded1fa13615dc74767bfddc23f4d9a65062a42a438",
+    "test_overlay": "../../../producer_captures/amazonq-native-capture.patch",
+    "test_overlay_sha256": "13660e6b4f7676807e145532de3e3ce87fde050b1ec5402b7dc47b3d946f6ea5",
+    "binary_sha256": "deeb5854fb01eed73139f0ce5e7d8e61d6236ded5e24803544d38b36cafde3a5",
+    "command": "CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 cargo +1.87.0 test --locked -p chat_cli --bin chat_cli codeplane_native_capture --no-run"
+  },
+  "execution": {
+    "target": "cli::chat::tests::codeplane_native_capture",
+    "arguments": [
+      "--exact",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "passed": 1,
+    "failed": 0,
+    "filtered_out": 341,
+    "network": "unshare --net with an empty process environment and no configured network interfaces",
+    "database": "native rusqlite in-memory SQLite under cfg(test)",
+    "filesystem": "native Fs::Chroot temporary filesystem under cfg(test)",
+    "input_source": "InputSource::new_mock",
+    "model_source": "Os.client.set_mock_output with two harmless text responses",
+    "writer": "ConversationState.push_assistant_message -> Database.set_conversation_by_path",
+    "retrieval": "get_conversation_by_path verified against exact raw conversations.value row after ChatSession.spawn"
+  },
+  "sqlite_key": "/tmp/codeplane-amazonq-capture.qJRxNf",
+  "sample": "amazonq-1.19.7.conversation.json",
+  "sample_sha256": "11282926d0ebf37b0812b52fd772ee03ff77afa3c31bfe6d5fac9daf9eb2a32f",
+  "model_inference": false,
+  "tool_invocations": 0,
+  "limitations": [
+    "Native ChatSession and SQLite writer with upstream inert model/input facilities, not a vendor conversation",
+    "The test-only overlay adds capture/assertions and a raw read accessor, not replacement producer or storage logic"
+  ]
+}
