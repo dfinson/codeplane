@@ -97,7 +97,7 @@ retention:
 
 native_mappings:
   extra_dirs: []
-  migrated_user_dir: null  # Defaults to ~/.codeplane/mappings
+  migrated_user_dir: null  # Defaults to mappings/ under CODEPLANE_HOME (or ~/.codeplane)
 
 logging:
   level: info
