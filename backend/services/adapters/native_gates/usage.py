@@ -16,7 +16,24 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
     values: dict[str, int] = {}
     source = ""
     model: str | None = None
-    if family == "swarm":
+    if family == "haystack":
+        messages = load_sdk("haystack.dataclasses")
+        if isinstance(result, messages.ChatMessage):
+            supplied = result.meta.get("usage")
+            if supplied is not None:
+                if not isinstance(supplied, dict):
+                    raise ValueError("Invalid native Haystack usage object")
+                values = _client_tokens(
+                    supplied, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
+                )
+                details = supplied.get("prompt_tokens_details")
+                if details is not None:
+                    if not isinstance(details, dict):
+                        raise ValueError("Invalid native Haystack token details")
+                    values.update(_client_tokens(details, (("cached_tokens", "cache_read_tokens"),)))
+                source = "ChatMessage.meta.usage"
+                model = result.meta.get("model")
+    elif family == "swarm":
         chat = load_sdk("openai.types.chat")
         if isinstance(result, (chat.ChatCompletion, chat.ChatCompletionChunk)):
             supplied = getattr(result, "usage", None)

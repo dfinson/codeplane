@@ -6,6 +6,8 @@ import asyncio
 import os
 import threading
 
+import httpx
+
 os.environ["HAYSTACK_TELEMETRY_ENABLED"] = "false"
 
 import pytest
@@ -122,3 +124,145 @@ async def test_missing_haystack_handler_is_not_completed_pipeline(composed_runti
             synchronous=True,
         )
         await task
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("usage", ["positive", "zero", "missing"])
+async def test_real_chat_generator_response_usage_is_not_multiplied_by_choices(composed_runtime, asynchronous, usage):
+    host, approvals, governance, create = composed_runtime
+    job = await create()
+    generators = load_sdk("haystack.components.generators.chat")
+    messages = load_sdk("haystack.dataclasses")
+    secret = load_sdk("haystack.utils").Secret
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "actual-native-completion",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [
+                    {"index": index, "finish_reason": "stop", "message": {"role": "assistant", "content": "inert"}}
+                    for index in range(2)
+                ],
+                "usage": None
+                if usage == "missing"
+                else {
+                    "prompt_tokens": 3 if usage == "positive" else 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 3 if usage == "positive" else 0,
+                },
+            },
+        )
+
+    generator = generators.OpenAIChatGenerator(
+        api_key=secret.from_token("fixture-not-a-cloud-credential"),
+        model="fixture-model",
+        generation_kwargs={"n": 2},
+        http_client_kwargs={"transport": httpx.MockTransport(respond)},
+        max_retries=0,
+    )
+    pipeline = sdk.Pipeline()
+    pipeline.add_component("model", generator)
+    trust = TrustedPipeline()
+    trust.add_component("model", trust_score=0.9)
+    original = generator._prepare_api_call
+
+    async def approve(event):
+        if event.kind == "permission.requested":
+            await approvals.resolve(event.payload["approval_id"], "approved")
+
+    host._event_bus.subscribe(approve)
+    inputs = {"model": {"messages": [messages.ChatMessage.from_user("inert")]}}
+    task = await host.start_native(
+        job.id,
+        family="haystack",
+        target=HaystackTarget(pipeline, trust),
+        invoke=lambda: pipeline.run_async(inputs) if asynchronous else pipeline.run(inputs),
+        synchronous=not asynchronous,
+    )
+    try:
+        result = await task
+        assert len(result["model"]["replies"]) == 2 and len(requests) == 1
+        receipts = [event for event in await events_for(host, job.id) if event.kind == "execution.native.usage"]
+        assert len(receipts) == int(usage != "missing")
+        if receipts:
+            assert receipts[0].payload["operation_id"] == "actual-native-completion"
+            assert {amount["unit"]: amount["amount"] for amount in receipts[0].payload["usage"]} == {
+                "input_tokens": "3" if usage == "positive" else "0",
+                "output_tokens": "0",
+            }
+            assert all(
+                amount["model"] == "fixture-model" and amount["producer"] == "haystack"
+                for amount in receipts[0].payload["usage"]
+            )
+        assert generator._prepare_api_call == original
+        assert (await governance._ledger.job_totals(job.id)).executed_calls == 1
+    finally:
+        await asyncio.gather(task, return_exceptions=True)
+        if generator.client is not None:
+            generator.client.close()
+        if generator.async_client is not None:
+            await generator.async_client.close()
+
+
+@pytest.mark.parametrize("value", [True, -1, "3"])
+def test_haystack_usage_rejects_untyped_or_invalid_supplied_counts(value):
+    from backend.services.adapters.contracts import ExecutionIdentity
+    from backend.services.adapters.native_gates.usage import result_usage
+
+    identity = ExecutionIdentity("job", "binding", "epoch", "token")
+    raw = {"meta": {"usage": {"prompt_tokens": value}}}
+    assert result_usage("haystack", raw, identity) == ()
+    message = load_sdk("haystack.dataclasses").ChatMessage.from_assistant("inert", meta=raw["meta"])
+    with pytest.raises(ValueError, match="Invalid native client usage"):
+        result_usage("haystack", message, identity)
+
+
+async def test_component_supplied_usage_without_response_identity_stays_local_and_uncorrelated(composed_runtime):
+    host, approvals, _, create = composed_runtime
+    job = await create()
+    message = load_sdk("haystack.dataclasses").ChatMessage.from_assistant(
+        "inert", meta={"model": "fixture-model", "usage": {"prompt_tokens": 2, "completion_tokens": 0}}
+    )
+
+    @sdk.component
+    class InertMessages:
+        @sdk.component.output_types(replies=list)
+        def run(self):
+            return {"replies": [message]}
+
+    pipeline = sdk.Pipeline()
+    pipeline.add_component("supplied", InertMessages())
+    trust = TrustedPipeline()
+    trust.add_component("supplied", trust_score=0.9)
+
+    async def approve(event):
+        if event.kind == "permission.requested":
+            await approvals.resolve(event.payload["approval_id"], "approved")
+
+    host._event_bus.subscribe(approve)
+    task = await host.start_native(
+        job.id,
+        family="haystack",
+        target=HaystackTarget(pipeline, trust),
+        invoke=lambda: pipeline.run({}),
+        synchronous=True,
+    )
+    await task
+    events = await events_for(host, job.id)
+    assert not any(event.kind == "execution.native.usage" for event in events)
+    observed = next(
+        event
+        for event in events
+        if event.kind == "tool.call.completed" and event.metadata.integration_binding_id is not None
+    )
+    assert observed.payload["usage_correlation"] == "unresolved"
+    assert {amount["unit"]: amount["amount"] for amount in observed.payload["reported_usage"][0]["usage"]} == {
+        "input_tokens": "2",
+        "output_tokens": "0",
+    }

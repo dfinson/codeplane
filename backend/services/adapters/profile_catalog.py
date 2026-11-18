@@ -323,7 +323,11 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                 usage_units=sorted(managed.usage_units)
                 if managed
                 else (
-                    ["input_tokens", "output_tokens"] if profile.id == "generic-otel" or profile.id in _CLIENTS else []
+                    ["input_tokens", "output_tokens", "cache_read_tokens"]
+                    if profile.id in {"swarm", "haystack"}
+                    else ["input_tokens", "output_tokens"]
+                    if profile.id == "generic-otel" or profile.id in _CLIENTS
+                    else []
                 ),
                 utility_completion=managed.utility if managed else False,
                 operations=operations,
