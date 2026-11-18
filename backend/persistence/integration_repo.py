@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert
 
 from backend.models.db import IntegrationBindingRow, IntegrationProjectionCheckpointRow, IntegrationSourceCheckpointRow
 from backend.models.domain import StateConflictError
-from backend.persistence.event_repo import EventRepository
+from backend.persistence.event_repo import EventRepository, ObservationProjectionReference
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -209,6 +209,11 @@ class IntegrationRepository(BaseRepository):
 
     async def accepted_batch(self, receipt_id: str) -> SessionEvent | None:
         return await EventRepository(self._session).get(receipt_id)
+
+    async def first_observed_completions(
+        self, job_id: str, binding_id: str, operation_ids: list[str]
+    ) -> dict[str, ObservationProjectionReference]:
+        return await EventRepository(self._session).first_observed_completions(job_id, binding_id, operation_ids)
 
     async def projection(self, binding_id: str) -> ProjectionCheckpoint | None:
         row = await self._session.get(IntegrationProjectionCheckpointRow, binding_id)

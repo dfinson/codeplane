@@ -3,7 +3,7 @@
 import sqlite3
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from sqlalchemy.exc import OperationalError
 
 from backend.config import CPLConfig
@@ -16,6 +16,7 @@ from backend.models.api_schemas import (
     ObservationRecordBatch,
     ObservationRecordReceipt,
     OtlpExportResponse,
+    OtlpTraceRequest,
     RegisterObservationRequest,
 )
 from backend.models.domain import StateConflictError
@@ -62,18 +63,26 @@ async def revoke_ingest_credential(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-@router.post("/{binding_id}/traces", response_model=OtlpExportResponse)
+@router.post(
+    "/{binding_id}/traces",
+    response_model=OtlpExportResponse,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": OtlpTraceRequest.model_json_schema()}},
+        },
+    },
+)
 async def ingest_traces(
     binding_id: str,
     request: Request,
     bindings: FromDishka[IntegrationRepository],
     config: FromDishka[CPLConfig],
     service: FromDishka[ObservationRecords],
+    ingest_token: str | None = Header(default=None, alias=INGEST_TOKEN_HEADER),
 ) -> OtlpExportResponse:
     try:
-        authorization = await IngestCredentials(bindings, config).authorize(
-            binding_id, request.headers.get(INGEST_TOKEN_HEADER)
-        )
+        authorization = await IngestCredentials(bindings, config).authorize(binding_id, ingest_token)
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
             raise HTTPException(status_code=415, detail="Only OTLP HTTP/JSON is currently implemented")
         await service.append_otlp(binding_id, await request.body(), authorization=authorization)

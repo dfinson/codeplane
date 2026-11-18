@@ -69,6 +69,12 @@ class OtlpExportResponse(CamelModel):
     """Empty successful OTLP ExportTraceServiceResponse (no partial acceptance)."""
 
 
+class OtlpTraceRequest(CamelModel):
+    """OTLP JSON envelope. Typed attributes/spans are validated by the bounded codec."""
+
+    resource_spans: list[dict[str, Any]]
+
+
 class IntegrationDependencyReadiness(CamelModel):
     ready: bool
     reason: str | None = None

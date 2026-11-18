@@ -1,6 +1,7 @@
 """Persistence for per-call telemetry span detail rows.
 
-Append-only: one row per LLM call or tool call.  Used for per-job drill-down
+One row per LLM call or tool operation. Observed operation revisions update this
+read projection while their canonical source events remain immutable. Used for per-job drill-down
 (tool breakdown table, LLM call timeline) and cross-job analytics (tool
 failure rates, latency percentiles).
 """
@@ -26,7 +27,27 @@ if TYPE_CHECKING:
 
 
 class TelemetrySpansRepository(BaseRepository):
-    """Append-only insert of individual LLM/tool call spans."""
+    """Individual call spans and source-qualified observed-operation projections."""
+
+    async def observed_tool(self, job_id: str, operation_id: str) -> dict[str, Any] | None:
+        result = await self._session.execute(
+            text("""
+                SELECT id, attrs_json, duration_ms FROM job_telemetry_spans
+                WHERE job_id = :job_id AND session_kind = 'job' AND span_type = 'tool'
+                  AND json_extract(attrs_json, '$.observation_operation_id') = :operation_id
+                LIMIT 1
+            """),
+            {"job_id": job_id, "operation_id": operation_id},
+        )
+        row = result.mappings().first()
+        return {**row, "attrs": json.loads(row["attrs_json"])} if row is not None else None
+
+    async def update_observed_tool(self, span_id: int, *, attrs: dict[str, Any], duration_ms: float) -> None:
+        await self._session.execute(
+            text("UPDATE job_telemetry_spans SET attrs_json = :attrs, duration_ms = :duration WHERE id = :id"),
+            {"id": span_id, "attrs": json.dumps(attrs), "duration": duration_ms},
+        )
+        await self._session.flush()
 
     async def insert(
         self,
@@ -236,7 +257,10 @@ class TelemetrySpansRepository(BaseRepository):
                     SUM(duration_ms) as total_duration_ms,
                     SUM(CASE WHEN json_extract(attrs_json, '$.success') = 0
                              OR json_extract(attrs_json, '$.success') = 'false'
-                        THEN 1 ELSE 0 END) as failure_count
+                        THEN 1 ELSE 0 END) as failure_count,
+                    SUM(CASE WHEN json_extract(attrs_json, '$.observation_operation_id') IS NOT NULL
+                              AND json_type(attrs_json, '$.success') = 'null'
+                        THEN 1 ELSE 0 END) as unknown_count
                 FROM job_telemetry_spans
                 WHERE span_type = 'tool'
                     AND created_at >= datetime('now', '-{int(period_days)} days')

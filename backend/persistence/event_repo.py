@@ -22,6 +22,20 @@ class StoredEvent:
     event: SessionEvent
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationProjectionReference:
+    event_id: str
+    step_id: str | None
+    step_number: int | None
+    turn_id: str | None
+
+    @classmethod
+    def from_event(cls, event: SessionEvent) -> ObservationProjectionReference:
+        return cls(
+            event.id, event.payload.get("step_id"), event.payload.get("step_number"), event.payload.get("turn_id")
+        )
+
+
 class EventRepository(BaseRepository):
     """Raw event persistence. Direct consumers: RuntimeService, TrailService,
     RuntimeTelemetry (log lines). All other services must use
@@ -99,6 +113,41 @@ class EventRepository(BaseRepository):
         result = await self._session.execute(select(EventRow).where(EventRow.event_id == event_id))
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row is not None else None
+
+    async def first_observed_completions(
+        self, job_id: str, binding_id: str, operation_ids: list[str]
+    ) -> dict[str, ObservationProjectionReference]:
+        """Bounded lookups over retained canonical history, not a lifetime-sized cache."""
+        found = {}
+        operation = func.json_extract(EventRow.payload, "$._codeplane_observation.operation_id")
+        for offset in range(0, len(operation_ids), 128):
+            first = (
+                select(func.min(EventRow.id))
+                .where(
+                    EventRow.job_id == job_id,
+                    EventRow.kind.in_((EventKind.tool_call_completed.value, EventKind.tool_call_failed.value)),
+                    func.json_extract(EventRow.event_metadata, "$.integration_binding_id") == binding_id,
+                    operation.in_(operation_ids[offset : offset + 128]),
+                )
+                .group_by(operation)
+            )
+            rows = await self._session.execute(
+                select(
+                    EventRow.event_id,
+                    operation.label("operation"),
+                    func.json_extract(EventRow.payload, "$.step_id").label("step_id"),
+                    func.json_extract(EventRow.payload, "$.step_number").label("step_number"),
+                    func.json_extract(EventRow.payload, "$.turn_id").label("turn_id"),
+                ).where(EventRow.id.in_(first))
+            )
+            for row in rows.mappings():
+                found[row["operation"]] = ObservationProjectionReference(
+                    row["event_id"],
+                    row["step_id"],
+                    row["step_number"],
+                    row["turn_id"],
+                )
+        return found
 
     async def list_after(
         self,
