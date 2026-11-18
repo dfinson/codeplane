@@ -230,7 +230,13 @@ def _access_only_process_fixture():
             )
             return child
 
-        rh.subprocess.Popen = replacement
+        # Keep listener-owner probes on the real subprocess module.
+        rh.subprocess = SimpleNamespace(
+            Popen=replacement,
+            PIPE=subprocess.PIPE,
+            DEVNULL=subprocess.DEVNULL,
+            TimeoutExpired=subprocess.TimeoutExpired,
+        )
         rh.probe_remote_origin = lambda *_: None
         code = rh.run_helper(paths.pending)
         write_json_atomic(Path(config["home"]) / "helper-result.json", {"code": code})
