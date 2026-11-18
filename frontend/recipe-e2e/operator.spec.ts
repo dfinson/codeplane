@@ -61,10 +61,14 @@ async function stopServer() {
 
 test.afterAll(async () => {
   await stopServer();
-  await test.info().attach("fixture-server.log", { body: output, contentType: "text/plain" });
-  if (directory) await test.info().attach("git-events.jsonl", {
-    body: await readFile(path.join(directory, "git-events.jsonl")), contentType: "application/jsonl",
-  });
+  const serverLog = test.info().outputPath("fixture-server.log");
+  await writeFile(serverLog, output);
+  await test.info().attach("fixture-server.log", { path: serverLog, contentType: "text/plain" });
+  if (directory) {
+    const gitLog = test.info().outputPath("git-events.jsonl");
+    await writeFile(gitLog, await readFile(path.join(directory, "git-events.jsonl")));
+    await test.info().attach("git-events.jsonl", { path: gitLog, contentType: "application/jsonl" });
+  }
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
