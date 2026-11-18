@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__get"];
+        get: operations["preview_proxy_api_preview__port___path__delete"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__get"];
+        put: operations["preview_proxy_api_preview__port___path__delete"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__get"];
+        post: operations["preview_proxy_api_preview__port___path__delete"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__get"];
+        delete: operations["preview_proxy_api_preview__port___path__delete"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__get"];
+        head: operations["preview_proxy_api_preview__port___path__delete"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__get"];
+        patch: operations["preview_proxy_api_preview__port___path__delete"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -3176,6 +3176,58 @@ export interface paths {
         get: operations["list_recipe_revisions_api_recipes__definition_id__revisions_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Integration Profiles */
+        get: operations["list_integration_profiles_api_integrations_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/ingest-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue Ingest Credential */
+        post: operations["issue_ingest_credential_api_integrations__binding_id__ingest_credential_post"];
+        /** Revoke Ingest Credential */
+        delete: operations["revoke_ingest_credential_api_integrations__binding_id__ingest_credential_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Traces */
+        post: operations["ingest_traces_api_integrations__binding_id__traces_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4990,6 +5042,129 @@ export interface components {
             /** Why */
             why: string;
         };
+        /** IntegrationDependencyReadiness */
+        IntegrationDependencyReadiness: {
+            /** Ready */
+            ready: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Installedversion */
+            installedVersion?: string | null;
+        };
+        /** IntegrationOperation */
+        IntegrationOperation: {
+            /** Id */
+            id: string;
+            /**
+             * Supported
+             * @default true
+             */
+            supported: boolean;
+            /** Implemented */
+            implemented: boolean;
+            /** Producer */
+            producer?: string | null;
+            dependency: components["schemas"]["IntegrationDependencyReadiness"];
+            /**
+             * Validationstatus
+             * @default not-qualified
+             * @enum {string}
+             */
+            validationStatus: "not-qualified" | "local-fixture-qualified";
+            /** Evidence */
+            evidence?: string[];
+            /** Limitations */
+            limitations?: string[];
+        };
+        /** IntegrationProfileList */
+        IntegrationProfileList: {
+            /** Specificationsha256 */
+            specificationSha256: string;
+            /** Profiles */
+            profiles: components["schemas"]["IntegrationProfileResponse"][];
+        };
+        /** IntegrationProfileResponse */
+        IntegrationProfileResponse: {
+            /** Profileid */
+            profileId: string;
+            /** Name */
+            name: string;
+            /** Adapterid */
+            adapterId: string | null;
+            /** Providerfamily */
+            providerFamily: string;
+            /** Acceptancekind */
+            acceptanceKind: string;
+            /**
+             * Descriptorversion
+             * @default 1
+             */
+            descriptorVersion: number;
+            /** Supportedversions */
+            supportedVersions: string[];
+            /** Nativeformats */
+            nativeFormats: {
+                [key: string]: string;
+            };
+            /** Hooks */
+            hooks: string[];
+            /** Observationchannels */
+            observationChannels: string[];
+            /** Declaredownership */
+            declaredOwnership: string;
+            /** Declaredsteering */
+            declaredSteering: string;
+            /** Declaredcancellation */
+            declaredCancellation: string;
+            /** Declaredinterception */
+            declaredInterception: string;
+            /** Identitysources */
+            identitySources: string[];
+            /** Usageunits */
+            usageUnits: string[];
+            /** Utilitycompletion */
+            utilityCompletion: boolean;
+            /** Operations */
+            operations: components["schemas"]["IntegrationOperation"][];
+            /** Admissionenabled */
+            admissionEnabled: boolean;
+            /** Bindingenabled */
+            bindingEnabled?: boolean | null;
+            /**
+             * Liveready
+             * @default false
+             */
+            liveReady: boolean;
+            /**
+             * Livereadinessreason
+             * @default Discovery supplies no live binding identity or capability acknowledgment
+             */
+            liveReadinessReason: string;
+            /** Historicalimportavailable */
+            historicalImportAvailable: boolean;
+            /** Sourcereference */
+            sourceReference: string;
+        };
+        /** IssueIngestCredentialRequest */
+        IssueIngestCredentialRequest: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+        };
+        /** IssuedIngestCredential */
+        IssuedIngestCredential: {
+            /** Token */
+            token: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Header
+             * @default x-codeplane-ingest-token
+             */
+            header: string;
+        };
         /** JobContextFlag */
         JobContextFlag: {
             /** Type */
@@ -6067,6 +6242,11 @@ export interface components {
              */
             observations: components["schemas"]["ObservationEntry"][];
         };
+        /**
+         * OtlpExportResponse
+         * @description Empty successful OTLP ExportTraceServiceResponse (no partial acceptance).
+         */
+        OtlpExportResponse: Record<string, never>;
         /** OutcomeMatrixCell */
         OutcomeMatrixCell: {
             /**
@@ -13002,7 +13182,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13032,7 +13212,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13062,7 +13242,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13092,7 +13272,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13122,7 +13302,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -13152,7 +13332,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__get: {
+    preview_proxy_api_preview__port___path__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -15599,6 +15779,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeRevisionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_integration_profiles_api_integrations_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProfileList"];
+                };
+            };
+        };
+    };
+    issue_ingest_credential_api_integrations__binding_id__ingest_credential_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueIngestCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedIngestCredential"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ingest_credential_api_integrations__binding_id__ingest_credential_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_traces_api_integrations__binding_id__traces_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-codeplane-ingest-token"?: string | null;
+            };
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Resourcespans */
+                    resourceSpans: {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OtlpExportResponse"];
                 };
             };
             /** @description Validation Error */
