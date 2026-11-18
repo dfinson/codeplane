@@ -171,7 +171,7 @@ def test_candidate_is_synced_and_closed_before_atomic_publication(tmp_path, monk
         nonlocal stream_ref, written_bytes
         stream_ref = stream
         original_dump(keys, stream, **kwargs)
-        written_bytes = len(json.dumps(keys, **kwargs).encode())
+        written_bytes = len(json.dumps(keys, **kwargs).replace("\n", os.linesep).encode("utf-8"))
         order.append("write")
 
     def sync(fd):
