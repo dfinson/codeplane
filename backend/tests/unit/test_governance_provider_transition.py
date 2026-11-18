@@ -140,7 +140,7 @@ async def test_populated_same_database_forward_cycle_preserves_evidence(
     composed_runtime, tmp_path, monkeypatch, continue_before_selection
 ):
     host, approvals, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
     await create("legacy-job")
     await root.close()
@@ -266,7 +266,7 @@ async def test_partial_retained_accounting_reconciles_without_repeating_business
     from types import SimpleNamespace
 
     host, _, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
     try:
         root = await _retained_root(host, root, tmp_path, roots)
@@ -325,7 +325,7 @@ async def test_unowned_retained_changes_never_activate_a_replacement_writer(
     composed_runtime, tmp_path, monkeypatch, change
 ):
     host, _, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
     try:
         root = await _retained_root(host, root, tmp_path, roots)
@@ -406,7 +406,7 @@ async def test_unavailable_optional_retained_distribution_does_not_break_standal
     from backend.services.runtime import contract_catalog
 
     host, _, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     actual = contract_catalog.distribution
 
     def distribution(name):
@@ -434,7 +434,7 @@ async def test_unavailable_selected_or_preserved_retained_pin_never_falls_back(
     from backend.services.action_policy import production
 
     host, _, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
     try:
         root = await _retained_root(host, root, tmp_path, roots)
@@ -469,7 +469,7 @@ async def test_incompatible_native_admission_does_not_persist_provider_pin_or_st
     composed_runtime, tmp_path, monkeypatch
 ):
     host, _, root, create = composed_runtime
-    roots = []
+    roots: list[StandaloneGovernance] = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
     try:
         root = await _retained_root(host, root, tmp_path, roots)
