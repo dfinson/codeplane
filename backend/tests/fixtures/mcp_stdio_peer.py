@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 server = FastMCP("CodePlane stdio qualification")
 record = Path(os.environ["CODEPLANE_MCP_FIXTURE_RECORD"])
+counter = 0
 
 
 def append(kind: str, **fields: object) -> None:
@@ -18,7 +19,11 @@ def append(kind: str, **fields: object) -> None:
 
 @server.tool()
 async def read_value(value: str, ctx: Context) -> str:
+    global counter
     append("entered", value=value, request_id=str(ctx.request_id))
+    if value == "counter":
+        counter += 1
+        return str(counter)
     if value == "wait":
         try:
             await asyncio.Event().wait()
@@ -28,5 +33,5 @@ async def read_value(value: str, ctx: Context) -> str:
 
 
 if __name__ == "__main__":
-    append("started")
+    append("started", process_id=os.getpid())
     server.run(transport="stdio")

@@ -237,6 +237,9 @@ def _operation(
                 "Server caller identity requires a pinned signature over exact binding, epoch, request and arguments"
             )
             limitations.append("Runtime revocation fences requests; the caller retains host process lifecycle")
+            limitations.append(
+                "Each client tool operation owns its transport; process-local state is not retained between calls"
+            )
         else:
             limitations.append("Task input requires a source-confirmed input-required task/context")
             limitations.append(

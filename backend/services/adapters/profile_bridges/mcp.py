@@ -35,6 +35,7 @@ from starlette.requests import Request
 
 from backend.services.adapters.ai_card import verify_card
 from backend.services.adapters.native_gates.binding import NativeCall, NativeGateDeniedError, encode_arguments
+from backend.services.adapters.native_gates.observation_scope import native_execution_context
 from backend.services.ingest.mapping import canonical_record
 from backend.services.ingest.otel_decoder import decode_json_body
 
@@ -494,13 +495,13 @@ def _install_server(gate: GateAttachment, target: McpServerTarget) -> None:
         native = native_tool(name)
         request = context.request_context.request
         protocol_session = request.headers.get("mcp-session-id") if isinstance(request, Request) else None
-        validated = native.fn_metadata.arg_model.model_validate(payload).model_dump(mode="json")
+        validated = native.fn_metadata.arg_model.model_validate(payload).model_dump(mode="json", by_alias=True)
 
         def exact_entry(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
             bound = signatures[name].bind(*args, **kwargs)
             bound.apply_defaults()
             actual = {key: value for key, value in bound.arguments.items() if key != native.context_kwarg}
-            return canonical_record(to_jsonable_python(actual)) == canonical_record(validated)
+            return canonical_record(to_jsonable_python(actual, by_alias=True)) == canonical_record(validated)
 
         call = NativeCall(
             f"mcp.{name}",
@@ -514,6 +515,7 @@ def _install_server(gate: GateAttachment, target: McpServerTarget) -> None:
             raise NativeGateDeniedError("MCP handler denied before invocation")
         verify_peer()
         token = invocation.set((context, convert_result))
+        observation_token = native_execution_context.set(gate.binding.execution)
 
         async def invoke() -> Any:
             gate.binding.observe(
@@ -556,22 +558,25 @@ def _install_server(gate: GateAttachment, target: McpServerTarget) -> None:
             return result
         finally:
             invocation.reset(token)
-            gate.binding.observe(
-                {
-                    "type": "tool_completed" if success else "tool_failed",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "operation_id": call.operation_id,
-                    "request_id": str(context.request_id),
-                    "tool": name,
-                    "peer_did": did,
-                    "protocol_session_id": protocol_session,
-                    "schema_sha256": hashlib.sha256(canonical_record(schemas[name])).hexdigest(),
-                    "outcome": outcome,
-                    "success": success,
-                    "result": to_jsonable_python(operation.result()) if success else None,
-                    "tool_call_id_source": "codeplane-operation; native request_id retained separately",
-                }
-            )
+            try:
+                gate.binding.observe(
+                    {
+                        "type": "tool_completed" if success else "tool_failed",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "operation_id": call.operation_id,
+                        "request_id": str(context.request_id),
+                        "tool": name,
+                        "peer_did": did,
+                        "protocol_session_id": protocol_session,
+                        "schema_sha256": hashlib.sha256(canonical_record(schemas[name])).hexdigest(),
+                        "outcome": outcome,
+                        "success": success,
+                        "result": to_jsonable_python(operation.result()) if success else None,
+                        "tool_call_id_source": "codeplane-operation; native request_id retained separately",
+                    }
+                )
+            finally:
+                native_execution_context.reset(observation_token)
 
     gate.patch(manager, "call_tool", dispatch)
     gate.patch(target, "authority_scope", authority_scope)

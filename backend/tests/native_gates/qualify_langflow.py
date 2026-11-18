@@ -68,6 +68,57 @@ class DelegatedInertComponent(InertComponent):
         return f"{self.value}:handled"
 
 
+class NativeValuesComponent(Component):
+    display_name = "Native message and data"
+    inputs = [load_sdk("lfx.io").MessageInput(name="message"), load_sdk("lfx.io").DataInput(name="payload")]
+    outputs = [Output(name="result", display_name="Result", method="produce")]
+
+    def produce(self) -> str:
+        self.seen.append((self.message, self.payload))
+        return f"{self.message.get_text()}:{self.payload.get_text()}"
+
+
+@pytest.mark.parametrize("outcome", ["allow", "mutate-message", "mutate-data"])
+async def test_real_langflow_native_values_are_pinned_without_replacing_objects(composed_runtime, outcome):
+    host, approvals, _, create = composed_runtime
+    job = await create()
+    component = NativeValuesComponent()
+    component.seen = []
+    component.set(
+        message=load_sdk("lfx.schema.message").Message(text="native-message"),
+        payload=load_sdk("lfx.schema.data").Data(data={"text": "native-data"}),
+    )
+    graph = Graph(start=component, end=component, flow_id="native-value-flow")
+    trust = TrustGatedFlow()
+    trust.register_node(component.get_id(), trust_score=0.9)
+    approved = []
+
+    async def approve(event):
+        if event.kind == "permission.requested":
+            approved.append((component.message, component.payload))
+            if outcome == "mutate-message":
+                component.message.text = "changed"
+            elif outcome == "mutate-data":
+                component.payload.data["text"] = "changed"
+            await approvals.resolve(event.payload["approval_id"], "approved")
+
+    host._event_bus.subscribe(approve)
+
+    async def invoke():
+        return [result async for result in graph.async_start()]
+
+    task = await host.start_native(job.id, family="langflow", target=LangflowTarget(graph, trust), invoke=invoke)
+    if outcome == "allow":
+        await task
+        assert component._outputs_map["result"].value == "native-message:native-data"
+        assert component.seen[0][0] is approved[0][0] and component.seen[0][1] is approved[0][1]
+    else:
+        with pytest.raises(Exception, match="changed|denied"):
+            await task
+        assert component.seen == []
+    assert len(approved) == 1
+
+
 @pytest.mark.parametrize("outcome", ["allow", "deny", "untrusted", "error", "cancel", "mutated", "selector-change"])
 @pytest.mark.parametrize("component_type", [InertComponent, AsyncInertComponent, DelegatedInertComponent])
 async def test_real_langflow_graph_connection_and_handler(composed_runtime, outcome, component_type):

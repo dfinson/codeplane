@@ -22,6 +22,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.shared.exceptions import McpError
 from sse_starlette.sse import AppStatus, _get_shutdown_state
 
+from backend.services.adapters.native_gates.observation_scope import native_execution_context
 from backend.services.adapters.profile_bridges.mcp import McpCallerAuthority, McpServerTarget, McpTarget
 from backend.services.ingest.mapping import canonical_record
 from backend.tests.native_gates.qualify_runtime_integration import composed_runtime as composed_runtime
@@ -51,7 +52,7 @@ def card(identity, endpoint):
     return value.model_dump_json().encode()
 
 
-@pytest.mark.parametrize("outcome", ["allow", "deny", "extra-argument", "cancel"])
+@pytest.mark.parametrize("outcome", ["allow", "deny", "extra-argument", "cancel", "operation-lifetime"])
 async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(composed_runtime, tmp_path, outcome):
     host, approvals, governance, create = composed_runtime
     job = await create()
@@ -88,9 +89,13 @@ async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(co
     payload = {"value": "wait" if outcome == "cancel" else "inert"}
     if outcome == "extra-argument":
         payload["extra"] = "must-not-be-dropped"
-    task = await host.start_native(
-        job.id, family="mcp", target=target, invoke=lambda: target.call_tool("read_value", payload)
-    )
+
+    async def invoke():
+        if outcome == "operation-lifetime":
+            return [await target.call_tool("read_value", {"value": "counter"}) for _ in range(2)]
+        return await target.call_tool("read_value", payload)
+
+    task = await host.start_native(job.id, family="mcp", target=target, invoke=invoke)
     try:
         if outcome == "cancel":
             async with asyncio.timeout(10):
@@ -109,6 +114,8 @@ async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(co
                 await task
             assert type(rejected.value).__name__ in {"NativeGateDeniedError", "ValidationError"}
             assert not record.exists()
+        elif outcome == "operation-lifetime":
+            assert [result.content[0].text for result in await task] == ["1", "1"]
         else:
             result = await task
             assert not result.isError and result.content[0].text == "inert"
@@ -119,12 +126,16 @@ async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(co
             assert rows[1]["kind"] == "entered"
             if outcome == "cancel":
                 assert rows[-1]["kind"] == "cancelled"
+        if outcome == "operation-lifetime":
+            assert len({row["process_id"] for row in rows if row["kind"] == "started"}) == 2
+            assert len({item.operation_id for item in observations}) == 2
         observed = [
             event for event in await events_for(host, job.id) if event.metadata.integration_binding_id is not None
         ]
         if outcome == "allow":
             assert any(event.kind == "tool.call.completed" for event in observed)
-        assert (await governance._ledger.job_totals(job.id)).executed_calls == int(outcome == "allow")
+        expected_calls = 2 if outcome == "operation-lifetime" else int(outcome == "allow")
+        assert (await governance._ledger.job_totals(job.id)).executed_calls == expected_calls
     finally:
         if not task.done():
             task.cancel()
@@ -149,6 +160,9 @@ async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(co
             "cancel",
             "client-bridge",
             "handler-error",
+            "json-parameter",
+            "existing-host",
+            "existing-thread",
         )
     ]
     + [(True, outcome) for outcome in ("allow", "deny", "cancel")],
@@ -156,11 +170,27 @@ async def test_real_stdio_operation_uses_runtime_gate_and_native_cancellation(co
 async def test_real_mcp_server_requires_scoped_identity_before_native_handler(composed_runtime, synchronous, outcome):
     host, approvals, governance, create = composed_runtime
     job = await create()
-    peer = FastMCP("trusted actual server", json_response=True)
+    restored_scopes = []
+
+    class CheckedHost(FastMCP):
+        async def call_tool(self, name, arguments):
+            previous = native_execution_context.get()
+            try:
+                return await super().call_tool(name, arguments)
+            finally:
+                restored_scopes.append((previous, native_execution_context.get()))
+
+    peer = CheckedHost("trusted actual server", json_response=True)
     called, decisions = [], []
     entered, finished, release = threading.Event(), threading.Event(), threading.Event()
 
-    if synchronous:
+    if outcome == "json-parameter":
+
+        @peer.tool()
+        async def read_value(json: str, ctx: Context) -> str:
+            called.append((json, str(ctx.request_id)))
+            return json
+    elif synchronous:
 
         @peer.tool()
         def read_value(value: str, ctx: Context) -> str:
@@ -211,7 +241,7 @@ async def test_real_mcp_server_requires_scoped_identity_before_native_handler(co
     previous_exit = AppStatus.should_exit
     AppStatus.should_exit = False
     server = uvicorn.Server(uvicorn.Config(peer.streamable_http_app(), log_level="warning"))
-    ready = asyncio.Event()
+    ready, admitted = threading.Event(), asyncio.Event()
 
     async def approve(event):
         if event.kind == "permission.requested":
@@ -226,10 +256,25 @@ async def test_real_mcp_server_requires_scoped_identity_before_native_handler(co
         ready.set()
         await server.serve(sockets=[listener])
 
-    task = await host.start_native(job.id, family="mcp", target=target, invoke=serve)
+    existing = asyncio.create_task(serve()) if outcome == "existing-host" else None
+    thread = threading.Thread(target=lambda: asyncio.run(serve())) if outcome == "existing-thread" else None
+    if thread is not None:
+        thread.start()
+
+    async def own_server():
+        admitted.set()
+        if existing is not None:
+            await existing
+        elif thread is not None:
+            await asyncio.to_thread(thread.join)
+        else:
+            await serve()
+
+    task = await host.start_native(job.id, family="mcp", target=target, invoke=own_server)
     try:
         async with asyncio.timeout(10):
-            await ready.wait()
+            await admitted.wait()
+            assert await asyncio.to_thread(ready.wait, 5)
             while not server.started:
                 if task.done():
                     await task
@@ -241,7 +286,7 @@ async def test_real_mcp_server_requires_scoped_identity_before_native_handler(co
             ClientSession(read, write) as session,
         ):
             await session.initialize()
-            payload = {"value": "wait" if outcome == "cancel" else "inert"}
+            payload = {"json" if outcome == "json-parameter" else "value": "wait" if outcome == "cancel" else "inert"}
             if outcome == "extra-argument":
                 payload["extra"] = "not-allowed"
             proof = authority.proof(endpoint, "read_value", payload, str(session._request_id))
@@ -292,13 +337,35 @@ async def test_real_mcp_server_requires_scoped_identity_before_native_handler(co
                 assert await asyncio.to_thread(finished.wait, 5)
             else:
                 result = await pending
-                assert result.isError is (outcome not in {"allow", "replay", "client-bridge"})
+                assert result.isError is (
+                    outcome
+                    not in {
+                        "allow",
+                        "replay",
+                        "client-bridge",
+                        "json-parameter",
+                        "existing-host",
+                        "existing-thread",
+                    }
+                )
                 assert "private-handler-secret" not in result.model_dump_json()
                 if outcome == "replay":
                     session._request_id = int(proof["request_id"])
                     replay = await session.call_tool("read_value", payload, meta=meta)
                     assert replay.isError
-            assert len(called) == int(outcome in {"allow", "replay", "cancel", "client-bridge", "handler-error"})
+            assert len(called) == int(
+                outcome
+                in {
+                    "allow",
+                    "replay",
+                    "cancel",
+                    "client-bridge",
+                    "handler-error",
+                    "json-parameter",
+                    "existing-host",
+                    "existing-thread",
+                }
+            )
             if called:
                 expected_id = client_observations[0].request_id if client_observations else proof["request_id"]
                 assert called[0][1] == expected_id
@@ -307,6 +374,9 @@ async def test_real_mcp_server_requires_scoped_identity_before_native_handler(co
         server.should_exit = True
         await task
         assert native_tool.fn is original and trust.audit_all_calls is True
+        assert restored_scopes and all(before == after for before, after in restored_scopes)
+        if outcome in {"existing-host", "existing-thread"}:
+            assert all(before is None for before, _ in restored_scopes)
         assert (await governance._ledger.job_totals(job.id)).executed_calls == len(called)
         observed = [
             event for event in await events_for(host, job.id) if event.metadata.integration_binding_id is not None
