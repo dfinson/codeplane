@@ -1,0 +1,58 @@
+framework: swarm
+framework_version: "swarm==0.1.0@6af0b4caf37dca4526dfd98e9fbd8ce36e7eeb22;openai==2.38.0"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  model_completed:
+    kind: llm.call.completed
+    payload:
+      agent_id: agent_id
+      model: response.model
+      response_id: response.id
+      input_tokens: response.usage.prompt_tokens
+      output_tokens: response.usage.completion_tokens
+      response: response
+  model_chunk:
+    kind: llm.stream.chunk
+    payload:
+      agent_id: agent_id
+      model: response.model
+      response_id: response.id
+      input_tokens: response.usage.prompt_tokens
+      output_tokens: response.usage.completion_tokens
+      response: response
+  tool_started:
+    kind: tool.call.started
+    payload:
+      agent_id: agent_id
+      operation_id: operation_id
+      tool_call_id: tool_call_id
+      tool_name: tool_name
+      arguments: arguments
+  tool_completed:
+    kind: tool.call.completed
+    payload:
+      agent_id: agent_id
+      operation_id: operation_id
+      tool_call_id: tool_call_id
+      tool_name: tool_name
+      result: result
+      success: success
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      agent_id: agent_id
+      operation_id: operation_id
+      tool_call_id: tool_call_id
+      tool_name: tool_name
+      error_type: error_type
+      success: success
+  handoff_verified:
+    kind: delegation.verified
+    payload:
+      operation_id: operation_id
+      source_agent: source_agent
+      target_agent: target_agent
+      source_did: source_did
+      target_did: target_did
