@@ -14,6 +14,8 @@ from backend.services.action_policy.session_policy import PermissionInvocation
 from backend.services.adapters.contracts import ExecutionIdentity, GateAction
 from backend.services.auth.permission_policy import PermissionRequest
 
+from .controls import NativeControls
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
@@ -71,6 +73,9 @@ class NativeBinding:
         is_current: Callable[[], Awaitable[bool]],
         is_current_inline: Callable[[], bool] | None = None,
         on_result: Callable[[NativeCall, bool | None, bool | None], Awaitable[None]] | None = None,
+        control_retained: Callable[[], Awaitable[bool]] | None = None,
+        control_cancel_requested: Callable[[], bool] | None = None,
+        on_control: Callable[[str, str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         if (
             not all((execution.job_id, execution.binding_id, execution.epoch, execution.execution_token, workspace))
@@ -102,6 +107,29 @@ class NativeBinding:
         self._work_changed = asyncio.Event()
         self._observation: Callable[[Mapping[str, Any]], None] | None = None
         self._usage: Callable[[str, object], Awaitable[None]] | None = None
+        self._control_retained = control_retained
+        self._control_cancel_requested = control_cancel_requested
+        self._on_control = on_control
+        self.controls = NativeControls(self)
+
+    async def require_control_retained(self) -> None:
+        if self._control_retained is None or not await self._control_retained():
+            raise StateError("Native control requires its retained execution and current pin")
+
+    async def control_receipt(self, operation_id: str, phase: str, payload: dict[str, Any]) -> None:
+        await self.require_control_retained()
+        if self._on_control is None:
+            raise StateError("Native control has no durable Runtime receipt path")
+        await self._on_control(operation_id, phase, payload)
+
+    async def require_control(self, permit: Any) -> None:
+        await self.controls.require(permit)
+
+    def control_stop_requested(self) -> bool:
+        return self._control_cancel_requested is not None and self._control_cancel_requested()
+
+    async def drain_controls(self) -> None:
+        await self.controls.drain()
 
     def observe(self, record: Mapping[str, Any]) -> None:
         if self._observation is None:
