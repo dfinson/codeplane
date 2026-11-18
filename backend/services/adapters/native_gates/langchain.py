@@ -8,20 +8,50 @@ from inspect import signature
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, ToolException
-
-from .binding import NativeCall, encode_arguments
+from ._optional import load_sdk
+from .binding import ExecutionEvidence, NativeCall, encode_arguments
 
 if TYPE_CHECKING:
+    from ._optional import LangChainTool
     from .installation import GateAttachment
 
+RunnableConfig = load_sdk("langchain_core.runnables").RunnableConfig
+_tools = load_sdk("langchain_core.tools")
+BaseTool, ToolException = _tools.BaseTool, _tools.ToolException
 
-def install(gate: GateAttachment, tool: BaseTool) -> None:
+
+def track_tool(gate: GateAttachment, tool: Any) -> None:
+    if any(
+        base.__module__ == "agentmesh.integrations.langchain.tools" and base.__name__ == "TrustVerifiedTool"
+        for base in type(tool).__mro__
+    ):
+        gate.track_callable(tool, "_inner_fn")
+    elif hasattr(tool, "func") or hasattr(tool, "coroutine"):
+        gate.track_callable(tool, "func")
+        gate.track_callable(tool, "coroutine")
+    else:
+        gate.track_callable(tool, "_run")
+        if type(tool)._arun is not BaseTool._arun:
+            gate.track_callable(tool, "_arun")
+
+
+def tool_identity(tool: Any) -> dict[str, object]:
+    return {
+        "target": id(tool),
+        "name": tool.name,
+        "description": tool.description,
+        "func": id(getattr(tool, "func", None)),
+        "coroutine": id(getattr(tool, "coroutine", None)),
+        "inner": id(getattr(tool, "_inner_fn", None)),
+    }
+
+
+def install(gate: GateAttachment, tool: LangChainTool) -> None:
     if not isinstance(tool, BaseTool):
         raise TypeError("LangChain gating requires the original BaseTool instance")
     call_id: ContextVar[str | None] = ContextVar("native_langchain_call", default=None)
     delegated: ContextVar[tuple[str, list[bool], Lock] | None] = ContextVar("native_langchain_delegation", default=None)
+    track_tool(gate, tool)
     original_run, original_arun = tool._run, tool._arun
 
     def call(args: tuple[Any, ...], kwargs: dict[str, Any], manager: Any) -> NativeCall:
@@ -32,6 +62,14 @@ def install(gate: GateAttachment, tool: BaseTool) -> None:
             str(manager.run_id) if manager else None,
             str(manager.parent_run_id) if manager and manager.parent_run_id else None,
             tool.description,
+            fingerprint=lambda: encode_arguments(
+                {
+                    **tool_identity(tool),
+                    "run_id": str(manager.run_id) if manager else None,
+                    "parent_id": str(manager.parent_run_id) if manager and manager.parent_run_id else None,
+                }
+            ),
+            evidence=ExecutionEvidence(False),
         )
 
     def forwarded(original: Any, kwargs: dict[str, Any], config: Any, manager: Any) -> dict[str, Any]:
@@ -43,7 +81,7 @@ def install(gate: GateAttachment, tool: BaseTool) -> None:
             values["run_manager"] = manager
         return values
 
-    def guarded_run(*args: Any, config: RunnableConfig | None = None, run_manager: Any = None, **kwargs: Any) -> Any:
+    def guarded_run(*args: Any, config: dict[str, Any] | None = None, run_manager: Any = None, **kwargs: Any) -> Any:
         native_call = call(args, kwargs, run_manager)
         permit = delegated.get()
         authorized = False
@@ -62,7 +100,7 @@ def install(gate: GateAttachment, tool: BaseTool) -> None:
         return invoke() if authorized else gate.complete_sync(native_call, invoke)
 
     async def guarded_arun(
-        *args: Any, config: RunnableConfig | None = None, run_manager: Any = None, **kwargs: Any
+        *args: Any, config: dict[str, Any] | None = None, run_manager: Any = None, **kwargs: Any
     ) -> Any:
         native_call = call(args, kwargs, run_manager)
         if not await gate.allow(native_call):

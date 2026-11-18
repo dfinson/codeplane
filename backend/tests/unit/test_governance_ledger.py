@@ -1,8 +1,11 @@
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
 
+from backend.models.domain import StateConflictError
 from backend.models.usage import UsageAmount
 from backend.persistence.governance_repo import GovernanceLedger
 
@@ -153,3 +156,109 @@ async def test_job_budget_retains_prior_epochs_and_uncertainty_after_restart(tmp
     assert current.budget_accountable
     empty = await restored.job_totals("new-job")
     assert empty.executed_calls == 0 and not empty.verified_usd_present
+
+
+async def test_admission_fence_survives_restart_and_cannot_be_released_by_a_stale_writer(tmp_path) -> None:
+    path = tmp_path / "governance.db"
+    ledger = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    await ledger.initialize()
+    await ledger.require_admission()
+    initial = await ledger.admission_state()
+    blocked = await ledger.set_admission_control(
+        expected_generation=initial.generation, blocked=True, reason="Provider transition is draining"
+    )
+    restored = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    await restored.initialize()
+    with pytest.raises(StateConflictError, match="draining"):
+        await restored.require_admission()
+    with pytest.raises(StateConflictError, match="generation changed"):
+        await restored.set_admission_control(
+            expected_generation=initial.generation, blocked=False, reason="Stale activation"
+        )
+    assert await restored.admission_state() == blocked
+    await restored.record_completion(
+        job_id="existing-job",
+        epoch="existing-epoch",
+        event_id="completion-during-drain",
+        tool_call_id="existing-call",
+        source_id="existing-session",
+        action_digest="accepted-before-fence",
+        executed=True,
+        succeeded=True,
+        destructive=False,
+    )
+    assert (await ledger.job_totals("existing-job")).executed_calls == 1
+    await restored.set_admission_control(
+        expected_generation=blocked.generation, blocked=False, reason="Drain and comparison verified"
+    )
+    await ledger.require_admission()
+
+
+async def test_uninitialized_admission_fence_does_not_create_or_assume_an_open_gate(tmp_path) -> None:
+    path = tmp_path / "missing.db"
+    ledger = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    with pytest.raises(StateConflictError, match="not been initialized"):
+        await ledger.require_admission()
+    assert not path.exists()
+
+
+async def test_native_callback_can_read_and_write_ledger_with_one_default_executor_worker(tmp_path) -> None:
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    ledger = GovernanceLedger(tmp_path / "governance.db", application_database=tmp_path / "data.db")
+    await ledger.initialize()
+
+    async def policy_work() -> int:
+        await ledger.require_admission()
+        await ledger.record_uncertainty("job", "epoch", "source", "needs-reconciliation")
+        return (await ledger.job_totals("job")).unaccounted
+
+    def native_callback() -> int:
+        return asyncio.run_coroutine_threadsafe(policy_work(), loop).result(timeout=2)
+
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(native_callback), timeout=3) == 1
+    finally:
+        await ledger.close()
+
+
+async def test_cancelled_waiter_and_close_drain_the_actual_sql_write_and_join_worker(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "governance.db"
+    ledger = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    await ledger.initialize()
+    entered, release = threading.Event(), threading.Event()
+    worker_ids: list[int] = []
+    write = ledger._record_uncertainty
+
+    def delayed(*args) -> None:
+        worker_ids.append(threading.get_ident())
+        entered.set()
+        assert release.wait(5)
+        write(*args)
+
+    monkeypatch.setattr(ledger, "_record_uncertainty", delayed)
+    pending = asyncio.create_task(ledger.record_uncertainty("job", "epoch", "source", "retained"))
+    async with asyncio.timeout(2):
+        while not entered.is_set():
+            await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    closing = asyncio.create_task(ledger.close())
+    try:
+        await asyncio.sleep(0)
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        with pytest.raises(RuntimeError, match="I/O is closed"):
+            await ledger.require_admission()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    assert not any(thread.ident in worker_ids and thread.is_alive() for thread in threading.enumerate())
+    restored = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    try:
+        assert (await restored.job_totals("job")).unaccounted == 1
+    finally:
+        await restored.close()

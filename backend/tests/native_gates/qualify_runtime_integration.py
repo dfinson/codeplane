@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.config import CPLConfig, RuntimeConfig
 from backend.models.db import Base, ProjectRow
 from backend.models.domain import ApprovalResolution, Job, JobState, StateConflictError
-from backend.models.events import EventKind
+from backend.models.events import EventKind, SessionEvent
+from backend.persistence import database
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.execution_contract_repo import ExecutionContractRepository
@@ -21,6 +22,7 @@ from backend.persistence.native_execution_repo import NativeExecutionRepository
 from backend.services.action_policy.production import StandaloneGovernance
 from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.integration_policy import IntegrationDisabledError
+from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.events.event_bus import EventBus
 from backend.services.git.git_service import GitService
 from backend.services.job.approval_service import ApprovalService
@@ -29,7 +31,8 @@ from backend.tests.native_gates.producers import make_producer
 
 
 @pytest.fixture
-async def composed_runtime(tmp_path):
+async def composed_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "_write_lock", asyncio.Lock())
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'data.db'}")
     sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as conn:
@@ -114,7 +117,7 @@ async def test_real_runtime_admission_authority_and_native_tool(family, composed
     job = await create()
     mode = family + ("-sync" if family in {"crewai", "smolagents"} else "-async")
     producer = make_producer(mode)
-    requested = asyncio.Queue()
+    requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
 
     async def on_event(event):
         if event.kind == EventKind.approval_requested:
@@ -228,7 +231,7 @@ async def test_cancel_retires_only_exact_native_approval(composed_runtime):
 
 
 async def test_sync_worker_is_retained_until_actual_completion(composed_runtime):
-    from langchain_core.tools import StructuredTool
+    tools = load_sdk("langchain_core.tools")
 
     host, approvals, _, create = composed_runtime
     job = await create()
@@ -240,8 +243,8 @@ async def test_sync_worker_is_retained_until_actual_completion(composed_runtime)
         assert release.wait(10)
         return "finished"
 
-    tool = StructuredTool.from_function(body)
-    requested = asyncio.Queue()
+    tool = tools.StructuredTool.from_function(body)
+    requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
 
     async def on_event(event):
         if event.kind == EventKind.approval_requested:
@@ -271,7 +274,7 @@ async def test_sync_worker_is_retained_until_actual_completion(composed_runtime)
 
 @pytest.mark.parametrize("resolution", [ApprovalResolution.approved, ApprovalResolution.rejected])
 async def test_real_failure_counts_once_and_denial_does_not_count(resolution, composed_runtime):
-    from langchain_core.tools import StructuredTool, ToolException
+    tools = load_sdk("langchain_core.tools")
 
     host, approvals, governance, create = composed_runtime
     job = await create()
@@ -282,8 +285,8 @@ async def test_real_failure_counts_once_and_denial_does_not_count(resolution, co
         calls.append(True)
         raise ValueError("native body failed")
 
-    tool = StructuredTool.from_function(failing)
-    requested = asyncio.Queue()
+    tool = tools.StructuredTool.from_function(failing)
+    requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
 
     async def on_event(event):
         if event.kind == EventKind.approval_requested:
@@ -295,7 +298,7 @@ async def test_real_failure_counts_once_and_denial_does_not_count(resolution, co
     )
     event = await asyncio.wait_for(requested.get(), 10)
     await approvals.resolve(event.payload["approval_id"], resolution)
-    expected_error = ValueError if resolution == ApprovalResolution.approved else ToolException
+    expected_error = ValueError if resolution == ApprovalResolution.approved else tools.ToolException
     with pytest.raises(expected_error):
         await task
     expected_count = int(resolution == ApprovalResolution.approved)
@@ -309,7 +312,7 @@ async def test_native_detach_while_waiting_does_not_release_late_approval(compos
     host, approvals, governance, create = composed_runtime
     job = await create()
     producer = make_producer("pydantic_ai-async")
-    requested = asyncio.Queue()
+    requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
 
     async def on_event(event):
         if event.kind == EventKind.approval_requested:

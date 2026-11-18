@@ -9,7 +9,17 @@ Run all rows explicitly, with no skips, using an isolated uv environment:
         -r backend/tests/native_gates/requirements.txt
     HATCH_BUILD_NO_HOOKS=true uv pip install --python <qualification-env>/bin/python --no-deps -e .
     uv run --no-project --python <qualification-env>/bin/python \
-        python -m pytest backend/tests/native_gates/qualify_*.py
+        python -m pytest backend/tests/native_gates/qualify_native_*.py \
+        backend/tests/native_gates/qualify_runtime_integration.py \
+        backend/tests/native_gates/qualify_review_regressions.py \
+        backend/tests/native_gates/qualify_observation_scope.py \
+        backend/tests/native_gates/qualify_executor_isolation.py
+
+The AutoGen/LlamaIndex/ADK follow-ups use a separate environment with
+requirements-profiles.txt and the same no-deps editable install, then run
+qualify_autogen.py, qualify_llamaindex.py, qualify_google_adk.py and
+qualify_profile_release.py. None of
+these optional environments changes the application's default profile.
 
 The excluded ONNX package is an unused CrewAI/Chroma embedding dependency, not a
 tool-hook requirement. No native package code is patched or replaced.
@@ -81,6 +91,7 @@ def binding_factory():
                 workspace="/workspace",
                 protected_paths=(),
                 is_current=current,
+                is_current_inline=lambda: live["current"],
             )
         )
         managers.append(gates)

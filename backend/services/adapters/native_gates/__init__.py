@@ -12,6 +12,11 @@ Sync SDK calls must run in the runtime's worker, not on its policy event loop.
 Native observation remains separate. Only app-owned invocation result receipts
 feed the existing ledger, never raw observer callbacks. Gates make no
 postflight-filter claim.
+
+Runtime retains both async work (including executor fallback) and sync workers
+until actual completion. Observer registration requires a Runtime-issued owner;
+its async detach drains only admitted callbacks. Canonical local observation
+commits before an optional metadata-only export.
 """
 
 from .binding import NativeBinding

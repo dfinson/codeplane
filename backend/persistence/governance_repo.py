@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from backend.models.domain import StateConflictError
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from concurrent.futures import Future
     from pathlib import Path
 
     from backend.models.usage import UsageAmount
@@ -47,6 +53,13 @@ class AuditHead:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class GovernanceAdmission:
+    generation: int
+    blocked: bool
+    reason: str
+
+
 class GovernanceLedger:
     def __init__(self, path: Path, *, application_database: Path) -> None:
         if path.resolve() == application_database.resolve() or (
@@ -54,10 +67,64 @@ class GovernanceLedger:
         ):
             raise ValueError("Governance ledger must be separate from the application database")
         self.path = path
+        self._io_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="codeplane-governance")
+        self._io_lock = threading.Lock()
+        self._io_pending = 0
+        self._io_closing = False
+        self._io_closed = False
+        self._io_drained = asyncio.Event()
+        self._io_close_loop: asyncio.AbstractEventLoop | None = None
+        self._io_close_task: asyncio.Task[None] | None = None
+
+    async def _io[T](self, operation: Callable[..., T], *arguments: object) -> T:
+        context = copy_context()
+        with self._io_lock:
+            if self._io_closing:
+                raise RuntimeError("Governance ledger I/O is closed")
+            future: Future[T] = self._io_executor.submit(context.run, operation, *arguments)
+            self._io_pending += 1
+
+        def finished(_future: Future[T]) -> None:
+            with self._io_lock:
+                self._io_pending -= 1
+                if self._io_closing and self._io_pending == 0:
+                    assert self._io_close_loop is not None
+                    self._io_close_loop.call_soon_threadsafe(self._io_drained.set)
+
+        future.add_done_callback(finished)
+        # A cancelled waiter must not discard an admitted outcome/audit write.
+        return await asyncio.shield(asyncio.wrap_future(future))
+
+    async def close(self) -> None:
+        """Stop new I/O, drain admitted work and join its owned worker without the default executor."""
+        if self._io_closed:
+            return
+        if self._io_close_task is None:
+            with self._io_lock:
+                self._io_closing = True
+                self._io_close_loop = asyncio.get_running_loop()
+                if self._io_pending == 0:
+                    self._io_drained.set()
+            self._io_close_task = asyncio.create_task(self._close_io(), name="governance-io-drain")
+        interrupted = False
+        while not self._io_close_task.done():
+            try:
+                await asyncio.shield(self._io_close_task)
+            except asyncio.CancelledError:
+                interrupted = True
+        self._io_close_task.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+    async def _close_io(self) -> None:
+        await self._io_drained.wait()
+        self._io_executor.shutdown(wait=True)
+        self._io_closed = True
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=5)
+    def _connect(self, *, read_only: bool = False) -> Iterator[sqlite3.Connection]:
+        target = self.path.resolve().as_uri() + "?mode=ro" if read_only else str(self.path)
+        connection = sqlite3.connect(target, timeout=5, uri=read_only)
         try:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
@@ -68,7 +135,7 @@ class GovernanceLedger:
             connection.close()
 
     async def initialize(self) -> None:
-        await asyncio.to_thread(self._initialize)
+        await self._io(self._initialize)
 
     def _initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,7 +179,68 @@ class GovernanceLedger:
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                     storage_cursor INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS cp_admission_control (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    generation INTEGER NOT NULL CHECK(generation >= 0),
+                    blocked INTEGER NOT NULL CHECK(blocked IN (0, 1)),
+                    reason TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO cp_admission_control VALUES(1,0,0,'');
             """)
+
+    async def admission_state(self) -> GovernanceAdmission:
+        return await self._io(self._admission_state)
+
+    def _admission_state(self) -> GovernanceAdmission:
+        if not self.path.is_file():
+            raise StateConflictError("Governance admission gate has not been initialized")
+        with self._connect(read_only=True) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_admission_control'"
+            ).fetchone()
+            row = (
+                connection.execute(
+                    "SELECT generation,blocked,reason FROM cp_admission_control WHERE singleton=1"
+                ).fetchone()
+                if exists
+                else None
+            )
+        if row is None:
+            raise StateConflictError("Governance admission gate has not been initialized")
+        return GovernanceAdmission(row["generation"], bool(row["blocked"]), row["reason"])
+
+    async def require_admission(self) -> None:
+        state = await self.admission_state()
+        if state.blocked:
+            raise StateConflictError(f"New governance admission is blocked: {state.reason}")
+
+    async def set_admission_control(
+        self, *, expected_generation: int, blocked: bool, reason: str
+    ) -> GovernanceAdmission:
+        """Fence new admissions without interrupting existing outcome/audit writes."""
+        if (
+            isinstance(expected_generation, bool)
+            or not isinstance(expected_generation, int)
+            or expected_generation < 0
+            or not isinstance(blocked, bool)
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 1024
+        ):
+            raise ValueError("Admission control requires a generation, boolean state and bounded reason")
+        return await self._io(self._set_admission_control, expected_generation, blocked, reason)
+
+    def _set_admission_control(self, expected_generation: int, blocked: bool, reason: str) -> GovernanceAdmission:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            changed = connection.execute(
+                """UPDATE cp_admission_control SET generation=generation+1, blocked=?, reason=?
+                   WHERE singleton=1 AND generation=?""",
+                (int(blocked), reason, expected_generation),
+            )
+            if changed.rowcount != 1:
+                raise StateConflictError("Governance admission generation changed; reread before retrying")
+        return GovernanceAdmission(expected_generation + 1, blocked, reason)
 
     async def record_completion(
         self,
@@ -127,7 +255,7 @@ class GovernanceLedger:
         succeeded: bool,
         destructive: bool,
     ) -> bool:
-        return await asyncio.to_thread(
+        return await self._io(
             self._record_completion,
             job_id,
             epoch,
@@ -207,7 +335,7 @@ class GovernanceLedger:
     async def record_usage(self, event_id: str, usage: UsageAmount) -> bool:
         if not usage.job_id or not usage.execution_epoch or not event_id:
             raise ValueError("Usage accounting requires Job, epoch and source event identity")
-        return await asyncio.to_thread(self._record_usage, event_id, usage)
+        return await self._io(self._record_usage, event_id, usage)
 
     def _record_usage(self, event_id: str, usage: UsageAmount) -> bool:
         values = (
@@ -237,18 +365,18 @@ class GovernanceLedger:
             return True
 
     async def totals(self, job_id: str, epoch: str) -> GovernanceTotals:
-        return await asyncio.to_thread(self._totals, job_id, epoch)
+        return await self._io(self._totals, job_id, epoch)
 
     async def job_totals(self, job_id: str) -> GovernanceTotals:
         """Carry the Job budget across process epochs and continuation admissions."""
         if not job_id:
             raise ValueError("Budget accounting requires a Job identity")
-        return await asyncio.to_thread(self._totals, job_id, None)
+        return await self._io(self._totals, job_id, None)
 
     async def record_uncertainty(self, job_id: str, epoch: str, event_id: str, reason: str) -> None:
         if not all((job_id, epoch, event_id, reason)):
             raise ValueError("Unresolved accounting requires exact source context")
-        await asyncio.to_thread(self._record_uncertainty, job_id, epoch, event_id, reason)
+        await self._io(self._record_uncertainty, job_id, epoch, event_id, reason)
 
     def _record_uncertainty(self, job_id: str, epoch: str, event_id: str, reason: str) -> None:
         with self._connect() as connection:
@@ -258,7 +386,7 @@ class GovernanceLedger:
             )
 
     async def event_cursor(self) -> int:
-        return await asyncio.to_thread(self._event_cursor)
+        return await self._io(self._event_cursor)
 
     def _event_cursor(self) -> int:
         with self._connect() as connection:
@@ -268,7 +396,7 @@ class GovernanceLedger:
     async def advance_event_cursor(self, previous: int, current: int) -> None:
         if not 0 <= previous < current:
             raise ValueError("Governance event cursor must advance monotonically")
-        await asyncio.to_thread(self._advance_event_cursor, previous, current)
+        await self._io(self._advance_event_cursor, previous, current)
 
     def _advance_event_cursor(self, previous: int, current: int) -> None:
         with self._connect() as connection:
@@ -290,7 +418,7 @@ class GovernanceLedger:
         execution_token: str,
         tool_call_id: str,
     ) -> AuditDecision | None:
-        return await asyncio.to_thread(self._authorized_tool, job_id, epoch, execution_token, tool_call_id)
+        return await self._io(self._authorized_tool, job_id, epoch, execution_token, tool_call_id)
 
     def _authorized_tool(
         self,
@@ -357,7 +485,7 @@ class GovernanceLedger:
         encoded = json.dumps(metadata, sort_keys=True, separators=(",", ":"), allow_nan=False)
         if len(encoded.encode()) > 32 * 1024:
             raise ValueError("Decision audit metadata exceeds 32 KiB")
-        await asyncio.to_thread(self._enqueue_decision, decision_id, job_id, epoch, action_digest, decision, encoded)
+        await self._io(self._enqueue_decision, decision_id, job_id, epoch, action_digest, decision, encoded)
 
     def _enqueue_decision(
         self, decision_id: str, job_id: str, epoch: str, action_digest: str, decision: str, encoded: str
@@ -381,7 +509,7 @@ class GovernanceLedger:
 
     async def deliver_audit(self, write: Callable[[AuditDecision, AuditHead | None], AuditHead]) -> bool:
         """Serialize delivery across processes; the writer reconciles an unacknowledged file tail."""
-        return await asyncio.to_thread(self._deliver_audit, write)
+        return await self._io(self._deliver_audit, write)
 
     def _deliver_audit(self, write: Callable[[AuditDecision, AuditHead | None], AuditHead]) -> bool:
         with self._connect() as connection:

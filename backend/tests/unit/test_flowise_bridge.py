@@ -10,7 +10,12 @@ from backend.models.session_event import EventMetadata
 from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.adapters.native_gates import GateAttachment, NativeBinding
 from backend.services.adapters.native_gates.binding import NativeGateDeniedError
-from backend.services.adapters.profile_bridges.flowise import FlowiseDeliveryUnknownError, FlowiseTarget, install
+from backend.services.adapters.profile_bridges.flowise import (
+    FlowiseDeliveryUnknownError,
+    FlowiseObservation,
+    FlowiseTarget,
+    install,
+)
 
 
 @pytest.fixture
@@ -69,7 +74,8 @@ async def test_real_upstream_predict_upsert_are_gated_and_report_native_response
             return self.allowed
 
     policy = Policy()
-    observations, receipts = [], []
+    observations: list[FlowiseObservation] = []
+    receipts = []
 
     async def current():
         return True

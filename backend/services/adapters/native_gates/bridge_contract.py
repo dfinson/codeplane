@@ -11,8 +11,11 @@ class BridgeSpec:
     module: str
     dependencies: tuple[tuple[str, str], ...]
     operations: frozenset[str]
+    observation_mapping: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.observation_mapping, bool):
+            raise ValueError("Bridge observation mapping must be a fixed boolean capability")
         if not self.id or self.id in PACKAGES:
             raise ValueError("A bridge must have a distinct selected profile identity")
         prefix = "backend.services.adapters.profile_bridges."

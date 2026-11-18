@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.action_policy.production import StandaloneGovernance
     from backend.services.adapters.contracts import ExecutionIdentity
+    from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
@@ -2378,7 +2379,7 @@ class RuntimeService:
         self,
         job_id: str,
         *,
-        family: NativeFamily,
+        family: NativeFamily | str,
         target: object,
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool = False,
@@ -2392,11 +2393,23 @@ class RuntimeService:
         """Revoke only this native binding, without claiming its worker stopped."""
         return await self._native_executions.detach(execution)
 
+    async def open_native_observation(
+        self, execution: ExecutionIdentity, *, format_id: str, external_session_id: str
+    ) -> NativeObservationOwner:
+        """Attach local observation to this real execution, not a second Job."""
+        return await self._native_executions.open_observation(
+            execution, format_id=format_id, external_session_id=external_session_id
+        )
+
+    async def reconcile_native_observers(self) -> None:
+        """Apply an effective profile disable and drain only its native subscriptions."""
+        await self._native_executions.reconcile_observers()
+
     async def invoke_native[T](
         self,
         job_id: str,
         *,
-        family: NativeFamily,
+        family: NativeFamily | str,
         target: object,
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool = False,
@@ -2572,6 +2585,14 @@ class RuntimeService:
                 raise AttemptBindingConflictError("The primary execution cannot also belong to an attempt")
             binding = self._attempt_bindings.register(job_id, attempt_id, adapter, session_id, provider)
             return CurrentExecutionContext(job_id, binding.token)
+
+    async def require_governance_admission(self) -> None:
+        """Check the durable transition fence immediately before admitting new work."""
+        if self._shutting_down:
+            raise StateConflictError("The runtime is shutting down and cannot admit new work")
+        if self._standalone_governance is None:
+            raise StateConflictError("Governance admission gate has not been wired")
+        await self._standalone_governance.require_admission()
 
     def configure_execution_contracts(
         self,

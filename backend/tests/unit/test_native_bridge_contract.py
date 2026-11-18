@@ -11,6 +11,7 @@ from backend.services.adapters.native_gates.bridge_contract import BridgeSpec
         {"id": "langchain"},
         {"dependencies": (("httpx", ">=0.28"),)},
         {"dependencies": ()},
+        {"observation_mapping": "caller.decoder"},
     ],
 )
 def test_bridge_registration_rejects_non_runnable_or_unqualified_entries(changes):

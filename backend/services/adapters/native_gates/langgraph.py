@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import ToolMessage
-from langgraph.prebuilt import ToolNode
-
-from .binding import NativeCall
+from ._optional import load_sdk
+from .binding import ExecutionEvidence, NativeCall, encode_arguments
+from .langchain import tool_identity, track_tool
 from .readiness import UnsupportedNativeHookError
 
 if TYPE_CHECKING:
+    from ._optional import LangGraphToolNode
     from .installation import GateAttachment
 
+ToolMessage = load_sdk("langchain_core.messages").ToolMessage
+ToolNode = load_sdk("langgraph.prebuilt").ToolNode
 
-def install(gate: GateAttachment, node: ToolNode) -> None:
+
+def install(gate: GateAttachment, node: LangGraphToolNode) -> None:
     if not isinstance(node, ToolNode):
         raise TypeError("LangGraph gating requires the original ToolNode instance")
     sync, asynchronous = node._wrap_tool_call, node._awrap_tool_call
@@ -22,14 +25,27 @@ def install(gate: GateAttachment, node: ToolNode) -> None:
         raise UnsupportedNativeHookError("An existing sync-only ToolNode wrapper needs a matching async wrapper")
 
     def call(request: Any) -> NativeCall:
+        if request.tool is not None:
+            track_tool(gate, request.tool)
+
+        def fingerprint() -> str:
+            return encode_arguments(
+                {
+                    "tool_call": request.tool_call,
+                    "tool": tool_identity(request.tool) if request.tool is not None else None,
+                }
+            )
+
         return NativeCall(
             request.tool_call["name"],
             request.tool_call["args"],
             request.tool_call["id"],
             definition=request.tool.description if request.tool is not None else "",
+            fingerprint=fingerprint,
+            evidence=ExecutionEvidence(False),
         )
 
-    def denied(request: Any) -> ToolMessage:
+    def denied(request: Any) -> Any:
         return ToolMessage(
             content="Denied by CodePlane",
             name=request.tool_call["name"],

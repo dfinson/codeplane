@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from backend.models.usage import UsageAmount
 
+from ._optional import load_sdk
+
 if TYPE_CHECKING:
     from backend.services.adapters.contracts import ExecutionIdentity
 
@@ -13,10 +15,51 @@ if TYPE_CHECKING:
 def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tuple[UsageAmount, ...]:
     values: dict[str, int] = {}
     source = ""
-    if family == "pydantic_ai":
-        from pydantic_ai.run import AgentRunResult
+    if family == "autogen":
+        models = load_sdk("autogen_core.models")
+        if isinstance(result, models.CreateResult):
+            values = {"input_tokens": result.usage.prompt_tokens, "output_tokens": result.usage.completion_tokens}
+            source = "CreateResult.usage"
+    elif family == "llamaindex":
+        llms = load_sdk("llama_index.core.base.llms.types")
+        if isinstance(result, (llms.CompletionResponse, llms.ChatResponse)):
+            for native_name, unit in (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens")):
+                amount = result.additional_kwargs.get(native_name)
+                if amount is not None:
+                    if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+                        raise ValueError("Invalid native LlamaIndex token usage")
+                    values[unit] = amount
+            source = f"{type(result).__name__}.additional_kwargs"
+    elif family == "google-adk":
+        events = load_sdk("google.adk.events")
+        if isinstance(result, events.Event) and result.usage_metadata is not None:
+            reported = result.usage_metadata
+            for native_name, unit in (
+                ("prompt_token_count", "input_tokens"),
+                ("candidates_token_count", "output_tokens"),
+                ("cached_content_token_count", "cache_read_tokens"),
+            ):
+                amount = getattr(reported, native_name)
+                if amount is not None:
+                    values[unit] = amount
+            source = "Event.usage_metadata"
+    elif family == "crewai":
+        crew_output = load_sdk("crewai.crews.crew_output")
+        if isinstance(result, crew_output.CrewOutput):
+            reported = result.token_usage
+            for native_name, unit in (
+                ("prompt_tokens", "input_tokens"),
+                ("completion_tokens", "output_tokens"),
+                ("cached_prompt_tokens", "cache_read_tokens"),
+            ):
+                amount = getattr(reported, native_name)
+                if native_name in reported.model_fields_set or amount:
+                    values[unit] = amount
+            source = "CrewOutput.token_usage"
+    elif family == "pydantic_ai":
+        pydantic_run = load_sdk("pydantic_ai.run")
 
-        if isinstance(result, AgentRunResult):
+        if isinstance(result, pydantic_run.AgentRunResult):
             usage = result.usage()
             # These aggregate SDK dataclasses default omitted counters to zero.
             # An all-default object is not proof of reported zero usage.
@@ -28,9 +71,9 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
                     values["cache_write_tokens"] = usage.cache_write_tokens
             source = "AgentRunResult.usage"
     elif family == "openai_agents":
-        from agents.result import RunResult
+        agents_result = load_sdk("agents.result")
 
-        if isinstance(result, RunResult):
+        if isinstance(result, agents_result.RunResult):
             agent_usage = result.context_wrapper.usage
             if agent_usage.input_tokens or agent_usage.output_tokens:
                 values = {"input_tokens": agent_usage.input_tokens, "output_tokens": agent_usage.output_tokens}
@@ -38,9 +81,9 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
                     values["cache_read_tokens"] = agent_usage.input_tokens_details.cached_tokens
             source = "RunResult.context_wrapper.usage"
     elif family in {"langchain", "langgraph"}:
-        from langchain_core.messages import AIMessage
+        messages = load_sdk("langchain_core.messages")
 
-        if isinstance(result, AIMessage) and result.usage_metadata is not None:
+        if isinstance(result, messages.AIMessage) and result.usage_metadata is not None:
             values = {
                 "input_tokens": result.usage_metadata["input_tokens"],
                 "output_tokens": result.usage_metadata["output_tokens"],
