@@ -488,6 +488,7 @@ class AggregateStats(TypedDict, total=False):
     total_premium_requests: float
     total_tool_calls: int
     total_tool_failures: int
+    total_tool_unknown: int
     total_agent_errors: int
     total_cache_read: int
     total_input_tokens: int
@@ -551,6 +552,7 @@ class ToolStatsRow(TypedDict, total=False):
     avg_duration_ms: float
     total_duration_ms: float
     failure_count: int
+    unknown_count: int
     p50_duration_ms: float
     p95_duration_ms: float
     p99_duration_ms: float

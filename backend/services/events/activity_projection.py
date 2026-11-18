@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, is_admission_receipt, new_event
 from backend.services.action_policy.credential_filter import filter_credentials
+from backend.services.events.observation import has_source_grouping, is_observation_revision, observation_label
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -74,7 +75,7 @@ class ActivityProjection:
     async def push(self, event: SessionEvent, *, replay: bool = False) -> None:
         if is_admission_receipt(event):
             return
-        if event.kind not in TRANSCRIPT_KINDS:
+        if is_observation_revision(event) or (event.kind not in TRANSCRIPT_KINDS and not has_source_grouping(event)):
             return
         key = self._key(event)
         current = self._active.get(key)
@@ -95,9 +96,15 @@ class ActivityProjection:
             current.plan_step_id = plan_id
         if not new_boundary:
             return
-        label = self._label(
-            event.payload.get("content") if event.kind == EventKind.message_user else event.payload.get("plan_label"),
-            "Work in progress",
+        label = (
+            observation_label(event)
+            if has_source_grouping(event)
+            else self._label(
+                event.payload.get("content")
+                if event.kind == EventKind.message_user
+                else event.payload.get("plan_label"),
+                "Work in progress",
+            )
         )
         identity = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.version}:{key}:{event.id}"))
         activity = _Activity(identity, label, plan_id, event)

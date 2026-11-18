@@ -20,6 +20,7 @@ from backend.models.domain import JobNotFoundError, StateConflictError
 from backend.models.events import TRANSCRIPT_KINDS, SessionEvent
 from backend.models.schemas.integrations import ObservationRecordBatch, ObservationRecordReceipt
 from backend.models.session_event import EventMetadata
+from backend.persistence.event_repo import ObservationProjectionReference
 from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
 from backend.services.events.event_processor import EventProcessor
@@ -27,6 +28,7 @@ from backend.services.events.observation import (
     OBSERVATION_NAMESPACE,
     OBSERVATION_NOTIFICATIONS,
     is_observation_history,
+    observed_operation_id,
 )
 from backend.services.events.tool_pairing import PairingCheckpoint, ToolPairing
 from backend.services.ingest.acquisition_checkpoint import AcquisitionCheckpoint
@@ -224,6 +226,8 @@ class ObservationRecords:
         if accepted_batch is not None:
             if accepted_batch.session_id != job.id or accepted_batch.kind != "integration.batch.accepted":
                 raise StateConflictError("Source receipt identity conflicts with retained history")
+            if ingest_fence is not None:
+                await self._bindings.acknowledge_ingest_retry(ingest_fence)
             return ObservationRecordReceipt.model_validate(accepted_batch.payload).model_copy(update={"replay": True})
         saved_acquisition = checkpoint.buffer.get("acquisition") if checkpoint is not None else None
         if acquisition is None:
@@ -375,11 +379,28 @@ class ObservationRecords:
                 normalized.append(event)
                 canonical_prefix = _advance(canonical_prefix, canonical_record(event.model_dump(mode="json")))
         closed = False
+        completions = await self._bindings.first_observed_completions(
+            job.id, binding.id, list({identity for event in normalized if (identity := observed_operation_id(event))})
+        )
         for event in normalized:
             if closed and event.kind in TRANSCRIPT_KINDS:
                 raise ValueError("Transcript records follow the source session termination")
             tracker.observe_source_time(job.id, event)
-            await processor.process_event(job.id, event)
+            identity = observed_operation_id(event)
+            previous = completions.get(identity) if identity is not None else None
+            if previous is not None and str(event.kind).startswith("tool."):
+                event.payload["_codeplane_observation"]["revision_of"] = previous.event_id
+                for field in ("step_id", "step_number", "turn_id"):
+                    value = getattr(previous, field)
+                    if value is not None:
+                        event.payload[field] = value
+            published = await processor.process_event(job.id, event)
+            if (
+                identity is not None
+                and event.kind in {"tool.call.completed", "tool.call.failed"}
+                and published is not None
+            ):
+                completions.setdefault(identity, ObservationProjectionReference.from_event(published))
             if event.kind == "session.ended":
                 await processor.on_job_terminal(job.id, "source_ended")
                 await activities.close(job.id, event.timestamp)

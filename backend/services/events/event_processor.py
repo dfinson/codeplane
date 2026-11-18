@@ -23,6 +23,7 @@ from backend.models.events import (
 )
 from backend.models.session_event import EventMetadata
 from backend.services.events.activity_projection import ActivityProjection
+from backend.services.events.observation import has_source_grouping, is_observation_revision
 from backend.services.events.tool_pairing import ToolPairing
 
 if TYPE_CHECKING:
@@ -169,6 +170,8 @@ class EventProcessor:
             await self._reconstruct(event)
             return None
         diff_eligible = self._diff_service is not None and bool(worktree_path) and bool(base_ref)
+        if is_observation_revision(event):
+            return await self._process_enriched(job_id, event, worktree_path, base_ref, diff_eligible)
 
         # Diff recalculation on native file-edit events — consumed, not published
         # (the FE receives file changes via the synthesized diff.updated event).
@@ -246,7 +249,7 @@ class EventProcessor:
         # Ensure transcript events carry a turn_id for step tracking. Managed
         # adapters already include one; imported sessions don't — synthesize here
         # and rotate on each completed agent message (turn boundary).
-        if is_transcript:
+        if is_transcript or has_source_grouping(event):
             payload = event.payload
             if not payload.get("turn_id"):
                 tid = self._turn_ids.get(job_id)
@@ -259,10 +262,14 @@ class EventProcessor:
 
         # Step tracking — annotate non-streaming transcript events with step
         # boundaries. Streaming partials (deltas, tool output chunks) are skipped.
-        if is_transcript and kind not in TRANSCRIPT_STREAMING_KINDS and self._step_tracker is not None:
+        if (
+            (is_transcript or has_source_grouping(event))
+            and kind not in TRANSCRIPT_STREAMING_KINDS
+            and self._step_tracker is not None
+        ):
             await self._step_tracker.on_transcript_event(job_id, event)
             current = self._current_step(job_id, event)
-            if current:
+            if current and not is_observation_revision(event):
                 event.payload["step_number"] = current.step_number
                 if self._attempt_scope is not None or self._trail_service is None:
                     event.payload["step_id"] = current.step_id
@@ -325,7 +332,7 @@ class EventProcessor:
 
         is_transcript = kind in TRANSCRIPT_KINDS
 
-        if is_transcript:
+        if is_transcript or has_source_grouping(event):
             payload = event.payload
             if not payload.get("turn_id"):
                 tid = self._turn_ids.get(job_id)
@@ -336,10 +343,14 @@ class EventProcessor:
             if kind == EventKind.message_assistant:
                 self._turn_ids[job_id] = str(uuid.uuid4())
 
-        if is_transcript and kind not in TRANSCRIPT_STREAMING_KINDS and self._step_tracker is not None:
+        if (
+            (is_transcript or has_source_grouping(event))
+            and kind not in TRANSCRIPT_STREAMING_KINDS
+            and self._step_tracker is not None
+        ):
             await self._step_tracker.on_transcript_event(job_id, event)
             current = self._current_step(job_id, event)
-            if current:
+            if current and not is_observation_revision(event):
                 event.payload["step_number"] = current.step_number
                 if self._attempt_scope is not None or self._trail_service is None:
                     event.payload["step_id"] = current.step_id
