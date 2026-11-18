@@ -292,7 +292,9 @@ class CopilotPreParser(MarkdownPreParser):
         # Parse assistant response with tree-sitter (uses base class infra)
         assistant_resp = row.get("assistant_response")
         if assistant_resp:
-            source = assistant_resp.encode("utf-8")
+            # The Markdown grammar needs a terminal newline to recognize an EOF
+            # closing fence. This parser-only sentinel never alters stored bytes.
+            source = (assistant_resp if assistant_resp.endswith("\n") else assistant_resp + "\n").encode("utf-8")
             tree = self._ts_parser.parse(source)
             blocks = self._extract_blocks(tree, source)
             yield from self._process_blocks(blocks, source)

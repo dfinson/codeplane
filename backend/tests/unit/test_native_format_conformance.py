@@ -245,6 +245,38 @@ def test_copilot_sqlite_markdown_turn_preserves_medium_fidelity():
     assert all("tool_call_id" not in event.payload and "success" not in event.payload for event in events)
 
 
+@pytest.mark.parametrize(
+    ("markdown", "kind", "payload"),
+    [
+        ('```json\n{"value": false}\n```', "structured_output", {"format": "json", "data": {"value": False}}),
+        ('```json\n{"value": false}\n```\n', "structured_output", {"format": "json", "data": {"value": False}}),
+        ('```json\n{"value": false}', "structured_output", {"format": "json", "data": {"value": False}}),
+        ('```json\n{"value":', "code_block", {"language": "json", "content": '{"value":'}),
+        ('```json\n{"value": false}\n``', "code_block", {"language": "json", "content": '{"value": false}\n``'}),
+    ],
+)
+def test_copilot_terminal_newline_preserves_closed_and_unclosed_fence_behavior(markdown, kind, payload):
+    from backend.compat.traceformats.parsers import CopilotPreParser
+
+    row = {
+        "session_id": "native-sqlite",
+        "turn_index": 0,
+        "timestamp": ANCHOR.isoformat(),
+        "assistant_response": markdown,
+    }
+    original = deepcopy(row)
+    parser = CopilotPreParser()
+    (record,) = parser.parse_turn(row)
+    assert record == {
+        "session_id": "native-sqlite",
+        "turn_index": 0,
+        "timestamp": ANCHOR.isoformat(),
+        "type": kind,
+        **payload,
+    }
+    assert row == original and parser.current_offset == 0
+
+
 def _transferred_bytes(name):
     manifest = json.loads((PRODUCED / "transferred-provenance.json").read_text())
     source = manifest[name]
