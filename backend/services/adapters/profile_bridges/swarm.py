@@ -242,7 +242,8 @@ def install(gate: GateAttachment, target: object) -> None:
                 for chunk in response:
                     require_current()
                     report(chunk, "model_chunk")
-                    yield chunk
+                    if chunk.choices:
+                        yield chunk
             finally:
                 response.close()
 

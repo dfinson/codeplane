@@ -104,6 +104,8 @@ uses the native cancellation notification and retains acknowledgment or a late
 result separately. The standard stdio client is separately qualified against a
 real local MCP process. Its command/environment snapshot is bound to the
 admitted operation, not exposed as a public process-launch route.
+The client API owns one transport session per tool operation. It does not claim
+process-local state retention across calls, even when they share a binding.
 
 Caller-owned FastMCP servers can attach the released `TrustGatedMCPServer` to
 their actual registered handlers. The client must sign a short-lived,

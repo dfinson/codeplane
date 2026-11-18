@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 host_graph = load_sdk("lfx.graph.graph.base")
 host_component = load_sdk("lfx.custom.custom_component.component")
+native_data = load_sdk("lfx.schema.data")
 
 
 @dataclass
@@ -79,7 +80,19 @@ def install(gate: GateAttachment, target: object) -> None:
         gate.track_callable(holder, "call")
 
         def inputs() -> dict[str, Any]:
-            return {key: getattr(component, key) for key in component._inputs}
+            def plain(value: Any) -> Any:
+                if isinstance(value, native_data.Data):
+                    return {
+                        "native_type": f"{type(value).__module__}.{type(value).__qualname__}",
+                        "value": value.model_dump(mode="json"),
+                    }
+                if isinstance(value, dict):
+                    return {key: plain(item) for key, item in value.items()}
+                if isinstance(value, (list, tuple)):
+                    return [plain(item) for item in value]
+                return value
+
+            return {key: plain(getattr(component, key)) for key in component._inputs}
 
         def fingerprint() -> str:
             return encode_arguments({"topology": topology(), "inputs": inputs()})

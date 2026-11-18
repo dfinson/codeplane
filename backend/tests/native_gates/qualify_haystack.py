@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
+from functools import partial
 
 import httpx
+from pydantic import BaseModel
 
 os.environ["HAYSTACK_TELEMETRY_ENABLED"] = "false"
 
@@ -19,6 +22,154 @@ from backend.tests.native_gates.qualify_runtime_integration import composed_runt
 from backend.tests.native_gates.qualify_runtime_integration import events_for
 
 sdk = load_sdk("haystack")
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["stream", "tools", "schema", "callback-mutated", "tool-mutated", "schema-mutated", "slotted", "slotted-mutated"],
+)
+async def test_actual_chat_generator_runtime_handles_and_mutation_fences(composed_runtime, kind):
+    host, approvals, _, create = composed_runtime
+    job = await create()
+    callbacks, tool_calls, requests = [], [], []
+    options = {"label": "original"}
+
+    def record(chunk, *, label):
+        assert label is options
+        callbacks.append(chunk)
+
+    def inert_tool(value: str):
+        tool_calls.append(value)
+        return value
+
+    class SlottedCallback:
+        __slots__ = ("label",)
+
+        def __init__(self):
+            self.label = "original"
+
+        def __call__(self, chunk):
+            callbacks.append(chunk)
+
+    slotted = SlottedCallback()
+    tool = load_sdk("haystack.tools").Tool(
+        name="inert_tool",
+        description="Inert fixture tool",
+        parameters={"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        function=inert_tool,
+    )
+
+    class Reply(BaseModel):
+        answer: str
+
+    runtime = (
+        {"streaming_callback": slotted}
+        if kind.startswith("slotted")
+        else {"streaming_callback": partial(record, label=options)}
+        if kind in {"stream", "callback-mutated"}
+        else {"tools": [tool]}
+        if kind in {"tools", "tool-mutated"}
+        else {"generation_kwargs": {"response_format": Reply}}
+    )
+
+    def respond(request):
+        requests.append(request)
+        if kind in {"stream", "slotted"}:
+            chunks = [
+                {
+                    "id": "native-stream",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "fixture-model",
+                    "choices": [
+                        {"index": 0, "delta": {"role": "assistant", "content": "inert"}, "finish_reason": None}
+                    ],
+                },
+                {
+                    "id": "native-stream",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "fixture-model",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            ]
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b"".join(b"data: " + json.dumps(chunk).encode() + b"\n\n" for chunk in chunks)
+                + b"data: [DONE]\n\n",
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "native-completion",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": '{"answer":"inert"}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    generator = load_sdk("haystack.components.generators.chat").OpenAIChatGenerator(
+        api_key=load_sdk("haystack.utils").Secret.from_token("fixture-not-a-cloud-credential"),
+        model="fixture-model",
+        http_client_kwargs={"transport": httpx.MockTransport(respond)},
+        max_retries=0,
+    )
+    pipeline = sdk.Pipeline()
+    pipeline.add_component("generator", generator)
+    trust = TrustedPipeline()
+    trust.add_component("generator", trust_score=0.9)
+    decisions = []
+
+    async def approve(event):
+        if event.kind == "permission.requested":
+            decisions.append(event)
+            assert not callbacks and not tool_calls and not requests
+            if kind == "callback-mutated":
+                options["label"] = "changed"
+            elif kind == "slotted-mutated":
+                slotted.label = "changed"
+            elif kind == "tool-mutated":
+                tool.parameters["properties"]["value"]["description"] = "changed"
+            elif kind == "schema-mutated":
+                Reply.model_fields["answer"].description = "changed"
+                Reply.model_rebuild(force=True)
+            await approvals.resolve(event.payload["approval_id"], "approved")
+
+    host._event_bus.subscribe(approve)
+    task = await host.start_native(
+        job.id,
+        family="haystack",
+        target=HaystackTarget(pipeline, trust),
+        invoke=lambda: generator.run(
+            messages=[load_sdk("haystack.dataclasses").ChatMessage.from_user("inert")], **runtime
+        ),
+        synchronous=True,
+    )
+    try:
+        if kind.endswith("mutated"):
+            with pytest.raises(Exception, match="changed|denied"):
+                await task
+            assert not requests and not callbacks
+        else:
+            result = await task
+            assert len(result["replies"]) == len(requests) == 1
+            assert bool(callbacks) is (kind in {"stream", "slotted"})
+        assert not tool_calls and len(decisions) == 1
+    finally:
+        await asyncio.gather(task, return_exceptions=True)
+        if generator.client is not None:
+            generator.client.close()
+        if generator.async_client is not None:
+            await generator.async_client.close()
 
 
 @pytest.mark.parametrize("outcome", ["allow", "deny", "untrusted", "error", "cancel", "mutated"])

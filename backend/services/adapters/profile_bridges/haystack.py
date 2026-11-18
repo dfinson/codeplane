@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import marshal
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from functools import wraps
+from functools import partial, wraps
 from importlib.metadata import version
-from types import SimpleNamespace
+from types import GetSetDescriptorType, MemberDescriptorType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from agentmesh.integrations.haystack import TrustedPipeline
+from pydantic import BaseModel
 
 from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.binding import NativeCall, NativeGateDeniedError, encode_arguments
@@ -23,6 +26,67 @@ if TYPE_CHECKING:
     from backend.services.adapters.native_gates import GateAttachment
 
 sdk = load_sdk("haystack")
+
+
+def _handle(value: Any) -> dict[str, Any]:
+    """Describe executable/schema values without calling them or disclosing their captured state."""
+    seen: set[int] = set()
+
+    def snapshot(item: Any, expand: bool = False) -> Any:
+        if item is None or isinstance(item, (str, int, float, bool)):
+            return item
+        if id(item) in seen:
+            return {"reference": id(item)}
+        seen.add(id(item))
+        if isinstance(item, bytes):
+            return {"bytes_sha256": hashlib.sha256(item).hexdigest()}
+        if isinstance(item, dict):
+            return [[snapshot(key), snapshot(entry)] for key, entry in item.items()]
+        if isinstance(item, (list, tuple)):
+            return [snapshot(entry) for entry in item]
+        identity = {"identity": id(item), "type": f"{type(item).__module__}.{type(item).__qualname__}"}
+        if type(item) is partial:
+            return {
+                **identity,
+                "function": snapshot(item.func),
+                "args": snapshot(item.args),
+                "keywords": snapshot(item.keywords),
+                "attributes": snapshot(item.__dict__),
+            }
+        if inspect.isfunction(item):
+            return {
+                **identity,
+                "code": hashlib.sha256(marshal.dumps(item.__code__)).hexdigest(),
+                "defaults": snapshot(item.__defaults__),
+                "keywords": snapshot(item.__kwdefaults__),
+                "closure": [snapshot(cell.cell_contents) for cell in item.__closure__ or ()],
+                "attributes": snapshot(item.__dict__),
+            }
+        if inspect.ismethod(item):
+            return {**identity, "function": snapshot(item.__func__), "owner": snapshot(item.__self__, True)}
+        if isinstance(item, type) and issubclass(item, BaseModel):
+            return {**identity, "schema": snapshot(item.__pydantic_core_schema__)}
+        if expand:
+            descriptor = inspect.getattr_static(item, "__dict__", None)
+            state = {"attributes": descriptor.__get__(item) if isinstance(descriptor, GetSetDescriptorType) else None}
+            state["call"] = inspect.getattr_static(type(item), "__call__", None)
+            slots = {}
+            for cls in type(item).__mro__:
+                for name, member in vars(cls).items():
+                    if isinstance(member, MemberDescriptorType):
+                        try:
+                            slots[f"{cls.__module__}.{cls.__qualname__}.{name}"] = member.__get__(item)
+                        except AttributeError:
+                            slots[f"{cls.__module__}.{cls.__qualname__}.{name}"] = {"uninitialized": True}
+            state["slots"] = slots
+            return {**identity, "state": snapshot(state)}
+        return identity
+
+    return {
+        "native_handle": f"{type(value).__module__}.{type(value).__qualname__}",
+        "identity": id(value),
+        "content_sha256": hashlib.sha256(encode_arguments(snapshot(value, True)).encode()).hexdigest(),
+    }
 
 
 @dataclass
@@ -61,10 +125,26 @@ def install(gate: GateAttachment, target: object) -> None:
 
     attached = fingerprint()
     messages = load_sdk("haystack.dataclasses")
+    tools = load_sdk("haystack.tools")
 
     def arguments(value: Any) -> Any:
         if isinstance(value, (messages.ChatMessage, messages.Document)):
             return arguments(value.to_dict())
+        if isinstance(value, tools.Tool):
+            return {
+                "native_type": "haystack.Tool",
+                "identity": id(value),
+                "name": value.name,
+                "description": value.description,
+                "parameters": arguments(value.parameters),
+                "function": _handle(value.function) if value.function is not None else None,
+                "async_function": _handle(value.async_function) if value.async_function is not None else None,
+                "inputs_from_state": arguments(value.inputs_from_state),
+                "outputs_to_state": arguments(value.outputs_to_state),
+                "outputs_to_string": arguments(value.outputs_to_string),
+            }
+        if callable(value):
+            return _handle(value)
         if isinstance(value, dict):
             return {key: arguments(item) for key, item in value.items()}
         if isinstance(value, (list, tuple)):

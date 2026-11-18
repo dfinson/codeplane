@@ -20,7 +20,8 @@ openai = load_sdk("openai")
 
 
 @pytest.mark.parametrize(
-    "outcome", ["allow", "deny", "untrusted-handoff", "same-name-handoff", "result-handoff", "cancel", "stream"]
+    "outcome",
+    ["allow", "deny", "untrusted-handoff", "same-name-handoff", "result-handoff", "cancel", "stream", "stream-usage"],
 )
 async def test_real_swarm_function_handoff_policy_and_scoped_observation(composed_runtime, outcome):
     from agentmesh.integrations.swarm import HandoffVerifier, TrustPolicy, TrustViolationError
@@ -81,10 +82,20 @@ async def test_real_swarm_function_handoff_policy_and_scoped_observation(compose
                     {"index": 0, "delta": result, "finish_reason": "tool_calls" if len(requests) == 1 else "stop"}
                 ],
             }
+            chunks = [chunk]
+            if outcome == "stream-usage":
+                chunks.append(
+                    {
+                        **chunk,
+                        "choices": [],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 2, "total_tokens": 2},
+                    }
+                )
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                content=b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n",
+                content=b"".join(b"data: " + json.dumps(item).encode() + b"\n\n" for item in chunks)
+                + b"data: [DONE]\n\n",
             )
         return httpx.Response(
             200,
@@ -122,9 +133,9 @@ async def test_real_swarm_function_handoff_policy_and_scoped_observation(compose
             [{"role": "user", "content": "inert fixture"}],
             context_variables={"caller": "original-context"},
             max_turns=4,
-            stream=outcome == "stream",
+            stream=outcome in {"stream", "stream-usage"},
         )
-        return list(result) if outcome == "stream" else result
+        return list(result) if outcome in {"stream", "stream-usage"} else result
 
     task = await host.start_native(
         job.id,
@@ -148,13 +159,13 @@ async def test_real_swarm_function_handoff_policy_and_scoped_observation(compose
                 await task
         else:
             result = await task
-            if outcome == "stream":
+            if outcome in {"stream", "stream-usage"}:
                 result = result[-1]["response"]
             assert result.agent is peer and result.messages[-1]["content"] == "actual target result"
         assert len(called) == int(outcome != "deny")
         if called:
             assert called[0] == ("real-body", {"caller": "original-context"})
-        assert len(requests) == (2 if outcome in {"allow", "result-handoff", "stream"} else 1)
+        assert len(requests) == (2 if outcome in {"allow", "result-handoff", "stream", "stream-usage"} else 1)
         assert source.functions is original_functions and runtime.handle_tool_calls == original_dispatch
         stored = await events_for(host, job.id)
         usage = [event for event in stored if event.kind == "execution.native.usage"]
@@ -169,14 +180,14 @@ async def test_real_swarm_function_handoff_policy_and_scoped_observation(compose
                 for amount in event.payload["usage"]
             )
         observed = [event for event in stored if event.metadata.integration_binding_id is not None]
-        model_kind = "llm.stream.chunk" if outcome == "stream" else "llm.call.completed"
+        model_kind = "llm.stream.chunk" if outcome in {"stream", "stream-usage"} else "llm.call.completed"
         assert any(event.kind == model_kind for event in observed)
         if outcome != "deny":
             tool = next(event for event in observed if event.kind in {"tool.call.completed", "tool.call.failed"})
             assert tool.payload["tool_call_id"] == "native-call"
             assert tool.payload["agent_id"] == "source"
         handoffs = [event for event in observed if event.kind == "delegation.verified"]
-        assert bool(handoffs) == (outcome in {"allow", "result-handoff", "cancel", "stream"})
+        assert bool(handoffs) == (outcome in {"allow", "result-handoff", "cancel", "stream", "stream-usage"})
         if handoffs:
             assert handoffs[0].payload["source_did"] == verifier._identities["source"].did
             assert handoffs[0].payload["target_did"] == verifier._identities["target"].did
