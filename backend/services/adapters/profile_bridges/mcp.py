@@ -1,28 +1,48 @@
-"""A bound MCP tool operation using the standard Streamable HTTP client."""
+"""Bound MCP operations using standard transports and authenticated native handlers."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import hashlib
+import inspect
+import time
+import uuid
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import wraps
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import httpx
 import jsonschema
-from mcp import ClientSession, types
+from agentmesh.integrations.mcp import TrustGatedMCPServer
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from mcp import ClientSession, StdioServerParameters, types
+from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.server.fastmcp import FastMCP
 from mcp.shared.exceptions import McpError
+from pydantic_core import to_jsonable_python
+from starlette.requests import Request
 
 from backend.services.adapters.ai_card import verify_card
-from backend.services.adapters.native_gates.binding import NativeCall, NativeGateDeniedError
+from backend.services.adapters.native_gates.binding import NativeCall, NativeGateDeniedError, encode_arguments
 from backend.services.ingest.mapping import canonical_record
 from backend.services.ingest.otel_decoder import decode_json_body
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
+
+    from agentmesh.identity import AgentIdentity
+    from mcp.server.fastmcp.tools import Tool
 
     from backend.services.adapters.native_gates import GateAttachment
 
@@ -46,9 +66,48 @@ class McpTarget:
     public_key: str
     tools: dict[str, dict[str, Any]]
     observe: Callable[[McpObservation], None] | None = None
+    stdio: StdioServerParameters | None = None
+    authority: McpCallerAuthority | None = None
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         raise PermissionError("MCP target must be attached to a live Runtime execution")
+
+
+@dataclass(frozen=True)
+class McpCallerAuthority:
+    identity: AgentIdentity
+    binding_id: str
+    epoch: str
+
+    def proof(self, endpoint: str, tool: str, arguments: dict[str, Any], request_id: str) -> dict[str, Any]:
+        payload = {
+            "caller_did": str(self.identity.did),
+            "binding_id": self.binding_id,
+            "epoch": self.epoch,
+            "endpoint": endpoint,
+            "tool": tool,
+            "request_id": request_id,
+            "arguments_sha256": hashlib.sha256(canonical_record(arguments)).hexdigest(),
+            "nonce": uuid.uuid4().hex,
+            "expires_at": int(time.time()) + 60,
+        }
+        return {**payload, "signature": self.identity.sign(canonical_record(payload))}
+
+
+@dataclass
+class McpServerTarget:
+    server: FastMCP
+    trust: TrustGatedMCPServer
+    endpoint: str
+    project_id: str
+    peer_card: bytes
+    expected_did: str
+    public_key: str
+    capabilities: tuple[str, ...]
+    trust_score: int
+
+    async def authority_scope(self) -> tuple[str, str]:
+        raise PermissionError("MCP server is not attached to a live Runtime execution")
 
 
 class McpDeliveryUnknownError(OSError):
@@ -71,6 +130,9 @@ def _local_schema(schema: dict[str, Any]) -> None:
 
 
 def install(gate: GateAttachment, target: object) -> None:
+    if isinstance(target, McpServerTarget):
+        _install_server(gate, target)
+        return
     if not isinstance(target, McpTarget):
         raise TypeError("MCP gating requires an explicitly configured McpTarget")
     endpoint, project, card, did, key = (
@@ -81,6 +143,8 @@ def install(gate: GateAttachment, target: object) -> None:
         target.public_key,
     )
     schemas = deepcopy(target.tools)
+    stdio = target.stdio.model_copy(deep=True) if target.stdio is not None else None
+    authority = target.authority
     if not schemas or len(schemas) > 100:
         raise ValueError("MCP target requires between 1 and 100 explicitly pinned tool schemas")
     decode_json_body(canonical_record(schemas))
@@ -116,7 +180,15 @@ def install(gate: GateAttachment, target: object) -> None:
         verified_peer()
         call = NativeCall(
             name=f"mcp.{name}",
-            arguments={"endpoint": endpoint, "tool": name, "arguments": payload},
+            arguments={
+                "endpoint": endpoint,
+                "tool": name,
+                "arguments": payload,
+                "transport": "stdio" if stdio is not None else "streamable-http",
+                "stdio_sha256": hashlib.sha256(canonical_record(stdio.model_dump(mode="json"))).hexdigest()
+                if stdio is not None
+                else None,
+            },
             definition=f"MCP tools/call against pinned peer {did}; input schema SHA256 {fingerprint}",
         )
         if not await gate.allow(call):
@@ -130,13 +202,8 @@ def install(gate: GateAttachment, target: object) -> None:
         native_result: dict[str, Any] | None = None
         try:
             async with (
-                streamablehttp_client(
-                    endpoint,
-                    timeout=timedelta(seconds=30),
-                    sse_read_timeout=timedelta(seconds=30),
-                    httpx_client_factory=_http_client,
-                ) as (read, write, session_id),
-                ClientSession(read, write) as session,
+                _connection(endpoint, stdio) as (read, write, session_id),
+                ClientSession(read, write, read_timeout_seconds=timedelta(seconds=30)) as session,
             ):
                 await session.initialize()
                 protocol_session = session_id()
@@ -165,9 +232,10 @@ def install(gate: GateAttachment, target: object) -> None:
                         "tool_call_id_source": "codeplane-operation; native request_id retained separately",
                     }
                 )
-                pending = asyncio.create_task(
-                    session.call_tool(name, payload, meta={"codeplane-operation-id": call.operation_id})
-                )
+                metadata: dict[str, Any] = {"codeplane-operation-id": call.operation_id}
+                if authority is not None:
+                    metadata["codeplane-authority"] = authority.proof(endpoint, name, payload, request_id)
+                pending = asyncio.create_task(session.call_tool(name, payload, meta=metadata))
                 revoked = asyncio.create_task(gate.binding.wait_revoked())
                 try:
                     done, _ = await asyncio.wait((pending, revoked), return_when=asyncio.FIRST_COMPLETED)
@@ -247,6 +315,266 @@ def install(gate: GateAttachment, target: object) -> None:
                 target.observe(McpObservation(call.operation_id, request_id, name, fingerprint, did, outcome))
 
     gate.patch(target, "call_tool", invoke)
+
+
+@asynccontextmanager
+async def _connection(endpoint: str, stdio: StdioServerParameters | None) -> AsyncIterator[Any]:
+    if stdio is not None:
+        async with stdio_client(stdio) as (read, write):
+            yield read, write, lambda: None
+    else:
+        async with streamablehttp_client(
+            endpoint,
+            timeout=timedelta(seconds=30),
+            sse_read_timeout=timedelta(seconds=30),
+            httpx_client_factory=_http_client,
+        ) as connection:
+            yield connection
+
+
+def _install_server(gate: GateAttachment, target: McpServerTarget) -> None:
+    if not isinstance(target.server, FastMCP) or not isinstance(target.trust, TrustGatedMCPServer):
+        raise TypeError("MCP server binding requires actual standard and upstream trust servers")
+    if type(target.trust_score) is not int or not 0 <= target.trust_score <= 1000:
+        raise ValueError("MCP trust score must be an explicit operator-configured value from 0 to 1000")
+    server, trust = target.server, target.trust
+    endpoint, did, key, card, project = (
+        target.endpoint,
+        target.expected_did,
+        target.public_key,
+        bytes(target.peer_card),
+        target.project_id,
+    )
+    capabilities, score = tuple(target.capabilities), target.trust_score
+    tools = tuple(trust._tools.items())
+    if not tools or len(tools) > 100:
+        raise ValueError("MCP server requires an explicit bounded tool inventory")
+    manager = server._tool_manager
+    schemas: dict[str, dict[str, Any]] = {}
+    signatures: dict[str, inspect.Signature] = {}
+    asynchronous_handlers: dict[str, bool] = {}
+    for name, tool in tools:
+        native = manager.get_tool(name)
+        if native is None or canonical_record(native.parameters) != canonical_record(tool.input_schema):
+            raise ValueError("MCP trust tool must match the actual native handler and schema")
+        if not callable(native.fn) or tool.handler is not native.fn:
+            raise ValueError("MCP trust registration must reference the actual native handler")
+        if tool.require_human_sponsor:
+            raise ValueError("MCP sponsor-required tools need a separate verified sponsorship authority")
+        _local_schema(tool.input_schema)
+        jsonschema.Draft202012Validator.check_schema(tool.input_schema)
+        schemas[name] = deepcopy(tool.input_schema)
+        signatures[name] = inspect.signature(native.fn)
+        asynchronous_handlers[name] = native.is_async
+
+    def verify_peer() -> None:
+        verify_card(
+            card,
+            binding_id=gate.binding.execution.binding_id.replace(":", "-"),
+            project_id=project,
+            expected_did=did,
+            public_key=key,
+            services=(("mcp", endpoint),),
+        )
+
+    verify_peer()
+    public_key = Ed25519PublicKey.from_public_bytes(base64.b64decode(key, validate=True))
+    gate.claim(server)
+    gate.claim(manager)
+    gate.claim(trust)
+    gate.patch(trust, "audit_all_calls", False)
+    original_dispatch = manager.call_tool
+    invocation: ContextVar[tuple[Any, bool] | None] = ContextVar("mcp_server_invocation", default=None)
+    seen: dict[str, int] = {}
+
+    def native_tool(name: str) -> Tool:
+        native = manager.get_tool(name)
+        if native is None:
+            raise NativeGateDeniedError("MCP native handler was removed after attachment")
+        return native
+
+    def fingerprint() -> str:
+        return encode_arguments(
+            {
+                name: {
+                    "native": id(native_tool(name)),
+                    "trust": id(trust._tools.get(name)),
+                    "schema": native_tool(name).parameters,
+                    "trust_schema": trust._tools[name].input_schema,
+                    "capability": trust._tools[name].required_capability,
+                    "minimum": trust._tools[name].min_trust_score,
+                    "sponsor": trust._tools[name].require_human_sponsor,
+                }
+                for name in schemas
+            }
+        )
+
+    attached = fingerprint()
+
+    def install_handler(name: str, tool: Any) -> None:
+        native = native_tool(name)
+        holder = SimpleNamespace(call=native.fn)
+        gate.track_callable(holder, "call")
+        asynchronous = native.is_async
+
+        @wraps(native.fn)
+        async def handler(*args: Any, **kwargs: Any) -> Any:
+            if asynchronous:
+                return await holder.call(*args, **kwargs)
+            return await asyncio.to_thread(holder.call, *args, **kwargs)
+
+        gate.patch(native, "fn", handler)
+        gate.patch(native, "is_async", True)
+
+        async def dispatch(**arguments: Any) -> Any:
+            current = invocation.get()
+            if current is None:
+                raise PermissionError("MCP trust handler has no authenticated protocol request")
+            context, convert_result = current
+            return await original_dispatch(name, arguments, context=context, convert_result=convert_result)
+
+        gate.patch(tool, "handler", dispatch)
+
+    for name, tool in tools:
+        install_handler(name, tool)
+
+    async def authority_scope() -> tuple[str, str]:
+        if not gate.active or not await gate.binding.current():
+            raise PermissionError("MCP server binding is no longer live")
+        return gate.binding.execution.binding_id, gate.binding.execution.epoch
+
+    async def dispatch(name: str, arguments: dict[str, Any], context: Any = None, convert_result: bool = False) -> Any:
+        gate.validate()
+        if name not in schemas or context is None:
+            raise PermissionError("MCP tool requires its bound native request context")
+        if fingerprint() != attached or not gate.active or not await gate.binding.current():
+            raise PermissionError("MCP server execution or tool configuration is no longer current")
+        payload = decode_json_body(canonical_record(arguments))
+        jsonschema.Draft202012Validator({**schemas[name], "additionalProperties": False}).validate(payload)
+        verify_peer()
+        meta = context.request_context.meta
+        proof = meta.model_dump().get("codeplane-authority") if meta is not None else None
+        if not isinstance(proof, dict):
+            raise PermissionError("MCP requires a signed, binding-scoped request proof")
+        proof = dict(proof)
+        signature = proof.pop("signature", None)
+        nonce, expires = proof.get("nonce"), proof.get("expires_at")
+        now = int(time.time())
+        expected = {
+            "caller_did": did,
+            "binding_id": gate.binding.execution.binding_id,
+            "epoch": gate.binding.execution.epoch,
+            "endpoint": endpoint,
+            "tool": name,
+            "request_id": str(context.request_id),
+            "arguments_sha256": hashlib.sha256(canonical_record(payload)).hexdigest(),
+            "nonce": nonce,
+            "expires_at": expires,
+        }
+        if (
+            proof != expected
+            or not isinstance(signature, str)
+            or not isinstance(nonce, str)
+            or len(nonce) != 32
+            or any(char not in "0123456789abcdef" for char in nonce)
+            or type(expires) is not int
+            or not now < expires <= now + 65
+        ):
+            raise PermissionError("MCP request proof has an invalid identity, scope or lifetime")
+        try:
+            public_key.verify(base64.b64decode(signature, validate=True), canonical_record(proof))
+        except (ValueError, binascii.Error, InvalidSignature) as exc:
+            raise PermissionError("MCP request signature does not match the pinned caller key") from exc
+        for used, deadline in tuple(seen.items()):
+            if deadline <= now:
+                del seen[used]
+        if nonce in seen or len(seen) >= 1024:
+            raise PermissionError("MCP request proof was already used or its replay window is full")
+        seen[nonce] = expires
+        native = native_tool(name)
+        request = context.request_context.request
+        protocol_session = request.headers.get("mcp-session-id") if isinstance(request, Request) else None
+        validated = native.fn_metadata.arg_model.model_validate(payload).model_dump(mode="json")
+
+        def exact_entry(args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
+            bound = signatures[name].bind(*args, **kwargs)
+            bound.apply_defaults()
+            actual = {key: value for key, value in bound.arguments.items() if key != native.context_kwarg}
+            return canonical_record(to_jsonable_python(actual)) == canonical_record(validated)
+
+        call = NativeCall(
+            f"mcp.{name}",
+            {"endpoint": endpoint, "tool": name, "arguments": validated},
+            tool_call_id=str(context.request_id),
+            fingerprint=fingerprint,
+            definition=f"Authenticated MCP handler for pinned caller {did}",
+            entry_check=exact_entry,
+        )
+        if not await gate.allow(call):
+            raise NativeGateDeniedError("MCP handler denied before invocation")
+        verify_peer()
+        token = invocation.set((context, convert_result))
+
+        async def invoke() -> Any:
+            gate.binding.observe(
+                {
+                    "type": "tool_started",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "operation_id": call.operation_id,
+                    "request_id": str(context.request_id),
+                    "tool": name,
+                    "arguments": validated,
+                    "peer_did": did,
+                    "protocol_session_id": protocol_session,
+                    "schema_sha256": hashlib.sha256(canonical_record(schemas[name])).hexdigest(),
+                    "tool_call_id_source": "codeplane-operation; native request_id retained separately",
+                }
+            )
+            result = await trust.invoke_tool(name, validated, did, list(capabilities), score)
+            if not result.success:
+                raise NativeGateDeniedError("MCP upstream trust or native handler refused the operation")
+            return result.result
+
+        operation = asyncio.create_task(gate.complete(call, invoke))
+        try:
+            try:
+                result = await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                if asynchronous_handlers[name]:
+                    operation.cancel()
+                # MCP uses level-triggered AnyIO cancellation. Drain the owned
+                # operation outside that scope so its receipt transaction closes.
+                with anyio.CancelScope(shield=True):
+                    await asyncio.gather(operation, return_exceptions=True)
+                raise
+        except BaseException as exc:
+            completed = operation.done() and not operation.cancelled() and operation.exception() is None
+            outcome, success = ("responded-after-cancel", True) if completed else (type(exc).__name__, False)
+            raise
+        else:
+            outcome, success = "responded", True
+            return result
+        finally:
+            invocation.reset(token)
+            gate.binding.observe(
+                {
+                    "type": "tool_completed" if success else "tool_failed",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "operation_id": call.operation_id,
+                    "request_id": str(context.request_id),
+                    "tool": name,
+                    "peer_did": did,
+                    "protocol_session_id": protocol_session,
+                    "schema_sha256": hashlib.sha256(canonical_record(schemas[name])).hexdigest(),
+                    "outcome": outcome,
+                    "success": success,
+                    "result": to_jsonable_python(operation.result()) if success else None,
+                    "tool_call_id_source": "codeplane-operation; native request_id retained separately",
+                }
+            )
+
+    gate.patch(manager, "call_tool", dispatch)
+    gate.patch(target, "authority_scope", authority_scope)
 
 
 def _http_client(
