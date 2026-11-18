@@ -43,7 +43,7 @@
     "producer": "cline/cline",
     "version": "4.1.3",
     "revision": "bbfcbcd31d8c2b2de30ea1d8143b85b17f8ed109",
-    "producer_file": "message-translator.ts",
+    "producer_file": "apps/vscode/src/sdk/message-translator.ts",
     "producer_blob": "62f759b65e71353c3bb7495981b16ec32e735697",
     "license": "Apache-2.0",
     "runtime": {"node": "24.21.0", "typescript": "5.8.3"},
@@ -52,7 +52,12 @@
     "direct_cline_message_construction": false,
     "capture_owner": "55d2f5af-7228-4b4c-a977-fe299c575938",
     "full_artifacts": "C:\\agent-artifacts\\55d2f5af-7228-4b4c-a977-fe299c575938\\native-captures\\cline",
-    "evidence_limit": "Not a live CLI/VSCode conversation or raw session.messages.json storage. ts values 1/2/3 are native minter identities, not wall-clock timestamps. Repeated identities are actual partial/final UI updates. Usage and tool correlation IDs are absent. Socket/process guards were self-tested with zero capture attempts. Decoder timestamp and incremental-update qualification remains open."
+    "qualification_envelope": {
+      "id": "Exact native message.ts integer, unchanged and not epoch-seeded",
+      "_codeplane_source_format": {"producer": "cline", "version": "4.1.3", "representation": "sdk-ui-update"},
+      "message": "Unmodified decoded native UI record from the retained byte fixture"
+    },
+    "evidence_limit": "Not a live CLI/VSCode conversation or raw session.messages.json storage. ts values 1/2/3 are native minter identities, not wall-clock timestamps. Repeated identities are actual partial/final UI updates. The app-owned envelope selects these semantics explicitly; untagged flat records retain legacy timestamp-backed behavior. Final UI tool content omits the original CoreSessionEvent output/success fields and cannot prove execution completion, success or duration. Completion banners are not session-terminal proof. The verified translator also defaults missing SDK metrics to zero in UI display data; these values are not promoted to known execution usage or cost. Usage and tool correlation IDs are absent in this capture. Socket/process guards were self-tested with zero capture attempts."
   },
   "copilot_markdown": {
     "file": "copilot-1.0.108.session-store-turns.json",
