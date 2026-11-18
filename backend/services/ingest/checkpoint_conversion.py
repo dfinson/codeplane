@@ -1,8 +1,13 @@
 """Explicit, quiescent v1/v2 conversion; never rewrites or re-emits source history.
 
 Rollback restores only an unchanged conversion boundary, not a provider or its
-new outcomes. Once either reader advances, retained evidence remains readable
-but a new transition requires reconciliation rather than offset reset.
+new outcomes. Any retained event-history change, including diagnostics or title
+events, blocks rollback. Once either reader advances, retained evidence remains
+readable but a new transition requires reconciliation rather than offset reset.
+
+Final history and physical-prefix revalidation holds the database writer
+transaction. Large conversions can delay other writers and belong in quiescent
+maintenance periods, not an uninterrupted-write availability guarantee.
 """
 
 from __future__ import annotations
@@ -49,10 +54,15 @@ def _canonical_event(event: SessionEvent) -> dict[str, Any]:
 
 
 def _compare_event(old: SessionEvent, new: SessionEvent) -> bytes:
-    before, after = _canonical_event(old), _canonical_event(new)
+    before = _canonical_record(_canonical_event(old))
+    after = _canonical_record(_canonical_event(new))
     _require(before == after, "canonical output differs (identity, time, payload or metadata)")
-    _require(old.raw_event is None or old.raw_event == new.raw_event, "retained original raw event differs")
-    return _canonical_record(before)
+    if old.raw_event is not None:
+        _require(
+            new.raw_event is not None and _canonical_record(old.raw_event) == _canonical_record(new.raw_event),
+            "retained original raw event differs",
+        )
+    return before
 
 
 async def _history_digest(session: AsyncSession, job_id: str, framework: str, external_id: str, accepted: int) -> str:
@@ -126,6 +136,8 @@ async def _convert(
         _require(framework is not None and bool(job.external_session_id), "Job does not own a native CLI source")
         _require(isinstance(checkpoint, dict), "no provable native checkpoint")
         assert framework is not None and job.external_session_id is not None and checkpoint is not None
+        revision = checkpoint.get("version")
+        _require(type(revision) is int and revision in (1, 2), "unsupported native checkpoint version")
         current_count = checkpoint.get("record_count")
         _require(type(current_count) is int and current_count >= 0, "invalid physical record count")
         assert isinstance(current_count, int)
@@ -133,6 +145,7 @@ async def _convert(
         retained = _conversion(checkpoint)
         original = retained["evidence"]["original_checkpoint"] if retained else checkpoint
         offset = retained["evidence"]["original_tail_offset"] if retained else job.tail_offset
+        _require(type(offset) is int and offset >= 0, "invalid retained decoded cursor")
         emitted = await EventRepository(session).count_native_events(job_id, framework, job.external_session_id)
     base = {key: value for key, value in checkpoint.items() if key != "conversion"}
     if retained is not None:
@@ -147,12 +160,17 @@ async def _convert(
             return _result("already_converted", job_id, retained)
         expected = evidence["converted_checkpoint"] if rollback else original
         _require(
-            base == expected and job.tail_offset == offset and history_digest == evidence["history_sha256"],
+            _canonical_record(base) == _canonical_record(expected)
+            and job.tail_offset == offset
+            and history_digest == evidence["history_sha256"],
             "progress or history changed after the retained conversion boundary",
         )
     else:
         _require(not rollback, "no retained conversion to roll back")
-    _require(original.get("version") == 1, "only an explicit version-1 boundary may be converted")
+    _require(
+        type(original.get("version")) is int and original["version"] == 1,
+        "only an explicit version-1 boundary may be converted",
+    )
     count = original.get("record_count")
     _require(type(count) is int and count >= 0, "invalid physical record count")
     assert isinstance(count, int)
@@ -194,8 +212,10 @@ async def _convert(
             prefix = _advance_prefix(prefix, _canonical_record(raw) if isinstance(raw, dict) else b"")
         _require(prefix.hex() == original["prefix_sha256"], "accepted physical prefix changed")
         _require(decoded == offset, "decoded cursor ends inside a compound record or differs from accepted prefix")
-        _require(old.checkpoint() == new.decoder.checkpoint(), "buffered motivation or turn state differs")
-        continuation = _advance_prefix(bytes(32), _canonical_record(asdict(old.checkpoint())))
+        old_state = _canonical_record(asdict(old.checkpoint()))
+        new_state = _canonical_record(asdict(new.decoder.checkpoint()))
+        _require(old_state == new_state, "buffered motivation or turn state differs")
+        continuation = _advance_prefix(bytes(32), old_state)
         old_starts, new_starts = old_pairs.checkpoint().starts, new_pairs.checkpoint().starts
         _require(len(old_starts) == len(new_starts), "buffered tool-start count differs")
         for left_start, right_start in zip(old_starts, new_starts, strict=True):
@@ -224,7 +244,10 @@ async def _convert(
             "history_sha256": history_digest,
         }
         if retained is not None:
-            _require(evidence == retained["evidence"], "retained conversion proof no longer matches either reader")
+            _require(
+                _canonical_record(evidence) == _canonical_record(retained["evidence"]),
+                "retained conversion proof no longer matches either reader",
+            )
         status = "rolled_back" if rollback else "converted"
         record = {
             "status": status,

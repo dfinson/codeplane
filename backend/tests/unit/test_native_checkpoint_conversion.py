@@ -275,7 +275,7 @@ async def test_real_parser_difference_refuses_promotion(conversion_store, tmp_pa
         legacy_mapping["motivation"] = {"sources": [{"events": ["session.info"], "field": "message"}]}
         records = [{"type": "session.info", "data": {"message": "Pending intent"}}]
     legacy_dir = tmp_path / "home" / ".traceforge" / "mappings"
-    native_dir = tmp_path / "home" / ".codeplane" / "mappings"
+    native_dir = tmp_path / "mappings"
     legacy_dir.mkdir(parents=True)
     native_dir.mkdir(parents=True)
     (legacy_dir / "copilot.yaml").write_text(yaml.safe_dump(legacy_mapping))
@@ -311,7 +311,7 @@ async def test_source_change_after_staged_promotion_rolls_back(conversion_store,
             from backend.services.ingest.mapping import resolve_mapping_path
 
             definition = resolve_mapping_path("copilot").read_bytes()
-            directory = tmp_path / "home" / ".codeplane" / "mappings"
+            directory = tmp_path / "mappings"
             directory.mkdir(parents=True)
             (directory / "copilot.yaml").write_bytes(definition + b"\n# changed during conversion\n")
         return state
@@ -575,3 +575,135 @@ def test_existing_raw_payload_is_not_excluded_from_equivalence():
     changed = event.model_copy(update={"raw_event": {"different": "retained producer payload"}})
     with pytest.raises(StateConflictError, match="raw event differs"):
         _compare_event(changed, event)
+
+
+@pytest.mark.parametrize(("boolean", "number"), [(True, 1), (False, 0)], ids=["true-one", "false-zero"])
+async def test_real_legacy_boolean_number_difference_preserves_original_history(
+    conversion_store, tmp_path, boolean, number
+):
+    import yaml
+    from traceforge.config.mappings import resolve_mapping_path
+
+    from backend.services.ingest.checkpoint_conversion import convert_native_checkpoint
+
+    legacy = yaml.safe_load(resolve_mapping_path("copilot").read_text())
+    replacement = json.loads(json.dumps(legacy))
+    legacy["events"]["session.info"]["payload"] = {"value": "data.legacy"}
+    replacement["events"]["session.info"]["payload"] = {"value": "data.replacement"}
+    for directory, definition in (
+        (tmp_path / "home" / ".traceforge" / "mappings", legacy),
+        (tmp_path / "home" / ".codeplane" / "mappings", replacement),
+        (tmp_path / "mappings", replacement),
+    ):
+        directory.mkdir(parents=True)
+        (directory / "copilot.yaml").write_text(yaml.safe_dump(definition))
+    raw = {
+        "type": "session.info",
+        "data": {
+            "legacy": {"nested": [boolean]},
+            "replacement": {"nested": [number]},
+        },
+    }
+    path = tmp_path / "producer.jsonl"
+    await _populate(conversion_store, path, records=[raw])
+    before = json.dumps(await _history(conversion_store), sort_keys=True)
+    async with conversion_store() as session:
+        original = (await JobRepository(session).get_ingest_state("native")).encoded_checkpoint
+    with pytest.raises(StateConflictError, match="canonical output"):
+        await convert_native_checkpoint(conversion_store, job_id="native", source_path=path)
+    async with conversion_store() as session:
+        assert (await JobRepository(session).get_ingest_state("native")).encoded_checkpoint == original
+    assert json.dumps(await _history(conversion_store), sort_keys=True) == before
+
+
+@pytest.mark.parametrize(("boolean", "number"), [(True, 1), (False, 0)], ids=["true-one", "false-zero"])
+def test_retained_raw_boolean_number_difference_is_not_equivalent(tmp_path, monkeypatch, boolean, number):
+    from backend.services.ingest._base import _NativeIdentity
+    from backend.services.ingest.checkpoint_conversion import _compare_event
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("CODEPLANE_HOME", str(tmp_path / "active"))
+    monkeypatch.setattr(backend_config, "_codeplane_dir", None)
+    raw = {"type": "assistant.message", "data": {"content": "Input"}, "nested": [boolean]}
+    event = next(_NativeIdentity("copilot", "source", "job", datetime(2026, 1, 1, tzinfo=UTC)).events(raw, 0))
+    changed = event.model_copy(update={"raw_event": {**raw, "nested": [number]}})
+    with pytest.raises(StateConflictError, match="raw event differs"):
+        _compare_event(event, changed)
+
+
+async def test_active_home_mapping_mismatch_cannot_be_hidden_by_default_home(conversion_store, tmp_path):
+    import yaml
+    from traceforge.config.mappings import resolve_mapping_path
+
+    from backend.services.ingest.checkpoint_conversion import convert_native_checkpoint
+
+    legacy = yaml.safe_load(resolve_mapping_path("copilot").read_text())
+    replacement = json.loads(json.dumps(legacy))
+    replacement["events"]["assistant.message"]["payload"]["content"] = "data.replacement"
+    for directory, definition in (
+        (tmp_path / "home" / ".codeplane" / "mappings", legacy),
+        (tmp_path / "mappings", replacement),
+    ):
+        directory.mkdir(parents=True)
+        (directory / "copilot.yaml").write_text(yaml.safe_dump(definition))
+    path = tmp_path / "producer.jsonl"
+    original = await _populate(
+        conversion_store,
+        path,
+        records=[{"type": "assistant.message", "data": {"content": "Accepted", "replacement": "Different"}}],
+    )
+    before = await _history(conversion_store)
+    with pytest.raises(StateConflictError, match="canonical output"):
+        await convert_native_checkpoint(conversion_store, job_id="native", source_path=path)
+    assert await _wait_checkpoint(conversion_store, original["record_count"]) == original
+    assert await _history(conversion_store) == before
+
+
+@pytest.mark.parametrize("selection", ["active", "legacy-fallback"])
+async def test_active_home_replacement_selection_resumes_without_migration(conversion_store, tmp_path, selection):
+    import yaml
+    from traceforge.config.mappings import resolve_mapping_path
+
+    from backend.services.ingest.checkpoint_conversion import convert_native_checkpoint
+
+    original_mapping = yaml.safe_load(resolve_mapping_path("copilot").read_text())
+    wrong = json.loads(json.dumps(original_mapping))
+    wrong["events"]["assistant.message"]["payload"]["content"] = "data.replacement"
+    definitions = [
+        (tmp_path / "home" / ".traceforge" / "mappings", original_mapping),
+        (tmp_path / "home" / ".codeplane" / "mappings", wrong),
+    ]
+    if selection == "active":
+        definitions.append((tmp_path / "mappings", original_mapping))
+    for directory, definition in definitions:
+        directory.mkdir(parents=True)
+        (directory / "copilot.yaml").write_text(yaml.safe_dump(definition))
+    mapping_bytes = {
+        directory / "copilot.yaml": (directory / "copilot.yaml").read_bytes() for directory, _ in definitions
+    }
+    path = tmp_path / "producer.jsonl"
+    await _populate(
+        conversion_store,
+        path,
+        records=[{"type": "assistant.message", "data": {"content": "Accepted", "replacement": "Wrong"}}],
+    )
+    await convert_native_checkpoint(conversion_store, job_id="native", source_path=path)
+    converted = await _wait_checkpoint(conversion_store, 1)
+    with path.open("ab") as producer:
+        producer.write(
+            json.dumps(
+                {"type": "assistant.message", "data": {"content": "Continued", "replacement": "Wrong tail"}}
+            ).encode()
+            + b"\n"
+        )
+    task = asyncio.create_task(_watcher(conversion_store, "copilot")._tail_traceforge_events("source", "native", path))
+    try:
+        progressed = await _wait_checkpoint(conversion_store, 2)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert progressed["mapping_sha256"] == converted["mapping_sha256"]
+    assert [event["payload"]["content"] for _, event in await _history(conversion_store)] == ["Accepted", "Continued"]
+    assert {path: path.read_bytes() for path in mapping_bytes} == mapping_bytes
+    assert (tmp_path / "mappings").exists() == (selection == "active")

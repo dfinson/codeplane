@@ -49,6 +49,7 @@ LATE_BINDING_MODULES = [
     "backend.services.credentials.encryption",
     "backend.services.dev_restart.launch_profile",
     "backend.services.dev_restart.restart_protocol",
+    "backend.services.ingest._base",
     "backend.services.ingest.mapping_registry",
     "backend.services.job.retention_service",
     "backend.services.setup.checks",
