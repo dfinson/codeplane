@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ._optional import load_sdk
-from .binding import NativeCall
+from .binding import ExecutionEvidence, NativeCall, encode_arguments
+from .langchain import tool_identity, track_tool
 from .readiness import UnsupportedNativeHookError
 
 if TYPE_CHECKING:
@@ -24,11 +25,24 @@ def install(gate: GateAttachment, node: LangGraphToolNode) -> None:
         raise UnsupportedNativeHookError("An existing sync-only ToolNode wrapper needs a matching async wrapper")
 
     def call(request: Any) -> NativeCall:
+        if request.tool is not None:
+            track_tool(gate, request.tool)
+
+        def fingerprint() -> str:
+            return encode_arguments(
+                {
+                    "tool_call": request.tool_call,
+                    "tool": tool_identity(request.tool) if request.tool is not None else None,
+                }
+            )
+
         return NativeCall(
             request.tool_call["name"],
             request.tool_call["args"],
             request.tool_call["id"],
             definition=request.tool.description if request.tool is not None else "",
+            fingerprint=fingerprint,
+            evidence=ExecutionEvidence(False),
         )
 
     def denied(request: Any) -> Any:

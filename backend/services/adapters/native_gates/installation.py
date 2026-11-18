@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import threading
+from contextvars import ContextVar
+from functools import wraps
 from importlib import import_module
+from inspect import iscoroutine, iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
-from .readiness import require_ready
+from .readiness import UnsupportedNativeHookError
+from .selection import require_installation
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -23,6 +27,8 @@ class GateAttachment:
         self.target = target
         self._closed = threading.Event()
         self._undo: list[Callable[[], None]] = []
+        self._executing: ContextVar[NativeCall | None] = ContextVar("native_execution", default=None)
+        self._tracked: set[tuple[int, str]] = set()
 
     @property
     def active(self) -> bool:
@@ -30,6 +36,8 @@ class GateAttachment:
 
     def claim(self, target: Any) -> None:
         owner = getattr(target, _MARKER, None)
+        if owner is self:
+            return
         if owner is not None:
             raise ValueError("Native object already belongs to another gate attachment")
         self.patch(target, _MARKER, self)
@@ -47,6 +55,40 @@ class GateAttachment:
                     object.__setattr__(target, name, original)
 
         self._undo.append(restore)
+
+    def track_callable(self, target: Any, name: str) -> bool:
+        """Observe actual callable entry, independently of permission wrappers."""
+        key = (id(target), name)
+        if key in self._tracked:
+            return True
+        original = getattr(target, name, None)
+        if not callable(original):
+            return False
+        self.claim(target)
+
+        @wraps(original)
+        def synchronous(*args: Any, **kwargs: Any) -> Any:
+            call = self._executing.get()
+            token = self.binding.begin_work(call) if call is not None else None
+            try:
+                return original(*args, **kwargs)
+            finally:
+                if token is not None:
+                    self.binding.end_work(token)
+
+        @wraps(original)
+        async def asynchronous(*args: Any, **kwargs: Any) -> Any:
+            call = self._executing.get()
+            token = self.binding.begin_work(call) if call is not None else None
+            try:
+                return await original(*args, **kwargs)
+            finally:
+                if token is not None:
+                    self.binding.end_work(token)
+
+        self.patch(target, name, asynchronous if iscoroutinefunction(original) else synchronous)
+        self._tracked.add(key)
+        return True
 
     def cleanup(self, undo: Callable[[], None]) -> None:
         self._undo.append(undo)
@@ -67,25 +109,35 @@ class GateAttachment:
     async def complete[T](
         self, call: NativeCall, invoke: Callable[[], Awaitable[T]], *, outcome: Callable[[T], bool | None] | None = None
     ) -> T:
+        token = self._executing.set(call)
         try:
             result = await invoke()
-        except BaseException:
-            await self.binding.report(call, True, False)
+        except BaseException as exc:
+            started = call.execution_probe(exc) if call.execution_probe is not None else call.evidence.started
+            await self.binding.report(call, started, False)
             raise
+        finally:
+            self._executing.reset(token)
         succeeded = outcome(result) if outcome is not None else True
-        await self.binding.report(call, True if succeeded is True else None, succeeded)
+        started = call.execution_probe(None) if call.execution_probe is not None else call.evidence.started
+        await self.binding.report(call, started, succeeded)
         return result
 
     def complete_sync[T](
         self, call: NativeCall, invoke: Callable[[], T], *, outcome: Callable[[T], bool | None] | None = None
     ) -> T:
+        token = self._executing.set(call)
         try:
             result = invoke()
-        except BaseException:
-            self.binding.report_sync(call, True, False)
+        except BaseException as exc:
+            started = call.execution_probe(exc) if call.execution_probe is not None else call.evidence.started
+            self.binding.report_sync(call, started, False)
             raise
+        finally:
+            self._executing.reset(token)
         succeeded = outcome(result) if outcome is not None else True
-        self.binding.report_sync(call, True if succeeded is True else None, succeeded)
+        started = call.execution_probe(None) if call.execution_probe is not None else call.evidence.started
+        self.binding.report_sync(call, started, succeeded)
         return result
 
 
@@ -102,12 +154,19 @@ class NativeGates:
         previous = self._attachments.get(id(target))
         if previous is not None and previous.active:
             return previous
-        require_ready(self.binding.family)
-        module = import_module(f"{__package__}.{self.binding.family}")
+        selected = require_installation(self.binding.family)
+        module = import_module(selected.module)
+        install = getattr(module, "install", None)
+        if not callable(install) or iscoroutinefunction(install):
+            raise UnsupportedNativeHookError("Native installer must implement the synchronous app-owned contract")
         attachment = GateAttachment(self.binding, target)
         try:
             attachment.claim(target)
-            module.install(attachment, target)
+            result = install(attachment, target)
+            if result is not None:
+                if iscoroutine(result):
+                    result.close()
+                raise UnsupportedNativeHookError("Native installer did not complete its synchronous attachment")
         except BaseException:
             attachment.detach()
             raise

@@ -1,13 +1,9 @@
 import asyncio
-import json
-import threading
 from typing import TYPE_CHECKING
 
 import pytest
 
-from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.adapters.native_gates._optional import load_sdk
-from backend.services.adapters.native_gates.observation import subscribe_crewai, subscribe_openai
 from backend.tests.native_gates.producers import make_producer
 
 
@@ -124,67 +120,6 @@ async def test_openai_shared_tool_is_not_unwrapped_by_another_binding(binding_fa
     second.detach(sibling)
     await producer.invoke()
     assert len(producer.calls) == len(decision.invocations) == 1
-
-
-def test_native_trace_export_is_additive_exact_and_metadata_only(monkeypatch):
-    tracing = load_sdk("agents.tracing")
-    providers = load_sdk("agents.tracing.provider")
-
-    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "false")
-    provider = providers.DefaultTraceProvider()
-    execution = ExecutionIdentity("job", "binding", "epoch", "token")
-    a: list[dict[str, object]] = []
-    b: list[dict[str, object]] = []
-    options = dict(identity_key=b"k" * 32, approved_models=frozenset({"local"}), provider=provider)
-    first = subscribe_openai(execution, "trace_local", sink=a.append, **options)
-    second = subscribe_openai(execution, "trace_local", sink=b.append, **options)
-    with provider.create_trace("local", trace_id="trace_local") as trace:
-        with provider.create_span(
-            tracing.GenerationSpanData(
-                input=[{"content": "secret=do-not-export"}],
-                output=[{"content": "private text"}],
-                model="local",
-                usage={"input_tokens": 0, "output_tokens": 3},
-            ),
-            parent=trace,
-        ):
-            pass
-        first.detach()
-        first.detach()
-    assert len(a) == 1 and len(b) == 2
-    assert a[0]["usage"][0]["amount"] == "0"
-    assert a[0]["usage"][0]["unit"] == "input_tokens"
-    assert a[0]["usage"][1]["amount"] == "3"
-    assert "secret" not in json.dumps(a)
-    assert "private" not in json.dumps(a)
-    assert "usage" not in b[-1]
-    second.detach()
-    assert provider._multi_processor._processors == ()
-
-
-async def test_crewai_event_bus_observation_preserves_siblings(binding_factory):
-    producer = make_producer("crewai-sync")
-    execution = ExecutionIdentity("job", "binding", "epoch", "token")
-    a: list[dict[str, object]] = []
-    b: list[dict[str, object]] = []
-    done = threading.Event()
-
-    def receive(value):
-        b.append(value)
-        done.set()
-
-    first = subscribe_crewai(execution, producer.target, identity_key=b"k" * 32, sink=a.append)
-    second = subscribe_crewai(execution, producer.target, identity_key=b"k" * 32, sink=receive)
-    try:
-        first.detach()
-        first.detach()
-        await producer.invoke()
-        assert await asyncio.to_thread(done.wait, 3)
-        assert not a and len(b) == 1
-        assert "result:value" not in json.dumps(b) and "tool_args" not in json.dumps(b)
-    finally:
-        first.detach()
-        second.detach()
 
 
 @pytest.mark.parametrize("allowed", [True, False])

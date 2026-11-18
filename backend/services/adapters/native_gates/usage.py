@@ -15,7 +15,20 @@ if TYPE_CHECKING:
 def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tuple[UsageAmount, ...]:
     values: dict[str, int] = {}
     source = ""
-    if family == "pydantic_ai":
+    if family == "crewai":
+        crew_output = load_sdk("crewai.crews.crew_output")
+        if isinstance(result, crew_output.CrewOutput):
+            reported = result.token_usage
+            for native_name, unit in (
+                ("prompt_tokens", "input_tokens"),
+                ("completion_tokens", "output_tokens"),
+                ("cached_prompt_tokens", "cache_read_tokens"),
+            ):
+                amount = getattr(reported, native_name)
+                if native_name in reported.model_fields_set or amount:
+                    values[unit] = amount
+            source = "CrewOutput.token_usage"
+    elif family == "pydantic_ai":
         pydantic_run = load_sdk("pydantic_ai.run")
 
         if isinstance(result, pydantic_run.AgentRunResult):

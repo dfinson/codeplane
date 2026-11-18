@@ -9,7 +9,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from ._optional import load_sdk
-from .binding import NativeCall, encode_arguments
+from .binding import ExecutionEvidence, NativeCall, encode_arguments
 
 if TYPE_CHECKING:
     from ._optional import LangChainTool
@@ -20,11 +20,38 @@ _tools = load_sdk("langchain_core.tools")
 BaseTool, ToolException = _tools.BaseTool, _tools.ToolException
 
 
+def track_tool(gate: GateAttachment, tool: Any) -> None:
+    if any(
+        base.__module__ == "agentmesh.integrations.langchain.tools" and base.__name__ == "TrustVerifiedTool"
+        for base in type(tool).__mro__
+    ):
+        gate.track_callable(tool, "_inner_fn")
+    elif hasattr(tool, "func") or hasattr(tool, "coroutine"):
+        gate.track_callable(tool, "func")
+        gate.track_callable(tool, "coroutine")
+    else:
+        gate.track_callable(tool, "_run")
+        if type(tool)._arun is not BaseTool._arun:
+            gate.track_callable(tool, "_arun")
+
+
+def tool_identity(tool: Any) -> dict[str, object]:
+    return {
+        "target": id(tool),
+        "name": tool.name,
+        "description": tool.description,
+        "func": id(getattr(tool, "func", None)),
+        "coroutine": id(getattr(tool, "coroutine", None)),
+        "inner": id(getattr(tool, "_inner_fn", None)),
+    }
+
+
 def install(gate: GateAttachment, tool: LangChainTool) -> None:
     if not isinstance(tool, BaseTool):
         raise TypeError("LangChain gating requires the original BaseTool instance")
     call_id: ContextVar[str | None] = ContextVar("native_langchain_call", default=None)
     delegated: ContextVar[tuple[str, list[bool], Lock] | None] = ContextVar("native_langchain_delegation", default=None)
+    track_tool(gate, tool)
     original_run, original_arun = tool._run, tool._arun
 
     def call(args: tuple[Any, ...], kwargs: dict[str, Any], manager: Any) -> NativeCall:
@@ -35,6 +62,14 @@ def install(gate: GateAttachment, tool: LangChainTool) -> None:
             str(manager.run_id) if manager else None,
             str(manager.parent_run_id) if manager and manager.parent_run_id else None,
             tool.description,
+            fingerprint=lambda: encode_arguments(
+                {
+                    **tool_identity(tool),
+                    "run_id": str(manager.run_id) if manager else None,
+                    "parent_id": str(manager.parent_run_id) if manager and manager.parent_run_id else None,
+                }
+            ),
+            evidence=ExecutionEvidence(False),
         )
 
     def forwarded(original: Any, kwargs: dict[str, Any], config: Any, manager: Any) -> dict[str, Any]:
