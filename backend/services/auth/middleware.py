@@ -441,6 +441,19 @@ async def authenticate_logout_request(request: Request) -> Response:
 def is_public_request(request: Request) -> bool:
     """Only bootstrap resources and exact token-validated read routes are public."""
     path = request.url.path
+    gate_source = r"/api/gate/gate-[a-f0-9]{32}"
+    gate_request = gate_source + r"/requests/[a-zA-Z0-9_-]{1,128}"
+    if (
+        request.method == "POST"
+        and re.fullmatch(gate_source + r"/(requests|invoke)", path)
+        or request.method in {"GET", "DELETE"}
+        and re.fullmatch(gate_request, path)
+        or request.method == "POST"
+        and re.fullmatch(gate_request + r"/(consume|observations)", path)
+    ):
+        # These exact handlers require their own execution-scoped control credential,
+        # including in direct-local mode. Issuance remains operator-authenticated.
+        return True
     if request.method == "POST" and path in {"/api/auth/login", "/api/auth/logout"}:
         return True
     if request.method not in {"GET", "HEAD"}:

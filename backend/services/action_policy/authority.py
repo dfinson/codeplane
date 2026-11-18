@@ -220,6 +220,7 @@ class PolicyAuthority:
                     "admission_id": pin.admission_id,
                     "policy": pin.contract.policy.model_dump(mode="json"),
                     "reason_code": decision.reason_code,
+                    **({"correlation_id": origin.correlation_id} if origin.correlation_id is not None else {}),
                     "fields": {key: filter_credentials(value).text for key, value in source_fields.items()},
                 },
                 sort_keys=True,

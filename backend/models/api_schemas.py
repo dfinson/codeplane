@@ -24,6 +24,7 @@ from backend.models.domain import (  # noqa: TC001 — Pydantic resolves annotat
 # Domain-grouped sub-modules — canonical definitions for base types and telemetry.
 # Re-exported here for backward compatibility.
 from backend.models.schemas.base import *  # noqa: E402,F401,F403
+from backend.models.schemas.external_gate import *  # noqa: E402,F401,F403
 from backend.models.schemas.integrations import *  # noqa: E402,F401,F403
 from backend.models.schemas.metrics import *  # noqa: E402,F401,F403
 from backend.models.schemas.recipes import *  # noqa: E402,F401,F403
