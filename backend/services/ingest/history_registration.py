@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from backend.models.domain import Job, JobNotFoundError, JobSource, JobState, StateConflictError
 from backend.services.action_policy.credential_filter import filter_credentials
-from backend.services.ingest.mapping import NATIVE_FORMATS
+from backend.services.ingest.mapping_registry import MappingRegistry
 from backend.services.ingest.otel_observation import OTEL_FORMAT
 from backend.validators import validate_integration_binding_id
 
@@ -19,10 +19,18 @@ if TYPE_CHECKING:
 
 
 class HistoryRegistration:
-    def __init__(self, bindings: IntegrationRepository, jobs: JobRepository, projects: ProjectRepository) -> None:
+    def __init__(
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        projects: ProjectRepository,
+        *,
+        mapping_registry: MappingRegistry | None = None,
+    ) -> None:
         self._bindings = bindings
         self._jobs = jobs
         self._projects = projects
+        self._mapping_registry = mapping_registry or MappingRegistry()
 
     async def _existing_job(self, binding: IntegrationBinding, project_id: str, config: dict[str, str]) -> Job:
         if (
@@ -53,8 +61,6 @@ class HistoryRegistration:
         base_ref: str | None = None,
     ) -> Job:
         validate_integration_binding_id(binding_id)
-        if format_id not in NATIVE_FORMATS and format_id != OTEL_FORMAT:
-            raise ValueError("Unsupported native history format")
         if not binding_id or not external_session_id or len(binding_id) > 128 or len(external_session_id) > 512:
             raise ValueError("History registration requires binding and external source identities")
         label = " ".join(filter_credentials(title or f"{format_id} observation").text.split())[:80]
@@ -65,7 +71,10 @@ class HistoryRegistration:
         if existing is not None:
             return await self._existing_job(existing, project_id, config)
         adapter_id = "generic-otel" if format_id == OTEL_FORMAT else "native"
-        binding, created = await self._bindings.create_observation(binding_id, project_id, adapter_id, config)
+        pinned_config = (
+            config if format_id == OTEL_FORMAT else {**config, "mapping_pin": self._mapping_registry.pin(format_id)}
+        )
+        binding, created = await self._bindings.create_observation(binding_id, project_id, adapter_id, pinned_config)
         if not created:
             return await self._existing_job(binding, project_id, config)
         now = datetime.now(UTC)
