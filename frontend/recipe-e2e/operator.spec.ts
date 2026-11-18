@@ -1,9 +1,10 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import type { Job, RecipeAttemptInspection, RecipeCurrentRun, RecipeStepInspection, RecipeStepList } from "../src/api/types";
 
 let server: ChildProcess;
 let directory = "";
@@ -246,3 +247,185 @@ test("pins a reusable block, joins isolated command branches and rejects only th
   expect(detail.attempt.result.evidence.decision).toBe("rejected");
   expect(detail.attempt.executions).toEqual([]);
 });
+
+async function tabTo(page: Page, target: Locator, backwards = false) {
+  for (let count = 0; count < 30; count++) {
+    if (await target.evaluate((element) => element === document.activeElement)) return;
+    await page.keyboard.press(backwards ? "Shift+Tab" : "Tab");
+  }
+  await expect(target).toBeFocused();
+}
+
+async function expectVisibleKeyboardFocus(target: Locator) {
+  await expect(target).toBeFocused();
+  expect(await target.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return element.matches(":focus-visible") &&
+      ((style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0) || style.boxShadow !== "none");
+  })).toBe(true);
+}
+
+for (const reducedMotion of ["no-preference", "reduce"] as const) {
+  test(`repair exhaustion retains distinct attempt evidence and keyboard focus (${reducedMotion})`, async ({ page, request }) => {
+    await page.emulateMedia({ reducedMotion });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const projects = await (await request.get("/api/settings/projects")).json();
+    const project = projects.items[0] ?? await (await request.post("/api/settings/projects", {
+      data: { name: "Repair exhaustion qualification", repoPaths: [repository] },
+    })).json();
+    const title = `Bounded repair ${reducedMotion}`;
+    const command = [
+      "attempt=0",
+      "if test -f repair-count.txt; then read -r attempt < repair-count.txt; fi",
+      "attempt=$((attempt + 1))",
+      "printf '%s\\n' \"$attempt\" > repair-count.txt",
+      "printf 'Repair attempt %s\\n' \"$attempt\"",
+      "printf 'Check failed after repair %s\\n' \"$attempt\" >&2",
+      "exit \"$((10 + attempt))\"",
+    ].join("; ");
+    const draftResponse = await request.post("/api/recipes", { data: {
+      name: title, entrySteps: ["repair"], steps: [
+        {
+          id: "repair", title: "Bounded repair check",
+          instructions: "Record one local repair attempt, then run its failing check. The published bound is total attempts.",
+          runner: { kind: "command", argv: ["sh", "-c", command], timeoutSeconds: 30 },
+          capabilities: ["read", "write", "shell", "external_access"], workspace: { mode: "mutable" },
+          inputs: { request: { type: "string", binding: { source: "literal", value: "Inspect each failed repair independently." } } },
+          outputs: { result: { type: "object" }, code: { type: "code_ref" } },
+          retry: { maxAttempts: 3, retryOn: ["failed"], exhaustion: { nextSteps: ["decide"] } },
+          routes: { succeeded: { nextSteps: ["passed"] }, failed: { terminal: "failed" } },
+        },
+        {
+          id: "passed", title: "Passing-only successor",
+          runner: { kind: "human", proposedAction: "This action requires a passing check." },
+          capabilities: [], workspace: { mode: "none" }, dependsOn: [{ stepId: "repair", outcomes: ["succeeded"] }],
+          routes: { approved: { terminal: "succeeded" }, rejected: { terminal: "failed" } },
+        },
+        {
+          id: "decide", title: "Inspect exhausted repairs",
+          runner: { kind: "human", proposedAction: "Inspect the final failed diagnostic. No passing result or new attempt is granted." },
+          capabilities: [], workspace: { mode: "none" }, dependsOn: [{ stepId: "repair", outcomes: ["failed"] }],
+          inputs: { diagnostic: {
+            type: "object", optional: true, degradedReason: "Failed diagnostic only, never a passing check.",
+            binding: { source: "output", stepId: "repair", output: "result" },
+          } },
+          routes: { approved: { terminal: "canceled" }, rejected: { terminal: "failed" } },
+        },
+      ],
+    } });
+    expect(draftResponse.ok(), await draftResponse.text()).toBeTruthy();
+    const draft = await draftResponse.json();
+    const published = await request.post(`/api/recipes/${draft.id}/publish`, { data: { expectedVersion: 1 } });
+    expect(published.ok(), await published.text()).toBeTruthy();
+    const revision = await published.json();
+    const created = await request.post("/api/jobs", { data: {
+      projectId: project.id, repo: repository, prompt: "Exhaust the published repair bound without hidden retry.",
+      title, branch: `repair-${reducedMotion}`, worktreeName: `repair-${reducedMotion}`,
+      preset: "autonomous", recipe: { revisionId: revision.id },
+    } });
+    expect(created.ok(), await created.text()).toBeTruthy();
+    const job = await created.json();
+    const { run }: RecipeCurrentRun = await (await request.get(`/api/jobs/${job.id}/recipe/current`)).json();
+    expect(run).not.toBeNull();
+    const root = `/api/jobs/${job.id}/recipe/runs/${run!.id}`;
+    let steps: RecipeStepList;
+    await expect.poll(async () => {
+      steps = await (await request.get(`${root}/steps`)).json();
+      return steps.items.find((step) => step.stepPath === "decide")?.state;
+    }, { timeout: 20_000 }).toBe("needs_decision");
+    const repair = steps!.items.find((step) => step.stepPath === "repair")!;
+    const gate = steps!.items.find((step) => step.stepPath === "decide")!;
+    const passed = steps!.items.find((step) => step.stepPath === "passed")!;
+    expect(passed.state).toBe("skipped");
+    expect(passed.currentAttemptId).toBeNull();
+    const inspection: RecipeStepInspection = await (await request.get(`${root}/steps/${repair.id}`)).json();
+    expect(inspection.attempts.map((attempt) => [attempt.number, attempt.outcome])).toEqual([[1, "failed"], [2, "failed"], [3, "failed"]]);
+    expect(new Set(inspection.attempts.map((attempt) => attempt.id)).size).toBe(3);
+    const details: RecipeAttemptInspection[] = [];
+    for (const summary of inspection.attempts) {
+      details.push(await (await request.get(`${root}/steps/${repair.id}/attempts/${summary.id}`)).json());
+    }
+    const receiptIds = details.flatMap((detail) => detail.attempt.outputs.map((output) => output.id));
+    expect(new Set(receiptIds).size).toBe(6);
+    expect(new Set(details.map((detail) => detail.attempt.outputs.find((output) => output.name === "code")!.checksum)).size).toBe(3);
+    const consumed: RecipeAttemptInspection = await (await request.get(`${root}/steps/${gate.id}/attempts/${gate.currentAttemptId}`)).json();
+    expect(consumed.attempt.inputs.diagnostic.producingAttemptId).toBe(repair.currentAttemptId);
+    expect(consumed.attempt.inputs.diagnostic.producerOutcome).toBe("failed");
+    expect(consumed.attempt.inputs.diagnostic.degradedReason).toBe("Failed diagnostic only, never a passing check.");
+
+    await page.goto(`/jobs/${job.id}?run=${run!.id}&step=${repair.id}&attempt=${repair.currentAttemptId}`);
+    const inspector = page.getByRole("region", { name: "Recipe step inspector" });
+    const railButton = page.getByRole("complementary", { name: "Recipe steps" }).getByRole("button", { name: /^Bounded repair check/ });
+    await expect(inspector.getByRole("heading", { name: "Bounded repair check" })).toBeVisible();
+    await expect(inspector.getByText("3 total", { exact: true })).toBeVisible();
+    await tabTo(page, railButton);
+    await expectVisibleKeyboardFocus(railButton);
+    await page.keyboard.press("Enter");
+    await expect(railButton).toBeFocused();
+    const selector = inspector.getByRole("combobox", { name: "Selected attempt" });
+    await tabTo(page, selector);
+    await expectVisibleKeyboardFocus(selector);
+    await expect(selector.locator("option")).toHaveCount(3);
+    const outputButton = inspector.getByRole("navigation", { name: "Step inspector views" }).getByRole("button", { name: "Output", exact: true });
+    await tabTo(page, outputButton);
+    await expectVisibleKeyboardFocus(outputButton);
+    await page.keyboard.press("Enter");
+    await expect(outputButton).toBeFocused();
+    for (const index of [2, 1, 0, 2]) {
+      await tabTo(page, selector, true);
+      await page.keyboard.press("Home");
+      for (let advance = 0; advance < index; advance++) await page.keyboard.press("ArrowDown");
+      await expect(selector).toHaveValue(details[index].attempt.id);
+      await expect(selector).toBeFocused();
+      await expect(inspector.getByText(`Repair attempt ${index + 1}`, { exact: true })).toBeVisible();
+      await expect(inspector.getByText(`Check failed after repair ${index + 1}`, { exact: true })).toBeVisible();
+      await expect(inspector.getByText(String(11 + index), { exact: true })).toBeVisible();
+      await expect(selector).toBeFocused();
+      if (index < 2) await expect(inspector.getByText(/Historical attempt/)).toBeVisible();
+    }
+    const refresh = inspector.getByRole("button", { name: "Refresh read" });
+    await page.keyboard.press("Shift+Tab");
+    await expect(refresh).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(refresh).toBeEnabled();
+    await expect(refresh).toBeFocused();
+    await expect(inspector.getByText("Repair attempt 3", { exact: true })).toBeVisible();
+    for (const detail of details) {
+      const retained: RecipeAttemptInspection = await (await request.get(`${root}/steps/${repair.id}/attempts/${detail.attempt.id}`)).json();
+      expect(retained.attempt).toEqual(detail.attempt);
+    }
+    const actualJob: Job = await (await request.get(`/api/jobs/${job.id}`)).json();
+    expect(await readFile(path.join(actualJob.worktreePath!, "repair-count.txt"), "utf8")).toBe("3\n");
+    expect((await (await request.get(`${root}/steps/${repair.id}`)).json()).attempts).toHaveLength(3);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const surface = inspector.getByRole("heading", { name: "Bounded repair check" });
+    await surface.dispatchEvent("touchstart", { touches: [{ identifier: 1, clientX: 320, clientY: 400 }] });
+    await surface.dispatchEvent("touchend", { changedTouches: [{ identifier: 1, clientX: 80, clientY: 400 }] });
+    const animation = await page.evaluate(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const panel = document.querySelector(".animate-slide-right");
+      return panel ? getComputedStyle(panel).animationName : "none";
+    });
+    expect(animation).toBe(reducedMotion === "reduce" ? "none" : "slide-in-from-right");
+    await expect(page.getByRole("complementary", { name: "Evidence for this decision" })).toBeVisible();
+    await page.getByRole("navigation").getByRole("button", { name: "Run", exact: true }).click();
+    await expect(inspector).toBeVisible();
+    expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(reducedMotion === "reduce");
+    await expect(selector).toHaveValue(repair.currentAttemptId!);
+    await tabTo(page, selector);
+    const decision = await request.post(`${root}/steps/${gate.id}/attempts/${gate.currentAttemptId}/decision`, { data: {
+      expectedVersion: gate.version, approvalId: consumed.gate!.binding.approvalId,
+      inputChecksum: consumed.gate!.binding.inputChecksum, decision: "rejected", outputs: {},
+    } });
+    expect(decision.ok(), await decision.text()).toBeTruthy();
+    expect((await decision.json()).status).toBe("decided");
+    await expect.poll(async () => (await (await request.get(`/api/jobs/${job.id}`)).json()).state).toBe("failed");
+    await expect(page.getByRole("region", { name: "Explicit recipe continuation" })
+      .getByRole("button", { name: "Resume Job with new run" })).toBeVisible();
+    await expect(selector).toBeFocused();
+    await expect(selector).toHaveValue(repair.currentAttemptId!);
+    expect(await readFile(path.join(actualJob.worktreePath!, "repair-count.txt"), "utf8")).toBe("3\n");
+    expect((await (await request.get(`${root}/steps/${repair.id}`)).json()).attempts).toEqual(inspection.attempts);
+  });
+}

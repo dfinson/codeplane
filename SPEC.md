@@ -354,6 +354,10 @@ instances and attempt summaries at most 20 entries; full evidence is fetched
 only for the selected attempt. Active step pages are live cursor projections,
 not a claim of a frozen historical snapshot. Resolved run history retains its
 recorded definitions, outcomes and gate receipts after a successor is admitted.
+Keyboard selection preserves focus while attempt evidence refreshes. The
+inspector's read-refresh control remains focusable while busy but cannot issue
+another read. Job tab swipes remain usable without spatial animation when
+reduced motion is requested.
 
 Selected-attempt `/control` reads describe the actual owned message channel and
 its disabled reason, not a model's presumed capabilities. `/messages` requires

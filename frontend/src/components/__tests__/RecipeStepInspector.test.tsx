@@ -129,4 +129,21 @@ describe("RecipeStepInspector", () => {
     expect(resumeJob).not.toHaveBeenCalled();
     expect(sendOperatorMessage).not.toHaveBeenCalled();
   });
+
+  it("keeps refresh focus without admitting another read while the first is pending", async () => {
+    render(<RecipeStepInspector jobId="job" runId="run" stepId="check" />);
+    const refresh = await screen.findByRole("button", { name: "Refresh read" });
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-disabled", "false"));
+    let finish: (value: RecipeStepInspection) => void = () => { throw new Error("No pending read"); };
+    vi.mocked(fetchRecipeStep).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    refresh.focus();
+    fireEvent.click(refresh);
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-disabled", "true"));
+    expect(refresh).toHaveFocus();
+    fireEvent.click(refresh);
+    expect(fetchRecipeStep).toHaveBeenCalledTimes(2);
+    await act(async () => { finish(step()); });
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-disabled", "false"));
+    expect(refresh).toHaveFocus();
+  });
 });
