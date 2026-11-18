@@ -9,7 +9,7 @@ import asyncio
 import sys
 import time
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -125,6 +125,12 @@ class _FakeClaudeCodeOptions:
             setattr(self, k, v)
 
 
+@dataclass
+class _FakeHookMatcher:
+    hooks: list[Any]
+    matcher: str | None = None
+
+
 class _FakeTransport:
     """Fake transport for _FakeClaudeSDKClient."""
 
@@ -177,6 +183,7 @@ def _build_fake_sdk_module() -> ModuleType:
     mod.AssistantMessage = _FakeAssistantMessage
     mod.ResultMessage = _FakeResultMessage
     mod.ClaudeCodeOptions = _FakeClaudeCodeOptions
+    mod.HookMatcher = _FakeHookMatcher
     mod.ClaudeSDKClient = _FakeClaudeSDKClient
     mod.StreamEvent = _FakeStreamEvent
     mod.query = AsyncMock()
