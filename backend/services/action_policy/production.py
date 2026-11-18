@@ -86,8 +86,9 @@ class StandaloneGovernance:
         available = {contract.id: contract}
         try:
             retained = await asyncio.to_thread(retained_governance_contract, contract)
-        except PackageNotFoundError:
+        except (PackageNotFoundError, ValueError, OSError) as exc:
             retained = None
+            log.warning("retained_governance_unavailable", reason=str(exc))
         if retained is not None:
             available[retained.id] = retained
             self._retained_available = True
@@ -96,12 +97,23 @@ class StandaloneGovernance:
         if available.get(selected.id) != selected:
             raise StateConflictError("Selected governance implementation is unavailable or changed")
 
-        async def select_for_job(job_id: str, prior: ExecutionContract | None) -> ExecutionContract:
+        async def select_for_job(
+            job_id: str,
+            prior: ExecutionContract | None,
+            required_policy: str | None,
+            persist: bool,
+        ) -> ExecutionContract:
             await self._ledger.require_admission()
-            if prior is not None:
-                await self._ledger._io(self._providers.register_job, job_id, prior)
-                return prior
-            return await self._ledger._io(self._providers.for_job, job_id, contract)
+            return await self._ledger._io(
+                lambda: self._providers.for_job(
+                    job_id,
+                    contract,
+                    legacy=retained,
+                    prior=prior,
+                    required_policy=required_policy,
+                    persist=persist,
+                )
+            )
 
         self._host.configure_execution_contracts(
             available=available, selected_for_new=selected.id, select_for_job=select_for_job

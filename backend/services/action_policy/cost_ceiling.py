@@ -1,8 +1,8 @@
 """CodePlane USD cost-ceiling policy assessor — a native TraceForge extension.
 
-TraceForge's budget is tool-call *count* based. CodePlane additionally tracks a
-real **USD** spend per job (``job_telemetry_summary.total_cost_usd``), and the
-product surfaces a per-preset dollar ceiling. Rather than translate that spend
+TraceForge's budget is tool-call *count* based. The retained production adapter
+supplies verified ledger USD, with unavailable currency represented by ``None``.
+The product surfaces a per-preset dollar ceiling. Rather than translate that spend
 into TraceForge's vocabulary (a charter-forbidden bridge), we extend TraceForge
 in its own idiom: :class:`JobSpendCeilingAssessor` implements the documented
 :class:`~traceforge.governance.rules.PolicyAssessor` protocol
@@ -29,6 +29,7 @@ from traceforge.governance.rules import PolicyDecision, RecommendedAction
 if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import datetime
+    from decimal import Decimal
 
     from traceforge.governance import EnrichmentContext
 
@@ -46,7 +47,7 @@ class JobSpendCeilingAssessor:
 
     ``get_job_spend_usd`` maps a governance session id (which is CodePlane's job
     id — the same key A2 threads through the event pipeline) to the job's current
-    total USD spend. It must be **cheap and synchronous** (an indexed single-row
+    verified USD spend, or ``None`` when unavailable. It must be **cheap and synchronous** (an indexed
     read); it is called on the read decision path inside the event loop. A read
     failure fails **open** for the cost dimension (returns no decision) — the USD
     ceiling is a soft spend guard, and the security-critical gates (rules,
@@ -59,7 +60,7 @@ class JobSpendCeilingAssessor:
         self,
         ceiling_usd: float | None,
         warn_usd: float | None,
-        get_job_spend_usd: Callable[[str], float],
+        get_job_spend_usd: Callable[[str], float | Decimal | None],
     ) -> None:
         self._ceiling_usd = ceiling_usd
         self._warn_usd = warn_usd
@@ -77,6 +78,8 @@ class JobSpendCeilingAssessor:
         except Exception:  # noqa: BLE001 — fail open for the cost dimension only
             log.warning("job_spend_read_failed", session_id=session_id, exc_info=True)
             return None
+        if spend is None:
+            return None
         if self._ceiling_usd is not None and spend >= self._ceiling_usd:
             return PolicyDecision(action=RecommendedAction.ESCALATE, reason_code=CEILING_REASON_CODE)
         if self._warn_usd is not None and spend >= self._warn_usd:
@@ -85,7 +88,10 @@ class JobSpendCeilingAssessor:
 
 
 def make_job_spend_reader(db_path: str | Path) -> Callable[[str], float]:
-    """Build the synchronous per-job USD spend reader over CodePlane's ``data.db``.
+    """Retained historical estimate reader, not the production USD authority.
+
+    The replacement retained adapter reads verified currency from its ledger
+    instead. This legacy reader preserves old telemetry/re-enrichment behavior.
 
     Returns a closure ``job_id -> total_cost_usd`` (the main-agent
     ``session_kind='job'`` row of ``job_telemetry_summary`` — exactly what the

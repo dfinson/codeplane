@@ -2603,7 +2603,8 @@ class RuntimeService:
         *,
         available: Mapping[str, ExecutionContract],
         selected_for_new: str,
-        select_for_job: Callable[[str, ExecutionContract | None], Awaitable[ExecutionContract]] | None = None,
+        select_for_job: Callable[[str, ExecutionContract | None, str | None, bool], Awaitable[ExecutionContract]]
+        | None = None,
     ) -> None:
         """Trusted composition selects available implementations separately from new admission."""
         from backend.persistence.execution_contract_repo import ExecutionContractRepository
@@ -2622,15 +2623,18 @@ class RuntimeService:
         admission_id: str,
         *,
         recovery: bool,
+        required_policy: str | None = None,
     ) -> ExecutionContractPin | None:
         """Persist fresh admission or retrieve recovery provenance before governed invocation."""
         if self._execution_contracts is None:
             raise RuntimeError("Execution contract implementations have not been configured")
         if recovery:
-            return await self._execution_contracts.recover(job_id, admission_id)
-        return await self._execution_contracts.fresh(job_id, admission_id)
+            return await self._execution_contracts.recover(job_id, admission_id, required_policy=required_policy)
+        return await self._execution_contracts.fresh(job_id, admission_id, required_policy=required_policy)
 
-    async def _prepare_legacy_execution_contract(self, job_id: str) -> LegacyStartIntent | None:
+    async def _prepare_legacy_execution_contract(
+        self, job_id: str, *, required_policy: str | None = None
+    ) -> LegacyStartIntent | None:
         from backend.persistence.database import serialized_write
         from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
         from backend.persistence.recipe_run_repo import RecipeRunRepository
@@ -2650,6 +2654,7 @@ class RuntimeService:
                 job_id,
                 admission.id,
                 recovery=job_id in self._legacy_recoveries and not unstarted,
+                required_policy=required_policy,
             )
             if pin is None:
                 raise StateConflictError("Recovery cannot create a missing historical execution contract")

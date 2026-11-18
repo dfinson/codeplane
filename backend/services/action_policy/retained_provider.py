@@ -15,6 +15,8 @@ from backend.services.action_policy.agt_policy import FactDecision
 from backend.services.action_policy.classifier import Action, Preset, RecommendedAction, is_security_critical
 
 if TYPE_CHECKING:
+    from decimal import Decimal
+
     from backend.models.session_event import SessionEvent
     from backend.persistence.governance_provider_repo import GovernanceProviderRepository
     from backend.persistence.governance_repo import GovernanceLedger
@@ -34,14 +36,17 @@ class RetainedGovernance:
         self._usd_ceilings = dict(ceilings)
 
     def _new_provider(self, ceilings: dict[Preset, tuple[float | None, float | None]]) -> GovernanceDecider:
-        from backend.services.action_policy.cost_ceiling import make_job_spend_reader
         from backend.services.action_policy.governance import GovernanceDecider
 
         return GovernanceDecider(
             self.ledger.path,
-            spend_reader=make_job_spend_reader(self.repository.application_database),
+            spend_reader=self._verified_spend,
             usd_ceilings=ceilings,
         )
+
+    def _verified_spend(self, job_id: str) -> Decimal | None:
+        totals = self.ledger._totals(job_id, None)
+        return totals.verified_usd if totals.verified_usd_present else None
 
     def _provider(self) -> GovernanceDecider:
         if self._decider is None:
@@ -90,7 +95,10 @@ class RetainedGovernance:
         return decision, {
             "producer": "traceforge",
             "policy_id": LEGACY_POLICY,
-            "spend_basis": "legacy_estimate_or_unknown",
+            "spend_basis": "verified_ledger_usd_only",
+            "usd_guard_status": "abstained_unavailable"
+            if self._verified_spend(action.job_id) is None
+            else "verified_only",
             "meta": MetaCodec().serialize_meta(meta),
         }
 

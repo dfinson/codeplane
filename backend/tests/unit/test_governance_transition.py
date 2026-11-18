@@ -415,3 +415,57 @@ async def test_retained_preview_rehydrates_original_budget_and_scoped_grants_aft
     finally:
         await retained.close()
         await ledger.close()
+
+
+@pytest.mark.parametrize("verified", [None, "0", "36", "40"])
+async def test_retained_usd_guard_uses_only_verified_currency_not_legacy_or_native_40(populated, verified):
+    from decimal import Decimal
+
+    from backend.models.usage import UsageAmount
+    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+    from backend.services.action_policy.retained_provider import RetainedGovernance
+
+    directory, _ = populated
+    with sqlite3.connect(directory / "data.db") as app:
+        app.execute("UPDATE job_telemetry_summary SET total_cost_usd=40 WHERE session_kind='job'")
+    with GovernanceRuntimeLease(directory, exclusive=True) as lease:
+        importer(directory).import_original(lease)
+    ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+    await ledger.initialize()
+    retained = RetainedGovernance(
+        ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
+    )
+    retained.set_usd_ceilings({Preset.supervised: (20.0, 35.0)})
+    try:
+        native = UsageAmount(
+            amount=Decimal("40"),
+            unit="copilot_cost_unit",
+            producer="copilot",
+            model="model",
+            job_id="legacy-job",
+            execution_epoch="epoch",
+            role="primary",
+            source="assistant.usage",
+        )
+        await ledger.record_usage("native-40", native)
+        if verified is not None:
+            await ledger.record_usage(
+                "verified-usd",
+                native.model_copy(
+                    update={
+                        "amount": Decimal(verified),
+                        "unit": "USD",
+                        "currency": "USD",
+                        "verified": True,
+                    }
+                ),
+            )
+        decision, evidence = await retained.classify(
+            Action(kind=ActionKind.shell, command="cat read.txt", job_id="legacy-job"), Preset.supervised
+        )
+        assert decision.action == ("escalate" if verified in {"36", "40"} else "allow")
+        assert evidence["usd_guard_status"] == ("abstained_unavailable" if verified is None else "verified_only")
+        assert (await ledger.job_totals("legacy-job")).legacy_estimated_usd == Decimal("40.0")
+    finally:
+        await retained.close()
+        await ledger.close()

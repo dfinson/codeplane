@@ -367,8 +367,15 @@ is stopped-runtime maintenance that resumes only validated prepared accounting,
 including an exact reserved event-time snapshot. It never repeats the business
 action or restores an older database over newer history. New provider selection
 refuses any unresolved receipt. Retained evaluation preserves its own policy
-namespace and configured spend reader, whose values are estimates, not verified
-currency. Native runnable profiles still require their qualified CP policy.
+namespace and configured thresholds, using only verified ledger USD for currency
+guards. Unavailable verified currency explicitly abstains rather than becoming
+zero. Native and historical estimated values remain preserved, not reclassified.
+Verified legacy import provenance retains the original Job's TF policy even
+before its first new-format pin. Native runnable compatibility is checked before
+persisting provider ownership, an admission pin or a start witness, and still
+requires the qualified CP policy. An unavailable optional TF distribution does
+not prevent independent standalone startup, but selected or preserved missing
+implementations never silently fall back.
 
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream

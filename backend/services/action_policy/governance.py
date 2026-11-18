@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from decimal import Decimal
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from traceforge.classify.config import ClassificationEngine
@@ -240,7 +241,7 @@ class GovernanceDecider:
         db_path: str | Path = DEFAULT_GOVERNANCE_DB,
         engine: ClassificationEngine | None = None,
         *,
-        spend_reader: Callable[[str], float] | None = None,
+        spend_reader: Callable[[str], float | Decimal | None] | None = None,
         usd_ceilings: dict[Preset, tuple[float | None, float | None]] | None = None,
     ) -> None:
         self._db_path = str(db_path)

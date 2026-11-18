@@ -957,14 +957,22 @@ def select_governance_provider_command(provider: str, generation: int) -> None:
         _require_governance_stopped(directory)
         with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
             standalone = standalone_contract()
-            target = retained_governance_contract(standalone) if provider == "retained" else standalone
+            available = {standalone.id: standalone}
+            try:
+                retained = retained_governance_contract(standalone)
+            except (PackageNotFoundError, ValueError, OSError):
+                if provider == "retained":
+                    raise
+            else:
+                available[retained.id] = retained
+            target = available["cp-retained-governance-v1"] if provider == "retained" else standalone
             repository = GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
             repository.initialize()
             result = repository.select_new_jobs(
                 ownership,
                 target=target,
                 default=standalone,
-                available={target.id: target},
+                available=available,
                 expected_generation=generation,
             )
     except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError, PackageNotFoundError) as exc:

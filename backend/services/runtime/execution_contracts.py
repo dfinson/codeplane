@@ -20,7 +20,8 @@ class ExecutionContracts:
         *,
         available: Mapping[str, ExecutionContract],
         selected_for_new: str,
-        select_for_job: Callable[[str, ExecutionContract | None], Awaitable[ExecutionContract]] | None = None,
+        select_for_job: Callable[[str, ExecutionContract | None, str | None, bool], Awaitable[ExecutionContract]]
+        | None = None,
     ) -> None:
         self._repository = repository
         self._available = {key: value.model_copy(deep=True) for key, value in available.items()}
@@ -37,19 +38,43 @@ class ExecutionContracts:
                 "Pinned implementation is unavailable or changed; explicit reconciliation is required"
             )
 
-    async def fresh(self, job_id: str, admission_id: str) -> ExecutionContractPin:
+    def _require_policy(self, contract: ExecutionContract, required_policy: str | None) -> None:
+        if self._available.get(contract.id) != contract:
+            raise StateConflictError(
+                "Pinned implementation is unavailable or changed; explicit reconciliation is required"
+            )
+        if required_policy is not None and contract.policy.id != required_policy:
+            raise StateConflictError(
+                f"Execution kind requires {required_policy}; the selected Job provider is incompatible"
+            )
+
+    async def preview(self, job_id: str, *, required_policy: str) -> ExecutionContract:
+        """Check execution-kind compatibility without creating ownership or a pin."""
+        prior = await self._repository.previous_contract(job_id)
+        selected = prior or self._available[self._selected].model_copy(deep=True)
+        if self._select_for_job is not None:
+            selected = await self._select_for_job(job_id, prior, required_policy, False)
+        self._require_policy(selected, required_policy)
+        return selected
+
+    async def fresh(
+        self, job_id: str, admission_id: str, *, required_policy: str | None = None
+    ) -> ExecutionContractPin:
         """Only the trusted fresh-admission path calls this, after durable admission."""
         retained = await self._repository.get(job_id, admission_id)
         if retained is not None:
-            self.require_available(retained)
+            self._require_policy(retained.contract, required_policy)
             if self._select_for_job is not None:
-                await self._select_for_job(job_id, retained.contract)
+                await self._select_for_job(job_id, retained.contract, required_policy, True)
             return retained
         selected = self._available[self._selected].model_copy(deep=True)
         if self._select_for_job is not None:
-            selected = await self._select_for_job(job_id, await self._repository.previous_contract(job_id))
+            selected = await self._select_for_job(
+                job_id, await self._repository.previous_contract(job_id), required_policy, True
+            )
             if self._available.get(selected.id) != selected:
                 raise StateConflictError("The Job's retained implementation requires explicit reconciliation")
+        self._require_policy(selected, required_policy)
         pin = ExecutionContractPin(
             job_id=job_id,
             admission_id=admission_id,
@@ -58,13 +83,15 @@ class ExecutionContracts:
         )
         return await self._repository.create(pin)
 
-    async def recover(self, job_id: str, admission_id: str) -> ExecutionContractPin | None:
+    async def recover(
+        self, job_id: str, admission_id: str, *, required_policy: str | None = None
+    ) -> ExecutionContractPin | None:
         """Missing provenance stays unrecorded; recovery never creates or upgrades a pin."""
         pin = await self._repository.get(job_id, admission_id)
         if pin is not None:
-            self.require_available(pin)
+            self._require_policy(pin.contract, required_policy)
             if self._select_for_job is not None:
-                await self._select_for_job(job_id, pin.contract)
+                await self._select_for_job(job_id, pin.contract, required_policy, True)
         return pin
 
     async def bind_handle(

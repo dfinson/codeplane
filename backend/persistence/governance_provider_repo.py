@@ -143,25 +143,61 @@ class GovernanceProviderRepository:
             row = connection.execute("SELECT contract_json FROM cp_provider_jobs WHERE job_id=?", (job_id,)).fetchone()
             return ExecutionContract.model_validate_json(row[0]) if row is not None else None
 
-    def for_job(self, job_id: str, default: ExecutionContract) -> ExecutionContract:
+    @staticmethod
+    def _legacy_owned(connection: sqlite3.Connection, job_id: str) -> bool:
+        from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
+
+        LegacyGovernanceRepository.verify_original_import(connection)
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='cp_legacy_budget'").fetchone():
+            return False
+        return connection.execute("SELECT 1 FROM cp_legacy_budget WHERE job_id=?", (job_id,)).fetchone() is not None
+
+    @staticmethod
+    def _retained_contract(legacy: ExecutionContract | None) -> ExecutionContract:
+        if legacy is None or legacy.policy.id != LEGACY_POLICY:
+            raise StateConflictError("The original imported Job's retained implementation is unavailable")
+        return legacy
+
+    def for_job(
+        self,
+        job_id: str,
+        default: ExecutionContract,
+        *,
+        legacy: ExecutionContract | None = None,
+        prior: ExecutionContract | None = None,
+        required_policy: str | None = None,
+        persist: bool = True,
+    ) -> ExecutionContract:
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             retained = connection.execute(
                 "SELECT contract_json FROM cp_provider_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
-            if retained is not None:
-                return ExecutionContract.model_validate_json(retained[0])
             gate = connection.execute("SELECT blocked FROM cp_admission_control WHERE singleton=1").fetchone()
             if gate is None or gate[0]:
                 raise StateConflictError("New governance admission is blocked for provider transition")
-            selected = connection.execute(
-                "SELECT contract_json FROM cp_provider_selection WHERE singleton=1"
-            ).fetchone()
-            contract = ExecutionContract.model_validate_json(selected[0]) if selected else default
-            connection.execute(
-                "INSERT INTO cp_provider_jobs VALUES(?,?,?)",
-                (job_id, contract.model_dump_json(), datetime.now(UTC).isoformat()),
-            )
+            if retained is not None:
+                contract = ExecutionContract.model_validate_json(retained[0])
+                if prior is not None and contract != prior:
+                    raise StateConflictError("An existing Job cannot change its registered governance provider")
+            elif prior is not None:
+                contract = prior
+            elif self._legacy_owned(connection, job_id):
+                contract = self._retained_contract(legacy)
+            else:
+                selected = connection.execute(
+                    "SELECT contract_json FROM cp_provider_selection WHERE singleton=1"
+                ).fetchone()
+                contract = ExecutionContract.model_validate_json(selected[0]) if selected else default
+            if required_policy is not None and contract.policy.id != required_policy:
+                raise StateConflictError(
+                    f"Execution kind requires {required_policy}; the selected Job provider is incompatible"
+                )
+            if persist and retained is None:
+                connection.execute(
+                    "INSERT INTO cp_provider_jobs VALUES(?,?,?)",
+                    (job_id, contract.model_dump_json(), datetime.now(UTC).isoformat()),
+                )
             return contract
 
     def select_new_jobs(
@@ -222,7 +258,11 @@ class GovernanceProviderRepository:
                     if prior is not None and ExecutionContract.model_validate_json(retained[0]) != prior:
                         raise StateConflictError("Registered Job and existing implementation pins disagree")
                     continue
-                preserved = prior or previous_contract
+                preserved = prior or (
+                    self._retained_contract(available.get("cp-retained-governance-v1"))
+                    if self._legacy_owned(connection, job["id"])
+                    else previous_contract
+                )
                 connection.execute(
                     "INSERT INTO cp_provider_jobs VALUES(?,?,?)", (job["id"], preserved.model_dump_json(), now)
                 )

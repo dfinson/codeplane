@@ -135,7 +135,10 @@ async def _execute_read(host, root, job_id, directory, *, retained=False, suffix
     return pin, completed
 
 
-async def test_populated_same_database_forward_cycle_preserves_evidence(composed_runtime, tmp_path, monkeypatch):
+@pytest.mark.parametrize("continue_before_selection", [True, False])
+async def test_populated_same_database_forward_cycle_preserves_evidence(
+    composed_runtime, tmp_path, monkeypatch, continue_before_selection
+):
     host, approvals, root, create = composed_runtime
     roots = []
     monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
@@ -158,6 +161,10 @@ async def test_populated_same_database_forward_cycle_preserves_evidence(composed
     )
     try:
         root = await _restart(host, root, tmp_path, roots)
+        if continue_before_selection:
+            legacy_pin = await host.prepare_execution_contract("legacy-job", "legacy-continuation", recovery=False)
+            assert legacy_pin.contract.policy.id == "tf-policy-v1"
+            await _execute_read(host, root, "legacy-job", tmp_path, retained=True, suffix="legacy-continuation")
         await create("cp-job")
         cp_pin, cp_receipt = await _execute_read(host, root, "cp-job", tmp_path)
         pending = await approvals.create_request("cp-job", "Preserve pending decision", '{"fixture":"pending"}')
@@ -187,6 +194,9 @@ async def test_populated_same_database_forward_cycle_preserves_evidence(composed
         ] == 2
         assert _rows(tmp_path / "data.db", *before_recovery) == before_recovery
         root = await _restart(host, root, tmp_path, roots)
+        if not continue_before_selection:
+            assert root._providers.owner("legacy-job").policy.id == "tf-policy-v1"
+            await _execute_read(host, root, "legacy-job", tmp_path, retained=True, suffix="legacy-continuation")
         assert (
             await host.prepare_execution_contract("cp-job", "continuation", recovery=False)
         ).contract == cp_pin.contract
@@ -213,7 +223,7 @@ async def test_populated_same_database_forward_cycle_preserves_evidence(composed
         await create("new-cp-job")
         new_pin, _ = await _execute_read(host, root, "new-cp-job", tmp_path)
         assert new_pin.contract == cp_pin.contract
-        assert (await root._ledger.job_totals("legacy-job")).executed_calls == 1
+        assert (await root._ledger.job_totals("legacy-job")).executed_calls == 2
         assert (await root._ledger.job_totals("cp-job")).executed_calls == 1
         assert (await root._ledger.job_totals("cp-job")).unaccounted == 1
         assert (await root._ledger.job_totals("tf-job")).executed_calls == 1
@@ -227,10 +237,10 @@ async def test_populated_same_database_forward_cycle_preserves_evidence(composed
         assert hashlib.sha256(backup_bytes).hexdigest() == imported["backup_sha256"]
         assert backup.stat().st_mode & 0o222 == 0
         with sqlite3.connect(tmp_path / "governance.db") as database:
-            assert database.execute("SELECT COUNT(*) FROM processed_events").fetchone()[0] == 2
+            assert database.execute("SELECT COUNT(*) FROM processed_events").fetchone()[0] == 3
             assert database.execute("SELECT COUNT(*) FROM cp_executed_tools").fetchone()[0] == 2
             assert (
-                database.execute("SELECT COUNT(*) FROM cp_retained_forward WHERE status='committed'").fetchone()[0] == 1
+                database.execute("SELECT COUNT(*) FROM cp_retained_forward WHERE status='committed'").fetchone()[0] == 2
             )
             assert database.execute("SELECT COUNT(*) FROM trust_grants WHERE session_id='tf-job'").fetchone()[0] == 0
             assert database.execute("SELECT COUNT(*) FROM cp_decision_outbox WHERE job_id='cp-job'").fetchone()[0] == 1
@@ -385,3 +395,92 @@ async def test_provider_selection_refuses_stale_or_undrained_state(composed_runt
         "conflicting-pin": "implementation pins",
     }[conflict] in result.output
     assert _rows(tmp_path / "data.db", *before) == before
+
+
+@pytest.mark.parametrize("defect", ["wrong-version", "missing-files"])
+async def test_unavailable_optional_retained_distribution_does_not_break_standalone(
+    composed_runtime, tmp_path, monkeypatch, defect
+):
+    from types import SimpleNamespace
+
+    from backend.services.runtime import contract_catalog
+
+    host, _, root, create = composed_runtime
+    roots = []
+    actual = contract_catalog.distribution
+
+    def distribution(name):
+        if name == "traceforge-toolkit":
+            return SimpleNamespace(version="0.0.0" if defect == "wrong-version" else "0.1.5", files=[])
+        return actual(name)
+
+    await root.close()
+    monkeypatch.setattr(contract_catalog, "distribution", distribution)
+    try:
+        root = await _restart(host, root, tmp_path, roots)
+        await create("standalone-job")
+        pin = await host.prepare_execution_contract("standalone-job", "admission", recovery=False)
+        assert pin.contract.policy.id == "cp-policy-v1"
+        assert not root._retained_available
+    finally:
+        for owned in reversed(roots):
+            await owned.close()
+
+
+@pytest.mark.parametrize("selected", [True, False])
+async def test_unavailable_selected_or_preserved_retained_pin_never_falls_back(
+    composed_runtime, tmp_path, monkeypatch, selected
+):
+    from backend.services.action_policy import production
+
+    host, _, root, create = composed_runtime
+    roots = []
+    monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
+    try:
+        root = await _retained_root(host, root, tmp_path, roots)
+        job = await create("retained-job")
+        pin = await host.prepare_execution_contract(job.id, "retained-admission", recovery=False)
+        assert pin.contract.policy.id == "tf-policy-v1"
+        if not selected:
+            state = await _cli("quiesce")
+            await root.close()
+            await _cli("select-provider", "standalone", "--generation", str(state["generation"]))
+        await root.close()
+
+        def unavailable(*args):
+            raise ValueError("retained implementation is unavailable")
+
+        monkeypatch.setattr(production, "retained_governance_contract", unavailable)
+        if selected:
+            failed = StandaloneGovernance(host, tmp_path)
+            with pytest.raises(StateConflictError, match="unavailable"):
+                await failed.start()
+        else:
+            root = await _restart(host, root, tmp_path, roots)
+            with pytest.raises(StateConflictError, match="unavailable"):
+                await host.prepare_execution_contract(job.id, "retained-admission", recovery=True)
+            assert root._providers.owner(job.id) == pin.contract
+    finally:
+        for owned in reversed(roots):
+            await owned.close()
+
+
+async def test_incompatible_native_admission_does_not_persist_provider_pin_or_start_witness(
+    composed_runtime, tmp_path, monkeypatch
+):
+    host, _, root, create = composed_runtime
+    roots = []
+    monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: tmp_path)
+    try:
+        root = await _retained_root(host, root, tmp_path, roots)
+        job = await create("native-incompatible")
+        before = _rows(tmp_path / "data.db", "jobs", "events")
+        with pytest.raises(StateConflictError, match="cp-policy-v1"):
+            await host.start_native(job.id, family="flowise", target=object(), invoke=lambda: None)
+        assert root._providers.owner(job.id) is None
+        assert _rows(tmp_path / "data.db", "jobs", "events") == before
+        _, _ = await _execute_read(host, root, job.id, tmp_path, retained=True)
+        assert root._providers.owner(job.id).policy.id == "tf-policy-v1"
+    finally:
+        for owned in reversed(roots):
+            await owned.close()

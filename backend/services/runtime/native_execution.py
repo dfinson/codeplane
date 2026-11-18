@@ -183,10 +183,11 @@ class NativeExecutions:
                         raise StateConflictError("Native start requires a queued, prepared execution Job")
                     if await RecipeRunRepository(session).get_for_job(job_id) is not None:
                         raise StateConflictError("Recipe invocations must use their actual RecipeExecutor task")
+                    await host._execution_contracts.preview(job_id, required_policy=POLICY_VERSION)
                     if not await JobRepository(session).claim_for_start(job_id):
                         raise StateConflictError("Native Job start claim was lost")
                     claimed = True
-                await host._prepare_legacy_execution_contract(job_id)
+                await host._prepare_legacy_execution_contract(job_id, required_policy=POLICY_VERSION)
                 pin = host._job_contract_pins[job_id]
                 if pin.contract.policy.id != POLICY_VERSION:
                     raise StateConflictError("Native execution requires a cp-policy-v1 admission authority")
