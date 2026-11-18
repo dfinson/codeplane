@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, TypedDict
 
 from sqlalchemy import select
 
-from backend.models.db import EventRow
+from backend.models.db import EventRow, IntegrationBindingRow
 from backend.models.domain import JobState, StateConflictError
 from backend.models.events import SessionEvent, new_event
 from backend.models.session_event import EventMetadata
@@ -15,12 +17,17 @@ from backend.persistence.database import serialized_write
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
 from backend.persistence.execution_contract_repo import ExecutionContractRepository
+from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+    from typing import Any
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from backend.models.domain import Job
     from backend.models.execution_contracts import ExecutionContractPin
     from backend.services.adapters.contracts import ExecutionIdentity
 
@@ -32,9 +39,146 @@ class NativeAdmission:
     metadata: EventMetadata
 
 
+class ObservationCommit(TypedDict):
+    source_key: str
+    revision: str
+    expected_version: int
+    record_count: int
+    prefix_sha256: str
+    canonical_sha256: str
+    parser_sha256: str
+    buffer: dict[str, Any]
+    events: list[SessionEvent]
+    projection_version: int
+    projection_parser_sha256: str
+    projection_canonical_sha256: str
+    projection_buffer: dict[str, Any]
+
+
 class NativeExecutionRepository:
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = factory
+
+    async def bind_observation(
+        self,
+        execution: ExecutionIdentity,
+        pin: ExecutionContractPin,
+        *,
+        binding_id: str,
+        family: str,
+        external_session_id: str,
+        assert_retained: Callable[[], Awaitable[None]],
+    ) -> Job:
+        from backend.validators import validate_integration_binding_id
+
+        validate_integration_binding_id(binding_id)
+        config = {
+            "format": family,
+            "external_session_id": external_session_id,
+            "execution": asdict(execution),
+            "admission_id": pin.admission_id,
+            "budget_id": pin.budget_id,
+            "owner": "native-runtime-observation-v1",
+        }
+        async with serialized_write(self._factory) as session:
+            await assert_retained()
+            events = EventRepository(session)
+            bound = await events.get(f"native:{execution.execution_token}:bound")
+            job = await JobRepository(session).get(execution.job_id)
+            if (
+                job is None
+                or job.observation_only
+                or bound is None
+                or bound.session_id != execution.job_id
+                or bound.metadata.source_framework != "codeplane"
+                or bound.metadata.namespace != ("control", "native-execution")
+                or bound.payload.get("execution") != asdict(execution)
+                or bound.payload.get("admission_id") != pin.admission_id
+                or bound.payload.get("budget_id") != pin.budget_id
+                or bound.payload.get("family") != family
+                or await events.get(f"native:{execution.execution_token}:released") is not None
+            ):
+                raise StateConflictError("Native observation has no exact retained execution admission")
+            existing = await session.get(IntegrationBindingRow, binding_id)
+            if existing is not None:
+                raise StateConflictError("Native observation source must reuse its retained Runtime owner")
+            now = datetime.now(UTC)
+            session.add(
+                IntegrationBindingRow(
+                    id=binding_id,
+                    project_id=job.project_id,
+                    job_id=job.id,
+                    adapter_id="native",
+                    mode="execution",
+                    enabled=True,
+                    config_json=json.dumps(config, sort_keys=True),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.flush()
+            await assert_retained()
+        return job
+
+    async def commit_observation(
+        self,
+        execution: ExecutionIdentity,
+        pin: ExecutionContractPin,
+        *,
+        binding_id: str,
+        assert_retained: Callable[[], Awaitable[None]],
+        closed: bool,
+        commit: ObservationCommit,
+    ) -> None:
+        async with serialized_write(self._factory) as session:
+            await assert_retained()
+            source = await session.get(IntegrationBindingRow, binding_id)
+            bound = await EventRepository(session).get(f"native:{execution.execution_token}:bound")
+            if (
+                source is None
+                or source.mode != "execution"
+                or source.job_id != execution.job_id
+                or not source.enabled
+                or bound is None
+                or bound.session_id != execution.job_id
+                or bound.metadata.source_framework != "codeplane"
+                or bound.metadata.namespace != ("control", "native-execution")
+                or json.loads(source.config_json).get("execution") != asdict(execution)
+                or json.loads(source.config_json).get("admission_id") != pin.admission_id
+                or bound.payload.get("execution") != asdict(execution)
+                or bound.payload.get("admission_id") != pin.admission_id
+                or await EventRepository(session).get(f"native:{execution.execution_token}:released") is not None
+            ):
+                raise StateConflictError("Native observation source is no longer retained")
+            for event in commit["events"]:
+                if (
+                    not isinstance(event, SessionEvent)
+                    or event.session_id != execution.job_id
+                    or event.metadata.integration_binding_id != binding_id
+                    or event.metadata.execution_epoch != execution.epoch
+                    or event.metadata.execution_token != execution.execution_token
+                    or not event.metadata.namespace
+                    or event.metadata.namespace[0] != "observation-source"
+                ):
+                    raise StateConflictError("Native observation output escaped its source ownership")
+            if closed:
+                source.enabled = False
+                source.version += 1
+                source.updated_at = datetime.now(UTC)
+            await IntegrationRepository(session).commit_records(binding_id=binding_id, **commit)
+            await assert_retained()
+
+    async def retire_observation(self, execution: ExecutionIdentity, binding_id: str) -> None:
+        async with serialized_write(self._factory) as session:
+            source = await session.get(IntegrationBindingRow, binding_id)
+            if (
+                source is not None
+                and source.enabled
+                and json.loads(source.config_json).get("execution") == asdict(execution)
+            ):
+                source.enabled = False
+                source.version += 1
+                source.updated_at = datetime.now(UTC)
 
     async def has_native_admission(self, job_id: str) -> bool:
         async with self._factory() as session:
