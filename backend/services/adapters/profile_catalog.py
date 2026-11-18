@@ -19,6 +19,7 @@ from backend.services.adapters.native_gates.readiness import PACKAGES
 from backend.services.adapters.profile_contracts import PROFILES, SPECIFICATION_SHA256, ProfileContract
 from backend.services.ingest.mapping import NATIVE_FORMATS, resolve_mapping_path
 from backend.services.ingest.otel_observation import OTEL_FORMAT
+from backend.services.ingest.otlp_codec import QUALIFIED_CODEC, protobuf_readiness
 
 if TYPE_CHECKING:
     from backend.services.adapters.adapter_registry import AdapterRegistry
@@ -79,7 +80,7 @@ def _operation(
             producer = f"{_HISTORY}; ObservationRecords.append_otlp"
             evidence = ["backend/tests/integration/test_api_otlp.py"]
             limitations = [
-                "HTTP/protobuf codec is not implemented",
+                "HTTP/protobuf requires the separately version-qualified optional codec",
                 "Live HTTP intake requires an enabled source credential and non-Copilot-only admission",
             ]
     elif profile.id in _CLI and operation in {"steer", "cancel"}:
@@ -127,7 +128,20 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
         formats = _formats(profile)
         channels = sorted(managed.channels) if managed else ["historical-records"] if formats else []
         if profile.id == "generic-otel":
-            channels.append("otlp-http-json")
+            channels.extend(("otlp-http-json", "otlp-http-protobuf"))
+        operations = [_operation(registry, profile, operation, formats) for operation in profile.operations]
+        if profile.id == "generic-otel":
+            operations.append(
+                IntegrationOperation(
+                    id="observe-http-protobuf",
+                    implemented=True,
+                    producer="backend.services.ingest.otlp_codec.protobuf_to_json; ObservationRecords.append_otlp",
+                    dependency=IntegrationDependencyReadiness(**asdict(protobuf_readiness())),
+                    evidence=["backend/tests/integration/qualify_otlp_protobuf.py"],
+                    validation_status="local-fixture-qualified",
+                    limitations=[f"Requires {package}=={pin}" for package, pin in QUALIFIED_CODEC],
+                )
+            )
         profiles.append(
             IntegrationProfileResponse(
                 profile_id=profile.id,
@@ -164,7 +178,7 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                 if managed
                 else (["input_tokens", "output_tokens"] if profile.id == "generic-otel" else []),
                 utility_completion=managed.utility if managed else False,
-                operations=[_operation(registry, profile, operation, formats) for operation in profile.operations],
+                operations=operations,
                 admission_enabled=registry.policy.enabled("copilot" if profile.id.startswith("copilot-") else "claude"),
                 historical_import_available=bool(formats),
                 source_reference=f"sha256:{SPECIFICATION_SHA256}#integration-fixtures; {profile.upstream}",

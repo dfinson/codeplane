@@ -51,15 +51,16 @@ push = ["pywebpush>=2.3.0", "py-vapid>=1.9.4", "qrcode>=7.0,<9"]
 telemetry = ["opentelemetry-api>=1.20,<2", "opentelemetry-sdk>=1.20,<2"]
 tokenizer = ["tiktoken>=0.12.0,<1", "anthropic-tokenizer>=0.1.0,<1"]
 all = [
-    "codeplane[voice]",
-    "codeplane[push]",
-    "codeplane[telemetry]",
-    "codeplane[tokenizer]",
+    "codeplane[otlp-ingest,push,telemetry,tokenizer,voice]",
 ]
 legacy-traceforge = [
     # Explicit opt-in for version-1 native checkpoints and historical re-enrichment.
     # Fresh native ingestion and the default application do not require TF/NLP.
     "traceforge-toolkit>=0.1.5,<0.2",
+]
+otlp-ingest = [
+    "opentelemetry-proto==1.45.2",
+    "protobuf==7.35.0",
 ]
 
 [project.scripts]
@@ -162,6 +163,9 @@ omit = [
 fail_under = 70
 show_missing = true
 skip_empty = true
+
+[tool.uv.sources]
+codeplane = { workspace = true }
 
 [dependency-groups]
 dev = [

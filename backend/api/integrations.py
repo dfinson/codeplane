@@ -15,6 +15,7 @@ from backend.models.api_schemas import (
     ObservationEventList,
     ObservationRecordBatch,
     ObservationRecordReceipt,
+    OtlpBinaryBody,
     OtlpExportResponse,
     OtlpTraceRequest,
     RegisterObservationRequest,
@@ -25,6 +26,7 @@ from backend.persistence.integration_repo import IntegrationRepository
 from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.ingest.credentials import INGEST_TOKEN_HEADER, IngestCredentials
 from backend.services.ingest.history_registration import HistoryRegistration
+from backend.services.ingest.otlp_codec import OtlpCodecUnavailableError, protobuf_to_json
 from backend.services.ingest.record_service import ObservationRecords
 
 router = APIRouter(prefix="/integrations", tags=["integrations"], route_class=DishkaRoute)
@@ -69,9 +71,13 @@ async def revoke_ingest_credential(
     openapi_extra={
         "requestBody": {
             "required": True,
-            "content": {"application/json": {"schema": OtlpTraceRequest.model_json_schema()}},
+            "content": {
+                "application/json": {"schema": OtlpTraceRequest.model_json_schema()},
+                "application/x-protobuf": {"schema": OtlpBinaryBody.model_json_schema()},
+            },
         },
     },
+    responses={200: {"content": {"application/x-protobuf": {"schema": OtlpBinaryBody.model_json_schema()}}}},
 )
 async def ingest_traces(
     binding_id: str,
@@ -80,12 +86,18 @@ async def ingest_traces(
     config: FromDishka[CPLConfig],
     service: FromDishka[ObservationRecords],
     ingest_token: str | None = Header(default=None, alias=INGEST_TOKEN_HEADER),
-) -> OtlpExportResponse:
+) -> OtlpExportResponse | Response:
     try:
         authorization = await IngestCredentials(bindings, config).authorize(binding_id, ingest_token)
-        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-            raise HTTPException(status_code=415, detail="Only OTLP HTTP/JSON is currently implemented")
-        await service.append_otlp(binding_id, await request.body(), authorization=authorization)
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        body = await request.body()
+        if media_type == "application/x-protobuf":
+            body = protobuf_to_json(body)
+        elif media_type != "application/json":
+            raise HTTPException(status_code=415, detail="Expected OTLP HTTP/JSON or HTTP/protobuf")
+        await service.append_otlp(binding_id, body, authorization=authorization)
+    except OtlpCodecUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except StateConflictError as exc:
@@ -97,6 +109,8 @@ async def ingest_traces(
         if code & 0xFF not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
             raise
         raise HTTPException(status_code=503, detail="Ingest storage is busy", headers={"Retry-After": "1"}) from exc
+    if media_type == "application/x-protobuf":
+        return Response(content=b"", media_type=media_type)
     return OtlpExportResponse()
 
 
