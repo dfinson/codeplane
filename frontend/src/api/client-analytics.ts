@@ -6,32 +6,13 @@
  */
 
 import { request } from "./client";
+import type { AnalyticsOverviewResponse, AnalyticsToolsResponse } from "./types";
 
 // ---------------------------------------------------------------------------
 // Analytics Overview / Models / Tools / Repos / Jobs
 // ---------------------------------------------------------------------------
 
-export interface AnalyticsOverview {
-  period: number;
-  totalJobs: number;
-  succeeded: number;
-  review: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-  running: number;
-  totalCostUsd: number;
-  totalTokens: number;
-  avgDurationMs: number;
-  totalPremiumRequests: number;
-  totalToolCalls: number;
-  totalToolFailures: number;
-  totalAgentErrors: number;
-  totalToolErrors: number;
-  toolSuccessRate: number;
-  cacheHitRate: number;
-  costTrend: { date: string; cost: number; jobs: number }[];
-}
+export type AnalyticsOverview = AnalyticsOverviewResponse;
 
 export interface AnalyticsModels {
   period: number;
@@ -61,19 +42,7 @@ export interface AnalyticsModels {
   }[];
 }
 
-export interface AnalyticsTools {
-  period: number;
-  tools: {
-    name: string;
-    count: number;
-    avgDurationMs: number;
-    totalDurationMs: number;
-    failureCount: number;
-    p50DurationMs: number;
-    p95DurationMs: number;
-    p99DurationMs: number;
-  }[];
-}
+export type AnalyticsTools = AnalyticsToolsResponse;
 
 export interface AnalyticsJobs {
   period: number;

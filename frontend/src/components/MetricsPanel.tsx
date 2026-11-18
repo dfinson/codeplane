@@ -125,15 +125,17 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     return () => { cancelled = true; };
   }, [jobId]);
 
-  const fails = (data?.toolCalls ?? []).filter((t) => !t.success).length;
+  const fails = (data?.toolCalls ?? []).filter((t) => t.success === false).length;
+  const unknown = (data?.toolCalls ?? []).filter((t) => t.success === null).length;
 
   const toolAggs = useMemo(() => {
     const map = new Map<string, ToolAggregate>();
     for (const tc of data?.toolCalls ?? []) {
-      const agg = map.get(tc.name) ?? { name: tc.name, count: 0, totalMs: 0, avgMs: 0, fails: 0 };
+      const agg = map.get(tc.name) ?? { name: tc.name, count: 0, totalMs: 0, avgMs: 0, fails: 0, unknown: 0 };
       agg.count++;
       agg.totalMs += tc.durationMs;
-      if (!tc.success) agg.fails++;
+      if (tc.success === false) agg.fails++;
+      if (tc.success === null) agg.unknown++;
       map.set(tc.name, agg);
     }
     for (const agg of map.values()) {
@@ -255,7 +257,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                   <div><StatCard icon={<Brain size={14} />} label={sdkConf.llmStatLabel} value={sdkConf.llmStatValue(data)} color="text-blue-400" /></div>
                 </Tooltip>
                 <Tooltip content="Shell commands, file edits, and other tool invocations by the agent">
-                  <div><StatCard icon={<Wrench size={14} />} label="Tools" value={`${data.toolCallCount ?? 0}${fails ? ` (${fails} fail)` : ""}`} color="text-yellow-400" /></div>
+                  <div><StatCard icon={<Wrench size={14} />} label="Tools" value={`${data.toolCallCount ?? 0}${fails ? ` (${fails} fail)` : ""}${unknown ? ` (${unknown} unknown)` : ""}`} color="text-yellow-400" /></div>
                 </Tooltip>
               </div>
                 );
@@ -709,7 +711,14 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                               <td className="px-2 py-1.5 text-right tabular-nums">{agg.count}</td>
                               <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{formatDuration(agg.avgMs)}</td>
                               <td className="px-2 py-1.5 text-right tabular-nums">{formatDuration(agg.totalMs)}</td>
-                              <td className={cn("px-2 py-1.5 text-right tabular-nums", agg.fails > 0 && "text-red-400")}>{agg.fails}</td>
+                              <td className={cn("px-2 py-1.5 text-right tabular-nums", agg.fails > 0 && "text-red-400")}>
+                                {agg.unknown < agg.count && agg.fails}
+                                {agg.unknown > 0 && (
+                                  <span className="text-muted-foreground">
+                                    {agg.unknown === agg.count ? `Unknown (${agg.unknown})` : ` (${agg.unknown} unknown)`}
+                                  </span>
+                                )}
+                              </td>
                             </tr>
                           ))}
                         </tbody>

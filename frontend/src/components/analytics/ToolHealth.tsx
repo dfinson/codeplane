@@ -84,10 +84,10 @@ export function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
               <Tooltip content="Total number of times this tool was called"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Calls</span></Tooltip>
             </th>
             <th className="text-right py-1.5 px-2 font-medium">
-              <Tooltip content="Number of calls that returned an error or failed"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Errors</span></Tooltip>
+              <Tooltip content="Number of calls with a reported failure; unknown outcomes are excluded"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Errors</span></Tooltip>
             </th>
             <th className="text-right py-1.5 px-2 font-medium">
-              <Tooltip content="Percentage of calls that completed without errors"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Success</span></Tooltip>
+              <Tooltip content="Percentage of calls with known outcomes that completed without errors"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Success</span></Tooltip>
             </th>
             <th className="text-right py-1.5 px-2 font-medium">
               <Tooltip content="Average time per call"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Avg Time</span></Tooltip>
@@ -105,21 +105,27 @@ export function ToolHealth({ tools }: { tools: AnalyticsTools["tools"] }) {
         </thead>
         <tbody>
           {tools.map((t, i) => {
-            const failures = t.failureCount || 0;
-            const successRate = t.count > 0 ? ((t.count - failures) / t.count * 100) : 100;
+            const failures = t.failureCount;
+            const knownCount = t.count - t.unknownCount;
+            const successRate = knownCount > 0 ? ((knownCount - failures) / knownCount * 100) : null;
             const desc = toolDescriptions[t.name];
             return (
               <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
                 <td className="py-1.5 px-2 font-mono">
                   {desc ? <Tooltip content={desc}><span className="cursor-help border-b border-dotted border-muted-foreground/50">{t.name}</span></Tooltip> : t.name}
                 </td>
-                <td className="text-right py-1.5 px-2">{t.count}</td>
                 <td className="text-right py-1.5 px-2">
-                  {failures ? <span className="text-red-400">{failures}</span> : <span className="text-muted-foreground">0</span>}
+                  {t.count}
+                  {t.unknownCount > 0 && <span className="text-muted-foreground"> ({t.unknownCount} unknown)</span>}
                 </td>
                 <td className="text-right py-1.5 px-2">
-                  <span className={successRate >= 95 ? "text-green-400" : successRate >= 80 ? "text-yellow-400" : "text-red-400"}>
-                    {successRate.toFixed(0)}%
+                  {knownCount === 0
+                    ? <span className="text-muted-foreground">Unknown</span>
+                    : failures ? <span className="text-red-400">{failures}</span> : <span className="text-muted-foreground">0</span>}
+                </td>
+                <td className="text-right py-1.5 px-2">
+                  <span className={successRate === null ? "text-muted-foreground" : successRate >= 95 ? "text-green-400" : successRate >= 80 ? "text-yellow-400" : "text-red-400"}>
+                    {successRate === null ? "Unknown" : `${successRate.toFixed(0)}%`}
                   </span>
                 </td>
                 <td className="text-right py-1.5 px-2">{formatDuration(Number(t.avgDurationMs) || 0)}</td>
