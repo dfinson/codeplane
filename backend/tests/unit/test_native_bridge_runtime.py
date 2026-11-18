@@ -232,3 +232,116 @@ async def test_bridge_cancel_retains_actual_transport_until_response(composed_ru
     assert len(calls) == 1
     assert host._native_executions.for_job(job.id) == ()
     assert (await governance._ledger.job_totals(job.id)).executed_calls == 1
+
+
+async def block_admission(governance):
+    state = await governance._ledger.admission_state()
+    return await governance._ledger.set_admission_control(
+        expected_generation=state.generation,
+        blocked=True,
+        reason="Native transition test is draining",
+    )
+
+
+async def test_quiesce_blocks_native_start_before_claim(composed_runtime, local_flowise):
+    host, _, governance, create = composed_runtime
+    job = await create()
+    target = target_for(local_flowise[0])
+    await block_admission(governance)
+    with pytest.raises(StateConflictError, match="draining"):
+        await host.start_native(
+            job.id,
+            family="flowise",
+            target=target,
+            invoke=partial(target.client.predict, "flow", "question"),
+            synchronous=True,
+        )
+    assert (await host._get_job(job.id)).state == JobState.queued
+    assert host._tasks == {} and host._starting_tasks == {}
+    assert host._native_executions.for_job(job.id) == () and local_flowise[1] == []
+
+
+async def test_quiesce_is_rechecked_after_capacity_wait(composed_runtime, local_flowise):
+    host, _, governance, create = composed_runtime
+    job = await create()
+    target = target_for(local_flowise[0])
+    slots = host._config.runtime.max_concurrent_jobs
+    for _ in range(slots):
+        await host._recipe_runner_slots.acquire()
+    pending = asyncio.create_task(
+        host.start_native(
+            job.id,
+            family="flowise",
+            target=target,
+            invoke=partial(target.client.predict, "flow", "question"),
+            synchronous=True,
+        )
+    )
+    try:
+        async with asyncio.timeout(5):
+            while job.id not in host._starting_tasks:
+                await asyncio.sleep(0)
+        await block_admission(governance)
+    finally:
+        for _ in range(slots):
+            host._recipe_runner_slots.release()
+    with pytest.raises(StateConflictError, match="draining"):
+        await pending
+    assert (await host._get_job(job.id)).state == JobState.queued
+    assert local_flowise[1] == []
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_quiesce_after_binding_refuses_actual_dispatch(synchronous, composed_runtime, local_flowise, monkeypatch):
+    host, _, governance, create = composed_runtime
+    job = await create()
+    target = target_for(local_flowise[0])
+    invoked = []
+    original = host._native_executions._repository.record
+
+    async def record(*args, **kwargs):
+        await original(*args, **kwargs)
+        if args[3] == "bound":
+            await block_admission(governance)
+
+    def invoke_sync():
+        invoked.append(True)
+        return "not permitted"
+
+    async def invoke_async():
+        invoked.append(True)
+        return "not permitted"
+
+    monkeypatch.setattr(host._native_executions._repository, "record", record)
+    task = await host.start_native(
+        job.id,
+        family="flowise",
+        target=target,
+        invoke=invoke_sync if synchronous else invoke_async,
+        synchronous=synchronous,
+    )
+    with pytest.raises(StateConflictError, match="draining"):
+        await task
+    assert invoked == [] and local_flowise[1] == []
+    assert host._native_executions.for_job(job.id) == ()
+
+
+async def test_quiesce_does_not_block_already_started_native_completion(composed_runtime, local_flowise):
+    host, approvals, governance, _ = composed_runtime
+    url, calls, received, release = local_flowise
+    release.clear()
+    target = target_for(url)
+    job, task, event = await pending_bridge(composed_runtime, target)
+    await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
+    assert await asyncio.to_thread(received.wait, 5)
+    blocked = await block_admission(governance)
+    try:
+        with pytest.raises(StateConflictError, match="draining"):
+            await host.require_governance_admission()
+        assert not task.done()
+    finally:
+        release.set()
+    result = await asyncio.wait_for(task, 10)
+    assert result["sessionId"] == "native-local-session" and len(calls) == 1
+    assert (await governance._ledger.job_totals(job.id)).executed_calls == 1
+    assert await governance._ledger.admission_state() == blocked
