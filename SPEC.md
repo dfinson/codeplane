@@ -6,6 +6,53 @@
 
 ### Standalone interoperability transition
 
+`GET /api/integrations/profiles` exposes the 32 selections from approved
+specification `9941bd11323740358f158baf953083d192873f03b610708d9fad10934aee29c5`.
+Explorer IDs do not rename the managed `copilot`/`claude` adapters or the 24
+native mapping IDs. Each operation separately reports declared support,
+implementation, dependency readiness, local fixture qualification and missing
+capabilities. Global admission eligibility is not binding enablement or live
+control readiness. Metadata discovery constructs no SDK clients, and an
+unimplemented selected operation is not advertised as runnable.
+
+The additional `otlp_json` observation format accepts supplied span dictionaries
+through historical records. Standard exporters use
+`POST /api/integrations/{bindingId}/traces` with OTLP HTTP/JSON and
+`x-codeplane-ingest-token`. An operator issues/replaces this single-purpose
+credential at `POST /api/integrations/{bindingId}/ingest-credential` with explicit
+`enabled: true`, or revokes it with `DELETE` on that route. Only a digest is
+stored. Its immutable source/Project/Job scope and generation are checked again
+inside the atomic admission transaction. The token grants no event-read,
+permission-consumption, steering, MCP or operator authority. Direct-local
+operator trust is unchanged, but the trace route always requires its scoped
+credential. Copilot-only admission rejects this live intake while explicit
+historical record import remains available.
+
+Exporters supply no CodePlane cursor. The server validates the entire request,
+deduplicates full-content span observations using durable source-scoped receipts,
+and advances the existing source/projection CAS atomically. Exact and overlapping
+retries do not reprocess accepted spans. Changed observations of the same native
+span remain distinct evidence. Concurrent conflicts return retryable HTTP 503,
+not an execution retry. JSON bodies remain bounded to 1 MiB and 1,000 spans.
+HTTP/protobuf is explicitly unsupported (415), independent of exporter packages.
+Metadata-only observations retain missing usage and arguments as unknown.
+
+Trusted native acquisition can supply a typed `AcquisitionCheckpoint` to
+`ObservationRecords.append`. Source identity, expected checkpoint generation,
+transport state and receipt provenance commit with the same accepted batch.
+Ordinary record calls cannot erase acquired-source state, and an acquisition
+cannot silently adopt old untracked progress. A no-change poll does not advance
+its durable cursor or manufacture source termination.
+
+AI Card registration uses the existing project-scoped `integration_identities`
+table and creates no Job or execution binding. The installed AGT core 5.0.0
+schema and signature verifier are supplemented by explicit DID/key, signed
+validity-interval and independently configured service-endpoint checks.
+Upstream signatures do not cover service endpoints. Signed capability names
+remain claims, not action permissions or verified delegation attestations.
+Removal disables retained identity evidence, and subsequent lookup rechecks
+validity rather than trusting a cached verification.
+
 `POST /api/integrations/observations` registers a binding-owned history Job
 without launching an SDK, creating a workspace or attaching runtime sidecars.
 Repeated registration of the same binding/source returns the same Job. These

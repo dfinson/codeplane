@@ -19,7 +19,7 @@ class ObservationBodyLimit:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or not (path.startswith("/api/integrations/") and path.endswith("/records"))
+            or not (path.startswith("/api/integrations/") and path.endswith(("/records", "/traces")))
         ):
             await self.app(scope, receive, send)
             return
