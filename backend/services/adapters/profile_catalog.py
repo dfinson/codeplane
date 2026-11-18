@@ -39,6 +39,7 @@ _CLI = {
     "claude-cli": "backend.services.ingest.claude_source.ClaudeSessionStateWatcher",
 }
 _HISTORY = "backend.services.ingest.record_service.ObservationRecords.append"
+_CLIENTS = {"openai-client", "anthropic-client", "gemini-client", "mistral-client", "bedrock-client"}
 
 
 def _native_readiness(profile: ProfileContract) -> AdapterReadiness:
@@ -97,6 +98,47 @@ def _operation(
         evidence = ["backend/tests/unit/test_ai_card.py"]
         limitations.append("Identity evidence grants no execution, steering, tool or cancellation authority")
         limitations.append("Registration verifies supplied cards; it does not fetch arbitrary discovery URLs")
+    elif profile.id in _CLIENTS:
+        from backend.services.adapters.native_gates.selection import select_installation
+
+        selected = select_installation(profile.id)
+        if operation in {"invoke", "gate", "observe", "cancel", "steer"}:
+            readiness = selected.readiness()
+            producer = (
+                "backend.services.runtime.RuntimeService.start_native"
+                if operation == "invoke"
+                else f"{selected.module}.install"
+                if operation in {"gate", "steer"}
+                else "backend.services.runtime.native_observation.open_native_observation"
+                if operation == "observe"
+                else "backend.services.runtime.RuntimeService.detach_native"
+            )
+            evidence = [
+                "backend/tests/native_gates/qualify_client_profiles.py",
+                "backend/tests/native_gates/qualify_client_usage.py",
+            ]
+        limitations.extend(
+            (
+                "Requires an explicitly supplied pinned SDK client and current persisted Runtime ownership",
+                "Only configured requests and supplied local functions are gated; hosted provider tools remain remote",
+                "Steering is a new admitted native request/turn; no unacknowledged live-input callback is claimed",
+                "Retries must be disabled; missing usage/IDs remain unknown and currency is never inferred",
+            )
+        )
+        if profile.id == "openai-client":
+            limitations.append(
+                "Explicit native runs.cancel retains the returned run state; Runtime detach only stops local waiting"
+            )
+        else:
+            limitations.append("Cancellation stops local waiting, not unconfirmed remote provider execution")
+        if profile.id == "bedrock-client":
+            limitations.append(
+                "invoke_agent owns consumption of up to 1000 events/1 MiB and returns finite native-event replay"
+            )
+        else:
+            limitations.append("Streaming is refused before dispatch; only complete response requests are qualified")
+        if profile.id == "gemini-client":
+            limitations.append("Native automatic function calling must be explicitly disabled")
     elif profile.id in {"flowise", "mcp", "a2a"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
@@ -187,6 +229,11 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
             if profile.id == "a2a":
                 bridge_versions.append("A2A JSON-RPC 0.3.0")
             channels.extend(("native-request-boundary", "pinned-canonical-observations"))
+        if profile.id in _CLIENTS:
+            from backend.services.adapters.native_gates.selection import select_installation
+
+            bridge_versions = [f"{package}=={pin}" for package, pin in select_installation(profile.id).dependencies]
+            channels.append("native-client-request-and-local-function")
         if profile.id == "generic-otel":
             channels.extend(("otlp-http-json", "otlp-http-protobuf"))
         operations = [_operation(registry, profile, operation, formats) for operation in profile.operations]
@@ -236,7 +283,9 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                 ),
                 usage_units=sorted(managed.usage_units)
                 if managed
-                else (["input_tokens", "output_tokens"] if profile.id == "generic-otel" else []),
+                else (
+                    ["input_tokens", "output_tokens"] if profile.id == "generic-otel" or profile.id in _CLIENTS else []
+                ),
                 utility_completion=managed.utility if managed else False,
                 operations=operations,
                 admission_enabled=registry.policy.enabled("copilot" if profile.id.startswith("copilot-") else "claude"),
