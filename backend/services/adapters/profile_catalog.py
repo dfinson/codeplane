@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from importlib.resources import files
 from importlib.util import find_spec
 from typing import TYPE_CHECKING
 
@@ -39,6 +40,27 @@ _CLI = {
     "claude-cli": "backend.services.ingest.claude_source.ClaudeSessionStateWatcher",
 }
 _HISTORY = "backend.services.ingest.record_service.ObservationRecords.append"
+_NATIVE_CLIENTS = {
+    "autogen": ("SingleThreadedAgentRuntime.send_message", "FunctionTool.run_json"),
+    "llamaindex": ("query", "chat", "FunctionTool.call", "FunctionTool.acall"),
+    "google-adk": ("Runner.run_async", "BasePlugin.before_tool_callback", "BasePlugin.after_tool_callback"),
+}
+_BOUNDARY_INPUT = "backend.services.runtime.RuntimeService.consume_native_input"
+_BOUNDARY_LIMIT = (
+    "Requires start_native/invoke_native input_handler registration for this instance, "
+    "then consume_native_input and exact acknowledge_native_input; not live steering or managed resume"
+)
+
+
+def _external_gate_readiness() -> AdapterReadiness:
+    root = files("backend")
+    required = ("services/runtime/external_gate.py", "api/external_gate.py", "services/external_gate_cli.py")
+    present = all(root.joinpath(path).is_file() for path in required)
+    return AdapterReadiness(
+        present,
+        None if present else "External gate runtime/API/CLI modules are absent",
+        "codeplane-external-gate-v1" if present else None,
+    )
 
 
 def _native_readiness(profile: ProfileContract) -> AdapterReadiness:
@@ -102,6 +124,51 @@ def _operation(
         evidence = ["backend/tests/unit/test_ai_card.py"]
         limitations.append("Identity evidence grants no execution, steering, tool or cancellation authority")
         limitations.append("Registration verifies supplied cards; it does not fetch arbitrary discovery URLs")
+    elif profile.id == "external-gate":
+        readiness = _external_gate_readiness()
+        if readiness.ready:
+            method = "before_call" if operation == "gate" else "reported"
+            producer = f"backend.services.runtime.external_gate.ExternalGates.{method}"
+            evidence = ["backend/tests/unit/test_external_gate.py"]
+        limitations.extend(
+            (
+                "Requires an already-live, pinned Runtime owner and separate scoped control credential",
+                "Reports are observational, not accounting proof",
+                "Blocking hook only; no runnable, launch, steering or managed-session authority",
+            )
+        )
+    elif profile.id in _NATIVE_CLIENTS:
+        from backend.services.adapters.native_gates.selection import select_installation
+
+        selected = select_installation(profile.id)
+        readiness = selected.readiness()
+        producer = (
+            "backend.services.runtime.RuntimeService.start_native"
+            if operation == "invoke"
+            else _BOUNDARY_INPUT
+            if operation == "steer"
+            else "backend.services.runtime.RuntimeService.detach_native"
+            if operation == "cancel"
+            else f"{selected.module}.install"
+        )
+        stem = profile.id.replace("-", "_")
+        evidence = [
+            f"backend/tests/native_gates/qualify_{stem}.py",
+            "backend/tests/native_gates/qualify_profile_release.py",
+        ]
+        if operation == "steer":
+            evidence = ["backend/tests/native_gates/qualify_profile_boundary_input.py"]
+            limitations.append(_BOUNDARY_LIMIT)
+        limitations.append(
+            "Requires exact persisted Runtime admission; cancellation is requested until actual completion"
+        )
+        limitations.append(
+            {
+                "autogen": "Enqueue-only publish is unsupported; actual RPC and function invocation are qualified",
+                "llamaindex": "Streaming query/chat consumption and context-dependent tools are unsupported",
+                "google-adk": "run_live is unsupported without acknowledged native input",
+            }[profile.id]
+        )
     elif profile.id in {"haystack", "langflow", "swarm"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
@@ -180,7 +247,7 @@ def _operation(
             limitations.append(
                 "Uncertain request delivery is not automatically retried; tasks/get reconciles known task IDs"
             )
-    elif profile.id in _GATES and operation in {"invoke", "gate", "cancel"}:
+    elif profile.id in _GATES and operation in {"invoke", "gate", "cancel", "steer"}:
         readiness = _native_readiness(profile)
         if find_spec("backend.services.adapters.native_gates") is not None:
             producer = (
@@ -188,11 +255,16 @@ def _operation(
                 if operation == "gate"
                 else "backend.services.runtime.RuntimeService.start_native"
                 if operation == "invoke"
+                else _BOUNDARY_INPUT
+                if operation == "steer"
                 else "backend.services.runtime.RuntimeService.detach_native"
             )
         limitations.append("Requires an actual Runtime-owned task, persisted Job and native execution identity")
         if operation == "cancel":
             limitations.append("Cancellation remains requested until the owned invocation ends")
+        if operation == "steer":
+            limitations.append(_BOUNDARY_LIMIT)
+            evidence = ["backend/tests/native_gates/qualify_boundary_input.py"]
     return IntegrationOperation(
         id=operation,
         implemented=producer is not None,
@@ -212,6 +284,19 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
         channels = sorted(managed.channels) if managed else ["historical-records"] if formats else []
         bridge_versions: list[str] = []
         bridge_hooks: list[str] = []
+        if profile.id in _NATIVE_CLIENTS:
+            from backend.services.adapters.native_gates.selection import select_installation
+
+            selected = select_installation(profile.id)
+            bridge_versions = [f"{package}=={pin}" for package, pin in selected.dependencies]
+            bridge_hooks = list(_NATIVE_CLIENTS[profile.id])
+            channels.extend(("native-request-boundary", "pinned-canonical-observations", "registered-boundary-input"))
+        if profile.id in _GATES:
+            channels.append("registered-boundary-input")
+        if profile.id == "external-gate":
+            bridge_versions = ["codeplane-external-gate-v1"]
+            bridge_hooks = ["ExternalGates.before_call", "ExternalGates.reported"]
+            channels.extend(("authenticated-http-preflight", "stdin-hook-relay", "in-process-preflight"))
         if profile.id in {"flowise", "mcp", "a2a"}:
             from backend.services.adapters.native_gates.selection import select_installation
 

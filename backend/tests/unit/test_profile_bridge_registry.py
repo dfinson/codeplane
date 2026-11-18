@@ -56,3 +56,23 @@ def test_host_catalogue_does_not_load_optional_host_or_invent_live_input(monkeyp
     assert operations["observe"].implemented and operations["gate"].implemented
     assert not operations["steer"].implemented and not row.live_ready and not row.admission_enabled
     assert module not in set(sys.modules) - before
+
+
+@pytest.mark.parametrize("profile", ["autogen", "llamaindex", "google-adk"])
+def test_qualified_native_client_rows_keep_boundary_input_conditional(monkeypatch, profile):
+    from backend.services.adapters import profile_bridges
+    from backend.services.adapters.adapter_registry import AdapterRegistry
+
+    def missing(package):
+        raise profile_bridges.PackageNotFoundError(package)
+
+    monkeypatch.setattr(profile_bridges, "version", missing)
+    before = set(sys.modules)
+    row = next(row for row in AdapterRegistry().list_profiles().profiles if row.profile_id == profile)
+    operations = {operation.id: operation for operation in row.operations}
+    assert all(operation.implemented and not operation.dependency.ready for operation in operations.values())
+    assert operations["steer"].producer.endswith("consume_native_input")
+    assert "input_handler registration" in " ".join(operations["steer"].limitations)
+    assert "not live steering or managed resume" in " ".join(operations["steer"].limitations)
+    assert row.hooks and row.supported_versions and not row.live_ready and row.binding_enabled is None
+    assert not any(name.startswith(("autogen_core", "llama_index", "google.adk")) for name in set(sys.modules) - before)
