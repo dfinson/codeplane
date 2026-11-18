@@ -108,8 +108,12 @@ test.describe("Settings Screen — Rendering", () => {
 
     // Should show repo count
     await expect(page.getByText("Projects (2)")).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText("Project A")).toBeVisible();
-    await expect(page.getByText("Project B")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Project A", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Project B", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Project A 1 repos", exact: true }))
+      .toHaveAttribute("href", "/projects/id/project-a/settings");
+    await expect(page.getByRole("link", { name: "Project B 1 repos", exact: true }))
+      .toHaveAttribute("href", "/projects/id/project-b/settings");
   });
 
   test("displays runtime settings with correct values", async ({ page }) => {
