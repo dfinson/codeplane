@@ -405,6 +405,9 @@ waiting state remains eligible for the exact approval's final ownership check.
 Canceled policy invocations retire their own unconsumed requests rather than
 leaving stale approvals behind. Runtime shutdown preserves pending decisions
 for the existing fenced restart/reconciliation path.
+Native read/search path arguments are retained for both capability and policy
+containment checks. Scout's existing read-only workspace restriction applies
+before standalone policy in both SDK pre-tool and permission callbacks.
 
 The AGT policy component uses the pinned core package's `PolicyEngine` with
 explicit `priority_first_match` priorities and no evaluation-time rate limits.

@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from backend.services.action_policy.session_policy import PermissionInvocation
+
 # ---------------------------------------------------------------------------
 # Fake copilot SDK types — injected into sys.modules before adapter import
 # ---------------------------------------------------------------------------
@@ -2391,6 +2393,49 @@ class TestScoutAccounting:
 
 
 class TestScoutPermissions:
+    @pytest.mark.parametrize(("tool", "outside"), [("view", True), ("grep", True), ("grep", False)])
+    async def test_actual_scout_hook_checks_scope_before_standalone_policy(
+        self, adapter: CopilotAdapter, tmp_path: Path, tool: str, outside: bool
+    ) -> None:
+        class Policy:
+            execution_epoch = "fixture-epoch"
+
+            def __init__(self) -> None:
+                self.requests: list[PermissionInvocation] = []
+
+            async def authorize_permission(self, invocation: PermissionInvocation) -> bool:
+                self.requests.append(invocation)
+                return True
+
+        policy = Policy()
+        adapter._policy_router["job-1"] = policy
+        session = _FakeCopilotSession("scout-hook")
+        client = SimpleNamespace(
+            create_session=AsyncMock(return_value=session), stop=AsyncMock(), force_stop=AsyncMock()
+        )
+        with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
+            sid = await adapter.create_session(
+                _make_config(
+                    job_id="job-1",
+                    workspace_path=str(tmp_path),
+                    session_kind="preflight",
+                )
+            )
+        try:
+            hook = client.create_session.call_args.kwargs["hooks"]["on_pre_tool_use"]
+            path = str(tmp_path.parent / "outside") if outside else str(tmp_path)
+            arguments = {"paths": path, "pattern": "fixture"} if tool == "grep" else {"path": path}
+            result = await hook(
+                {"toolName": tool, "toolArgs": arguments, "cwd": str(tmp_path), "timestamp": 0},
+                {"session_id": sid},
+            )
+            assert result["permissionDecision"] == ("deny" if outside else "allow")
+            assert len(policy.requests) == (0 if outside else 1)
+            if not outside:
+                assert policy.requests[0].request.possible_paths == [path]
+        finally:
+            await adapter.abort_session(sid)
+
     async def test_recipe_grant_blocks_actual_hook_before_permission_policy(self, adapter, tmp_path) -> None:
         client = MagicMock()
         session = _FakeCopilotSession("capability-session")

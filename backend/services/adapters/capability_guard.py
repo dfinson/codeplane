@@ -79,6 +79,14 @@ def invocation_permission_request(workspace: str, tool_name: str, arguments: dic
         for key in ("path", "file_path", "filePath", "file_name", "pattern" if name == "glob" else "path")
         if isinstance(value := arguments.get(key), str) and value
     ]
+    if kind in {"read", "write"} and arguments.get("paths") is not None:
+        supplied = arguments["paths"]
+        if isinstance(supplied, str) and supplied:
+            paths.append(supplied)
+        elif isinstance(supplied, list) and all(isinstance(value, str) and value for value in supplied):
+            paths.extend(supplied)
+        else:
+            raise CapabilityDeniedError("Native paths must be a nonempty string or a list of nonempty strings")
     return PermissionRequest(
         kind=kind,
         workspace_path=workspace,
@@ -95,11 +103,7 @@ async def enforce_invocation_capabilities(
     arguments: dict[str, Any],
     dialect: str | None = None,
 ) -> None:
-    paths = [
-        value
-        for key in ("path", "file_path", "filePath", "file_name")
-        if isinstance(value := arguments.get(key), str) and value
-    ]
+    request = invocation_permission_request(workspace, tool_name, arguments)
     command = arguments.get("command")
     if command is not None and not isinstance(command, str):
         raise CapabilityDeniedError("Shell command must be a complete string")
@@ -108,7 +112,7 @@ async def enforce_invocation_capabilities(
         workspace=workspace,
         kind="",
         tool_name=tool_name,
-        paths=paths,
+        paths=request.possible_paths or (),
         command=command,
         dialect=dialect,
     )

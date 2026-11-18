@@ -9,6 +9,7 @@ from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.production import StandaloneGovernance
 from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.base_adapter import PermissionDecision
+from backend.services.adapters.capability_guard import invocation_permission_request
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.events.event_bus import EventBus
 from backend.services.job.approval_service import ApprovalService
@@ -110,7 +111,13 @@ async def test_managed_policy_gate_uses_runtime_approval_state_and_exact_adapter
         await host.shutdown()
 
 
-async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_boundary(session_factory, tmp_path):
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [("view", {"path": "source.py"}), ("grep", {"paths": "source.py", "pattern": "fixture"})],
+)
+async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_boundary(
+    session_factory, tmp_path, tool_name, arguments
+):
     events = EventBus()
     approvals = ApprovalService(session_factory)
     registry = AdapterRegistry(approval_service=approvals, event_bus=events, session_factory=session_factory)
@@ -139,9 +146,9 @@ async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_bounda
         decision = await adapter._evaluate_permission(
             "native-session",
             "job-1",
-            PermissionRequest(kind="read", workspace_path=str(tmp_path), path="source.py"),
-            tool_name="view",
-            tool_input={"path": "source.py"},
+            invocation_permission_request(str(tmp_path), tool_name, arguments),
+            tool_name=tool_name,
+            tool_input=arguments,
             tool_call_id="read-1",
         )
         assert decision == PermissionDecision.allow

@@ -727,6 +727,16 @@ class CopilotAdapter(BaseAgentAdapter):
                     request["toolName"],
                     arguments,
                 )
+                if config.session_kind == "preflight":
+                    from backend.services.tools.preflight_curator import scout_read_allowed
+
+                    if permission_request.full_command_text or not scout_read_allowed(
+                        config.workspace_path,
+                        permission_request.kind,
+                        request["toolName"],
+                        permission_request.possible_paths or [],
+                    ):
+                        raise CapabilityDeniedError("Scout tool invocation exceeds its read-only workspace")
                 await enforce_tool_capabilities(
                     config.execution_capabilities,
                     workspace=config.workspace_path,

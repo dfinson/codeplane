@@ -1,7 +1,37 @@
 import pytest
 
-from backend.services.adapters.capability_guard import enforce_command_capabilities, enforce_tool_capabilities
+from backend.services.adapters.capability_guard import (
+    enforce_command_capabilities,
+    enforce_invocation_capabilities,
+    enforce_tool_capabilities,
+    invocation_permission_request,
+)
 from backend.services.adapters.contracts import CapabilityDeniedError
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+async def test_native_search_paths_are_preserved_and_contained(tmp_path, as_list) -> None:
+    inside = str(tmp_path / "source.py")
+    supplied = [inside] if as_list else inside
+    request = invocation_permission_request(str(tmp_path), "grep", {"paths": supplied, "pattern": "fixture"})
+    assert request.kind == "read" and request.possible_paths == [inside]
+    await enforce_invocation_capabilities(
+        frozenset({"read"}), workspace=str(tmp_path), tool_name="grep", arguments={"paths": supplied}
+    )
+    outside = str(tmp_path.parent / "outside")
+    with pytest.raises(CapabilityDeniedError):
+        await enforce_invocation_capabilities(
+            frozenset({"read"}),
+            workspace=str(tmp_path),
+            tool_name="grep",
+            arguments={"paths": [inside, outside] if as_list else outside},
+        )
+
+
+@pytest.mark.parametrize("paths", [123, ["source.py", None], {"path": "source.py"}])
+def test_malformed_native_search_paths_are_not_silently_discarded(tmp_path, paths) -> None:
+    with pytest.raises(CapabilityDeniedError):
+        invocation_permission_request(str(tmp_path), "grep", {"paths": paths})
 
 
 async def test_shell_capability_does_not_authorize_writes_or_network(tmp_path) -> None:
