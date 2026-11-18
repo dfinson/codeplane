@@ -15,6 +15,7 @@ import structlog
 from backend.config import resolve_protected_paths
 from backend.models.domain import ApprovalAlreadyResolvedError, ApprovalResolution, JobState, StateConflictError
 from backend.persistence.database import serialized_write
+from backend.persistence.execution_contract_repo import ExecutionContractRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.native_execution_repo import NativeExecutionRepository
 from backend.persistence.policy_repo import PolicyRepository
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from backend.models.execution_contracts import ExecutionContractPin, ImplementationPin
     from backend.models.session_event import EventMetadata
     from backend.services.adapters.native_gates.binding import NativeCall
+    from backend.services.adapters.native_gates.controls import NativeInput
     from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
     from backend.services.runtime.service import RuntimeService
 
@@ -77,6 +79,49 @@ class NativeExecutions:
 
     def retains(self, execution: NativeExecution) -> bool:
         return self._live.get(execution.identity.execution_token) is execution
+
+    async def owns_job(self, job_id: str) -> bool:
+        return bool(self.for_job(job_id)) or await self._repository.has_native_admission(job_id)
+
+    def input_execution(self, job_id: str, *, attempt_id: str | None = None) -> NativeExecution:
+        matches = [item for item in self.for_job(job_id) if item.metadata.attempt_id == attempt_id]
+        if len(matches) != 1:
+            raise StateConflictError("Native input requires one exact retained execution")
+        execution = matches[0]
+        if execution.cancel_requested or not execution.gates.binding.active:
+            raise StateConflictError("Native input execution is cancelling")
+        return execution
+
+    async def queue_input(
+        self, job_id: str, expected_execution: str, content: str, *, message_id: str, attempt_id: str | None = None
+    ) -> None:
+        execution = self.input_execution(job_id, attempt_id=attempt_id)
+        if execution.identity.execution_token != expected_execution:
+            raise StateConflictError("Native input belongs to a stale execution")
+        await execution.gates.binding.controls.enqueue(content, message_id=message_id)
+
+    def _context_execution(self) -> NativeExecution:
+        from backend.services.adapters.native_gates.observation_scope import native_execution_context
+
+        identity = native_execution_context.get()
+        execution = self._live.get(identity.execution_token) if identity is not None else None
+        if execution is None or execution.identity != identity:
+            raise StateConflictError("Native input consumption requires its exact caller-owned execution context")
+        return execution
+
+    async def consume_input(self) -> Any:
+        return await self._context_execution().gates.binding.controls.consume()
+
+    async def acknowledge_input(self, message: NativeInput, native_ids: dict[str, str]) -> None:
+        execution = self._context_execution()
+        if message.execution != execution.identity:
+            raise StateConflictError("Native input acknowledgment belongs to another execution")
+        await execution.gates.binding.controls.consumed(message, native_ids)
+
+    async def cancel_controls(self, execution: NativeExecution) -> None:
+        if not self.retains(execution) or not execution.cancel_requested:
+            raise StateConflictError("Native stop requires an actual retained cancellation request")
+        await execution.gates.binding.controls.stop()
 
     async def open_observation(
         self, identity: ExecutionIdentity, *, format_id: str, external_session_id: str
@@ -147,6 +192,7 @@ class NativeExecutions:
         target: object,
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool,
+        input_handler: Callable[[NativeInput], Awaitable[Any]] | None = None,
     ) -> asyncio.Task[T]:
         """Internal composition entry: claim a queued Job and create its real task.
 
@@ -211,6 +257,7 @@ class NativeExecutions:
                             invoke=invoke,
                             synchronous=synchronous,
                             attempt_id=None,
+                            input_handler=input_handler,
                         )
                         async with host._session_factory() as session:
                             await host._make_job_service(session).transition_state(job_id, JobState.review)
@@ -306,6 +353,7 @@ class NativeExecutions:
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool,
         attempt_id: str | None,
+        input_handler: Callable[[NativeInput], Awaitable[Any]] | None = None,
     ) -> T:
         host = self.host
         family = str(family)
@@ -395,6 +443,31 @@ class NativeExecutions:
             )
             await host._event_bus.publish(event)
 
+        async def control_retained() -> bool:
+            if not self.retains(execution) or execution.pin != pin:
+                return False
+            current_pin = host._recipe_contract_pins.get(job_id) or host._job_contract_pins.get(job_id)
+            if current_pin != pin:
+                return False
+            if await ExecutionContractRepository(host._session_factory).get(job_id, pin.admission_id) != pin:
+                return False
+            source = require_installation(family).observation_source()
+            return (source[0] if source is not None else None) == execution.observation_pin
+
+        async def control_receipt(operation_id: str, phase: str, payload: dict[str, Any]) -> None:
+            if not await control_retained():
+                raise StateConflictError("Native control lost its retained execution or pin")
+            event = await self._repository.receipt(
+                identity,
+                pin,
+                family,
+                metadata,
+                operation_id=operation_id,
+                phase=phase,
+                payload=payload,
+            )
+            await host._event_bus.publish(event)
+
         gates = NativeGates(
             NativeBinding(
                 family=family,
@@ -406,6 +479,9 @@ class NativeExecutions:
                 is_current=current,
                 is_current_inline=locally_current,
                 on_result=report,
+                control_retained=control_retained,
+                control_cancel_requested=lambda: self.retains(execution) and execution.cancel_requested,
+                on_control=control_receipt,
             )
         )
         execution = NativeExecution(identity, pin, metadata, gates, owner, target)
@@ -492,7 +568,9 @@ class NativeExecutions:
                 await self._repository.record(
                     identity, pin, family, "bound", metadata, source_pin=execution.observation_pin
                 )
-                await gates.attach(target)
+                attachment = await gates.attach(target)
+                if input_handler is not None:
+                    attachment.cleanup(gates.binding.controls.register(input_handler=input_handler))
             if execution.observation_pin is not None:
                 from backend.services.adapters.native_gates.observation_scope import ObservationSubscription
 

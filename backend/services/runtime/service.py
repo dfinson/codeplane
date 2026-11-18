@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.action_policy.production import StandaloneGovernance
     from backend.services.adapters.contracts import ExecutionIdentity
+    from backend.services.adapters.native_gates.controls import NativeInput
     from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
@@ -2387,10 +2388,11 @@ class RuntimeService:
         target: object,
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool = False,
+        input_handler: Callable[[NativeInput], Awaitable[Any]] | None = None,
     ) -> asyncio.Task[T]:
         """Internal admission of a supplied runnable, using existing Job task capacity."""
         return await self._native_executions.start(
-            job_id, family=family, target=target, invoke=invoke, synchronous=synchronous
+            job_id, family=family, target=target, invoke=invoke, synchronous=synchronous, input_handler=input_handler
         )
 
     async def detach_native(self, execution: ExecutionIdentity) -> str:
@@ -2418,11 +2420,26 @@ class RuntimeService:
         invoke: Callable[[], T | Awaitable[T]],
         synchronous: bool = False,
         attempt_id: str | None = None,
+        input_handler: Callable[[NativeInput], Awaitable[Any]] | None = None,
     ) -> T:
         """Invoke a caller-owned runnable inside the existing owning task only."""
         return await self._native_executions.invoke(
-            job_id, family=family, target=target, invoke=invoke, synchronous=synchronous, attempt_id=attempt_id
+            job_id,
+            family=family,
+            target=target,
+            invoke=invoke,
+            synchronous=synchronous,
+            attempt_id=attempt_id,
+            input_handler=input_handler,
         )
+
+    async def consume_native_input(self) -> Any:
+        """Wait at the supplied runnable's declared boundary, never start another execution."""
+        return await self._native_executions.consume_input()
+
+    async def acknowledge_native_input(self, message: NativeInput, native_ids: dict[str, str]) -> None:
+        """Acknowledge this exact message only after the native input was actually consumed."""
+        await self._native_executions.acknowledge_input(message, native_ids)
 
     async def authorize_attempt_command(
         self,
@@ -2796,6 +2813,12 @@ class RuntimeService:
 
         if job is None or job.observation_only or job.state != JobState.running:
             return None
+        if self._native_executions.for_job(job.id):
+            try:
+                execution = self._native_executions.input_execution(job.id, attempt_id=attempt_id)
+            except StateConflictError:
+                return None
+            return execution.identity.execution_token
         if attempt_id is not None:
             binding = self._attempt_bindings.get(job.id, attempt_id)
             return binding.token if binding is not None and not binding.cancel_requested else None
@@ -2844,9 +2867,19 @@ class RuntimeService:
             if reason:
                 return CurrentExecutionDispatchResult(job_id, token, "conflict", reason)
             assert job is not None
+            native = (
+                self._native_executions.input_execution(job_id, attempt_id=attempt_id)
+                if self._native_executions.for_job(job_id)
+                else None
+            )
+            if native is not None and not native.gates.binding.controls.accepts_input:
+                return CurrentExecutionDispatchResult(job_id, token, "failed", "native_input_not_configured")
+            native_message_id = str(uuid.uuid4()) if native is not None else None
             binding = self._attempt_bindings.get(job_id, attempt_id) if attempt_id is not None else None
             target_session_id = (
-                binding.session_id
+                None
+                if native is not None
+                else binding.session_id
                 if binding is not None
                 else self._agent_sessions[job_id].session_id
                 if job.source == JobSource.managed
@@ -2881,7 +2914,12 @@ class RuntimeService:
             try:
                 IntegrationPolicy(self._config).require_enabled(binding.sdk if binding is not None else job.sdk)
                 async with asyncio.timeout(30):
-                    if binding is not None:
+                    if native is not None:
+                        assert native_message_id is not None
+                        await self._native_executions.queue_input(
+                            job_id, expected_execution, content, message_id=native_message_id, attempt_id=attempt_id
+                        )
+                    elif binding is not None:
                         await binding.adapter.send_message(binding.session_id, content)
                     elif job.source == JobSource.managed:
                         await self._agent_sessions[job_id].send_message(content)
@@ -2899,7 +2937,7 @@ class RuntimeService:
                 )
             except (TimeoutError, ConnectionError, OSError):
                 return CurrentExecutionDispatchResult(job_id, token, "uncertain", "delivery_unknown")
-        receipt_id = str(uuid.uuid4())
+        receipt_id = native_message_id or str(uuid.uuid4())
         payload: dict[str, Any] = {
             "content": (
                 f"Coordinated operator admission receipt {receipt_id}\n"
@@ -2914,6 +2952,8 @@ class RuntimeService:
         }
         if attempt_id is not None:
             payload["attempt_id"] = attempt_id
+        if native is not None:
+            payload["target_native_binding_id"] = native.identity.binding_id
         message = new_event(
             job_id,
             EventKind.message_user,
@@ -2962,6 +3002,16 @@ class RuntimeService:
             raise JobNotFoundError(f"Job {job_id} does not exist")
         if job.observation_only:
             raise StateConflictError("Observation-only history has no instruction channel")
+        if await self._native_executions.owns_job(job_id):
+            token = await self._execution_token(job)
+            if token is None:
+                raise StateConflictError("Native input requires the exact currently owned runnable")
+            result = await self.dispatch_current_execution(job_id, token, content)
+            if result.status != "accepted":
+                raise NativeDeliveryError(
+                    f"Native input was not admitted: {result.reason}", uncertain=result.status == "uncertain"
+                )
+            return True
         IntegrationPolicy(self._config).require_enabled(job.sdk)
         if job.source == JobSource.managed:
             return await self.send_message(job_id, content)
@@ -3099,8 +3149,12 @@ class RuntimeService:
                 "Use explicit Resume to continue a finished run."
             )
         agent_session = self._agent_sessions.get(job_id)
+        if self._native_executions.for_job(job_id):
+            return await self.send_operator_message(job_id, message)
         if agent_session is None:
             job = await self._get_job(job_id)
+            if job is not None and await self._native_executions.owns_job(job_id):
+                raise StateConflictError("Native continuation requires its original caller-owned input boundary")
             if job is not None and job.source != JobSource.managed:
                 return await self.send_operator_message(job_id, message)
             return await self._resume_orphaned(job_id, message)
