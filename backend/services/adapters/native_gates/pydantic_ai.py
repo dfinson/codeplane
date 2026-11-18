@@ -4,22 +4,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import Agent
-from pydantic_ai._output import OutputToolset
-from pydantic_ai.toolsets import WrapperToolset
-
+from ._optional import load_sdk
 from .binding import NativeCall, NativeGateDeniedError
 
 if TYPE_CHECKING:
+    from ._optional import AgentToolsets, Toolset, WrapperToolset
     from .installation import GateAttachment
+else:
+    WrapperToolset = load_sdk("pydantic_ai.toolsets").WrapperToolset
+
+Agent = load_sdk("pydantic_ai").Agent
+OutputToolset = load_sdk("pydantic_ai._output").OutputToolset
 
 
-def install(gate: GateAttachment, agent: Agent[Any, Any]) -> None:
+def install(gate: GateAttachment, agent: AgentToolsets) -> None:
     if not isinstance(agent, Agent):
         raise TypeError("PydanticAI gating requires the original Agent")
     original = agent._get_toolset
 
-    class CodePlaneToolset(WrapperToolset[Any]):
+    class CodePlaneToolset(WrapperToolset):
+        wrapped: Toolset
+
         async def call_tool(self, name: str, tool_args: dict[str, Any], ctx: Any, tool: Any) -> Any:
             call = NativeCall(
                 name,
@@ -30,7 +35,7 @@ def install(gate: GateAttachment, agent: Agent[Any, Any]) -> None:
             )
             if not await gate.allow(call):
                 raise NativeGateDeniedError("Denied by CodePlane")
-            original = super().call_tool
+            original = self.wrapped.call_tool
             return await gate.complete(call, lambda: original(name, tool_args, ctx, tool))
 
     def wrap(toolset: Any) -> Any:

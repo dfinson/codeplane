@@ -200,15 +200,14 @@ class NativeExecutionRepository:
                 )
             ):
                 return False
-            positions = dict(
-                (
-                    await session.execute(
-                        select(EventRow.event_id, EventRow.id).where(
-                            EventRow.event_id.in_([bound_id, event.id, released_id])
-                        )
+            rows = (
+                await session.execute(
+                    select(EventRow.event_id, EventRow.id).where(
+                        EventRow.event_id.in_([bound_id, event.id, released_id])
                     )
-                ).all()
-            )
+                )
+            ).all()
+            positions: dict[str, int] = {identity: cursor for identity, cursor in rows}
             if not positions[bound_id] < positions[event.id] < positions.get(released_id, float("inf")):
                 return False
         admission_id = event.payload.get("admission_id")

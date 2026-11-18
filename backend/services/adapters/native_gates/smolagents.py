@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from smolagents import ToolCallingAgent
-
+from ._optional import load_sdk
 from .binding import NativeCall, encode_arguments
 
 if TYPE_CHECKING:
+    from ._optional import SmolToolCallingAgent
     from .installation import GateAttachment
 
+ToolCallingAgent = load_sdk("smolagents").ToolCallingAgent
 
-def install(gate: GateAttachment, agent: ToolCallingAgent) -> None:
+
+def install(gate: GateAttachment, agent: SmolToolCallingAgent) -> None:
     if not isinstance(agent, ToolCallingAgent):
         raise TypeError("Only smolagents ToolCallingAgent has this qualified pre-tool boundary")
     original = agent.execute_tool_call

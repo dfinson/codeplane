@@ -8,16 +8,19 @@ from inspect import signature
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, ToolException
-
+from ._optional import load_sdk
 from .binding import NativeCall, encode_arguments
 
 if TYPE_CHECKING:
+    from ._optional import LangChainTool
     from .installation import GateAttachment
 
+RunnableConfig = load_sdk("langchain_core.runnables").RunnableConfig
+_tools = load_sdk("langchain_core.tools")
+BaseTool, ToolException = _tools.BaseTool, _tools.ToolException
 
-def install(gate: GateAttachment, tool: BaseTool) -> None:
+
+def install(gate: GateAttachment, tool: LangChainTool) -> None:
     if not isinstance(tool, BaseTool):
         raise TypeError("LangChain gating requires the original BaseTool instance")
     call_id: ContextVar[str | None] = ContextVar("native_langchain_call", default=None)
@@ -43,7 +46,7 @@ def install(gate: GateAttachment, tool: BaseTool) -> None:
             values["run_manager"] = manager
         return values
 
-    def guarded_run(*args: Any, config: RunnableConfig | None = None, run_manager: Any = None, **kwargs: Any) -> Any:
+    def guarded_run(*args: Any, config: dict[str, Any] | None = None, run_manager: Any = None, **kwargs: Any) -> Any:
         native_call = call(args, kwargs, run_manager)
         permit = delegated.get()
         authorized = False
@@ -62,7 +65,7 @@ def install(gate: GateAttachment, tool: BaseTool) -> None:
         return invoke() if authorized else gate.complete_sync(native_call, invoke)
 
     async def guarded_arun(
-        *args: Any, config: RunnableConfig | None = None, run_manager: Any = None, **kwargs: Any
+        *args: Any, config: dict[str, Any] | None = None, run_manager: Any = None, **kwargs: Any
     ) -> Any:
         native_call = call(args, kwargs, run_manager)
         if not await gate.allow(native_call):

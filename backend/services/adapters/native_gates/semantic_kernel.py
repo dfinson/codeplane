@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from semantic_kernel import Kernel
-from semantic_kernel.filters import FilterTypes
-from semantic_kernel.functions import FunctionResult
-
+from ._optional import load_sdk
 from .binding import NativeCall
 
 if TYPE_CHECKING:
+    from ._optional import KernelFilters
     from .installation import GateAttachment
 
+Kernel = load_sdk("semantic_kernel").Kernel
+FilterTypes = load_sdk("semantic_kernel.filters").FilterTypes
+FunctionResult = load_sdk("semantic_kernel.functions").FunctionResult
 
-def install(gate: GateAttachment, kernel: Kernel) -> None:
+
+def install(gate: GateAttachment, kernel: KernelFilters) -> None:
     if not isinstance(kernel, Kernel):
         raise TypeError("Semantic Kernel gating requires the original Kernel")
 
