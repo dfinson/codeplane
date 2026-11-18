@@ -14,24 +14,24 @@ def preprocess_openhands(obj: dict[str, Any]) -> list[dict[str, Any]]:
 
     OpenHands 0.x used an ``action``/``observation`` compound discriminator.
     OpenHands 1.x SDK persistence uses ``kind`` plus ``source``/``tool_name``.
-    Synthesize the YAML ``action`` discriminator for both formats while
+    Synthesize the YAML ``_event_type`` discriminator for both formats while
     preserving the native nested payload for dot-path extraction.
     """
     kind = obj.get("kind")
     if kind in {"SystemPromptEvent", "ActionEvent", "ObservationEvent", "MessageEvent"}:
         normalized = dict(obj)
         if kind in {"ActionEvent", "ObservationEvent"}:
-            normalized["action"] = f"{kind}.{obj.get('tool_name', 'unknown')}"
+            normalized["_event_type"] = f"{kind}.{obj.get('tool_name', 'unknown')}"
         elif kind == "MessageEvent":
-            normalized["action"] = f"MessageEvent.{obj.get('source', 'unknown')}"
+            normalized["_event_type"] = f"MessageEvent.{obj.get('source', 'unknown')}"
         else:
-            normalized["action"] = kind
+            normalized["_event_type"] = kind
         return [normalized]
 
     if "action" in obj:
-        return [obj]
+        return [{**obj, "_event_type": obj["action"]}]
     elif "observation" in obj:
         normalized = dict(obj)
-        normalized["action"] = f"observation.{normalized['observation']}"
+        normalized["_event_type"] = f"observation.{normalized['observation']}"
         return [normalized]
     return [obj]

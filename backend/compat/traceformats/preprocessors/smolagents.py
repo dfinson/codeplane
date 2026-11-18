@@ -15,6 +15,7 @@ def preprocess_smolagents(obj: dict[str, Any]) -> list[dict[str, Any]]:
     Only synthesizes the step_type field and extracts timestamps from timing.
     If step_type is already present, trusts the existing value.
     Nested structures (token_usage, tool_calls) preserved for _resolve_path.
+    Native ActionStep tool calls are flat; nested function objects remain supported.
     """
     normalized = dict(obj)
 
@@ -32,7 +33,7 @@ def preprocess_smolagents(obj: dict[str, Any]) -> list[dict[str, Any]]:
                 results: list[dict[str, Any]] = [normalized]
                 for tc in tool_calls:
                     if isinstance(tc, dict):
-                        fn = tc.get("function", {})
+                        fn = tc.get("function", tc)
                         results.append(
                             {
                                 "step_type": "ToolCall",
@@ -60,7 +61,7 @@ def preprocess_smolagents(obj: dict[str, Any]) -> list[dict[str, Any]]:
             results = [normalized]
             for tc in tool_calls:
                 if isinstance(tc, dict):
-                    fn = tc.get("function", {})
+                    fn = tc.get("function", tc)
                     results.append(
                         {
                             "step_type": "ToolCall",
