@@ -112,7 +112,7 @@ export const TaskLinkCard = memo(function TaskLinkCard({
       tabIndex={navigable ? 0 : undefined}
       onClick={openJob}
       onKeyDown={(event) => {
-        if (navigable && (event.key === "Enter" || event.key === " ")) {
+        if (event.target === event.currentTarget && navigable && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
           openJob();
         }

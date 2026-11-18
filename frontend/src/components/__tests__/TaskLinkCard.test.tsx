@@ -30,6 +30,7 @@ function renderCard(taskLink = makeTaskLink(), onStart = vi.fn(), dependencies?:
     <MemoryRouter initialEntries={["/projects/id/proj-1/board"]}>
       <Routes>
         <Route path="/projects/id/:projectId/board" element={<TaskLinkCard taskLink={taskLink} onStart={onStart} dependencies={dependencies} />} />
+        <Route path="/projects/id/:projectId/board/task/:taskId" element={<div>Task inspection</div>} />
         <Route path="/jobs/:jobId" element={<div>Job detail</div>} />
       </Routes>
     </MemoryRouter>,
@@ -85,6 +86,31 @@ describe("TaskLinkCard", () => {
     renderCard(makeTaskLink({ state: "running", jobId: "job-7" }));
     fireEvent.click(screen.getByRole("link", { name: /Task recipe/ }));
     expect(screen.getByText("Job detail")).toBeInTheDocument();
+  });
+
+  it.each(["Enter", " "])("does not consume %s from the task inspection button", (key) => {
+    renderCard(makeTaskLink({ state: "running", jobId: "job-7" }));
+    const inspect = screen.getByRole("button", { name: "Inspect task" });
+    inspect.focus();
+    expect(fireEvent.keyDown(inspect, { key })).toBe(true);
+    expect(screen.queryByText("Job detail")).not.toBeInTheDocument();
+    fireEvent.click(inspect);
+    expect(screen.getByText("Task inspection")).toBeInTheDocument();
+  });
+
+  it.each(["Enter", " "])("keeps direct card %s navigation", (key) => {
+    renderCard(makeTaskLink({ state: "running", jobId: "job-7" }));
+    const card = screen.getByRole("link", { name: /Task recipe/ });
+    card.focus();
+    fireEvent.keyDown(card, { key });
+    expect(screen.getByText("Job detail")).toBeInTheDocument();
+  });
+
+  it("keeps inspection clicks separate from card navigation", () => {
+    renderCard(makeTaskLink({ state: "running", jobId: "job-7" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect task" }));
+    expect(screen.getByText("Task inspection")).toBeInTheDocument();
+    expect(screen.queryByText("Job detail")).not.toBeInTheDocument();
   });
 
   it("preserves explicit tracker-link context for tracker-backed tasks", () => {
