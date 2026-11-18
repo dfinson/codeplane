@@ -1,0 +1,46 @@
+framework: langflow
+framework_version: "lfx==1.13.3;agent-governance-toolkit-core==5.0.0"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  component_started:
+    kind: tool.call.started
+    payload:
+      operation_id: operation_id
+      tool_call_id: operation_id
+      tool_call_id_source: tool_call_id_source
+      tool_name: node_id
+      node_id: node_id
+      parent_nodes: parent_nodes
+      run_id: run_id
+      flow_id: flow_id
+      component_did: component_did
+      arguments: arguments
+  component_completed:
+    kind: tool.call.completed
+    payload:
+      operation_id: operation_id
+      tool_call_id: operation_id
+      tool_call_id_source: tool_call_id_source
+      tool_name: node_id
+      node_id: node_id
+      parent_nodes: parent_nodes
+      run_id: run_id
+      flow_id: flow_id
+      component_did: component_did
+      success: success
+  component_failed:
+    kind: tool.call.failed
+    payload:
+      operation_id: operation_id
+      tool_call_id: operation_id
+      tool_call_id_source: tool_call_id_source
+      tool_name: node_id
+      node_id: node_id
+      parent_nodes: parent_nodes
+      run_id: run_id
+      flow_id: flow_id
+      component_did: component_did
+      error_type: error_type
+      success: success
