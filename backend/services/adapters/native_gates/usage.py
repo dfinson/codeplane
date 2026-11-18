@@ -15,7 +15,65 @@ if TYPE_CHECKING:
 def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tuple[UsageAmount, ...]:
     values: dict[str, int] = {}
     source = ""
-    if family == "autogen":
+    model: str | None = None
+    if family == "openai-client":
+        runs = load_sdk("openai.types.beta.threads.run")
+        if isinstance(result, runs.Run) and result.usage is not None:
+            values = _client_tokens(
+                result.usage, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
+            )
+            source = "Run.usage"
+            model = result.model
+    elif family == "anthropic-client":
+        messages = load_sdk("anthropic.types")
+        if isinstance(result, messages.Message):
+            values = _client_tokens(
+                result.usage,
+                (
+                    ("input_tokens", "input_tokens"),
+                    ("output_tokens", "output_tokens"),
+                    ("cache_read_input_tokens", "cache_read_tokens"),
+                    ("cache_creation_input_tokens", "cache_write_tokens"),
+                ),
+            )
+            source = "Message.usage"
+            model = result.model
+    elif family == "gemini-client":
+        types = load_sdk("google.genai.types")
+        if isinstance(result, types.GenerateContentResponse) and result.usage_metadata is not None:
+            values = _client_tokens(
+                result.usage_metadata,
+                (
+                    ("prompt_token_count", "input_tokens"),
+                    ("candidates_token_count", "output_tokens"),
+                    ("cached_content_token_count", "cache_read_tokens"),
+                ),
+            )
+            source = "GenerateContentResponse.usage_metadata"
+            model = result.model_version
+    elif family == "mistral-client":
+        models = load_sdk("mistralai.client.models")
+        if isinstance(result, models.ChatCompletionResponse):
+            values = _client_tokens(
+                result.usage, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
+            )
+            source = "ChatCompletionResponse.usage"
+            model = result.model
+    elif family == "bedrock-client":
+        if isinstance(result, dict):
+            trace = result.get("trace", {}).get("trace", {})
+            for phase in ("orchestrationTrace", "preProcessingTrace", "postProcessingTrace", "routingClassifierTrace"):
+                output = trace.get(phase, {}).get("modelInvocationOutput", {})
+                supplied = output.get("metadata", {}).get("usage")
+                if supplied is not None:
+                    if not isinstance(supplied, dict):
+                        raise ValueError("Invalid native Bedrock usage object")
+                    values = _client_tokens(
+                        supplied, (("inputTokens", "input_tokens"), ("outputTokens", "output_tokens"))
+                    )
+                    source = f"InvokeAgent.trace.{phase}.modelInvocationOutput.metadata.usage"
+                    break
+    elif family == "autogen":
         models = load_sdk("autogen_core.models")
         if isinstance(result, models.CreateResult):
             values = {"input_tokens": result.usage.prompt_tokens, "output_tokens": result.usage.completion_tokens}
@@ -95,7 +153,7 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
                 "amount": amount,
                 "unit": unit,
                 "producer": family,
-                "model": None,
+                "model": model,
                 "job_id": execution.job_id,
                 "execution_epoch": execution.epoch,
                 "role": "primary",
@@ -104,3 +162,18 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
         )
         for unit, amount in values.items()
     )
+
+
+def _client_tokens(supplied: Any, fields: tuple[tuple[str, str], ...]) -> dict[str, int]:
+    values = {}
+    present = supplied.keys() if isinstance(supplied, dict) else supplied.model_fields_set
+    for native, unit in fields:
+        if native not in present:
+            continue
+        amount = supplied.get(native) if isinstance(supplied, dict) else getattr(supplied, native)
+        if amount is None:
+            continue
+        if type(amount) is not int or amount < 0:
+            raise ValueError(f"Invalid native client usage: {native}")
+        values[unit] = amount
+    return values

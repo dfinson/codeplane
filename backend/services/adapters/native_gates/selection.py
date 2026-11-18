@@ -41,7 +41,13 @@ class NativeInstallation:
         mapping = source.with_suffix(".yaml")
         if not mapping.is_file():
             raise UnsupportedNativeHookError("Native observation mapping is unavailable")
-        return _pin(self.id, [(self.module, source), (self.id, mapping)]), mapping
+        files = [(self.module, source), (self.id, mapping)]
+        if self.id in {"openai-client", "anthropic-client", "gemini-client", "mistral-client", "bedrock-client"}:
+            helper = source.with_name("_client_calls.py")
+            if not helper.is_file():
+                raise UnsupportedNativeHookError("Native client helper is unavailable")
+            files.append(("native-client-calls", helper))
+        return _pin(self.id, files), mapping
 
     def readiness(self) -> AdapterReadiness:
         versions = []
