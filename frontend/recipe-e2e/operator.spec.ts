@@ -1,10 +1,10 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import type { Job, RecipeAttemptInspection, RecipeCurrentRun, RecipeStepInspection, RecipeStepList } from "../src/api/types";
+import type { Job, JobPendingDecisionPage, RecipeAttemptControl, RecipeAttemptInspection, RecipeCurrentRun, RecipeStepInspection, RecipeStepList } from "../src/api/types";
 
 let server: ChildProcess;
 let directory = "";
@@ -25,6 +25,7 @@ test.beforeAll(async () => {
   execFileSync("git", ["-C", repository, "commit", "-m", "Fixture"]);
   home = path.join(directory, "home");
   await mkdir(home);
+  await writeFile(path.join(directory, "git-events.jsonl"), "");
   await writeFile(path.join(home, "config.yaml"), "server:\n  host: 127.0.0.1\n  port: 18769\nruntime:\n  max_concurrent_jobs: 1\n");
   await startServer();
 });
@@ -32,7 +33,10 @@ test.beforeAll(async () => {
 async function startServer() {
   server = spawn("uv", ["run", "--no-sync", "python", "-m", "backend.tests.recipe_browser_server"], {
     cwd: path.resolve(".."),
-    env: { ...process.env, CODEPLANE_HOME: home, RECIPE_BROWSER_PORT: "18769", CODEPLANE_E2E_FAKE_AGENT: "1" },
+    env: {
+      ...process.env, CODEPLANE_HOME: home, RECIPE_BROWSER_PORT: "18769", CODEPLANE_E2E_FAKE_AGENT: "1",
+      GIT_TRACE2_EVENT: path.join(directory, "git-events.jsonl"),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   server.stdout?.on("data", (chunk) => { output += chunk.toString(); });
@@ -57,8 +61,133 @@ async function stopServer() {
 
 test.afterAll(async () => {
   await stopServer();
+  await test.info().attach("fixture-server.log", { body: output, contentType: "text/plain" });
+  if (directory) await test.info().attach("git-events.jsonl", {
+    body: await readFile(path.join(directory, "git-events.jsonl")), contentType: "application/jsonl",
+  });
   if (directory) await rm(directory, { recursive: true, force: true });
 });
+
+async function finishFixtureCommands(
+  page: Page,
+  request: APIRequestContext,
+  jobId: string,
+  commands: Record<string, {
+    argv: string[] | ((attempt: RecipeAttemptInspection["attempt"]) => string[]);
+    workspaceKey?: string;
+    maxAttempts?: number;
+    hardGate?: boolean;
+    permissionReason?: "hard_gate" | "incomplete_evidence";
+  }>,
+) {
+  const { run }: RecipeCurrentRun = await (await request.get(`/api/jobs/${jobId}/recipe/current`)).json();
+  expect(run?.jobId).toBe(jobId);
+  const root = `/api/jobs/${jobId}/recipe/runs/${run!.id}`;
+  const approved = new Set<string>();
+  const hardGates = new Map<string, string[]>();
+  const mergeDispatches = async () => (await readFile(path.join(directory, "git-events.jsonl"), "utf8"))
+    .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    .filter((event) => event.event === "start" && event.argv?.[1] === "merge");
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const pending: JobPendingDecisionPage = await (await request.get(`/api/jobs/${jobId}/recipe/decisions`)).json();
+    const steps: RecipeStepList = await (await request.get(`${root}/steps`)).json();
+    expect(pending.nextCursor).toBeNull();
+    for (const item of pending.items) {
+      if (item.humanGate) continue;
+      const action = JSON.parse(item.approval.proposedAction!);
+      expect(action.kind).toBe("policy_action");
+      expect(action.execution.binding_id).toBe(`codeplane.command:${run!.id}`);
+      const owners: RecipeAttemptControl[] = [];
+      for (const candidate of steps.items) {
+        if (!candidate.currentAttemptId || candidate.definition.runner.kind !== "command") continue;
+        const control: RecipeAttemptControl = await (await request.get(
+          `${root}/steps/${candidate.id}/attempts/${candidate.currentAttemptId}/control`,
+        )).json();
+        if (control.stop?.enabled && control.stop.expectedToken === action.execution.execution_token) owners.push(control);
+      }
+      expect(owners, `Permission must match one actual command token: ${JSON.stringify(item)}`).toHaveLength(1);
+      const control = owners[0];
+      const step = steps.items.find((candidate) => candidate.id === control.stepInstanceId)!;
+      const expected = commands[step!.stepPath];
+      expect(expected, `Unexpected permission for ${step!.stepPath}`).toBeDefined();
+      expect(item.approval.jobId).toBe(jobId);
+      // Policy events are intentionally Job-wide in the pending-decision projection.
+      // Match their token against the independently read owned attempt, not argument claims.
+      expect([item.recipeRunId, item.stepInstanceId, item.attemptId]).toEqual(
+        item.attemptId ? [run!.id, step.id, step.currentAttemptId] : [null, null, null],
+      );
+      expect(control.attemptId).toBe(step.currentAttemptId);
+      expect(approved.has(item.approval.id)).toBe(false);
+      const target = `${root}/steps/${step.id}/attempts/${control.attemptId}`;
+      const { attempt }: RecipeAttemptInspection = await (await request.get(target)).json();
+      expect(attempt.id).toBe(control.attemptId);
+      expect(attempt.stepInstanceId).toBe(step!.id);
+      expect(attempt.number).toBeLessThanOrEqual(expected.maxAttempts ?? 1);
+      expect(attempt.result).toBeNull();
+      expect(attempt.outputs).toEqual([]);
+      const argv = typeof expected.argv === "function" ? expected.argv(attempt) : expected.argv;
+      expect(attempt.runner).toMatchObject({ kind: "command", argv });
+      const job: Job = await (await request.get(`/api/jobs/${jobId}`)).json();
+      expect(attempt.workspace.policy).toMatchObject({
+        mode: expected.workspaceKey ? "isolated" : "mutable", key: expected.workspaceKey ?? "job",
+      });
+      if (expected.workspaceKey) {
+        expect(path.dirname(attempt.workspace.path)).toBe(path.dirname(job.worktreePath!));
+        const registered = execFileSync("git", ["-C", repository, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+        const entry = registered.split("\n\n").find((value) => value.startsWith(`worktree ${attempt.workspace.path}\n`));
+        expect(entry).toContain(`branch refs/heads/codeplane/recipe/recipe-${step!.id}-v`);
+        expect(attempt.workspace.path).not.toBe(job.worktreePath);
+      } else {
+        expect(attempt.workspace.path).toBe(job.worktreePath);
+      }
+      expect(control).toMatchObject({
+        jobId, runId: run!.id, stepInstanceId: step!.id, attemptId: attempt.id,
+        stop: { enabled: true },
+      });
+      expect(action.execution).toEqual({
+        job_id: jobId, binding_id: `codeplane.command:${run!.id}`,
+        epoch: control.executionEpoch, execution_token: control.stop?.expectedToken,
+      });
+      expect(action.execution.execution_token).toBeTruthy();
+      expect(action.reason_code).toBe(expected.permissionReason ?? (expected.hardGate ? "hard_gate" : "incomplete_evidence"));
+      expect(item.approval.description).toBe(`Policy approval required: ${action.reason_code}`);
+      expect(JSON.parse(action.fields.arguments)).toEqual({ argv });
+      expect(action.fields.command).toBe(argv[0] === "sh" ? argv[2] : "");
+      const permissions = page.getByRole("region", { name: "Pending Job decisions" });
+      await expect(permissions).toBeVisible();
+      await permissions.getByRole("button", { name: "Refresh decisions" }).click();
+      const card = permissions.locator("div.rounded-lg").filter({
+        has: page.locator("pre", { hasText: item.approval.proposedAction! }),
+      });
+      await expect(card).toHaveCount(1);
+      await expect(card.getByText(item.approval.description, { exact: true })).toBeVisible();
+      if (expected.hardGate) expect(await mergeDispatches()).toEqual([]);
+      // The exact owned command must still be unfinished when the operator decides.
+      expect((await (await request.get(target)).json()).attempt.result).toBeNull();
+      const [resolution] = await Promise.all([
+        page.waitForResponse((response) => response.url().endsWith(`/api/approvals/${item.approval.id}/resolve`) &&
+          response.request().method() === "POST"),
+        card.getByRole("button", { name: "Approve", exact: true }).click(),
+      ]);
+      expect(resolution.ok(), await resolution.text()).toBeTruthy();
+      approved.add(item.approval.id);
+      if (expected.hardGate) hardGates.set(step!.stepPath, argv);
+    }
+    if (Object.keys(commands).every((stepPath) => steps.items.some((step) =>
+      step.stepPath === stepPath && ["succeeded", "failed"].includes(step.state)))) {
+      for (const [stepPath, expected] of Object.entries(commands)) {
+        if (expected.hardGate) {
+          expect(hardGates.has(stepPath), `Missing mandatory gate: ${stepPath}`).toBe(true);
+          expect((await mergeDispatches()).map((event) => event.argv)).toEqual([hardGates.get(stepPath)]);
+        }
+      }
+      return;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Fixture commands did not finish: ${JSON.stringify(commands)}\nServer:${output.slice(-12000)}`);
+}
 
 test("restarts at a human gate and accepts only its exact retained decision", async ({ page, request }) => {
   const projectResponse = await request.post("/api/settings/projects", { data: { name: "Recipe qualification", repoPaths: [repository] } });
@@ -135,6 +264,9 @@ test("publishes, executes a real command and inspects exact evidence and review 
   await page.goto(`/jobs/${job.id}`);
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Actual Git check", exact: true }).last()).toBeVisible();
+  await finishFixtureCommands(page, request, job.id, {
+    check: { argv: ["sh", "-c", "printf '\\nFixture review change\\n' >> README.md; git diff --check"] },
+  });
   await expect.poll(async () => (await (await request.get(`/api/jobs/${job.id}`)).json()).state, { timeout: 60_000 }).toBe("review");
   await page.reload();
   await page.getByText("Output", { exact: true }).click();
@@ -219,10 +351,26 @@ test("pins a reusable block, joins isolated command branches and rejects only th
   const run = (await (await request.get(`/api/jobs/${job.id}/recipe/current`)).json()).run;
   expect(run.snapshot.blocks[childRevision.id].revisionId).toBe(childRevision.id);
   await page.goto(`/jobs/${job.id}`);
-  const permissions = page.getByRole("region", { name: "Pending Job decisions" });
-  await expect(permissions.getByText("Approve this exact recipe command invocation")).toBeVisible({ timeout: 20_000 });
-  await expect(permissions.getByText(/git merge --no-edit/)).toBeVisible();
-  await permissions.getByRole("button", { name: "Approve", exact: true }).click();
+  await finishFixtureCommands(page, request, job.id, {
+    "block@1/verify": { argv: ["git", "status", "--porcelain"] },
+    left: { argv: ["git", "status", "--porcelain"], workspaceKey: "left" },
+    right: { argv: ["git", "status", "--porcelain"], workspaceKey: "right" },
+    join: {
+      hardGate: true,
+      argv: (attempt) => {
+        const commits = ["left", "right"].map((name) => {
+          const input = attempt.inputs[name];
+          expect(input.producerOutcome).toBe("succeeded");
+          expect(input.producingAttemptId).toBeTruthy();
+          expect(input.value).toHaveProperty("commit");
+          if (!input.value || typeof input.value !== "object" || Array.isArray(input.value) ||
+            !("commit" in input.value) || typeof input.value.commit !== "string") throw new Error("Missing exact predecessor code commit");
+          return input.value.commit;
+        });
+        return ["git", "merge", "--no-edit", ...commits];
+      },
+    },
+  });
   let gate: { id: string; currentAttemptId: string; state: string } | undefined;
   try {
     await expect.poll(async () => {
@@ -328,6 +476,10 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     const { run }: RecipeCurrentRun = await (await request.get(`/api/jobs/${job.id}/recipe/current`)).json();
     expect(run).not.toBeNull();
     const root = `/api/jobs/${job.id}/recipe/runs/${run!.id}`;
+    await page.goto(`/jobs/${job.id}`);
+    await finishFixtureCommands(page, request, job.id, {
+      repair: { argv: ["sh", "-c", command], maxAttempts: 3, permissionReason: "hard_gate" },
+    });
     let steps: RecipeStepList;
     await expect.poll(async () => {
       steps = await (await request.get(`${root}/steps`)).json();
