@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import ToolMessage
-from langgraph.prebuilt import ToolNode
-
+from ._optional import load_sdk
 from .binding import NativeCall
 from .readiness import UnsupportedNativeHookError
 
 if TYPE_CHECKING:
+    from ._optional import LangGraphToolNode
     from .installation import GateAttachment
 
+ToolMessage = load_sdk("langchain_core.messages").ToolMessage
+ToolNode = load_sdk("langgraph.prebuilt").ToolNode
 
-def install(gate: GateAttachment, node: ToolNode) -> None:
+
+def install(gate: GateAttachment, node: LangGraphToolNode) -> None:
     if not isinstance(node, ToolNode):
         raise TypeError("LangGraph gating requires the original ToolNode instance")
     sync, asynchronous = node._wrap_tool_call, node._awrap_tool_call
@@ -29,7 +31,7 @@ def install(gate: GateAttachment, node: ToolNode) -> None:
             definition=request.tool.description if request.tool is not None else "",
         )
 
-    def denied(request: Any) -> ToolMessage:
+    def denied(request: Any) -> Any:
         return ToolMessage(
             content="Denied by CodePlane",
             name=request.tool_call["name"],

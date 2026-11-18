@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from agent_framework import FunctionMiddleware, MiddlewareTermination
 from pydantic import BaseModel
 
+from ._optional import load_sdk
 from .binding import NativeCall
 
 if TYPE_CHECKING:
+    from ._optional import FunctionMiddleware
     from .installation import GateAttachment
+else:
+    FunctionMiddleware = load_sdk("agent_framework").FunctionMiddleware
+
+MiddlewareTermination = load_sdk("agent_framework").MiddlewareTermination
 
 
 class MiddlewareSlot:

@@ -7,24 +7,24 @@ from inspect import signature
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from crewai import Crew
-from crewai.hooks import (
-    register_after_tool_call_hook,
-    register_before_tool_call_hook,
-    tool_hooks,
-    unregister_after_tool_call_hook,
-    unregister_before_tool_call_hook,
-)
 
+from ._optional import load_sdk
 from .binding import NativeCall, NativeGateDeniedError, encode_arguments
 
 if TYPE_CHECKING:
     from .installation import GateAttachment
 
 log = structlog.get_logger()
+Crew = load_sdk("crewai").Crew
+_hooks = load_sdk("crewai.hooks")
+tool_hooks = _hooks.tool_hooks
+register_before_tool_call_hook = _hooks.register_before_tool_call_hook
+register_after_tool_call_hook = _hooks.register_after_tool_call_hook
+unregister_before_tool_call_hook = _hooks.unregister_before_tool_call_hook
+unregister_after_tool_call_hook = _hooks.unregister_after_tool_call_hook
 
 
-def install(gate: GateAttachment, crew: Crew) -> None:
+def install(gate: GateAttachment, crew: object) -> None:
     if not isinstance(crew, Crew):
         raise TypeError("CrewAI gating requires the original Crew")
     active: ContextVar[tuple[Any, NativeCall, list[bool]] | None] = ContextVar("native_crewai_invocation", default=None)
