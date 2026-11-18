@@ -9,7 +9,7 @@ from datetime import UTC
 
 from backend.models.events import EventKind, SessionEvent
 from backend.models.session_event import EventMetadata
-from backend.services.events.observation import has_source_grouping
+from backend.services.events.observation import has_source_grouping, observed_operation_id
 from backend.services.tool_formatters import format_tool_display
 
 
@@ -27,6 +27,9 @@ class ToolPairing:
 
     @staticmethod
     def _call_id(event: SessionEvent) -> str | None:
+        operation = observed_operation_id(event)
+        if operation is not None:
+            return f"observed-operation:{operation}"
         value = event.payload.get("tool_call_id")
         if value is None and event.metadata.source_framework == "opencode":
             value = event.payload.get("call_id")
@@ -38,18 +41,19 @@ class ToolPairing:
         namespace = metadata.namespace or ()
         if namespace and namespace[0] == "observation-source":
             namespace = namespace[2:]
-        scope = json.dumps(
-            [
-                metadata.integration_binding_id,
-                metadata.run_id,
-                metadata.execution_epoch,
-                metadata.attempt_id,
-                metadata.execution_token,
-                namespace,
-                call_id,
-            ],
-            separators=(",", ":"),
-        )
+        identities: list[object] = [
+            metadata.integration_binding_id,
+            metadata.run_id,
+            metadata.execution_epoch,
+            metadata.attempt_id,
+            metadata.execution_token,
+            namespace,
+            call_id,
+        ]
+        operation = observed_operation_id(event)
+        if operation is not None:
+            identities.append({"observed_operation_id": operation})
+        scope = json.dumps(identities, separators=(",", ":"))
         return event.session_id, scope
 
     def process(self, event: SessionEvent) -> SessionEvent | list[SessionEvent] | None:
