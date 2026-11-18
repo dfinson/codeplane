@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 from backend.models.action_assessment import ActionAssessment
 from backend.models.usage import UsageAmount
-from backend.services.action_policy.assessment import ActionBinding, AssessmentService
+from backend.services.action_policy.assessment import ASSESSMENT_REQUEST_PREFIX, ActionBinding, AssessmentService
 from backend.services.adapters.agent_adapter import CompletionResult
 from backend.services.adapters.completion_context import CompletionContext, current_completion_context
 
@@ -71,6 +71,9 @@ async def test_single_text_only_attempt_binds_sources_and_rechecks_epoch() -> No
     provider.complete.assert_awaited_once()
     assert provider.complete.call_args.kwargs["excluded_tools"] == ["*"]
     assert contexts[0].response_schema == ActionAssessment.model_json_schema()
+    prompt = provider.complete.call_args.args[0]
+    assert prompt.startswith(ASSESSMENT_REQUEST_PREFIX)
+    assert json.loads(prompt.removeprefix(ASSESSMENT_REQUEST_PREFIX)) == fields
     system = provider.complete.call_args.kwargs["system_message"]
     lengths = system.split("Source codepoint lengths: ", 1)[1].splitlines()[0]
     assert json.loads(lengths) == {"command": 3, "arguments": 0, "tool_definition": 0, "context": 2}
