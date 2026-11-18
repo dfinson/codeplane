@@ -3,7 +3,8 @@
 Thin routes: validate input, delegate to ``ProjectService``, return the
 result. ``ProjectRow`` is the sole persistence entity for repo-path
 membership (AD-5) — creating/editing a Project is the only way a repo path
-is durably registered going forward.
+is durably registered going forward. Commit membership before reporting success
+so an immediately following Job request can observe it.
 """
 
 from __future__ import annotations
@@ -85,9 +86,11 @@ def _task_link_to_response(task_link: TaskLink) -> TaskLinkResponse:
 async def create_project(
     body: CreateProjectRequest,
     project_service: FromDishka[ProjectService],
+    session: FromDishka[AsyncSession],
 ) -> ProjectResponse:
     """Create a new Project, registering each repo path (AD-5)."""
     project = await project_service.create(name=body.name, repo_paths=body.repo_paths)
+    await session.commit()
     return _to_response(project)
 
 
@@ -131,6 +134,7 @@ async def update_project(
     project_id: str,
     body: UpdateProjectRequest,
     project_service: FromDishka[ProjectService],
+    session: FromDishka[AsyncSession],
 ) -> ProjectResponse:
     """Rename a Project and/or replace its repo membership."""
     project = await project_service.update(
@@ -139,6 +143,7 @@ async def update_project(
         repo_paths=body.repo_paths,
         confirm_repo_removal=body.confirm_repo_removal,
     )
+    await session.commit()
     return _to_response(project)
 
 
