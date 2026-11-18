@@ -8,6 +8,7 @@ from backend.models.api_schemas import (
     RecipeAttemptControl,
     RecipeAttemptInspection,
     RecipeAttemptResumeRequest,
+    RecipeConsumedInputPage,
     RecipeCurrentRunResponse,
     RecipeGateDecisionRequest,
     RecipeMessageReceipt,
@@ -92,6 +93,22 @@ async def inspect_attempt(
     service: FromDishka[RecipeInspectionService],
 ) -> RecipeAttemptInspection:
     return await service.attempt(job_id, run_id, step_id, attempt_id)
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/consumers",
+    response_model=RecipeConsumedInputPage,
+)
+async def consumed_inputs(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    service: FromDishka[RecipeInspectionService],
+    after: str = Query("", max_length=256),
+    limit: int = Query(30, ge=1, le=100),
+) -> RecipeConsumedInputPage:
+    return await service.consumed_by(job_id, run_id, step_id, attempt_id, after=after, limit=limit)
 
 
 @router.get(

@@ -444,9 +444,27 @@ class RecipeGateInspection(RecipeModel):
     resolved_at: datetime | None
 
 
+class RecipeConsumedInput(RecipeModel):
+    step_instance_id: str
+    step_path: str
+    attempt_id: str
+    attempt_number: int
+    input_name: str
+    receipt_id: str | None
+    checksum: str | None
+    producer_outcome: str | None
+    consumer_outcome: str | None
+
+
+class RecipeConsumedInputPage(RecipeModel):
+    items: list[RecipeConsumedInput]
+    next_cursor: str | None
+
+
 class RecipeAttemptInspection(RecipeModel):
     attempt: RecipeAttemptResponse
     gate: RecipeGateInspection | None
+    consumed_by: RecipeConsumedInputPage | None = None
 
 
 class RecipeControlAction(RecipeModel):

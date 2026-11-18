@@ -380,6 +380,9 @@ The shared inspector lists pinned predecessor outcomes and declared consumers
 within the exact block invocation. Deep links carry run, step and optional
 attempt identities. Declared consumer bindings are not represented as proof
 that a selected historical attempt's output was consumed.
+The selected attempt also exposes paged actual consuming input receipts,
+including the consuming attempt, original receipt/checksum and both recorded
+outcomes. These references prove input admission, not consumer completion.
 
 `POST /api/jobs/{jobId}/reviews/prepare` seals the explicitly selected attempt
 and event evidence plus an exact current-code snapshot without executing work.

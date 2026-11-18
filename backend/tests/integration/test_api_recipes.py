@@ -262,6 +262,16 @@ async def test_step_inspection_links_pinned_dependencies_and_consumers_without_i
     assert after["predecessors"][0]["attemptId"] == attempt.id
     assert after["predecessors"][0]["state"] == "succeeded"
     assert after["attempts"] == [], "Reading a ready input cannot claim or dispatch the waiting consumer."
+    async with session_factory() as session:
+        consumed = await ready_attempt(session, run, "check")
+    receipt = (await client.get(f"{root}/{producer.id}/attempts/{attempt.id}")).json()
+    assert receipt["consumedBy"]["items"][0]["attemptId"] == consumed.id
+    assert receipt["consumedBy"]["items"][0]["inputName"] == "brief"
+    assert receipt["consumedBy"]["items"][0]["consumerOutcome"] is None
+    assert receipt["consumedBy"]["items"][0]["receiptId"] == consumed.inputs["brief"].receipt_id
+    assert (
+        await client.get(f"{root}/{producer.id}/attempts/{attempt.id}/consumers", params={"limit": 101})
+    ).status_code == 422
 
 
 async def test_job_creation_pins_selected_revision_and_request_before_background_setup(

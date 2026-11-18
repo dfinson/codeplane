@@ -22,6 +22,7 @@ import type {
   RecipeStepList,
   RecipeStepInspection,
   RecipeAttemptInspection,
+  RecipeConsumedInputPage,
   RecipeAttemptControl,
   RecipeMessageReceipt,
   RecipeOperationReceipt,
@@ -158,6 +159,10 @@ export function fetchRecipeAttempt(
   jobId: string, runId: string, stepId: string, attemptId: string,
 ): Promise<RecipeAttemptInspection> {
   return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}`);
+}
+
+export function fetchRecipeConsumers(jobId: string, runId: string, stepId: string, attemptId: string, after = ""): Promise<RecipeConsumedInputPage> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/consumers?${new URLSearchParams({ after })}`);
 }
 
 export function fetchRecipeAttemptControl(

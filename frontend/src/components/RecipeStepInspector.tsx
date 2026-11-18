@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { fetchRecipeAttempt, fetchRecipeStep } from "../api/client";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { fetchRecipeAttempt, fetchRecipeStep, fetchRecipeConsumers } from "../api/client";
 import type { RecipeAttemptInspection } from "../api/types";
 import { useStore } from "../store";
 import { Button } from "./ui/button";
@@ -80,6 +80,43 @@ export interface RecipeStepInspectorProps {
 
 export function RecipeStepInspector(props: RecipeStepInspectorProps) {
   return <SelectedRecipeStepInspector key={JSON.stringify([props.jobId, props.runId, props.stepId])} {...props} />;
+}
+
+function ActualConsumers({ jobId, runId, stepId, inspection }: RecipeStepInspectorProps & { inspection: RecipeAttemptInspection }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const page = inspection.consumedBy;
+  async function load(after = "") {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const value = await fetchRecipeConsumers(jobId, runId, stepId, inspection.attempt.id, after);
+      if (!active.current) return;
+      const key = JSON.stringify([jobId, runId, stepId, inspection.attempt.id]);
+      useStore.setState((state) => {
+        const current = state.recipeAttemptInspections[key];
+        return current ? { recipeAttemptInspections: { ...state.recipeAttemptInspections, [key]: { ...current, consumedBy: value } } } : state;
+      });
+    } catch (cause: unknown) {
+      if (active.current) setError(String(cause));
+    } finally { if (active.current) setBusy(false); }
+  }
+  return <section className="space-y-2" aria-label="Actual consuming attempts">
+    <h4 className="text-sm font-medium">Actual consuming attempts</h4>
+    <p className="text-xs text-muted-foreground">These immutable admitted input receipts name this exact producing attempt. Admission does not prove consumer completion.</p>
+    {page?.items.map((consumer) => <div key={`${consumer.attemptId}:${consumer.inputName}`} className="rounded-md border border-border p-3 text-xs">
+      <a className="text-primary underline" href={`/jobs/${encodeURIComponent(jobId)}?${new URLSearchParams({ run: runId, step: consumer.stepInstanceId, attempt: consumer.attemptId })}`}>{consumer.stepPath} / attempt {consumer.attemptNumber}</a>
+      <p>Input {consumer.inputName} / outcome {consumer.consumerOutcome ?? "Unfinished"} / producer outcome {consumer.producerOutcome ?? "Unrecorded"}</p>
+      <p className="break-all text-muted-foreground">Receipt {consumer.receiptId ?? "No receipt recorded"} / {consumer.checksum ?? "No checksum recorded"}</p>
+    </div>)}
+    {page?.items.length === 0 && <p className="text-xs text-muted-foreground">No admitted input receipts consume this attempt's outputs.</p>}
+    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => void load()}>First consumers</Button>
+      {page?.nextCursor && <Button size="sm" variant="outline" disabled={busy} onClick={() => void load(page.nextCursor!)}>More consumers</Button>}</div>
+  </section>;
 }
 
 function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }: RecipeStepInspectorProps) {
@@ -194,6 +231,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
       {attempt && Object.keys(attempt.attempt.inputs).length === 0 && <p className="text-sm text-muted-foreground">No declared inputs.</p>}
     </div>}
     {tab === "output" && (attempt ? <AttemptEvidence inspection={attempt} /> : <p className="text-sm text-muted-foreground">No selected attempt evidence.</p>)}
+    {tab === "output" && attempt && <ActualConsumers key={attempt.attempt.id} jobId={jobId} runId={runId} stepId={stepId} inspection={attempt} />}
     {tab === "output" && <div className="space-y-2">
       <h4 className="text-sm font-medium">Declared consumers</h4>
       <p className="text-xs text-muted-foreground">These are pinned input bindings. A consumer's state alone does not prove it received the selected historical attempt's output.</p>

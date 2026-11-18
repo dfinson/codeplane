@@ -3352,6 +3352,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/consumers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Consumed Inputs */
+        get: operations["consumed_inputs_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__consumers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/control": {
         parameters: {
             query?: never;
@@ -6573,6 +6590,7 @@ export interface components {
         RecipeAttemptInspection: {
             attempt: components["schemas"]["RecipeAttemptResponse"];
             gate: components["schemas"]["RecipeGateInspection"] | null;
+            consumedBy?: components["schemas"]["RecipeConsumedInputPage"] | null;
         };
         /** RecipeAttemptResponse */
         RecipeAttemptResponse: {
@@ -6727,6 +6745,34 @@ export interface components {
             timeoutSeconds: number;
             /** Reconciles */
             reconciles?: string[];
+        };
+        /** RecipeConsumedInput */
+        RecipeConsumedInput: {
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Steppath */
+            stepPath: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Attemptnumber */
+            attemptNumber: number;
+            /** Inputname */
+            inputName: string;
+            /** Receiptid */
+            receiptId: string | null;
+            /** Checksum */
+            checksum: string | null;
+            /** Produceroutcome */
+            producerOutcome: string | null;
+            /** Consumeroutcome */
+            consumerOutcome: string | null;
+        };
+        /** RecipeConsumedInputPage */
+        RecipeConsumedInputPage: {
+            /** Items */
+            items: components["schemas"]["RecipeConsumedInput"][];
+            /** Nextcursor */
+            nextCursor: string | null;
         };
         /** RecipeControlAction */
         RecipeControlAction: {
@@ -15889,6 +15935,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecipeAttemptInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consumed_inputs_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__consumers_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeConsumedInputPage"];
                 };
             };
             /** @description Validation Error */

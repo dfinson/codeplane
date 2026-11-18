@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import case, delete, exists, func, select, update
+from sqlalchemy import case, delete, exists, func, literal, select, true, update
 from sqlalchemy.dialects.sqlite import insert
 
 from backend.models.db import (
@@ -38,6 +38,8 @@ from backend.models.schemas.recipes import (
     RecipeCodeReference,
     RecipeCommandResult,
     RecipeCommandRunner,
+    RecipeConsumedInput,
+    RecipeConsumedInputPage,
     RecipeDefinition,
     RecipeGateBinding,
     RecipeGateProposal,
@@ -1212,6 +1214,50 @@ class RecipeRunRepository(BaseRepository):
             .limit(20)
         )
         return [RecipeAttemptSummary.model_validate(dict(row)) for row in rows.mappings()]
+
+    async def consumed_by(
+        self, run_id: str, attempt_id: str, *, after: str = "", limit: int = 30
+    ) -> RecipeConsumedInputPage:
+        if not 1 <= limit <= 100:
+            raise StateConflictError("Invalid consumed-input page size.")
+        inputs = func.json_each(RecipeAttemptRow.inputs_json).table_valued("key", "value").alias("received")
+        cursor = RecipeAttemptRow.id + literal("/") + inputs.c.key
+        rows = list(
+            (
+                await self._session.execute(
+                    select(
+                        RecipeStepInstanceRow.id.label("step_instance_id"),
+                        RecipeStepInstanceRow.step_path,
+                        RecipeAttemptRow.id.label("attempt_id"),
+                        RecipeAttemptRow.number.label("attempt_number"),
+                        inputs.c.key.label("input_name"),
+                        func.json_extract(inputs.c.value, "$.receipt_id").label("receipt_id"),
+                        func.json_extract(inputs.c.value, "$.checksum").label("checksum"),
+                        func.json_extract(inputs.c.value, "$.producer_outcome").label("producer_outcome"),
+                        RecipeAttemptResultRow.outcome.label("consumer_outcome"),
+                        cursor.label("cursor"),
+                    )
+                    .select_from(RecipeAttemptRow)
+                    .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+                    .join(inputs, true())
+                    .outerjoin(RecipeAttemptResultRow, RecipeAttemptResultRow.attempt_id == RecipeAttemptRow.id)
+                    .where(
+                        RecipeStepInstanceRow.run_id == run_id,
+                        func.json_extract(inputs.c.value, "$.producing_attempt_id") == attempt_id,
+                        cursor > after,
+                    )
+                    .order_by(cursor)
+                    .limit(limit + 1)
+                )
+            ).mappings()
+        )
+        return RecipeConsumedInputPage(
+            items=[
+                RecipeConsumedInput.model_validate({key: value for key, value in row.items() if key != "cursor"})
+                for row in rows[:limit]
+            ],
+            next_cursor=rows[limit - 1]["cursor"] if len(rows) > limit else None,
+        )
 
     async def record_execution(self, attempt_id: str, execution: RecipeAttemptExecution) -> None:
         attempt = await self.get_attempt(attempt_id)

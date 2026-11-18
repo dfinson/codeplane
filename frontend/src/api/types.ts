@@ -32,6 +32,7 @@ export type RecipeCurrentRun = components["schemas"]["RecipeCurrentRunResponse"]
 export type RecipeStepList = components["schemas"]["RecipeStepListResponse"];
 export type RecipeStepInspection = components["schemas"]["RecipeStepInspection"];
 export type RecipeAttemptInspection = components["schemas"]["RecipeAttemptInspection"];
+export type RecipeConsumedInputPage = components["schemas"]["RecipeConsumedInputPage"];
 export type RecipeSelection = components["schemas"]["RecipeSelection"];
 export type RecipeAttemptControl = components["schemas"]["RecipeAttemptControl"];
 export type RecipeMessageReceipt = components["schemas"]["RecipeMessageReceipt"];
