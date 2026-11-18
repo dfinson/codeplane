@@ -58,6 +58,9 @@ class StandaloneGovernance:
         self._titles.start()
         self._delivery = asyncio.create_task(self._deliver(), name="governance-audit-delivery")
 
+    async def require_admission(self) -> None:
+        await self._ledger.require_admission()
+
     async def _deliver(self) -> None:
         while not self._stop.is_set():
             try:
