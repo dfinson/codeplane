@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 import yaml
 
+from backend import config as backend_config
 from backend.models.domain import JobState, StateConflictError
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
 from backend.services.ingest.jsonl_source import MAX_RECORD_BYTES, NativeJsonlSource
@@ -57,7 +58,7 @@ class _NativeIdentity:
     """Fresh standalone source, retaining the published native-v1 identity seed."""
 
     def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
-        path = resolve_mapping_path(framework)
+        path = resolve_mapping_path(framework, migrated_user_dir=backend_config.get_codeplane_dir() / "mappings")
         if path is None:
             raise ValueError(f"No native event mapping for framework {framework}")
         self.decoder = NativeMappingDecoder(

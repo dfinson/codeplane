@@ -792,6 +792,10 @@ def convert_native_checkpoint_command(job_id: str, source_path: Path, rollback: 
 
     Requires the retained legacy parser. Does not convert at startup or perform
     whole-provider rollback.
+
+    Any event-history change, including diagnostics or title events, blocks
+    rollback. Final history/source checks hold the database writer transaction;
+    use quiescent maintenance periods for large conversions.
     """
     import asyncio
     import json
