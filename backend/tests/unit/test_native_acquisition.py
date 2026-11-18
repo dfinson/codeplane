@@ -99,6 +99,18 @@ async def _reply(writer, body, content_type="application/json"):
     await writer.drain()
 
 
+async def _reply_sse_chunks(writer, chunks):
+    writer.write(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+    )
+    for chunk in chunks:
+        writer.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
+        await writer.drain()
+        await asyncio.sleep(0)
+    writer.write(b"0\r\n\r\n")
+    await writer.drain()
+
+
 async def test_file_snapshots_diff_stable_records_across_replacement_and_restart(session_factory, tmp_path):
     channel, job = await _channel(session_factory)
     path = tmp_path / "snapshot.json"
@@ -701,3 +713,219 @@ async def test_receipt_identity_lookup_is_scoped_to_the_acquisition_channel(sess
         is None
     )
     assert await _history_fingerprint(session_factory, job) == before
+
+
+async def test_sse_idle_timeout_returns_and_commits_complete_prefix(session_factory):
+    channel, job = await _channel(session_factory)
+    first, second = _message("first", "First"), _message("second", "Second")
+    requests = []
+
+    async def respond(request, writer):
+        requests.append(request)
+        if len(requests) == 1:
+            frame = f"id: first\ndata: {json.dumps(first)}\n\n".encode() + b'id: second\ndata: {"partial":'
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                + f"{len(frame):x}\r\n".encode()
+                + frame
+                + b"\r\n"
+            )
+            await writer.drain()
+            await asyncio.Event().wait()
+        else:
+            await _reply(writer, f"id: second\ndata: {json.dumps(second)}\n\n".encode(), "text/event-stream")
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        page = await asyncio.wait_for(sse_page(client, base), 7)
+        assert [record.identity for record in page.records] == ["first"]
+        assert page.incomplete_tail
+        receipt = await channel.accept(page)
+        assert receipt.accepted_records == 1 and not receipt.session_closed
+        page = await sse_page(client, base, last_event_id=await channel.last_event_id())
+        assert (await channel.accept(page)).accepted_records == 1
+    assert b"Last-Event-ID: first" in requests[1]
+    assert (await _history_fingerprint(session_factory, job))[0] == 2
+
+
+@pytest.mark.parametrize("accepted_prefix", [False, True])
+async def test_sse_individually_oversized_record_remains_an_explicit_failure(session_factory, accepted_prefix):
+    channel, job = await _channel(session_factory)
+
+    async def respond(request, writer):
+        body = b"id: too-large\ndata: " + json.dumps(_message("large", "x" * MAX_BYTES)).encode() + b"\n\n"
+        if accepted_prefix and b"Last-Event-ID: first" not in request:
+            body = f"id: first\ndata: {json.dumps(_message('first', 'First'))}\n\n".encode() + body
+        await _reply(writer, body, "text/event-stream")
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        if accepted_prefix:
+            assert (await channel.accept(await sse_page(client, base))).accepted_records == 1
+        before = await _history_fingerprint(session_factory, job)
+        with pytest.raises(ValueError, match="1 MiB"):
+            await sse_page(client, base, last_event_id=await channel.last_event_id())
+    assert await _history_fingerprint(session_factory, job) == before
+    assert before[0] == int(accepted_prefix)
+
+
+async def test_sse_cancellation_after_complete_frame_is_not_mistaken_for_idle_delivery(session_factory, monkeypatch):
+    from backend.services.ingest import acquisition_sources
+
+    channel, job = await _channel(session_factory)
+    parsed = asyncio.Event()
+    decode = acquisition_sources.decode_json_body
+
+    def observe_decode(body):
+        raw = decode(body)
+        parsed.set()
+        return raw
+
+    monkeypatch.setattr(acquisition_sources, "decode_json_body", observe_decode)
+
+    async def respond(request, writer):
+        frame = f"id: first\ndata: {json.dumps(_message('first', 'First'))}\n\n".encode()
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            b"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+            + f"{len(frame):x}\r\n".encode()
+            + frame
+            + b"\r\n"
+        )
+        await writer.drain()
+        await asyncio.Event().wait()
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        task = asyncio.create_task(sse_page(client, base))
+        await asyncio.wait_for(parsed.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert await _checkpoint(session_factory) is None
+    assert await _history(session_factory, job) == []
+
+
+async def test_sse_page_byte_boundary_does_not_discard_a_complete_large_record(session_factory):
+    channel, job = await _channel(session_factory)
+    first, second = _message("first", "x" * 600_000), _message("second", "y" * 600_000)
+    requests = []
+
+    async def respond(request, writer):
+        requests.append(request)
+        records = [second] if b"Last-Event-ID: first" in request else [first, second]
+        body = b"".join(f"id: {raw['id']}\ndata: {json.dumps(raw)}\n\n".encode() for raw in records)
+        await _reply(writer, body, "text/event-stream")
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        page = await sse_page(client, base)
+        assert [record.identity for record in page.records] == ["first"]
+        assert (await channel.accept(page)).accepted_records == 1
+        page = await sse_page(client, base, last_event_id=await channel.last_event_id())
+        assert [record.identity for record in page.records] == ["second"]
+        assert (await channel.accept(page)).accepted_records == 1
+    assert (await _history_fingerprint(session_factory, job))[0] == 2
+
+
+@pytest.mark.parametrize("sequence", [9223372036854775809, -9223372036854775809])
+async def test_big_native_sequence_round_trips_losslessly_and_keeps_integer_type(session_factory, sequence):
+    channel, job = await _channel(session_factory)
+    raw = _message("event", "Exact sequence")
+    page = callback_page("big-sequence", (SourceRecord("event", raw, sequence),))
+    await channel.accept(page)
+    before = await _history_fingerprint(session_factory, job)
+    assert await channel.accept(page) is None
+    assert await _history_fingerprint(session_factory, job) == before
+    with pytest.raises(StateConflictError, match="resequenced"):
+        await channel.accept(callback_page("big-sequence", (SourceRecord("event", raw, str(sequence)),)))
+    assert await _history_fingerprint(session_factory, job) == before
+
+
+@pytest.mark.parametrize("split", [False, True])
+async def test_sse_reconnect_strips_only_the_stream_start_bom(session_factory, split):
+    channel, job = await _channel(session_factory)
+    requests = []
+    first, second = _message("old", "Old"), _message("new", "Inside \ufeff payload")
+
+    async def respond(request, writer):
+        requests.append(request)
+        if len(requests) == 1:
+            await _reply(writer, f"id: old\ndata: {json.dumps(first)}\n\n".encode(), "text/event-stream")
+        else:
+            frame = f"id: new\ndata: {json.dumps(second, ensure_ascii=False)}\n\n".encode()
+            chunks = [b"\xef", b"\xbb", b"\xbf" + frame] if split else [b"\xef\xbb\xbf" + frame]
+            await _reply_sse_chunks(writer, chunks)
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        await channel.accept(await sse_page(client, base))
+        page = await sse_page(client, base, last_event_id=await channel.last_event_id())
+        assert (await channel.accept(page)).accepted_records == 1
+        assert await channel.last_event_id() == "new"
+    messages = [row.event for row in await _history(session_factory, job) if row.event.kind == "message.assistant"]
+    assert [event.payload["content"] for event in messages] == ["Old", "Inside \ufeff payload"]
+
+
+async def test_sse_does_not_strip_a_second_initial_bom():
+    async def respond(request, writer):
+        body = b"\xef\xbb\xbf\xef\xbb\xbfid: event\ndata: " + json.dumps(_message("event", "Value")).encode() + b"\n\n"
+        await _reply_sse_chunks(writer, [body])
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        with pytest.raises(ValueError, match="stable event id"):
+            await sse_page(client, base)
+
+
+async def test_explicit_empty_sse_final_page_keeps_last_committed_identity(session_factory):
+    channel, job = await _channel(session_factory)
+
+    async def respond(request, writer):
+        body = (
+            b": heartbeat\n\n"
+            if b"Last-Event-ID: first" in request
+            else f"id: first\ndata: {json.dumps(_message('first', 'First'))}\n\n".encode()
+        )
+        await _reply(writer, body, "text/event-stream")
+
+    async with _http_server(respond) as base, httpx.AsyncClient(trust_env=False) as client:
+        await channel.accept(await sse_page(client, base))
+        page = await sse_page(client, base, last_event_id=await channel.last_event_id())
+        receipt = await channel.finish(final_page=page)
+        assert receipt.session_closed and receipt.accepted_records == 0 and receipt.next_index == 1
+        assert await channel.last_event_id() == "first"
+        before = await _history_fingerprint(session_factory, job)
+        assert await channel.finish(final_page=page) is None
+        assert await _history_fingerprint(session_factory, job) == before
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+async def test_completed_journal_consumes_valid_unterminated_object_before_finish(session_factory, tmp_path, terminal):
+    channel, job = await _channel(session_factory)
+    first = _message("first", "First")
+    last = {"type": "session.shutdown", "data": {}} if terminal else _message("last", "Last")
+    path = tmp_path / "journal.jsonl"
+    path.write_text(json.dumps(first) + "\n" + json.dumps(last))
+    active = await file_journal(path)
+    assert active.incomplete_tail and len(active.records) == 1
+    await channel.accept(active)
+    with pytest.raises(ValueError, match="incomplete tail"):
+        await channel.finish(final_page=active)
+    receipt = await channel.finish(final_page=await file_journal(path, final=True))
+    assert receipt.session_closed and receipt.next_index == 2 and receipt.accepted_records == 1
+    before = await _history_fingerprint(session_factory, job)
+    assert await channel.finish(final_page=await file_journal(path, final=True)) is None
+    assert await _history_fingerprint(session_factory, job) == before
+    receipts = [
+        row.event for row in await _history(session_factory, job) if row.event.kind == "integration.batch.accepted"
+    ]
+    assert receipts[-1].raw_event["records"] == [last]
+
+
+async def test_completed_journal_rejects_malformed_final_remainder_before_closure(session_factory, tmp_path):
+    channel, job = await _channel(session_factory)
+    path = tmp_path / "journal.jsonl"
+    path.write_text(json.dumps(_message("first", "First")) + '\n{"broken":')
+    await channel.accept(await file_journal(path))
+    before = await _history_fingerprint(session_factory, job)
+    with pytest.raises(ValueError, match="Malformed"):
+        await channel.finish(final_page=await file_journal(path, final=True))
+    assert await _history_fingerprint(session_factory, job) == before
+    async with session_factory() as session:
+        assert not (await IntegrationRepository(session).projection("binding")).buffer["closed"]

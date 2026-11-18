@@ -72,10 +72,12 @@ class AcquisitionChannel:
             raise StateConflictError("Invalid durable SSE reconnect identity")
         return value
 
-    async def accept(self, page: AcquiredPage) -> ObservationRecordReceipt | None:
+    async def accept(self, page: AcquiredPage, *, end_session: bool = False) -> ObservationRecordReceipt | None:
         """Return None only for a valid duplicate/no-change acquisition."""
         if len(page.records) > MAX_RECORDS:
             raise ValueError("Acquisition exceeds 1000 records")
+        if end_session and page.incomplete_tail:
+            raise ValueError("Final acquisition still has an incomplete tail")
         page = deepcopy(page)
         async with self._sessions() as session:
             bindings = IntegrationRepository(session)
@@ -170,7 +172,7 @@ class AcquisitionChannel:
                 and page.physical_count < prior_physical
             ):
                 await reject("acquisition_snapshot_truncated", "Snapshot physical record count was truncated")
-            if not new_records:
+            if not new_records and (not end_session or (prior and prior["state"].get("closed"))):
                 return None
             state: dict[str, Any] = {
                 "contract": "native-acquisition-records-v2",
@@ -179,7 +181,10 @@ class AcquisitionChannel:
                 "incomplete_tail": page.incomplete_tail,
             }
             if page.source.get("transport") == "sse":
-                state["last_event_id"] = page.records[-1].identity
+                committed_id = prior["state"].get("last_event_id") if prior else None
+                state["last_event_id"] = page.records[-1].identity if page.records else committed_id
+            if end_session:
+                state["closed"] = True
             acquisition = AcquisitionCheckpoint(
                 source_identity_sha256=page.source_digest,
                 expected_checkpoint_version=checkpoint.version if checkpoint else 0,
@@ -190,6 +195,7 @@ class AcquisitionChannel:
                 start_index=checkpoint.record_count if checkpoint else 0,
                 prefix_sha256=checkpoint.prefix_sha256 if checkpoint else "0" * 64,
                 records=new_records,
+                end_session=end_session,
             )
             return await ObservationRecords(bindings, JobRepository(session), self._bus).append(
                 self.binding_id, batch, acquisition=acquisition
@@ -202,8 +208,13 @@ class AcquisitionChannel:
             source.acknowledge()
             return receipt
 
-    async def finish(self) -> ObservationRecordReceipt | None:
-        """Explicit producer completion, never implied by polling or HTTP EOF."""
+    async def finish(self, *, final_page: AcquiredPage | None = None) -> ObservationRecordReceipt | None:
+        """Explicit completion; a supplied final page and closure commit atomically.
+
+        Completion is never implied by polling or HTTP EOF.
+        """
+        if final_page is not None:
+            return await self.accept(final_page, end_session=True)
         async with self._sessions() as session:
             bindings = IntegrationRepository(session)
             checkpoint = await bindings.checkpoint(self.binding_id, self.source_key, PARSER_REVISION)

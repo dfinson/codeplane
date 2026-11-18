@@ -14,13 +14,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+import httpx
+
 from backend.services.ingest.mapping import canonical_record
 from backend.services.ingest.otel_decoder import decode_json_body
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import httpx
 
 MAX_BYTES = 1024 * 1024
 MAX_RECORDS = 1000
@@ -141,11 +141,15 @@ async def file_snapshot(
     )
 
 
-async def file_journal(path: Path) -> AcquiredPage:
+async def file_journal(path: Path, *, final: bool = False) -> AcquiredPage:
+    """Wait for delimiters while active; validate an unterminated final record only on explicit completion."""
     body = await asyncio.to_thread(_read_file, path)
     records = []
     complete_lines = body.split(b"\n")
-    incomplete = bool(complete_lines.pop())
+    remainder = complete_lines.pop()
+    incomplete = bool(remainder) and not final
+    if final and remainder:
+        complete_lines.append(remainder)
     if len(complete_lines) > MAX_RECORDS:
         raise ValueError("Acquired journal exceeds 1000 physical records")
     for index, line in enumerate(complete_lines):
@@ -278,7 +282,10 @@ async def sse_page(
     last_event_id: str | None = None,
     limit: int = MAX_RECORDS,
 ) -> AcquiredPage:
-    """One bounded connection; callers reconnect explicitly using committed state."""
+    """Return a complete prefix at EOF, idle timeout, or a page boundary.
+
+    Callers reconnect explicitly using only their durably committed event ID.
+    """
     if not 1 <= limit <= MAX_RECORDS:
         raise ValueError("SSE record limit must be between 1 and 1000")
     headers = {"Accept": "text/event-stream", "Accept-Encoding": "identity"}
@@ -291,6 +298,8 @@ async def sse_page(
     data: list[str] = []
     event_id = last_event_id
     total = 0
+    stream_start = True
+    skip_lf = False
 
     def consume_line(line: str) -> None:
         nonlocal event_id
@@ -314,39 +323,66 @@ async def sse_page(
         elif field == "id" and "\x00" not in value:
             event_id = value
 
+    def page() -> AcquiredPage:
+        return AcquiredPage(
+            {"transport": "sse", "url": url},
+            tuple(records),
+            mode="stream",
+            incomplete_tail=bool(buffer or data),
+        )
+
+    def consume_bytes(chunk: bytes) -> bool:
+        nonlocal total, stream_start, skip_lf
+        offset = 0
+        while offset < len(chunk):
+            available = MAX_BYTES - total
+            if not available:
+                if records:
+                    return True
+                raise ValueError("SSE record exceeds its 1 MiB acquisition bound")
+            part = chunk[offset : offset + min(64 * 1024, available)]
+            offset += len(part)
+            total += len(part)
+            buffer.extend(part)
+            if stream_start:
+                if len(buffer) < 3 and b"\xef\xbb\xbf".startswith(buffer):
+                    continue
+                if buffer.startswith(b"\xef\xbb\xbf"):
+                    del buffer[:3]
+                stream_start = False
+            while buffer:
+                if skip_lf:
+                    if buffer[0] == 10:
+                        del buffer[0]
+                    skip_lf = False
+                endings = [position for delimiter in (b"\r", b"\n") if (position := buffer.find(delimiter)) >= 0]
+                if not endings:
+                    break
+                position = min(endings)
+                delimiter = buffer[position]
+                line = bytes(buffer[:position]).decode("utf-8", errors="strict")
+                del buffer[: position + 1]
+                skip_lf = delimiter == 13
+                consume_line(line)
+                if len(records) == limit:
+                    return True
+        return total == MAX_BYTES and bool(records)
+
     async with client.stream("GET", url, headers=headers, follow_redirects=False, timeout=5) as response:
         response.raise_for_status()
         if response.headers.get("content-encoding", "identity") != "identity":
             raise ValueError("Compressed acquisition responses are unsupported")
         if response.headers.get("content-type", "").split(";", 1)[0].strip() != "text/event-stream":
             raise ValueError("SSE source did not return text/event-stream")
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > MAX_BYTES:
-                raise ValueError("SSE connection exceeds its 1 MiB acquisition bound")
-            buffer.extend(chunk)
-            while buffer:
-                endings = [position for delimiter in (b"\r", b"\n") if (position := buffer.find(delimiter)) >= 0]
-                if not endings:
-                    break
-                position = min(endings)
-                if buffer[position] == 13 and position == len(buffer) - 1:
-                    break
-                width = 2 if buffer[position : position + 2] == b"\r\n" else 1
-                line = bytes(buffer[:position]).decode("utf-8", errors="strict")
-                del buffer[: position + width]
-                consume_line(line)
-                if len(records) == limit:
-                    return AcquiredPage({"transport": "sse", "url": url}, tuple(records), mode="stream")
-    if buffer.endswith(b"\r"):
-        consume_line(bytes(buffer[:-1]).decode("utf-8", errors="strict"))
-        buffer.clear()
-    return AcquiredPage(
-        {"transport": "sse", "url": url},
-        tuple(records),
-        mode="stream",
-        incomplete_tail=bool(buffer or data),
-    )
+        try:
+            async for chunk in response.aiter_bytes():
+                if consume_bytes(chunk):
+                    return page()
+        except httpx.ReadTimeout:
+            if not records:
+                raise
+            return page()
+    return page()
 
 
 class QueueSource:
