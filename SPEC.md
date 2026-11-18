@@ -15,6 +15,15 @@ capabilities. Global admission eligibility is not binding enablement or live
 control readiness. Metadata discovery constructs no SDK clients, and an
 unimplemented selected operation is not advertised as runnable.
 
+Native producer captures retain Aider 0.86.2 `InputOutput` Markdown and the
+actual Continue CLI 1.5.47 session JSON from a two-turn local SSE run under
+`backend/tests/fixtures/native_formats/produced/`. Aider is native-writer/inert
+evidence, not a live vendor conversation. Continue's fetched artifact/file
+hashes are separate from its v1.5.45 test-harness source pin, with no inferred
+gitHead. Raw bytes, independent canonical expectations and durable replay are
+checked. The local model fixture supplied no usage, so the CLI's zero-initialized
+counters remain raw history rather than billing evidence.
+
 The additional `otlp_json` observation format accepts supplied span dictionaries
 through historical records. Standard exporters use
 `POST /api/integrations/{bindingId}/traces` with OTLP HTTP/JSON and

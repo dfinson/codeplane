@@ -1,0 +1,44 @@
+{
+  "capture_kind": "native-writer/inert",
+  "format_id": "aider_markdown",
+  "producer": {
+    "distribution": "aider-chat",
+    "version": "0.86.2",
+    "source_repository": "https://github.com/Aider-AI/aider",
+    "source_release": "v0.86.2",
+    "source_commit": "253f0368b873ba30d8ee26e463718f0c03614ddf",
+    "writer": "aider.io.InputOutput",
+    "writer_sha256": "7f62a79c8202f2a3793410bac4c983e417fb886513b90faf0e0579d5bb7d047b",
+    "python": "3.12.3"
+  },
+  "sample": "aider-0.86.2.history.md",
+  "sample_sha256": "29b52ff1560cfcb81e8103acd9bae88eb8b7fe50e99cf1b781be047619f7cb2d",
+  "invocations": [
+    {
+      "method": "user_input",
+      "content": "Describe addition in this synthetic writer fixture."
+    },
+    {
+      "method": "ai_output",
+      "content": "Addition combines two numbers. No model was invoked for this fixture."
+    },
+    {
+      "method": "tool_output",
+      "content": "Synthetic native writer check completed."
+    },
+    {
+      "method": "user_input",
+      "content": "Use the synthetic example 2 plus 3."
+    },
+    {
+      "method": "ai_output",
+      "content": "The synthetic example gives 5."
+    }
+  ],
+  "network": "all socket connections and name resolution blocked",
+  "model_inference": false,
+  "limitations": [
+    "Actual native writer methods, not a live vendor conversation",
+    "No fabricated token usage, tool execution, or structured Aider JSON producer claim"
+  ]
+}

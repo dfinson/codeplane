@@ -77,6 +77,11 @@ def _operation(
         readiness = AdapterReadiness(True)
         evidence = ["backend/tests/unit/test_native_format_conformance.py"]
         limitations.append("Historical record import is not a live SDK callback subscription")
+        if profile.id == "native-formats":
+            evidence.append("backend/tests/unit/test_native_producer_captures.py")
+            limitations.append(
+                "Native Aider-writer and Continue-CLI captures use inert inputs without vendor inference"
+            )
         if profile.id == "generic-otel":
             producer = f"{_HISTORY}; ObservationRecords.append_otlp"
             evidence = ["backend/tests/integration/test_api_otlp.py"]
