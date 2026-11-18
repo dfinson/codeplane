@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from functools import cache
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import httpx
@@ -25,6 +26,7 @@ import structlog
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+    from tiktoken import Encoding
 
     from backend.services.completers.naming_service import Completable
 
@@ -335,18 +337,23 @@ _STORY_COLUMN = "story_text"
 # Token estimation and model-context lookup
 # ---------------------------------------------------------------------------
 
-_tok_enc = None
-try:
-    import tiktoken as _tiktoken
 
-    _tok_enc = _tiktoken.get_encoding("cl100k_base")
-except (ImportError, OSError) as exc:
-    log.warning("story_tokenizer_unavailable", error=str(exc), fallback="character_estimate")
+@cache
+def _get_tokenizer() -> Encoding | None:
+    try:
+        import tiktoken
+    except ModuleNotFoundError as exc:
+        if exc.name != "tiktoken":
+            raise
+        log.warning("story_tokenizer_unavailable", error=str(exc), fallback="character_estimate")
+        return None
+    return tiktoken.get_encoding("cl100k_base")
 
 
 def _estimate_tokens(text: str) -> int:
-    """Use the tokenizer when available, otherwise the logged character estimate."""
-    return len(_tok_enc.encode(text)) if _tok_enc is not None else len(text) // 4
+    """Load on first use; only a missing optional package permits the estimate."""
+    encoding = _get_tokenizer()
+    return len(encoding.encode(text)) if encoding is not None else len(text) // 4
 
 
 def _truncate(s: str | None, max_len: int) -> str:
