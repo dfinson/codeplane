@@ -27,6 +27,7 @@ import type {
   RecipeOperationReceipt,
   RecipeReconcileRequest,
   RecipeResumeResponse,
+  RecipeGateDecisionRequest,
   ReviewPreparation,
   ReviewRecord,
   ReviewHistoryPage,
@@ -174,6 +175,12 @@ export function resumeRecipeAttempt(jobId: string, runId: string, stepId: string
 
 export function reconcileRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, body: RecipeReconcileRequest): Promise<RecipeOperationReceipt> {
   return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/reconcile`, {
+    method: "POST", body: JSON.stringify(body),
+  });
+}
+
+export function decideRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, body: RecipeGateDecisionRequest): Promise<RecipeOperationReceipt> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/decision`, {
     method: "POST", body: JSON.stringify(body),
   });
 }

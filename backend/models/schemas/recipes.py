@@ -486,9 +486,18 @@ class RecipeReconcileRequest(RecipeModel):
     code: RecipeCodeReference
 
 
+class RecipeGateDecisionRequest(RecipeModel):
+    expected_version: int = Field(ge=1)
+    approval_id: str = Field(min_length=1, max_length=128)
+    input_checksum: str = Field(pattern=r"^[a-f0-9]{64}$")
+    decision: Literal["approved", "rejected"]
+    outputs: dict[str, JsonValue] = Field(default_factory=dict, max_length=64)
+    notes: str | None = Field(default=None, max_length=10_000)
+
+
 class RecipeOperationReceipt(RecipeModel):
     attempt_id: str
-    status: Literal["stopped", "resumed", "reconciled", "conflict", "uncertain"]
+    status: Literal["stopped", "resumed", "reconciled", "decided", "conflict", "uncertain"]
     reason: str
     requires_reconciliation: bool = False
 

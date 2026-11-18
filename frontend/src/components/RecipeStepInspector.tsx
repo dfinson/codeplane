@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { ViewTabBar } from "./ViewTabBar";
 import { RecipeAttemptMessage } from "./RecipeAttemptMessage";
+import { RecipeGateDecision } from "./RecipeGateDecision";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="grid min-w-0 gap-2 py-[11px] sm:grid-cols-[155px_minmax(0,1fr)] sm:gap-[18px]"><dt className="text-[13px] leading-relaxed text-muted-foreground">{label}</dt><dd className="min-w-0 break-words text-[13px] leading-relaxed">{children}</dd></div>;
@@ -210,6 +211,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
       {(!attempt || attempt.attempt.executions.length === 0) && <p className="text-sm text-muted-foreground">No agent sessions recorded. Command, human and block coordination do not create fictional sessions.</p>}
     </div>}
     {attemptLoading && <p role="status" className="text-xs text-muted-foreground">Refreshing selected attempt...</p>}
+    {attempt && step.currentAttemptId === attempt.attempt.id && step.state === "needs_decision" && attempt.gate && !attempt.gate.resolution && <RecipeGateDecision key={attempt.attempt.id} jobId={jobId} runId={runId} step={step} inspection={attempt} />}
     {attemptId && <RecipeAttemptMessage jobId={jobId} runId={runId} stepId={stepId} attemptId={attemptId} />}
     {attemptError && <div role="alert" className="space-y-2"><p className="text-sm text-destructive">{attemptError}. Retained evidence may be stale.</p><Button size="sm" variant="outline" onClick={() => setRefresh((v) => v + 1)}>Retry evidence read</Button></div>}
   </section>;

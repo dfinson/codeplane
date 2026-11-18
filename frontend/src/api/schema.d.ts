@@ -3420,6 +3420,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Attempt */
+        post: operations["decide_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/reviews/prepare": {
         parameters: {
             query?: never;
@@ -6786,6 +6803,26 @@ export interface components {
              */
             createdAt: string;
         };
+        /** RecipeGateDecisionRequest */
+        RecipeGateDecisionRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Approvalid */
+            approvalId: string;
+            /** Inputchecksum */
+            inputChecksum: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approved" | "rejected";
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Notes */
+            notes?: string | null;
+        };
         /** RecipeGateInspection */
         RecipeGateInspection: {
             binding: components["schemas"]["RecipeGateBinding"];
@@ -6925,7 +6962,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "stopped" | "resumed" | "reconciled" | "conflict" | "uncertain";
+            status: "stopped" | "resumed" | "reconciled" | "decided" | "conflict" | "uncertain";
             /** Reason */
             reason: string;
             /**
@@ -15967,6 +16004,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["RecipeReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeOperationReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeGateDecisionRequest"];
             };
         };
         responses: {

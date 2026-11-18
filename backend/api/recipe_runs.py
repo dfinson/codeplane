@@ -8,6 +8,7 @@ from backend.models.api_schemas import (
     RecipeAttemptInspection,
     RecipeAttemptResumeRequest,
     RecipeCurrentRunResponse,
+    RecipeGateDecisionRequest,
     RecipeMessageReceipt,
     RecipeMessageRequest,
     RecipeOperationReceipt,
@@ -150,3 +151,15 @@ async def reconcile_attempt(
     service: FromDishka[RecipeControlService],
 ) -> RecipeOperationReceipt:
     return await service.reconcile(job_id, run_id, step_id, attempt_id, body)
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/decision", response_model=RecipeOperationReceipt)
+async def decide_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeGateDecisionRequest,
+    service: FromDishka[RecipeControlService],
+) -> RecipeOperationReceipt:
+    return await service.decide(job_id, run_id, step_id, attempt_id, body)
