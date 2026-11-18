@@ -15,6 +15,20 @@ BRIDGES = MappingProxyType(
             operations=frozenset({"send_message", "function_call"}),
             observation_mapping=True,
         ),
+        "llamaindex": BridgeSpec(
+            id="llamaindex",
+            module="backend.services.adapters.profile_bridges.llamaindex",
+            dependencies=(("llama-index-core", "0.14.26"),),
+            operations=frozenset({"query", "chat", "function_call"}),
+            observation_mapping=True,
+        ),
+        "google-adk": BridgeSpec(
+            id="google-adk",
+            module="backend.services.adapters.profile_bridges.google_adk",
+            dependencies=(("google-adk", "2.14.1"), ("google-genai", "2.34.0")),
+            operations=frozenset({"run", "model_request", "function_call"}),
+            observation_mapping=True,
+        ),
         "flowise": BridgeSpec(
             id="flowise",
             module="backend.services.adapters.profile_bridges.flowise",

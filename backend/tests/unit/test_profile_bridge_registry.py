@@ -18,12 +18,20 @@ def test_fixed_bridge_registration_cannot_promote_identity_or_observation_profil
         BRIDGES["ai-card"] = BRIDGES["mcp"]
 
 
-def test_optional_autogen_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch):
+@pytest.mark.parametrize(
+    "profile,package",
+    [
+        ("autogen", "autogen-core"),
+        ("llamaindex", "llama-index-core"),
+        ("google-adk", "google-adk"),
+    ],
+)
+def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, profile, package):
     from backend.services.adapters import profile_bridges
 
     def missing(package):
         raise profile_bridges.PackageNotFoundError(package)
 
     monkeypatch.setattr(profile_bridges, "version", missing)
-    readiness = profile_bridges.dependency_readiness("autogen")
-    assert not readiness.ready and "autogen-core" in readiness.reason
+    readiness = profile_bridges.dependency_readiness(profile)
+    assert not readiness.ready and package in readiness.reason
