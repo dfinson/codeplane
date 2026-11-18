@@ -139,7 +139,7 @@ def _operation(
             limitations.append("Streaming is refused before dispatch; only complete response requests are qualified")
         if profile.id == "gemini-client":
             limitations.append("Native automatic function calling must be explicitly disabled")
-    elif profile.id == "haystack":
+    elif profile.id in {"haystack", "langflow"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
         selected = select_installation(profile.id)
@@ -152,14 +152,16 @@ def _operation(
                 if operation == "cancel"
                 else f"{selected.module}.install"
             )
-            evidence = ["backend/tests/native_gates/qualify_haystack.py"]
+            evidence = [f"backend/tests/native_gates/qualify_{profile.id}.py"]
         limitations.extend(
             (
-                "The caller-owned Pipeline schedules components with blocking trust and policy",
+                "The caller-owned host schedules components with blocking trust and policy",
                 "Sync and async handlers remain owned until completion; revocation is not stop acknowledgment",
                 "No live-input callback or inferred model usage is provided by the component bridge",
             )
         )
+        if profile.id == "langflow":
+            limitations.append("LFX host execution is required; exported trust configuration is not a runnable")
     elif profile.id in {"flowise", "mcp", "a2a"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
@@ -255,12 +257,16 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
 
             bridge_versions = [f"{package}=={pin}" for package, pin in select_installation(profile.id).dependencies]
             channels.append("native-client-request-and-local-function")
-        if profile.id == "haystack":
+        if profile.id in {"haystack", "langflow"}:
             from backend.services.adapters.native_gates.selection import select_installation
 
             selected = select_installation(profile.id)
             bridge_versions = [f"{package}=={pin}" for package, pin in selected.dependencies]
-            bridge_hooks = ["Pipeline.run", "Pipeline.run_async", "component.run", "component.run_async"]
+            bridge_hooks = (
+                ["Pipeline.run", "Pipeline.run_async", "component.run", "component.run_async"]
+                if profile.id == "haystack"
+                else ["Graph.async_start", "Component output methods", "TrustGatedFlow.verify_connection"]
+            )
             channels.extend(("native-component-boundary", "pinned-canonical-observations"))
         if profile.id == "generic-otel":
             channels.extend(("otlp-http-json", "otlp-http-protobuf"))
