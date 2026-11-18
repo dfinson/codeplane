@@ -63,6 +63,8 @@ class NativeControls:
         self._consume_lock = asyncio.Lock()
         self._permits: set[ControlPermit] = set()
         self._stop_task: asyncio.Task[StopEvidence] | None = None
+        self._closing = False
+        self._admissions: set[asyncio.Future[None]] = set()
 
     @property
     def accepts_input(self) -> bool:
@@ -74,6 +76,8 @@ class NativeControls:
         input_handler: Callable[[NativeInput], Awaitable[Any]] | None = None,
         stop_handler: Callable[[ControlPermit], Awaitable[StopEvidence]] | None = None,
     ) -> Callable[[], None]:
+        if self._closing:
+            raise StateConflictError("Native controls are closing")
         if self._registration is not None:
             raise StateConflictError("Native binding already has an exact control registration")
         if input_handler is None and stop_handler is None:
@@ -86,16 +90,28 @@ class NativeControls:
         def remove() -> None:
             if self._registration is not registration:
                 return
-            if self._messages or (self._stop_task is not None and not self._stop_task.done()):
+            self._closing = True
+            if self._admissions or self._messages or (self._stop_task is not None and not self._stop_task.done()):
                 raise StateConflictError("Native control work must drain before hook restoration")
             self._registration, self._input, self._stop = None, None, None
 
         return remove
 
     async def enqueue(self, content: str, *, message_id: str) -> NativeInput:
+        if self._closing:
+            raise StateConflictError("Native controls are closing")
+        reservation: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._admissions.add(reservation)
+        try:
+            return await self._enqueue(content, message_id=message_id)
+        finally:
+            reservation.set_result(None)
+            self._admissions.discard(reservation)
+
+    async def _enqueue(self, content: str, *, message_id: str) -> NativeInput:
         if not self.accepts_input:
             raise StateConflictError("This native target has no declared operator-input boundary")
-        if not await self.binding.current():
+        if self._closing or not await self.binding.current():
             raise StateConflictError("Native input belongs to an inactive execution")
         message = NativeInput(message_id, self.binding.execution, SendMessageRequest(content=content).content)
         if message.id in self._messages:
@@ -111,7 +127,7 @@ class NativeControls:
                 "delivery_status": "queued",
             },
         )
-        if not await self.binding.current():
+        if self._closing or not await self.binding.current():
             await self.binding.control_receipt(message.id, "input_undelivered", {"reason": "execution_changed"})
             raise StateConflictError("Native execution changed before input was queued")
         self._messages[message.id] = message
@@ -120,7 +136,7 @@ class NativeControls:
 
     async def consume(self) -> Any:
         async with self._consume_lock:
-            if not self.accepts_input or not await self.binding.current():
+            if self._closing or not self.accepts_input or not await self.binding.current():
                 raise StateConflictError("Native operator-input boundary is unavailable")
             pending = asyncio.create_task(self._queue.get())
             revoked = asyncio.create_task(self.binding.wait_revoked())
@@ -197,7 +213,11 @@ class NativeControls:
         delivery[1].append(True)
 
     async def require(self, permit: ControlPermit) -> None:
-        if permit not in self._permits or permit.execution != self.binding.execution:
+        if (
+            not isinstance(permit, ControlPermit)
+            or permit not in self._permits
+            or permit.execution != self.binding.execution
+        ):
             raise StateConflictError("Native stop permit is not owned by this exact binding")
         if not self.binding.control_stop_requested():
             raise StateConflictError("Native stop has no Runtime-owned cancellation request")
@@ -210,7 +230,8 @@ class NativeControls:
             raise StateConflictError("Native stop has no Runtime-owned cancellation request")
         if self._stop_task is not None and (not refresh or not self._stop_task.done()):
             return await retain_task(self._stop_task)
-        await self.binding.require_control_retained()
+        if self._closing:
+            raise StateConflictError("Native controls are closing")
         callback = self._stop
         permit = ControlPermit(uuid.uuid4().hex, self.binding.execution)
         self._permits.add(permit)
@@ -246,6 +267,9 @@ class NativeControls:
         return await retain_task(self._stop_task)
 
     async def drain(self) -> None:
+        self._closing = True
+        if self._admissions:
+            await asyncio.gather(*(asyncio.shield(item) for item in tuple(self._admissions)))
         errors: list[Exception] = []
         if self._stop_task is not None:
             try:
