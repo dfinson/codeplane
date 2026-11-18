@@ -20,10 +20,12 @@ ALLOWED_EVENT_REPO_CONSUMERS = {
     "backend/services/trail/node_builder.py",  # rehydration on session_resumed
     "backend/services/runtime/service.py",  # hot-path event translation
     "backend/services/ingest/_base.py",  # native replay and checkpoint recovery
+    "backend/services/ingest/record_service.py",  # observation ingestion/projection DTO
     # --- Durable control receipts and their recovery owners ---
     "backend/persistence/execution_admission_repo.py",
     "backend/persistence/execution_contract_repo.py",
     "backend/persistence/integration_repo.py",
+    "backend/persistence/native_execution_repo.py",  # durable native receipts and recovery
     "backend/persistence/recipe_run_repo.py",
     "backend/persistence/review_repo.py",
     "backend/services/action_policy/production.py",  # governance ledger replay
