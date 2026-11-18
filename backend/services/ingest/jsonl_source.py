@@ -114,16 +114,27 @@ class NativeJsonlSource:
         assert self._file is not None
         self._verify()
         self._file.seek(self._offset)
-        line = self._file.readline(MAX_RECORD_BYTES + 2)
-        if len(line) > MAX_RECORD_BYTES:
-            raise ValueError("Native source record exceeds 1 MiB")
-        # A writer may have flushed an incomplete UTF-8/JSON suffix. Do not
-        # count or decode it until the newline commits the physical record.
-        if not line.endswith(b"\n"):
-            return None
-        self._offset += len(line)
-        self._digest.update(line)
-        return line
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = self._file.read(min(64 * 1024, MAX_RECORD_BYTES + 1 - size))
+            newline = chunk.find(b"\n")
+            if newline >= 0:
+                # Discard read-ahead: the next record must seek and read fresh
+                # bytes after checking the accepted prefix again.
+                chunk = chunk[: newline + 1]
+            size += len(chunk)
+            if size > MAX_RECORD_BYTES:
+                raise ValueError("Native source record exceeds 1 MiB")
+            if not chunk:
+                # An incomplete UTF-8/JSON suffix has no accepted progress.
+                return None
+            chunks.append(chunk)
+            if newline >= 0:
+                line = b"".join(chunks)
+                self._offset += size
+                self._digest.update(line)
+                return line
 
     def __aiter__(self) -> NativeJsonlSource:
         return self

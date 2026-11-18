@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import uuid
@@ -197,6 +198,84 @@ async def test_oversized_physical_record_is_bounded(tmp_path):
         with pytest.raises(ValueError, match="exceeds 1 MiB"):
             await anext(source)
         assert source.checkpoint()["byte_count"] == 0
+
+
+@pytest.mark.parametrize("complete", [True, False])
+async def test_large_records_use_bounded_raw_reads_per_poll(tmp_path, monkeypatch, record_property, complete):
+    path = tmp_path / "source.jsonl"
+    prefix = b"x" * (MAX_RECORD_BYTES - 1)
+    path.write_bytes(prefix + (b"\n" if complete else b""))
+
+    class CountingFile(io.FileIO):
+        read_calls = 0
+
+        def read(self, size=-1):
+            self.read_calls += 1
+            return super().read(size)
+
+    opened: list[CountingFile] = []
+    original_open = type(path).open
+
+    def instrumented_open(file_path, mode="r", buffering=-1, *args, **kwargs):
+        if file_path == path and mode == "rb" and buffering == 0:
+            stream = CountingFile(file_path, mode)
+            opened.append(stream)
+            return stream
+        return original_open(file_path, mode, buffering, *args, **kwargs)
+
+    monkeypatch.setattr(type(path), "open", instrumented_open)
+    async with NativeJsonlSource(path) as source:
+        stream = opened[0]
+        for poll in range(1 if complete else 2):
+            before = stream.read_calls
+            line = source._read_line()
+            reads = stream.read_calls - before
+            record_property(f"poll_{poll}_raw_reads", reads)
+            assert reads <= 32, f"A near-1 MiB record required {reads} raw reads"
+            if complete:
+                assert line == prefix + b"\n"
+                assert source.checkpoint()["byte_count"] == MAX_RECORD_BYTES
+                assert source.checkpoint()["sha256"] == hashlib.sha256(line).hexdigest()
+            else:
+                assert line is None
+                assert source.checkpoint()["byte_count"] == 0
+                assert source.checkpoint()["sha256"] == hashlib.sha256(b"").hexdigest()
+        if not complete:
+            with path.open("ab") as writer:
+                writer.write(b"\n")
+            before = stream.read_calls
+            assert source._read_line() == prefix + b"\n"
+            assert stream.read_calls - before <= 32
+            assert source.checkpoint()["byte_count"] == MAX_RECORD_BYTES
+
+
+async def test_read_ahead_is_discarded_before_next_unaccepted_record(tmp_path):
+    path = tmp_path / "source.jsonl"
+    first, following = b'{"value":"first"}\n', b'{"value":"prior"}\n'
+    path.write_bytes(first + following)
+    async with NativeJsonlSource(path) as source:
+        assert await anext(source) == first
+        assert source.checkpoint()["byte_count"] == len(first)
+        assert source.checkpoint()["sha256"] == hashlib.sha256(first).hexdigest()
+        replacement = following.replace(b"prior", b"newer")
+        with path.open("r+b", buffering=0) as writer:
+            writer.seek(len(first))
+            writer.write(replacement)
+        assert await anext(source) == replacement
+        assert source.checkpoint()["sha256"] == hashlib.sha256(first + replacement).hexdigest()
+
+
+async def test_newline_that_exceeds_record_limit_is_rejected_without_progress(tmp_path):
+    path = tmp_path / "source.jsonl"
+    path.write_bytes(b"x" * MAX_RECORD_BYTES)
+    async with NativeJsonlSource(path) as source:
+        assert source._read_line() is None
+        with path.open("ab") as writer:
+            writer.write(b"\n")
+        with pytest.raises(ValueError, match="exceeds 1 MiB"):
+            await anext(source)
+        assert source.checkpoint()["byte_count"] == 0
+        assert source.checkpoint()["sha256"] == hashlib.sha256(b"").hexdigest()
 
 
 async def test_restart_rejects_rewritten_bytes_even_if_json_semantics_match(session_factory, tmp_path):
