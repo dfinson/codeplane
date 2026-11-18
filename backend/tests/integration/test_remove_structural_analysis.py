@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -155,12 +156,20 @@ def _seed_predecessor(db_path: Path) -> None:
                     created_at=now,
                     updated_at=now,
                 )
-            conn.exec_driver_sql(
-                "UPDATE jobs SET review_story_json = ?, review_story_hash = ?, structural_coupling_delta = ?, "
-                "structural_cycle_count = ?, structural_changes_touch_tests = ?, structural_change_count = ?, "
-                "structural_merge_confidence = ?",
-                ('{"verdict":"historic"}', "a" * 64, 1.5, 2, 1, 3, "high"),
-            )
+            retired_values = {
+                "review_story_json": '{"verdict":"historic"}',
+                "review_story_hash": "a" * 64,
+                "structural_coupling_delta": 1.5,
+                "structural_cycle_count": 2,
+                "structural_changes_touch_tests": True,
+                "structural_change_count": 3,
+                "structural_merge_confidence": "high",
+            }
+            present_values = {
+                name: value for name, value in retired_values.items() if name in predecessor.tables["jobs"].c
+            }
+            if present_values:
+                conn.execute(predecessor.tables["jobs"].update().values(**present_values))
             insert(
                 "steps",
                 id="step",
@@ -185,7 +194,8 @@ def _seed_predecessor(db_path: Path) -> None:
                 edit_motivations='[{"reason":"Keep user control"}]',
                 preceding_context='["original context"]',
             )
-            conn.exec_driver_sql("UPDATE trail_nodes SET semantic_targets = ?", ('[{"symbol":"Worker.run"}]',))
+            if "semantic_targets" in predecessor.tables["trail_nodes"].c:
+                conn.exec_driver_sql("UPDATE trail_nodes SET semantic_targets = ?", ('[{"symbol":"Worker.run"}]',))
             insert(
                 "approvals",
                 id="approval",
@@ -360,7 +370,7 @@ def predecessor_db(tmp_path: Path) -> Path:
     return db_path
 
 
-def test_upgrade_preserves_scout_and_unrelated_evidence(predecessor_db: Path) -> None:
+def _assert_retirement_preserves_evidence(predecessor_db: Path) -> None:
     before = _snapshot(predecessor_db)["rows"]
     command.upgrade(_alembic(predecessor_db), "0074")
     _assert_no_structural_storage(predecessor_db)
@@ -381,6 +391,60 @@ def test_upgrade_preserves_scout_and_unrelated_evidence(predecessor_db: Path) ->
             row["payload"] = json.loads(row["payload"])
     assert after == expected
     with sqlite3.connect(predecessor_db) as db:
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_upgrade_preserves_scout_and_unrelated_evidence(predecessor_db: Path) -> None:
+    _assert_retirement_preserves_evidence(predecessor_db)
+
+
+@pytest.mark.parametrize(
+    ("old_job_chain", "old_trail_chain"),
+    [(True, False), (False, True), (True, True)],
+    ids=["0034-from-0032", "0050-from-0048", "both-original-chains"],
+)
+def test_real_original_ancestry_upgrades_without_retired_columns(
+    tmp_path: Path, old_job_chain: bool, old_trail_chain: bool
+) -> None:
+    source = Path(__file__).resolve().parents[3] / "alembic"
+    historical = tmp_path / "historical-alembic"
+    versions = historical / "versions"
+    versions.mkdir(parents=True)
+    shutil.copyfile(source / "env.py", historical / "env.py")
+    for migration in (source / "versions").glob("*.py"):
+        revision = migration.name.split("_", 1)[0]
+        if not revision.isdigit() or int(revision) > 72:
+            continue
+        if (old_job_chain and revision == "0033") or (old_trail_chain and revision == "0049"):
+            continue
+        text = migration.read_text()
+        if old_job_chain and revision == "0034":
+            text = text.replace('down_revision: Union[str, None] = "0033"', 'down_revision: Union[str, None] = "0032"')
+        if old_trail_chain and revision == "0050":
+            text = text.replace('down_revision = "0049"', 'down_revision = "0048"')
+        (versions / migration.name).write_text(text)
+    database = tmp_path / "original-chain.db"
+    old_config = _alembic(database)
+    old_config.set_main_option("script_location", str(historical))
+    command.upgrade(old_config, "0072")
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0072"
+        jobs = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        trail = {row[1] for row in db.execute("PRAGMA table_info(trail_nodes)")}
+        assert ("review_story_json" not in jobs) == old_job_chain
+        assert ("semantic_targets" not in trail) == old_trail_chain
+    _seed_predecessor(database)
+    before = _snapshot(database)["rows"]
+    command.upgrade(_alembic(database), "0073")
+    after = _snapshot(database)["rows"]
+    after["alembic_version"] = before["alembic_version"]
+    for job in after["jobs"]:
+        assert job.pop("ingest_checkpoint") is None
+    assert after == before
+    _assert_retirement_preserves_evidence(database)
+    command.upgrade(_alembic(database), "head")
+    _assert_no_structural_storage(database)
+    with sqlite3.connect(database) as db:
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

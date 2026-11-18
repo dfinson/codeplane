@@ -62,9 +62,13 @@ def upgrade() -> None:
     connection.execute(
         sa.text("DELETE FROM events WHERE kind IN ('repo.index_progress', 'repo.index_complete', 'structural.warning')")
     )
+    inspector = sa.inspect(connection)
+    job_columns = {column["name"] for column in inspector.get_columns("jobs")}
     for column in _JOB_COLUMNS:
-        op.drop_column("jobs", column)
-    op.drop_column("trail_nodes", "semantic_targets")
+        if column in job_columns:
+            op.drop_column("jobs", column)
+    if "semantic_targets" in {column["name"] for column in inspector.get_columns("trail_nodes")}:
+        op.drop_column("trail_nodes", "semantic_targets")
     if connection.exec_driver_sql("PRAGMA foreign_key_check").first() is not None:
         raise RuntimeError("Structural retirement violated database foreign keys")
 
