@@ -1,4 +1,12 @@
-"""Shared scaffolding for imported CLI ingestion sources."""
+"""Imported CLI observation, without changing native execution/control ownership.
+
+Fresh files use the standalone decoder and version-2 acquisition checkpoints.
+Version-1 checkpoints retain their explicit optional TraceForge implementation.
+Both preserve native-v1 event IDs. record_count counts physical lines (including
+blanks), decoded_event_count/tail_offset count decoder outputs, and
+emitted_event_count counts persisted source events after pairing. Storage cursors
+remain database-local and are never interpreted as any of those counts.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +27,9 @@ import yaml
 
 from backend.models.domain import JobState
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
+from backend.services.ingest.jsonl_source import MAX_RECORD_BYTES, NativeJsonlSource
+from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest.otel_decoder import decode_json_body
 from backend.services.runtime.execution_control import ExecutionControl
 
 if TYPE_CHECKING:
@@ -32,11 +43,9 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-_PERSIST_EVERY_EVENTS = 64
-
 
 def _canonical_record(raw: dict[str, Any]) -> bytes:
-    return json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 
 def _advance_prefix(prefix: bytes, canonical: bytes) -> bytes:
@@ -44,8 +53,39 @@ def _advance_prefix(prefix: bytes, canonical: bytes) -> bytes:
 
 
 class _NativeIdentity:
+    """Fresh standalone source, retaining the published native-v1 identity seed."""
+
     def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
-        from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
+        path = resolve_mapping_path(framework)
+        if path is None:
+            raise ValueError(f"No native event mapping for framework {framework}")
+        self.decoder = NativeMappingDecoder(
+            path,
+            job_id=job_id,
+            external_session_id=external_id,
+            anchor=anchor,
+            framework_id=framework,
+            legacy_identity=True,
+        )
+        self.mapping_digest = self.decoder.mapping_digest
+        self.anchor = self.decoder.anchor
+
+    def events(self, raw: dict[str, Any], ordinal: int) -> Iterator[SessionEvent]:
+        for event in self.decoder.decode(raw, ordinal):
+            yield event.model_copy(update={"raw_event": raw})
+
+
+class _LegacyNativeIdentity:
+    def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
+        try:
+            from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
+        except ModuleNotFoundError as exc:
+            if exc.name != "traceforge":
+                raise
+            raise RuntimeError(
+                "Legacy native checkpoint requires codeplane[legacy-traceforge]; "
+                "standalone checkpoint conversion requires explicit reconciliation"
+            ) from exc
         from traceforge.config.mappings import resolve_mapping_path
         from traceforge.preprocessors import get_preprocessor
 
@@ -128,11 +168,16 @@ class _NativeIdentity:
 def _verify_source_prefix(path: Path, count: int, expected: str) -> None:
     prefix = bytes(32)
     seen = 0
-    with path.open(encoding="utf-8") as source:
-        for line in source:
-            if seen == count:
+    with path.open("rb") as source:
+        while seen < count:
+            line = source.readline(MAX_RECORD_BYTES + 2)
+            if not line:
                 break
-            raw = json.loads(line) if line.strip() else None
+            if len(line) > MAX_RECORD_BYTES:
+                raise ValueError("Native source record exceeds 1 MiB")
+            raw = decode_json_body(line) if line.strip() else None
+            if line.strip() and not isinstance(raw, dict):
+                raise RuntimeError("Native source contains a non-object JSON record")
             canonical = _canonical_record(raw) if isinstance(raw, dict) else b""
             prefix = _advance_prefix(prefix, canonical)
             seen += 1
@@ -237,14 +282,12 @@ class TraceForgeIngestBase:
         initial_skip_count: int,
         finalize_on_raw: Callable[[dict[str, Any]], tuple[bool, str | None]] | None,
     ) -> None:
-        from traceforge.sources.file_watch import FileWatchSource
-
         from backend.persistence.database import serialized_write
         from backend.persistence.event_repo import EventRepository
         from backend.persistence.job_repo import JobRepository
 
-        emitted = 0
-        self._emitted_counts[job_id] = emitted
+        decoded = 0
+        self._emitted_counts[job_id] = decoded
         terminal_reason: str | None = None
         terminal_seen = False
         try:
@@ -255,17 +298,28 @@ class TraceForgeIngestBase:
                     raise RuntimeError("Native job no longer exists")
                 checkpoint = await repo.get_ingest_checkpoint(job_id)
                 prior = await EventRepository(session).list_by_job(job_id, list(TRANSCRIPT_KINDS), limit=1)
-            normalizer = _NativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
+            if job.external_session_id != session_id or job.source != f"{self._mapping_name}_cli":
+                raise RuntimeError("Native source does not belong to this Job")
+            revision = checkpoint.get("version") if checkpoint else 2
+            if revision not in (1, 2):
+                raise RuntimeError("Unsupported native checkpoint version requires reconciliation")
+            normalizer = (
+                _LegacyNativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
+                if revision == 1
+                else _NativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
+            )
             accepted = int(checkpoint["record_count"]) if checkpoint else 0
             if checkpoint:
                 if (
-                    checkpoint.get("version") != 1
-                    or checkpoint.get("mapping_sha256") != normalizer.mapping_digest
+                    checkpoint.get("mapping_sha256") != normalizer.mapping_digest
                     or checkpoint.get("external_session_id") != session_id
+                    or (revision == 2 and checkpoint.get("framework") != self._mapping_name)
+                    or (revision == 2 and checkpoint.get("timestamp_anchor") != normalizer.anchor.isoformat())
+                    or (revision == 2 and checkpoint.get("output_contract") != "codeplane-native-v1")
                 ):
                     raise RuntimeError("Native checkpoint mapping or session identity changed")
                 await asyncio.to_thread(_verify_source_prefix, jsonl_path, accepted, checkpoint["prefix_sha256"])
-            elif initial_skip_count and prior:
+            elif initial_skip_count or job.tail_offset or prior:
                 raise RuntimeError("Legacy native history has no provable source checkpoint")
             if checkpoint:
                 offset = 0
@@ -280,41 +334,40 @@ class TraceForgeIngestBase:
                     offset += len(history)
             prefix = bytes(32)
             ordinal = 0
-            file_identity = jsonl_path.stat().st_ino if jsonl_path.exists() else None
-            last_size = jsonl_path.stat().st_size if jsonl_path.exists() else 0
-            async with FileWatchSource(jsonl_path, name=session_id, start_at="beginning") as source:
-                async for record in source:
-                    stat = jsonl_path.stat()
-                    if (file_identity and stat.st_ino != file_identity) or stat.st_size < last_size:
-                        raise RuntimeError("Native source rotated or truncated during observation")
-                    file_identity, last_size = stat.st_ino, stat.st_size
-                    if not record.payload.strip():
-                        prefix = _advance_prefix(prefix, b"")
-                        ordinal += 1
-                        continue
-                    raw = self._load_json_payload(record.payload)
-                    if raw is None:
-                        raise RuntimeError("Native source contains an invalid JSON record")
+            source_checkpoint = checkpoint["source"] if checkpoint and revision == 2 else None
+            async with NativeJsonlSource(jsonl_path, checkpoint=source_checkpoint) as source:
+                async for line in source:
                     reconstruct = ordinal < accepted
-                    if finalize_on_raw is not None:
-                        terminal_seen, terminal_reason = finalize_on_raw(raw)
-                    for event in normalizer.events(raw, ordinal):
-                        if reconstruct:
-                            await self._event_processor.process_event(job_id, event, replay=True)
-                        else:
-                            await self._handle_tf_event(job_id, event)
-                        emitted += 1
-                        self._emitted_counts[job_id] = emitted
-                        if event.kind == EventKind.session_error:
-                            terminal_seen = True
-                            terminal_reason = self._event_error_reason(event)
-                        elif event.kind == EventKind.session_ended:
-                            terminal_seen = True
-                    prefix = _advance_prefix(prefix, _canonical_record(raw))
+                    raw = decode_json_body(line) if line.strip() else None
+                    if line.strip() and not isinstance(raw, dict):
+                        raise RuntimeError("Native source contains a non-object JSON record")
+                    if raw is not None:
+                        if finalize_on_raw is not None:
+                            terminal_seen, terminal_reason = finalize_on_raw(raw)
+                        events = tuple(normalizer.events(raw, ordinal))
+                        for event in events:
+                            if reconstruct:
+                                await self._event_processor.process_event(job_id, event, replay=True)
+                            else:
+                                await self._handle_tf_event(job_id, event)
+                            decoded += 1
+                            self._emitted_counts[job_id] = decoded
+                            if event.kind == EventKind.session_ended:
+                                terminal_seen = True
+                    prefix = _advance_prefix(prefix, _canonical_record(raw) if raw is not None else b"")
                     ordinal += 1
+                    await source.verify()
+                    if (
+                        reconstruct
+                        and ordinal == accepted
+                        and revision == 2
+                        and checkpoint is not None
+                        and decoded != checkpoint["decoded_event_count"]
+                    ):
+                        raise RuntimeError("Native decoded event count changed before its accepted checkpoint")
                     if not reconstruct:
                         checkpoint = {
-                            "version": 1,
+                            "version": revision,
                             "framework": self._mapping_name,
                             "external_session_id": session_id,
                             "record_count": ordinal,
@@ -323,10 +376,23 @@ class TraceForgeIngestBase:
                             "timestamp_anchor": normalizer.anchor.isoformat(),
                             "output_contract": "codeplane-native-v1",
                         }
+                        if revision == 2:
+                            checkpoint.update(source=source.checkpoint(), decoded_event_count=decoded)
                         async with serialized_write(self._session_factory) as session:
-                            await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, emitted)
+                            if revision == 2:
+                                checkpoint["emitted_event_count"] = await EventRepository(session).count_native_events(
+                                    job_id, self._mapping_name, session_id
+                                )
+                            await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, decoded)
                     if terminal_seen and ordinal >= accepted:
                         await self._finalize_session(job_id, error_reason=terminal_reason)
+                        if revision == 2:
+                            assert checkpoint is not None
+                            async with serialized_write(self._session_factory) as session:
+                                checkpoint["emitted_event_count"] = await EventRepository(session).count_native_events(
+                                    job_id, self._mapping_name, session_id
+                                )
+                                await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, decoded)
                         return
         except asyncio.CancelledError:
             raise

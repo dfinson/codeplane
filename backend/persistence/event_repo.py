@@ -82,6 +82,19 @@ class EventRepository(BaseRepository):
         self._verify_identity(row, event)
         return True
 
+    async def count_native_events(self, job_id: str, framework: str, external_session_id: str) -> int:
+        """Count durable projected source events, not physical records or SSE cursors."""
+        result = await self._session.execute(
+            select(func.count())
+            .select_from(EventRow)
+            .where(
+                EventRow.job_id == job_id,
+                func.json_extract(EventRow.payload, "$._codeplane_source.framework") == framework,
+                func.json_extract(EventRow.payload, "$._codeplane_source.session_id") == external_session_id,
+            )
+        )
+        return int(result.scalar_one())
+
     async def get(self, event_id: str) -> SessionEvent | None:
         result = await self._session.execute(select(EventRow).where(EventRow.event_id == event_id))
         row = result.scalar_one_or_none()
