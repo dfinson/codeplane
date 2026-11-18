@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -77,6 +78,16 @@ def install(gate: GateAttachment, target: object) -> None:
             arguments={"endpoint": url, "flow_id": flow_id, "body": decode_json_body(body)},
             run_id=flow_id,
             definition="Remote Flowise request. Internal tools are not intercepted. Response loss is delivery_unknown.",
+            fingerprint=lambda: hashlib.sha256(
+                canonical_record(
+                    {
+                        "endpoint": client.base_url,
+                        "headers": client._build_headers(),
+                        "identity": asdict(client.identity),
+                        "policy": asdict(client.policy),
+                    }
+                )
+            ).hexdigest(),
         )
         if not gate.allow_sync(call):
             raise NativeGateDeniedError("Flowise request denied before transport")
