@@ -9,6 +9,7 @@ import asyncio
 import sys
 import time
 import uuid
+from dataclasses import replace
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,7 @@ from backend.models.domain import (
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters.base_adapter import PermissionDecision
+from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1039,6 +1041,59 @@ class TestProcessStreamEvent:
 
 
 class TestConsumeMessages:
+    @pytest.mark.parametrize(
+        "terminal,final_text,output_type",
+        [
+            (False, None, "string"),
+            (False, None, "code_ref"),
+            (True, "Actual final answer", "string"),
+            (True, None, "code_ref"),
+            (True, None, None),
+        ],
+    )
+    async def test_recipe_requires_native_result_not_initialization(
+        self, sessions, terminal, final_text, output_type
+    ) -> None:
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.agent_runner import AgentStepRunner
+        from backend.tests.unit.test_recipe_agent_runner import agent_context
+
+        run, instance, attempt, owned, configs, make_runtime, _ = await agent_context(
+            sessions, provider="claude", output_type=output_type
+        )
+        native = ClaudeAdapter()
+        emitted = []
+
+        async def stream(session_id):
+            native._queues[session_id] = asyncio.Queue()
+            native.set_job_id(session_id, run.job_id)
+            native.set_session_kind(session_id, "job")
+            native.set_session_metadata(
+                session_id,
+                replace(configs[-1], execution_token=owned.attach_attempt_policy.call_args.kwargs["execution_token"]),
+            )
+            client = _FakeClaudeSDKClient()
+            client._messages = [_FakeSystemMessage()]
+            if terminal:
+                client._messages.append(_FakeResultMessage(result=final_text))
+            await native._consume_messages(session_id, client)
+            async for event in native.stream_events(session_id):
+                emitted.append(event)
+                yield event
+
+        owned.stream_events = stream
+        host = make_runtime()
+        pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+        result, outputs = await AgentStepRunner(host).run(run, instance, attempt, _make_config(), contract_pin=pin)
+        assert result.outcome == ("succeeded" if terminal else "interrupted")
+        assert result.evidence.text == final_text
+        assert outputs == ({"result": final_text} if terminal and output_type == "string" else {})
+        assert not any(event.kind == EventKind.message_assistant for event in emitted)
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            assert (await repository.agent_progress(attempt.id))[0] == int(terminal)
+            assert await repository.completed_execution_text(attempt.id) == (terminal, final_text)
+
     @pytest.mark.asyncio
     async def test_system_message_emits_log(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"

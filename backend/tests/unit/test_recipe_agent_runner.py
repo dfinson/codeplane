@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +14,7 @@ from backend.config import CPLConfig
 from backend.models.db import EventRow
 from backend.models.domain import SessionConfig
 from backend.models.events import EventMetadata, new_event
-from backend.models.schemas.recipes import RecipeCodeReference, RecipeDefinition, RecipeOutput
+from backend.models.schemas.recipes import RecipeAttemptExecution, RecipeCodeReference, RecipeDefinition, RecipeOutput
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.services.action_policy.classifier import RepoPolicy
@@ -26,8 +27,9 @@ from backend.tests.unit.test_recipe_runs import create_run, ready_attempt
 from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 
-async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="string"):
+async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="string", provider="copilot"):
     work = agent("work")
+    work.runner.provider = provider
     work.runner.session = "reuse" if reuse else "new"
     work.runner.max_turns = max_turns
     if output_type is None:
@@ -69,11 +71,13 @@ async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="stri
     processor.on_attempt_terminal = AsyncMock()
 
     def runtime():
+        config = CPLConfig()
+        config.runtime.copilot_only = provider == "copilot"
         host = RuntimeService(
             session_factory=sessions,
             event_bus=EventBus(),
             adapter_registry=registry,
-            config=CPLConfig(),
+            config=config,
             event_processor=processor,
         )
         host._policy_routers[run.job_id] = MagicMock()
@@ -88,7 +92,7 @@ async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="stri
             kind,
             payload,
             metadata=EventMetadata(
-                source_framework="copilot",
+                source_framework=config.sdk,
                 recipe_run_id=config.recipe_run_id,
                 step_instance_id=config.step_instance_id,
                 attempt_id=config.attempt_id,
@@ -99,6 +103,76 @@ async def agent_context(sessions, *, reuse=False, max_turns=1, output_type="stri
         )
 
     return run, instance, attempt, adapter, configurations, runtime, emit
+
+
+async def test_claude_eof_without_native_completion_cannot_mint_a_receipt(sessions):
+    run, instance, attempt, adapter, _, make_runtime, emit = await agent_context(sessions, provider="claude")
+
+    async def stream(_session_id):
+        yield emit("message.assistant", {"content": "Unfinished narration"})
+
+    adapter.stream_events = stream
+    host = make_runtime()
+    pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+    result, outputs = await AgentStepRunner(host).run(
+        run, instance, attempt, SessionConfig(workspace_path="/repo/snapshot", prompt="Read"), contract_pin=pin
+    )
+    assert result.outcome == "interrupted" and result.evidence.uncertain
+    assert result.evidence.text is None and not outputs
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        assert (await repository.agent_progress(attempt.id))[0] == 0
+        assert await repository.completed_execution_text(attempt.id) == (False, None)
+
+
+@pytest.mark.parametrize("native_evidence", ["missing", "foreign", "late"])
+async def test_recovery_rejects_old_claude_completion_without_qualified_native_result(sessions, native_evidence):
+    run, instance, attempt, adapter, configurations, make_runtime, _ = await agent_context(sessions, provider="claude")
+    async with sessions() as session:
+        repository = RecipeRunRepository(session)
+        await repository.record_execution(
+            attempt.id,
+            RecipeAttemptExecution(
+                execution_token="old-token",
+                session_id="old-session",
+                provider="claude",
+                model=None,
+                started_at=datetime.now(UTC),
+            ),
+        )
+        native = new_event(
+            run.job_id,
+            "session.ended",
+            {"result": "Not this completed execution"},
+            metadata=EventMetadata(
+                source_framework="claude",
+                recipe_run_id=run.id,
+                step_instance_id=instance.id,
+                attempt_id=attempt.id,
+                execution_epoch="old-epoch",
+                run_id="old-session",
+                execution_token="foreign-token" if native_evidence == "foreign" else "old-token",
+            ),
+        )
+        if native_evidence == "foreign":
+            await EventRepository(session).append(native)
+        await repository.finish_execution_turn(
+            attempt.id, "old-token", execution_epoch="old-epoch", result_text="Claude session initialized"
+        )
+        if native_evidence == "late":
+            await EventRepository(session).append(native)
+        await session.commit()
+        assert await repository.completed_execution_text(attempt.id) == (False, None)
+        retained = await repository.get_attempt(attempt.id)
+        current = await repository.get_step(instance.id)
+    host = make_runtime()
+    result, outputs = await AgentStepRunner(host).run(
+        run, current, retained, SessionConfig(workspace_path="/repo/snapshot", prompt="Recover"), contract_pin=None
+    )
+    assert result.outcome == "interrupted" and not outputs
+    assert result.evidence.text is None
+    assert not configurations
+    adapter.send_message.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -176,10 +250,13 @@ async def test_no_model_output_ports_accept_summary_but_preserve_explicit_failur
 
 @pytest.mark.parametrize("first_outcome", ["succeeded", "failed", "incomplete"])
 @pytest.mark.parametrize("legacy_receipt", [False, True])
+@pytest.mark.parametrize("provider", ["copilot", "claude"])
 async def test_recovery_uses_completed_token_not_a_later_uncompleted_message(
-    sessions, monkeypatch, first_outcome, legacy_receipt
+    sessions, monkeypatch, first_outcome, legacy_receipt, provider
 ):
-    run, instance, attempt, adapter, configurations, make_runtime, emit = await agent_context(sessions, max_turns=3)
+    run, instance, attempt, adapter, configurations, make_runtime, emit = await agent_context(
+        sessions, max_turns=3, provider=provider
+    )
     original_finish = RecipeRunRepository.finish_execution_turn
 
     class SimulatedCrash(BaseException):
@@ -200,6 +277,8 @@ async def test_recovery_uses_completed_token_not_a_later_uncompleted_message(
 
     async def original_stream(_session_id):
         yield emit("message.assistant", {"content": first_message})
+        if provider == "claude":
+            yield emit("session.ended", {"result": first_message})
 
     adapter.stream_events = original_stream
     original_host = make_runtime()
@@ -249,6 +328,8 @@ async def test_recovery_uses_completed_token_not_a_later_uncompleted_message(
 
     async def resumed_stream(_session_id):
         yield emit("message.assistant", {"content": '{"result":"completed remaining work"}'})
+        if provider == "claude":
+            yield emit("session.ended", {"result": '{"result":"completed remaining work"}'})
 
     adapter.stream_events = resumed_stream
     restarted = make_runtime()

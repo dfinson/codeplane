@@ -238,13 +238,17 @@ class ClaudeAdapter(BaseAgentAdapter):
                         try:
                             if isinstance(message, SystemMessage):
                                 job_id = self._session_to_job.get(session_id)
+                                metadata = self._session_metadata.get(session_id)
                                 if job_id and self.get_session_kind(session_id) != "preflight":
-                                    self._emit_tf(
-                                        session_id,
-                                        job_id,
-                                        EventKind.message_assistant,
-                                        {"content": "Claude session initialized"},
-                                    )
+                                    if metadata is not None and metadata.attempt_id is not None:
+                                        self._emit_log_line(session_id, job_id, "Claude session initialized")
+                                    else:
+                                        self._emit_tf(
+                                            session_id,
+                                            job_id,
+                                            EventKind.message_assistant,
+                                            {"content": "Claude session initialized"},
+                                        )
 
                             elif isinstance(message, AssistantMessage):
                                 await self._process_assistant_message(session_id, message)
@@ -565,8 +569,14 @@ class ClaudeAdapter(BaseAgentAdapter):
                 EventKind.session_ended,
                 {"result": getattr(message, "result", None)},
             )
-        # On success no explicit event is emitted; the ``done=True`` break in
-        # ``_consume_messages`` triggers the queue sentinel that ends the stream.
+        elif (metadata := self._session_metadata.get(session_id)) is not None and metadata.attempt_id is not None:
+            self._emit_tf(
+                session_id,
+                job_id or session_id,
+                EventKind.session_ended,
+                {"result": getattr(message, "result", None)},
+            )
+        # Legacy sessions still end through the queue sentinel.
 
     async def _process_stream_event(
         self,

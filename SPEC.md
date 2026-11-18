@@ -329,6 +329,10 @@ finalized without opening another SDK session. New receipts retain the exact
 completion text; older receipts may use only a matching execution token,
 native session and epoch before that receipt's event boundary. A later
 uncompleted message is never substituted for completed output.
+Claude recipe executions additionally require a successful native terminal result,
+including on recovery. Initialization/status messages and stream exhaustion do not
+qualify as output or completion. A genuine result with no text may still fulfill
+a contract with no model-produced outputs, including code-ref-only steps.
 `POST /api/recipes/resolve-default` validates and retains a content-addressed
 published revision of that actual configuration, without launching a Job.
 Repeated resolution reuses the same revision. A configuration change creates
@@ -403,6 +407,9 @@ cannot manufacture a new trusted capture.
 snapshot identity and checksum after revalidating Job/run versions, code and
 selected evidence. It is an append-only `review.recorded` event, not an
 accept/reject state machine, agent message, approval, merge or tracker command.
+An HTTP 409 rejection invalidates the selected capture and unlocks explicit
+recapture with a new request key while preserving the operator's rationale.
+Uncertain delivery retains the exact request and key for an idempotent retry.
 Legacy Jobs have no fabricated recipe correlation. Review history uses bounded
 storage cursors and a frozen high-water mark, not a reconstruction of unsaved
 Story annotations. Changes and Story remain central, with the selected

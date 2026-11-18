@@ -196,6 +196,7 @@ class AgentStepRunner:
                     break
                 dispatch_started = False
                 text = None
+                native_completed = False
                 config = replace(
                     base,
                     sdk=provider,
@@ -274,7 +275,20 @@ class AgentStepRunner:
                                     ),
                                 )
                             )
-                        if event.kind == EventKind.message_assistant:
+                        if event.kind == EventKind.session_ended and provider == "claude":
+                            if (
+                                event.metadata.source_framework != provider
+                                or event.metadata.integration_binding_id is not None
+                                or event.metadata.execution_token != token
+                                or event.metadata.run_id != execution.session_id
+                            ):
+                                raise StateConflictError("Native completion does not belong to the owned execution.")
+                            final_text = event.payload.get("result")
+                            if final_text is not None and not isinstance(final_text, str):
+                                raise StateConflictError("Native completion contains an invalid final response.")
+                            text = final_text
+                            native_completed = True
+                        elif event.kind == EventKind.message_assistant and provider != "claude":
                             content = event.payload.get("content")
                             if event.payload.get("has_tool_requests") or event.payload.get("tool_requests"):
                                 text = None
@@ -306,6 +320,9 @@ class AgentStepRunner:
                         error = "The execution was stopped or replaced before its result was accepted."
                         uncertain = True
                     resume_session = execution.session_id
+                if provider == "claude" and not native_completed and not error:
+                    uncertain = True
+                    error = "Claude execution ended without a qualified native completion result."
                 if pending_tools:
                     uncertain = True
                     error = error or "Tool completion evidence is missing."
