@@ -3302,6 +3302,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/external-gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue Source */
+        post: operations["issue_source_api_jobs__job_id__external_gates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preflight */
+        post: operations["preflight_api_gate__source_id__requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_gate__source_id__requests__request_id__get"];
+        put?: never;
+        post?: never;
+        /** Retire */
+        delete: operations["retire_api_gate__source_id__requests__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume */
+        post: operations["consume_api_gate__source_id__requests__request_id__consume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reported */
+        post: operations["reported_api_gate__source_id__requests__request_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Legacy Invoke */
+        post: operations["legacy_invoke_api_gate__source_id__invoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/recipe/current": {
         parameters: {
             query?: never;
@@ -4761,6 +4864,55 @@ export interface components {
              * @default 30
              */
             periodDays: number;
+        };
+        /** ExternalGateDecision */
+        ExternalGateDecision: {
+            /** Sourceid */
+            sourceId: string;
+            /** Requestid */
+            requestId: string;
+            /** Actiondigest */
+            actionDigest: string;
+            phase: components["schemas"]["ExternalGatePhase"];
+            /**
+             * Decision
+             * @default deny
+             * @enum {string}
+             */
+            decision: "allow" | "deny";
+            /** Reason */
+            reason: string;
+            /** Approvalid */
+            approvalId?: string | null;
+        };
+        /**
+         * ExternalGatePhase
+         * @enum {string}
+         */
+        ExternalGatePhase: "pending" | "allowed" | "denied" | "retired" | "consumed";
+        /** ExternalGateSourceRequest */
+        ExternalGateSourceRequest: {
+            /** Executiontoken */
+            executionToken: string;
+            /** Attemptid */
+            attemptId?: string | null;
+            /** Externalsessionid */
+            externalSessionId?: string | null;
+        };
+        /** ExternalGateSourceResponse */
+        ExternalGateSourceResponse: {
+            /** Sourceid */
+            sourceId: string;
+            /** Credential */
+            credential: string;
+            /** Jobid */
+            jobId: string;
+            /** Executionbindingid */
+            executionBindingId: string;
+            /** Executionepoch */
+            executionEpoch: string;
+            /** Executiontoken */
+            executionToken: string;
         };
         /** FileAccessEntry */
         FileAccessEntry: {
@@ -16091,6 +16243,287 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ObservationEventList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_source_api_jobs__job_id__external_gates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalGateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_api_gate__source_id__requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Requestid */
+                    requestId: string;
+                    /** Toolname */
+                    toolName: string;
+                    /** Toolinput */
+                    toolInput: {
+                        [key: string]: unknown;
+                    } | string;
+                    /** Target */
+                    target?: string | null;
+                    /** Sessionid */
+                    sessionId?: string | null;
+                    /** Toolcallid */
+                    toolCallId?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_api_gate__source_id__requests__request_id__get: {
+        parameters: {
+            query?: {
+                waitSeconds?: number;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retire_api_gate__source_id__requests__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consume_api_gate__source_id__requests__request_id__consume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Requestid */
+                    requestId: string;
+                    /** Toolname */
+                    toolName: string;
+                    /** Toolinput */
+                    toolInput: {
+                        [key: string]: unknown;
+                    } | string;
+                    /** Target */
+                    target?: string | null;
+                    /** Sessionid */
+                    sessionId?: string | null;
+                    /** Toolcallid */
+                    toolCallId?: string | null;
+                    /** Actiondigest */
+                    actionDigest: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reported_api_gate__source_id__requests__request_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Reportid */
+                    reportId: string;
+                    /**
+                     * Phase
+                     * @enum {string}
+                     */
+                    phase: "started" | "completed" | "failed";
+                    /** Details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_invoke_api_gate__source_id__invoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
                 };
             };
             /** @description Validation Error */
