@@ -92,6 +92,68 @@ class TestGetSettings:
         assert data["selfReviewPrompt"] == DEFAULT_SELF_REVIEW_PROMPT
 
 
+class TestPolicyUsdDefaults:
+    @pytest.fixture(autouse=True)
+    def policy_routes_without_legacy_imports(self, app: FastAPI, monkeypatch: pytest.MonkeyPatch):
+        import builtins
+
+        from backend.api.policy_settings import router
+
+        original_import = builtins.__import__
+
+        def no_legacy(name, *args, **kwargs):
+            if name == "traceforge" or name.startswith("traceforge."):
+                raise ModuleNotFoundError("The default settings API must not import TF", name="traceforge")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_legacy)
+        app.include_router(router, prefix="/api")
+
+    async def test_policy_and_ceiling_responses_keep_existing_defaults_without_tf(self, client: AsyncClient):
+        expected = {
+            "autonomous": {"warnUsd": None, "ceilingUsd": None},
+            "supervised": {"warnUsd": 20.0, "ceilingUsd": 40.0},
+            "locked": {"warnUsd": 5.0, "ceilingUsd": 10.0},
+        }
+        policy = await client.get("/api/settings/policy")
+        ceilings = await client.get("/api/settings/policy/usd-ceilings")
+        assert policy.status_code == ceilings.status_code == 200
+        assert policy.json() == {
+            "config": {"preset": "supervised", "batchWindowSeconds": 5.0},
+            "usdCeilings": expected,
+            "mcpServers": [],
+        }
+        assert ceilings.json() == {"ceilings": expected}
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"supervised": {"warnUsd": 0.0, "ceilingUsd": None}},
+            {"locked": {"warnUsd": None, "ceilingUsd": 0.0}},
+            {"autonomous": {"warnUsd": 2.5, "ceilingUsd": 7.5}, "unknown": {"warnUsd": 1.0, "ceilingUsd": 2.0}},
+            {"supervised": {}},
+        ],
+    )
+    async def test_persisted_overrides_keep_zero_null_and_unspecified_presets(
+        self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], overrides
+    ):
+        from backend.models.db import PolicyConfigRow
+
+        async with session_factory() as session:
+            session.add(PolicyConfigRow(id=1))
+            await session.commit()
+        baseline = (await client.get("/api/settings/policy/usd-ceilings")).json()["ceilings"]
+        response = await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": overrides})
+        assert response.status_code == 200
+        expected = dict(baseline)
+        for preset, entry in overrides.items():
+            if preset in expected:
+                expected[preset] = {"warnUsd": entry.get("warnUsd"), "ceilingUsd": entry.get("ceilingUsd")}
+        assert response.json() == {"ceilings": expected}
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == response.json()
+        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == expected
+
+
 class TestUpdateSettings:
     """PUT /api/settings"""
 

@@ -31,7 +31,7 @@ from traceforge.config.models import (
     ProtectedPathsPolicyConfig,
 )
 
-from backend.services.action_policy.classifier import Preset
+from backend.services.action_policy.classifier import USD_CEILING_DEFAULTS, Preset
 
 _RULES_DIR = Path(__file__).parent / "data" / "governance"
 
@@ -81,10 +81,9 @@ def _profile(
     protected_action: str,
     pressure_action: str | None,
     hard_max_tool_calls: int | None,
-    ceiling_usd: float | None,
-    warn_usd: float | None,
 ) -> PresetProfile:
     max_by_effect = {"destructive": max_destructive} if max_destructive is not None else None
+    warn_usd, ceiling_usd = USD_CEILING_DEFAULTS[preset]
     return PresetProfile(
         preset=preset,
         rules_path=_RULES_DIR / f"{preset.value}.yaml",
@@ -118,8 +117,6 @@ PROFILES: dict[Preset, PresetProfile] = {
         protected_action="escalate",
         pressure_action=None,
         hard_max_tool_calls=None,
-        ceiling_usd=None,
-        warn_usd=None,
     ),
     Preset.supervised: _profile(
         Preset.supervised,
@@ -128,8 +125,6 @@ PROFILES: dict[Preset, PresetProfile] = {
         protected_action="escalate",
         pressure_action="escalate",
         hard_max_tool_calls=None,
-        ceiling_usd=40.0,
-        warn_usd=20.0,
     ),
     Preset.locked: _profile(
         Preset.locked,
@@ -138,8 +133,6 @@ PROFILES: dict[Preset, PresetProfile] = {
         protected_action="deny",
         pressure_action="escalate",
         hard_max_tool_calls=400,
-        ceiling_usd=10.0,
-        warn_usd=5.0,
     ),
 }
 
