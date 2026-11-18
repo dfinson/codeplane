@@ -84,6 +84,17 @@ HTTP/protobuf traces and explicit gRPC traces/typed-usage metrics share this
 boundary. Missing role and unverified currency are withheld, not inferred.
 Optional route errors/drop counters are local health, never execution failures.
 
+Flowise prediction/upsert and MCP Streamable HTTP requests use fixed,
+version-qualified native bridge selections. Their installer/mapping source is
+pinned to the actual Runtime admission, and request/result observations drain
+through the existing canonical projection on that same executing Job.
+Flowise remote session IDs and MCP protocol-session/request IDs remain source
+evidence, distinct from CodePlane operation identities. A lost response remains
+uncertain, and local cancellation never invents remote abort. MCP revocation
+uses the native cancellation notification and retains acknowledgment or a late
+result separately. Stdio and upstream MCP server trust middleware are not
+qualified by the Streamable HTTP client implementation.
+
 `POST /api/integrations/observations` registers a binding-owned history Job
 without launching an SDK, creating a workspace or attaching runtime sidecars.
 Repeated registration of the same binding/source returns the same Job. These

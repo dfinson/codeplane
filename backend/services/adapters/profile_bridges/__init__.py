@@ -34,6 +34,7 @@ BRIDGES = MappingProxyType(
             module="backend.services.adapters.profile_bridges.flowise",
             dependencies=(("agent-governance-toolkit-core", "5.0.0"), ("httpx", "0.28.1")),
             operations=frozenset({"invoke", "gate", "observe", "stop-waiting"}),
+            observation_mapping=True,
         ),
         "mcp": BridgeSpec(
             id="mcp",
@@ -45,6 +46,7 @@ BRIDGES = MappingProxyType(
                 ("jsonschema", "4.26.0"),
             ),
             operations=frozenset({"invoke", "gate", "observe", "cancel"}),
+            observation_mapping=True,
         ),
     }
 )

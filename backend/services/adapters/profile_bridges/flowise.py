@@ -91,6 +91,16 @@ def install(gate: GateAttachment, target: object) -> None:
         )
         if not gate.allow_sync(call):
             raise NativeGateDeniedError("Flowise request denied before transport")
+        gate.binding.observe(
+            {
+                "type": "request_started",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "operation_id": call.operation_id,
+                "flow_id": flow_id,
+                "operation": operation,
+                "arguments": decode_json_body(body),
+            }
+        )
         started = time.monotonic()
         status: int | None = None
         result: dict[str, Any] | None = None
@@ -122,6 +132,21 @@ def install(gate: GateAttachment, target: object) -> None:
             return result
         finally:
             duration = (time.monotonic() - started) * 1000
+            remote_session = result.get("sessionId", result.get("chatId")) if result is not None else None
+            gate.binding.observe(
+                {
+                    "type": "request_completed" if result is not None else "request_unknown",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "operation_id": call.operation_id,
+                    "flow_id": flow_id,
+                    "operation": operation,
+                    "remote_session_id": remote_session if isinstance(remote_session, str) else None,
+                    "result": result,
+                    "status_code": status,
+                    "duration_ms": duration,
+                    "outcome": "responded" if result is not None else "delivery_unknown",
+                }
+            )
             if client.policy.audit_logging:
                 client._call_log.append(
                     FlowiseCallRecord(
@@ -135,13 +160,12 @@ def install(gate: GateAttachment, target: object) -> None:
                     )
                 )
             if target.observe is not None:
-                session = result.get("sessionId", result.get("chatId")) if result is not None else None
                 target.observe(
                     FlowiseObservation(
                         call.operation_id,
                         flow_id,
                         operation,
-                        session if isinstance(session, str) else None,
+                        remote_session if isinstance(remote_session, str) else None,
                         "responded" if result is not None else "delivery_unknown",
                         status,
                         duration,

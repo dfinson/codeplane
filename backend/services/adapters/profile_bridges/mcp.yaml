@@ -1,0 +1,55 @@
+framework: mcp
+framework_version: "mcp==1.27.1"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  tool_started:
+    kind: tool.call.started
+    payload:
+      tool_name: tool
+      tool_call_id: operation_id
+      request_id: request_id
+      operation_id: operation_id
+      protocol_session_id: protocol_session_id
+      tool_call_id_source: tool_call_id_source
+      arguments: arguments
+      peer_did: peer_did
+      schema_sha256: schema_sha256
+  tool_completed:
+    kind: tool.call.completed
+    payload:
+      tool_name: tool
+      tool_call_id: operation_id
+      request_id: request_id
+      operation_id: operation_id
+      protocol_session_id: protocol_session_id
+      tool_call_id_source: tool_call_id_source
+      result: result
+      success: success
+      peer_did: peer_did
+      schema_sha256: schema_sha256
+      outcome: outcome
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      tool_name: tool
+      tool_call_id: operation_id
+      request_id: request_id
+      operation_id: operation_id
+      protocol_session_id: protocol_session_id
+      tool_call_id_source: tool_call_id_source
+      result: result
+      success: success
+      peer_did: peer_did
+      outcome: outcome
+  tool_unknown:
+    kind: integration.request.unknown
+    payload:
+      tool_name: tool
+      operation_id: operation_id
+      request_id: request_id
+      protocol_session_id: protocol_session_id
+      peer_did: peer_did
+      schema_sha256: schema_sha256
+      outcome: outcome

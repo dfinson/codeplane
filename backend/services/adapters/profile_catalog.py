@@ -97,6 +97,38 @@ def _operation(
         evidence = ["backend/tests/unit/test_ai_card.py"]
         limitations.append("Identity evidence grants no execution, steering, tool or cancellation authority")
         limitations.append("Registration verifies supplied cards; it does not fetch arbitrary discovery URLs")
+    elif profile.id in {"flowise", "mcp"}:
+        from backend.services.adapters.native_gates.selection import select_installation
+
+        selected = select_installation(profile.id)
+        readiness = selected.readiness()
+        if operation in selected.operations:
+            producer = (
+                "backend.services.runtime.RuntimeService.start_native"
+                if operation == "invoke"
+                else f"{selected.module}.install"
+                if operation == "gate"
+                else "backend.services.runtime.native_observation.open_native_observation"
+                if operation == "observe"
+                else "backend.services.runtime.RuntimeService.detach_native"
+            )
+            evidence = [
+                f"backend/tests/unit/test_{profile.id}_bridge.py",
+                "backend/tests/unit/test_profile_bridge_revocation.py",
+            ]
+        limitations.append(
+            "Requires the existing persisted Runtime admission, exact execution identity and native binding"
+        )
+        limitations.append("Raw native results are retained; undocumented token or currency conversion is not inferred")
+        if profile.id == "flowise":
+            limitations.append("Stop is local: in-flight synchronous requests drain without claiming remote abort")
+        else:
+            limitations.append(
+                "Streamable HTTP client qualified; stdio and upstream server trust middleware are not qualified"
+            )
+            limitations.append(
+                "MCP cancellation is requested until native acknowledgment or a separately observed result"
+            )
     elif profile.id in _GATES and operation in {"invoke", "gate", "cancel"}:
         readiness = _native_readiness(profile)
         if find_spec("backend.services.adapters.native_gates") is not None:
@@ -127,6 +159,15 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
         managed = registry.describe(profile.adapter_id) if profile.adapter_id is not None else None
         formats = _formats(profile)
         channels = sorted(managed.channels) if managed else ["historical-records"] if formats else []
+        bridge_versions: list[str] = []
+        bridge_hooks: list[str] = []
+        if profile.id in {"flowise", "mcp"}:
+            from backend.services.adapters.native_gates.selection import select_installation
+
+            selected = select_installation(profile.id)
+            bridge_versions = [f"{package}=={pin}" for package, pin in selected.dependencies]
+            bridge_hooks = ["predict", "upsert"] if profile.id == "flowise" else ["ClientSession.call_tool"]
+            channels.extend(("native-request-boundary", "pinned-canonical-observations"))
         if profile.id == "generic-otel":
             channels.extend(("otlp-http-json", "otlp-http-protobuf"))
         operations = [_operation(registry, profile, operation, formats) for operation in profile.operations]
@@ -156,10 +197,10 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                     if profile.id in _GATES
                     else ["agent-governance-toolkit-core==5.0.0"]
                     if profile.id == "ai-card"
-                    else []
+                    else bridge_versions
                 ),
                 native_formats=formats,
-                hooks=list(managed.hooks) if managed else [],
+                hooks=list(managed.hooks) if managed else bridge_hooks,
                 observation_channels=channels,
                 declared_ownership=profile.ownership,
                 declared_steering=profile.steering,

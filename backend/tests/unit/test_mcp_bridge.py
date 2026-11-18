@@ -1,6 +1,7 @@
 import asyncio
 import socket
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 import jsonschema
 import pytest
@@ -13,6 +14,11 @@ from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.adapters.native_gates import GateAttachment, NativeBinding
 from backend.services.adapters.native_gates.binding import NativeGateDeniedError
 from backend.services.adapters.profile_bridges.mcp import McpTarget, install
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from backend.services.adapters.profile_bridges.mcp import McpObservation
 
 
 @pytest.fixture
@@ -79,7 +85,8 @@ def _target(endpoint, schema, observations):
 
 async def test_real_mcp_session_schema_gate_identity_correlation_and_cancellation(mcp_peer):
     endpoint, schema, calls, entered, finished = mcp_peer
-    observations, receipts = [], []
+    observations: list[McpObservation] = []
+    receipts = []
 
     class Policy:
         execution_epoch = "epoch"
@@ -106,6 +113,8 @@ async def test_real_mcp_session_schema_gate_identity_correlation_and_cancellatio
         is_current=current,
         on_result=report,
     )
+    raw_records: list[Mapping[str, Any]] = []
+    binding._observation = raw_records.append
     attachment = GateAttachment(binding, target)
     install(attachment, target)
     try:
@@ -127,6 +136,7 @@ async def test_real_mcp_session_schema_gate_identity_correlation_and_cancellatio
         await asyncio.wait_for(finished.wait(), 5)
         assert observations[-1].outcome == "cancel-acknowledged"
         assert receipts[-1][1:] == (None, None)
+        assert raw_records[-1]["outcome"] == "cancel-acknowledged"
     finally:
         attachment.detach()
     with pytest.raises(PermissionError, match="attached"):
