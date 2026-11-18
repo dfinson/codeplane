@@ -1504,6 +1504,10 @@ def restart(
 # ``cpl hook`` — Claude CLI hook bridge (stdin → HTTP POST)
 # ---------------------------------------------------------------------------
 
+from backend.services.external_gate_cli import gate as _external_gate_command  # noqa: E402
+
+cli.add_command(_external_gate_command)
+
 
 @cli.command()
 @click.option("--port", default=None, type=int, help="CodePlane port (default: from config or 8080)")

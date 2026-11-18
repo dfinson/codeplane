@@ -48,11 +48,13 @@ async def test_runtime_operator_input_is_queued_then_exactly_acknowledged(compos
         await host.send_message(job.id, "cannot resume as a managed session")
 
 
-async def test_stop_permit_requires_runtime_intent_and_cannot_reopen_normal_work(composed_runtime):
+@pytest.mark.parametrize("cancel", ["detach", "job", "owner"])
+async def test_stop_permit_requires_runtime_intent_and_cannot_reopen_normal_work(cancel, composed_runtime):
     host, _, _, create = composed_runtime
     job = await create()
     target = target_for("http://127.0.0.1:1")
     ready, finish = asyncio.Event(), asyncio.Event()
+    stopped = asyncio.Event()
     seen = []
 
     async def invoke():
@@ -64,6 +66,7 @@ async def test_stop_permit_requires_runtime_intent_and_cannot_reopen_normal_work
             await binding.require_control(permit)
             assert not binding.active
             seen.append(permit)
+            stopped.set()
             return StopEvidence("acknowledged", source="local-handler")
 
         gate.cleanup(binding.controls.register(stop_handler=stop))
@@ -79,14 +82,21 @@ async def test_stop_permit_requires_runtime_intent_and_cannot_reopen_normal_work
             await binding.controls.stop()
         with pytest.raises(StateConflictError, match="exact binding"):
             await binding.require_control(ControlPermit("fabricated", execution.identity))
-        await host.detach_native(execution.identity)
+        if cancel == "detach":
+            await host.detach_native(execution.identity)
+        elif cancel == "job":
+            await host.cancel_job(job.id)
+        else:
+            task.cancel()
+        await asyncio.wait_for(stopped.wait(), 5)
+        assert len(seen) == 1
         await host._native_executions.cancel_controls(execution)
         assert len(seen) == 1 and not binding.active
         with pytest.raises(StateConflictError, match="exact binding"):
             await binding.require_control(seen[0])
     finally:
         finish.set()
-        await task
+        await asyncio.gather(task, return_exceptions=True)
     events = await events_for(host, job.id)
     assert any(
         event.kind == "execution.native.stop_result" and event.payload["status"] == "acknowledged" for event in events
@@ -120,7 +130,6 @@ async def test_stop_is_reserved_before_pin_await_and_final_drain_fences_new_admi
         await asyncio.wait_for(ready.wait(), 5)
         (execution,) = host._native_executions.for_job(job.id)
         binding = execution.gates.binding
-        await host.detach_native(execution.identity)
         actual = binding._control_retained
 
         async def paused():
@@ -129,7 +138,7 @@ async def test_stop_is_reserved_before_pin_await_and_final_drain_fences_new_admi
             return await actual()
 
         monkeypatch.setattr(binding, "_control_retained", paused)
-        control = asyncio.create_task(host._native_executions.cancel_controls(execution))
+        control = asyncio.create_task(host.detach_native(execution.identity))
         await asyncio.wait_for(checking.wait(), 5)
         draining = asyncio.create_task(binding.drain_controls())
         await asyncio.wait({draining}, timeout=0.05)

@@ -4,6 +4,33 @@
 
 ## Runtime admission and evidence invariants
 
+### External blocking gates
+
+`POST /api/jobs/{jobId}/external-gates` issues a separate scoped control
+credential only for an existing, live, admission-pinned Runtime execution.
+Observation history and caller-supplied execution identities cannot create an
+owner. Issuance uses ordinary operator authentication. The exact `/api/gate/`
+transport routes always require the issued bearer credential, including on
+loopback, and do not accept event-ingest credentials.
+
+Preflight creates one durable request identity. Status polling or bounded
+long-polling waits on that same decision, with no human-approval timeout while
+its execution remains live. An allowed decision is not executable until an
+atomic, single-use consume matches its source, execution epoch/token and
+complete action digest. Rejection, changed action data, active-wait disconnect,
+cancellation or stale execution retires the request. Replays never return a
+second allow. Callback waits run asynchronously or on the caller's worker,
+never by blocking the server event loop.
+
+`cpl gate --stdin --agent <dialect>` translates the supported legacy hook
+envelopes through the same preflight/wait/consume service. `CPL_GATE_URL`,
+`CPL_GATE_SOURCE` and `CPL_GATE_TOKEN` identify the explicitly issued source,
+not a default session or global pipeline. Only a consumed allow emits the
+agent's neutral allow shape. Missing credentials, malformed data, transport
+failures and unsupported responses fail closed. The relay never launches a
+tool. Caller execution reports are source-attributed observations, not trusted
+execution or usage accrual.
+
 ### Standalone interoperability transition
 
 `GET /api/integrations/profiles` exposes the 32 selections from approved
