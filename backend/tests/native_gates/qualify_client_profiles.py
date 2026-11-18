@@ -157,7 +157,7 @@ async def client_target(family, body, *, mode="normal", synchronous=False):
                 if mode != "late":
                     raise
                 await release.wait()
-        if mode == "loss":
+        if mode == "loss" or (mode == "cancel_loss" and request.url.path.endswith("/cancel")):
             raise library.ReadError("Inert response loss", request=request)
         document = payload(family)
         if family == "openai-client" and request.url.path.endswith("/messages"):
@@ -179,7 +179,7 @@ async def client_target(family, body, *, mode="normal", synchronous=False):
         if mode == "invalid_usage":
             document.pop("usage", None)
         if request.url.path.endswith("/cancel"):
-            document["status"] = "cancelled"
+            document["status"] = "cancelling" if mode == "cancel_requested" else "cancelled"
             document["required_action"] = None
         elif request.url.path.endswith("/submit_tool_outputs") or request.method == "GET":
             document["status"] = "completed"
@@ -674,7 +674,9 @@ async def test_cancel_distinguishes_stopped_waiting_from_late_native_response(fa
         finally:
             producer.release.set()
             await asyncio.gather(task, return_exceptions=True)
-        assert len(producer.calls) == 1 and task.cancelled()
+        assert len(producer.calls) == (2 if family == "openai-client" and late else 1) and task.cancelled()
+        if family == "openai-client" and late:
+            assert producer.calls[1][1].endswith("/threads/thread-native/runs/run-native/cancel")
     events = await events_for(host, job.id)
     receipt = next(event for event in events if event.kind == "execution.native.tool_result")
     assert receipt.payload["started"] is (True if late else None)
@@ -682,6 +684,12 @@ async def test_cancel_distinguishes_stopped_waiting_from_late_native_response(fa
     assert any(event.payload.get("outcome") == "local-stop-requested" for event in events)
     if late:
         assert any(event.kind == "task.completed" and event.payload["local_cancel_requested"] for event in events)
+        if family == "openai-client":
+            stops = [event for event in events if event.kind == "execution.native.stop_result"]
+            assert stops[0].payload["status"] == "cancel-requested" and not stops[0].payload["native_ids"]
+            stop = stops[-1]
+            assert stop.payload["status"] == "acknowledged"
+            assert stop.payload["native_ids"][0]["run_id"] == "run-native"
     assert (await governance._ledger.job_totals(job.id)).executed_calls == int(late)
 
 
@@ -705,7 +713,8 @@ async def test_bedrock_cancel_keeps_sync_transport_owned_until_it_releases(compo
     assert any(
         event.kind == "task.progress" and event.payload["native_session_id"] == "session-native" for event in events
     )
-    assert any(event.payload.get("outcome") == "delivery-unknown" for event in events)
+    outcome = next(event for event in events if event.payload.get("outcome") == "local-stop-requested")
+    assert outcome.payload["response_received"] is True and outcome.payload["response_complete"] is False
     assert not host._native_executions.for_job(job.id)
 
 

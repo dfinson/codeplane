@@ -136,6 +136,8 @@ class NativeControls:
 
     async def consume(self) -> Any:
         async with self._consume_lock:
+            if native_execution_context.get() != self.binding.execution:
+                raise StateConflictError("Native input consumption requires its exact execution context")
             if self._closing or not self.accepts_input or not await self.binding.current():
                 raise StateConflictError("Native operator-input boundary is unavailable")
             pending = asyncio.create_task(self._queue.get())

@@ -9,10 +9,19 @@ from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.binding import encode_arguments
 from backend.services.adapters.native_gates.readiness import UnsupportedNativeHookError
 
-from ._client_calls import FunctionDispatcher, LocalFunction, install_functions, install_request, refuse_stream
+from ._client_calls import (
+    FunctionDispatcher,
+    LocalFunction,
+    call_native,
+    install_functions,
+    install_request,
+    install_turn_boundary,
+    refuse_stream,
+)
 
 if TYPE_CHECKING:
     from backend.services.adapters.native_gates import GateAttachment
+    from backend.services.adapters.native_gates.controls import NativeInput
 
 
 @dataclass
@@ -58,12 +67,14 @@ def install(gate: GateAttachment, target: object) -> None:
         if client.max_retries != 0:
             raise UnsupportedNativeHookError("Anthropic retries changed after attachment")
 
-    def response(result: Any) -> dict[str, Any]:
+    def identity(result: Any) -> dict[str, Any]:
         return {
-            "response": result.model_dump(mode="json", exclude_unset=True),
             "request_id": getattr(result, "_request_id", None),
-            "response_id": result.id,
+            "response_id": getattr(result, "id", None),
         }
+
+    def response(result: Any) -> dict[str, Any]:
+        return {"response": result.model_dump(mode="json", exclude_unset=True), **identity(result)}
 
     install_request(
         gate,
@@ -73,8 +84,21 @@ def install(gate: GateAttachment, target: object) -> None:
         fingerprint=fingerprint,
         validate=validate,
         response=response,
-        usage_key=lambda result: f"message:{result.id}",
+        identity=identity,
+        usage_key=lambda result: f"message:{result.id}" if isinstance(result.id, str) and result.id else None,
         async_method=isinstance(client, sdk.AsyncAnthropic),
     )
     gate.patch(client.messages, "stream", refuse_stream)
     install_functions(gate, target)
+
+    async def next_request(message: NativeInput, parameters: dict[str, Any]) -> Any:
+        messages = list(parameters.get("messages", ()))
+        return await call_native(
+            client.messages.create,
+            **{
+                **parameters,
+                "messages": [*messages, {"role": "user", "content": message.content}],
+            },
+        )
+
+    install_turn_boundary(gate, target, request=next_request)

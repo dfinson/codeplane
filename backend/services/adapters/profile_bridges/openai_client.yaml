@@ -10,9 +10,12 @@ events:
   response:
     kind: task.completed
     payload: {operation: operation, app_operation_id: operation_id, native_request_id: request_id, native_response_id: response_id, native_run_id: run_id, response: response, local_cancel_requested: local_cancel_requested}
+  response_received:
+    kind: task.progress
+    payload: {operation: operation, app_operation_id: operation_id, native_request_id: request_id, native_response_id: response_id, native_run_id: run_id, native_thread_id: thread_id, response_complete: response_complete}
   request_outcome:
     kind: session.warning
-    payload: {operation: operation, app_operation_id: operation_id, outcome: outcome, response_received: response_received, error_type: error_type}
+    payload: {operation: operation, app_operation_id: operation_id, outcome: outcome, response_received: response_received, response_complete: response_complete, native_request_id: request_id, native_response_id: response_id, native_run_id: run_id, native_thread_id: thread_id, error_type: error_type}
   function_started:
     kind: tool.call.started
     payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, arguments: arguments}
