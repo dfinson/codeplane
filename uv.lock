@@ -529,7 +529,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "questionary" },
     { name = "rich" },
-    { name = "sh-guard" },
     { name = "sqlalchemy" },
     { name = "structlog" },
     { name = "tree-sitter" },
@@ -618,7 +617,6 @@ requires-dist = [
     { name = "qrcode", marker = "extra == 'push'", specifier = ">=7.0,<9" },
     { name = "questionary", specifier = ">=2.0,<3" },
     { name = "rich", specifier = ">=13.0,<15" },
-    { name = "sh-guard", specifier = ">=0.1.10" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
     { name = "structlog", specifier = ">=24.0,<26" },
     { name = "tiktoken", marker = "extra == 'tokenizer'", specifier = ">=0.12.0,<1" },
@@ -3152,19 +3150,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
-]
-
-[[package]]
-name = "sh-guard"
-version = "0.1.10"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/e3/94ac0560be8161eb2b5ac427d8973442eea74848dd50eaece1c87d759b44/sh_guard-0.1.10.tar.gz", hash = "sha256:0a01fd6ef90901425c339d12791e185365d0608dcca795bc09947c901a90ba21", size = 87643, upload-time = "2026-04-06T16:28:23.979Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/69/d0a16d45b121d66aaf92d6861fbb4d8539f2c95ff06dfdf15d4988495899/sh_guard-0.1.10-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:d5c644593df4b87fe1b99bf7afb624221293b712a3b4a70f5a50bd291fe76a99", size = 680849, upload-time = "2026-04-06T16:28:17.424Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/96/391b69cb0532889787c108f650a673d5b5c71d91f490742ab47788d9f9c5/sh_guard-0.1.10-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:6bd3962e2d9c4bc9fb541e5b9de60bbac1b3059ffb49af0b8b3edceb3c706859", size = 676769, upload-time = "2026-04-06T16:28:18.667Z" },
-    { url = "https://files.pythonhosted.org/packages/da/99/cab3ce78a01bc7dc376d62b6823ca7ece2300a1768f11fe2538b8c764054/sh_guard-0.1.10-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:38a4247e8f6bbff044815f14c9c704d00901098a1d640e9df5f66cadc5ef67ae", size = 716897, upload-time = "2026-04-06T16:28:20.228Z" },
-    { url = "https://files.pythonhosted.org/packages/f4/35/471306785bd5abec267e67d3526c77c014ffc5fb219f8918c35be7e39e23/sh_guard-0.1.10-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:a8c4de44859a52492b3583af59f80403c793d2fcfd9907531f22721190f4a394", size = 754774, upload-time = "2026-04-06T16:28:21.697Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/0c/b7ae6f4d2775141ae3151a6db24454c34363e3469c07f50f38f9cda80bbe/sh_guard-0.1.10-cp312-cp312-win_amd64.whl", hash = "sha256:a2f24f52844b710517dd13bb173a2ac4a94c79bd0e7411812f97f1375053ffe5", size = 557914, upload-time = "2026-04-06T16:28:22.846Z" },
 ]
 
 [[package]]
