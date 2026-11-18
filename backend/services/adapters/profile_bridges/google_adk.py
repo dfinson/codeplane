@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from weakref import WeakSet
 
 from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.binding import (
@@ -56,6 +57,7 @@ def install(gate: GateAttachment, target: object) -> None:
     pending_tools: dict[int, tuple[NativeCall, str]] = {}
     pending_models: dict[int, tuple[NativeCall, str]] = {}
     pending_runs: dict[str, tuple[NativeCall, str]] = {}
+    failed_tools: WeakSet[Any] = WeakSet()
     denied = types.Content(role="model", parts=[types.Part(text="Denied by CodePlane")])
 
     def run_fingerprint(ctx: Any) -> str:
@@ -98,6 +100,8 @@ def install(gate: GateAttachment, target: object) -> None:
                 {"request": run_fingerprint(ctx)},
                 run_id=ctx.invocation_id,
                 fingerprint=lambda: run_fingerprint(ctx),
+                definition="Local ADK agent generator entry, not acknowledgment of remote processing.",
+                evidence=ExecutionEvidence(False),
             )
             if not await gate.allow(call):
                 return denied
@@ -119,6 +123,8 @@ def install(gate: GateAttachment, target: object) -> None:
                 {"request": model_fingerprint(model, llm_request)},
                 run_id=callback_context.invocation_id,
                 fingerprint=lambda: model_fingerprint(model, llm_request),
+                definition="Local ADK model generator entry; remote processing is not inferred from entry.",
+                evidence=ExecutionEvidence(False),
             )
             if not await gate.allow(call):
                 return LlmResponse(content=denied)
@@ -142,6 +148,10 @@ def install(gate: GateAttachment, target: object) -> None:
             return None
 
         async def after_tool_callback(self, *, tool: Any, tool_args: Any, tool_context: Any, result: Any) -> None:
+            if tool_context in failed_tools:
+                # Native recovery substitutes a response, not a second tool outcome.
+                failed_tools.discard(tool_context)
+                return
             gate.binding.observe(
                 {
                     "type": "tool_observed",
@@ -179,8 +189,9 @@ def install(gate: GateAttachment, target: object) -> None:
         lifecycle = gate.binding.begin_work(None)
         completed = False
         try:
+            await gate.require_entry(call)
+            call.evidence.started = True
             async for event in original_run(ctx):
-                call.evidence.started = True
                 yield event
             completed = True
         finally:
@@ -192,12 +203,18 @@ def install(gate: GateAttachment, target: object) -> None:
     gate.claim(runner.agent)
     gate.patch(runner.agent, "run_async", run)
     for tool in target.tools:
-        _tool(gate, tool, pending_tools, tool_fingerprint)
+        _tool(gate, tool, pending_tools, tool_fingerprint, failed_tools)
     for model in target.models:
         _model(gate, model, pending_models, model_fingerprint)
 
 
-def _tool(gate: GateAttachment, tool: Any, pending: dict[int, tuple[NativeCall, str]], fingerprint: Any) -> None:
+def _tool(
+    gate: GateAttachment,
+    tool: Any,
+    pending: dict[int, tuple[NativeCall, str]],
+    fingerprint: Any,
+    failed: WeakSet[Any],
+) -> None:
     gate.claim(tool)
     gate.track_callable(tool, "func")
     original = tool.run_async
@@ -217,7 +234,26 @@ def _tool(gate: GateAttachment, tool: Any, pending: dict[int, tuple[NativeCall, 
                 "arguments": args,
             }
         )
-        return await gate.complete(call, lambda: original(args=args, tool_context=tool_context))
+
+        async def invoke() -> Any:
+            try:
+                return await original(args=args, tool_context=tool_context)
+            except BaseException as exc:
+                failed.add(tool_context)
+                gate.binding.observe(
+                    {
+                        "type": "tool_failed",
+                        "tool_name": tool.name,
+                        "tool_call_id": tool_context.function_call_id,
+                        "run_id": tool_context.invocation_id,
+                        "arguments": args,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                raise
+
+        return await gate.complete(call, invoke)
 
     gate.patch(tool, "run_async", guarded)
 
@@ -234,8 +270,9 @@ def _model(gate: GateAttachment, model: Any, pending: dict[int, tuple[NativeCall
         gate.validate()
         completed = False
         try:
+            await gate.require_entry(call)
+            call.evidence.started = True
             async for response in original(llm_request, stream=stream):
-                call.evidence.started = True
                 yield response
             completed = True
         finally:
