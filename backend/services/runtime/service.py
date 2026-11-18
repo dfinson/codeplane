@@ -62,6 +62,7 @@ from backend.services.runtime.handoff import (
     build_resume_handoff_prompt_for_job,
     load_handoff_context_for_job,
 )
+from backend.services.runtime.native_execution import NativeExecutions
 from backend.services.runtime.resume import (
     attempt_resume_fallback as _attempt_resume_fallback_impl,
 )
@@ -93,13 +94,14 @@ from backend.services.runtime.verify import (
 from backend.validators import REF_PATTERN
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 
     from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin, LegacyStartIntent
     from backend.models.schemas.recipes import RecipeRunResponse, RecipeSelection
     from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.action_policy.production import StandaloneGovernance
+    from backend.services.adapters.contracts import ExecutionIdentity
     from backend.services.events.event_processor import EventProcessor
     from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
@@ -107,6 +109,7 @@ if TYPE_CHECKING:
     from backend.services.recipe.executor import RecipeExecutor
     from backend.services.runtime.execution_contracts import ExecutionContracts
     from backend.services.runtime.handoff import PendingHandoff
+    from backend.services.runtime.native_execution import NativeFamily
     from backend.services.sidecar.dispatcher import SidecarDispatcher
     from backend.services.steps.tracker import StepTracker
     from backend.services.terminal.terminal_service import TerminalService
@@ -305,6 +308,7 @@ class RuntimeService:
         self._execution_control = approval_service.execution_control if approval_service else ExecutionControl()
         self._execution_epoch = uuid.uuid4().hex
         self._attempt_bindings = AttemptBindings(self._execution_epoch)
+        self._native_executions = NativeExecutions(self)
         self._external_generations: dict[str, str] = {}
         self._starting_tasks: dict[str, asyncio.Task[Any]] = {}
         self._diff_service = diff_service
@@ -327,7 +331,7 @@ class RuntimeService:
         self._governance_decider: GovernanceDecider | None = None
         self._standalone_governance: StandaloneGovernance | None = None
         self._governance_subscriber: GovernanceSubscriber | None = None
-        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._recipe_controllers: dict[str, RecipeExecutor] = {}
         self._recipe_runner_slots = asyncio.Semaphore(config.runtime.max_concurrent_jobs)
         self._legacy_runner_slots: set[str] = set()
@@ -765,6 +769,12 @@ class RuntimeService:
         self, job: Job, override_prompt: str | None = None, resume_sdk_session_id: str | None = None
     ) -> None:
         """Create an asyncio task to execute the job."""
+        from backend.persistence.native_execution_repo import NativeExecutionRepository
+
+        if await NativeExecutionRepository(self._session_factory).has_native_admission(job.id):
+            raise StateConflictError(
+                "Native continuation requires the original caller-owned runnable and new admission"
+            )
         IntegrationPolicy(self._config).require_enabled(job.sdk)
         if job.id in self._tasks:
             return  # Already running (in-memory guard)
@@ -1542,6 +1552,7 @@ class RuntimeService:
 
     async def _cleanup_job_state(self, job_id: str) -> None:
         """Remove all per-job in-memory state and trigger post-job hooks."""
+        await self._native_executions.cancel_job(job_id)
         if job_id in self._legacy_runner_slots:
             self._legacy_runner_slots.remove(job_id)
             self._recipe_runner_slots.release()
@@ -2363,6 +2374,39 @@ class RuntimeService:
             raise AttemptBindingConflictError("Job has a pending approval")
         return job
 
+    async def start_native[T](
+        self,
+        job_id: str,
+        *,
+        family: NativeFamily,
+        target: object,
+        invoke: Callable[[], T | Awaitable[T]],
+        synchronous: bool = False,
+    ) -> asyncio.Task[T]:
+        """Internal admission of a supplied runnable, using existing Job task capacity."""
+        return await self._native_executions.start(
+            job_id, family=family, target=target, invoke=invoke, synchronous=synchronous
+        )
+
+    async def detach_native(self, execution: ExecutionIdentity) -> str:
+        """Revoke only this native binding, without claiming its worker stopped."""
+        return await self._native_executions.detach(execution)
+
+    async def invoke_native[T](
+        self,
+        job_id: str,
+        *,
+        family: NativeFamily,
+        target: object,
+        invoke: Callable[[], T | Awaitable[T]],
+        synchronous: bool = False,
+        attempt_id: str | None = None,
+    ) -> T:
+        """Invoke a caller-owned runnable inside the existing owning task only."""
+        return await self._native_executions.invoke(
+            job_id, family=family, target=target, invoke=invoke, synchronous=synchronous, attempt_id=attempt_id
+        )
+
     async def authorize_attempt_command(
         self,
         job_id: str,
@@ -2955,6 +2999,7 @@ class RuntimeService:
         by the service layer (JobService.cancel_job). This method only
         interacts with in-memory runtime tasks.
         """
+        await self._native_executions.cancel_job(job_id)
         self._queued_session_tokens.pop(job_id, None)
         self._legacy_recoveries.pop(job_id, None)
         self._legacy_handoffs.pop(job_id, None)
@@ -3147,12 +3192,15 @@ class RuntimeService:
         that support it), and sends a follow-up message instructing the
         agent to wait.  The pause message is never shown in the transcript.
         """
+        native_paused = await self._native_executions.cancel_job(job_id)
         _pause_msg = (
             "Please stop what you are doing right now and wait. "
             "Do not take any further actions until the operator sends a follow-up message."
         )
         agent_session = self._agent_sessions.get(job_id)
         if agent_session is None:
+            if native_paused:
+                return True
             log.warning("pause_job_no_session", job_id=job_id)
             return False
         # Block all tool calls immediately so the agent cannot act.
@@ -3203,6 +3251,7 @@ class RuntimeService:
 
         # Record the active gate.
         self._active_gates.setdefault(job_id, {})[sidecar_name] = reason or verdict
+        await self._native_executions.cancel_job(job_id)
 
         # Check if this is an imported session (soft gate via messaging).
         job = await self._get_job(job_id)
@@ -3582,6 +3631,8 @@ class RuntimeService:
         instead of marking them as canceled (which confused users).
         """
         self._shutting_down = True
+        for job_id in tuple(self._tasks):
+            await self._native_executions.cancel_job(job_id)
         for starting_task in tuple(self._starting_tasks.values()):
             if starting_task is not asyncio.current_task():
                 starting_task.cancel()
