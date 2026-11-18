@@ -67,6 +67,12 @@ async def open_native_observation(
     staged: list[SessionEvent] = []
     staged_bytes = 0
 
+    def native_run(raw: Mapping[str, Any] | None) -> str | None:
+        value = raw.get("run_id") if raw is not None else None
+        if value is not None and not isinstance(value, str):
+            raise ValueError("Native run identity must be a supplied string or unknown")
+        return value or None
+
     def scoped(event: SessionEvent, *, output: bool) -> SessionEvent:
         if event.session_id != identity.job_id:
             raise StateConflictError("Native observation belongs to another Job")
@@ -77,7 +83,7 @@ async def open_native_observation(
             update={
                 "source_framework": format_id,
                 "integration_binding_id": binding_id,
-                "run_id": (event.raw_event or {}).get("run_id")
+                "run_id": native_run(event.raw_event)
                 or (event.metadata.run_id if output and event.metadata.run_id != external_session_id else None)
                 if profile_source is not None
                 else event.metadata.run_id or external_session_id,
@@ -113,7 +119,7 @@ async def open_native_observation(
         metadata=EventMetadata(
             source_framework=format_id,
             integration_binding_id=binding_id,
-            run_id=external_session_id,
+            run_id=None if profile_source is not None else external_session_id,
             namespace=(OBSERVATION_NAMESPACE,),
             execution_epoch=identity.epoch,
             execution_token=identity.execution_token,
@@ -182,6 +188,8 @@ async def open_native_observation(
                     "checkpoint_version": version + 1,
                     "projection_version": version + 1,
                     "session_closed": raw is None,
+                    "execution_binding_id": identity.binding_id,
+                    "source_id": external_session_id,
                 },
                 event_id=f"{binding_id}:{version + 1}",
                 raw_event={
@@ -194,7 +202,7 @@ async def open_native_observation(
                 metadata=EventMetadata(
                     source_framework=format_id,
                     integration_binding_id=binding_id,
-                    run_id=external_session_id,
+                    run_id=native_run(raw) if profile_source is not None else external_session_id,
                     namespace=(OBSERVATION_NAMESPACE, "native-callbacks"),
                     execution_epoch=identity.epoch,
                     execution_token=identity.execution_token,

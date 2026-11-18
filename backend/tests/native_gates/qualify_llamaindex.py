@@ -30,8 +30,8 @@ else:
     BaseQueryEngine = query_sdk.BaseQueryEngine
 
 
-def make_engine(body, usage=None):
-    tool = tools.FunctionTool.from_defaults(fn=body)
+def make_engine(body, usage=None, async_fn=None):
+    tool = tools.FunctionTool.from_defaults(fn=body, async_fn=async_fn)
     manager = callbacks.CallbackManager([])
 
     class Engine(BaseQueryEngine):

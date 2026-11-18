@@ -26,6 +26,16 @@ class ToolPairing:
         self._starts: OrderedDict[tuple[str, str], SessionEvent] = OrderedDict()
 
     @staticmethod
+    def _app_operation_id(event: SessionEvent) -> str | None:
+        if event.metadata.source_framework != "llamaindex":
+            return None
+        native = event.payload.get("tool_call_id")
+        if isinstance(native, str) and native.strip():
+            return None
+        value = event.payload.get("app_operation_id")
+        return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
     def _call_id(event: SessionEvent) -> str | None:
         operation = observed_operation_id(event)
         if operation is not None:
@@ -33,7 +43,7 @@ class ToolPairing:
         value = event.payload.get("tool_call_id")
         if value is None and event.metadata.source_framework == "opencode":
             value = event.payload.get("call_id")
-        return value if isinstance(value, str) and value.strip() else None
+        return value if isinstance(value, str) and value.strip() else ToolPairing._app_operation_id(event)
 
     @staticmethod
     def _key(event: SessionEvent, call_id: str) -> tuple[str, str]:
@@ -54,6 +64,9 @@ class ToolPairing:
         if operation is not None:
             identities.append({"observed_operation_id": operation})
         scope = json.dumps(identities, separators=(",", ":"))
+        if operation is None and ToolPairing._app_operation_id(event) == call_id:
+            # App and vendor IDs may have equal text but cannot share an identity domain.
+            scope = json.dumps({"app_operation_id": call_id, "scope": scope}, separators=(",", ":"))
         return event.session_id, scope
 
     def process(self, event: SessionEvent) -> SessionEvent | list[SessionEvent] | None:

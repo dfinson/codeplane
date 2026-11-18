@@ -403,6 +403,7 @@ class NativeExecutions:
                 workspace=admission.workspace,
                 protected_paths=tuple(resolve_protected_paths(admission.repo)),
                 is_current=current,
+                is_current_inline=locally_current,
                 on_result=report,
             )
         )

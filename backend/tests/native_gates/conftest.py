@@ -17,7 +17,8 @@ Run all rows explicitly, with no skips, using an isolated uv environment:
 
 The AutoGen/LlamaIndex/ADK follow-ups use a separate environment with
 requirements-profiles.txt and the same no-deps editable install, then run
-qualify_autogen.py, qualify_llamaindex.py and qualify_google_adk.py. None of
+qualify_autogen.py, qualify_llamaindex.py, qualify_google_adk.py and
+qualify_profile_release.py. None of
 these optional environments changes the application's default profile.
 
 The excluded ONNX package is an unused CrewAI/Chroma embedding dependency, not a
@@ -90,6 +91,7 @@ def binding_factory():
                 workspace="/workspace",
                 protected_paths=(),
                 is_current=current,
+                is_current_inline=lambda: live["current"],
             )
         )
         managers.append(gates)
