@@ -602,7 +602,7 @@ async def test_classification_keeps_original_scope_across_policy_wait_and_replac
     from backend.services.adapters.base_adapter import PermissionDecision
 
     events = EventBus()
-    observed = []
+    observed: list[SessionEvent] = []
 
     async def record(event):
         observed.append(event)
