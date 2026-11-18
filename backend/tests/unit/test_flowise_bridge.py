@@ -3,6 +3,7 @@ import contextlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -16,6 +17,9 @@ from backend.services.adapters.profile_bridges.flowise import (
     FlowiseTarget,
     install,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @pytest.fixture
@@ -99,6 +103,8 @@ async def test_real_upstream_predict_upsert_are_gated_and_report_native_response
         is_current=current,
         on_result=report,
     )
+    raw_records: list[Mapping[str, Any]] = []
+    binding._observation = raw_records.append
     attachment = GateAttachment(binding, target)
     original = client._make_request
     install(attachment, target)
@@ -120,6 +126,12 @@ async def test_real_upstream_predict_upsert_are_gated_and_report_native_response
         assert all(observation.remote_session_id == "remote-session" for observation in observations)
         assert all(started is True and succeeded is True for _, started, succeeded in receipts)
         assert len(client.get_audit_log()) == 2
+        assert [record["type"] for record in raw_records] == [
+            "request_started",
+            "request_completed",
+            "request_started",
+            "request_completed",
+        ]
         behavior["loss"] = True
         with pytest.raises(FlowiseDeliveryUnknownError):
             await asyncio.to_thread(client.predict, "flow", "lost response")

@@ -7,7 +7,7 @@ import contextlib
 import hashlib
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -123,9 +123,11 @@ def install(gate: GateAttachment, target: object) -> None:
             raise NativeGateDeniedError("MCP request denied before transport")
         verified_peer()
         request_id: str | None = None
+        protocol_session: str | None = None
         outcome = "delivery_unknown"
         started: bool | None = None
         succeeded: bool | None = None
+        native_result: dict[str, Any] | None = None
         try:
             async with (
                 streamablehttp_client(
@@ -133,10 +135,11 @@ def install(gate: GateAttachment, target: object) -> None:
                     timeout=timedelta(seconds=30),
                     sse_read_timeout=timedelta(seconds=30),
                     httpx_client_factory=_http_client,
-                ) as (read, write, _),
+                ) as (read, write, session_id),
                 ClientSession(read, write) as session,
             ):
                 await session.initialize()
+                protocol_session = session_id()
                 available = await session.list_tools()
                 actual = next((tool for tool in available.tools if tool.name == name), None)
                 if actual is None or canonical_record(actual.inputSchema) != canonical_record(schema):
@@ -148,6 +151,20 @@ def install(gate: GateAttachment, target: object) -> None:
                 # This private counter is pinned to MCP 1.27.1 and there is only
                 # one operation on this owned session, so no request can race it.
                 request_id = str(session._request_id)
+                gate.binding.observe(
+                    {
+                        "type": "tool_started",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "operation_id": call.operation_id,
+                        "request_id": request_id,
+                        "tool": name,
+                        "arguments": payload,
+                        "schema_sha256": fingerprint,
+                        "peer_did": did,
+                        "protocol_session_id": protocol_session,
+                        "tool_call_id_source": "codeplane-operation; native request_id retained separately",
+                    }
+                )
                 pending = asyncio.create_task(
                     session.call_tool(name, payload, meta={"codeplane-operation-id": call.operation_id})
                 )
@@ -172,6 +189,7 @@ def install(gate: GateAttachment, target: object) -> None:
                     try:
                         late = await asyncio.wait_for(asyncio.shield(pending), timeout=2)
                         decode_json_body(late.model_dump_json(by_alias=True).encode())
+                        native_result = late.model_dump(mode="json", by_alias=True)
                         started, succeeded = True, not late.isError
                         outcome = "responded-after-cancel"
                     except McpError as exc:
@@ -189,6 +207,7 @@ def install(gate: GateAttachment, target: object) -> None:
                     revoked.cancel()
                     await asyncio.gather(revoked, return_exceptions=True)
                 decode_json_body(result.model_dump_json(by_alias=True).encode())
+                native_result = result.model_dump(mode="json", by_alias=True)
                 started, succeeded = True, not result.isError
                 outcome = (
                     "responded-after-cancel"
@@ -204,6 +223,26 @@ def install(gate: GateAttachment, target: object) -> None:
             raise McpDeliveryUnknownError("MCP did not confirm a bounded tool response") from exc
         finally:
             await gate.binding.report(call, started, succeeded)
+            gate.binding.observe(
+                {
+                    "type": "tool_completed"
+                    if succeeded is True
+                    else "tool_failed"
+                    if succeeded is False
+                    else "tool_unknown",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "operation_id": call.operation_id,
+                    "request_id": request_id,
+                    "tool": name,
+                    "schema_sha256": fingerprint,
+                    "peer_did": did,
+                    "outcome": outcome,
+                    "success": succeeded,
+                    "result": native_result,
+                    "protocol_session_id": protocol_session,
+                    "tool_call_id_source": "codeplane-operation; native request_id retained separately",
+                }
+            )
             if target.observe is not None:
                 target.observe(McpObservation(call.operation_id, request_id, name, fingerprint, did, outcome))
 
