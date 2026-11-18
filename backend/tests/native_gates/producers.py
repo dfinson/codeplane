@@ -15,6 +15,7 @@ class Producer:
     calls: list = field(default_factory=list)
     leaf: Any = None
     leaf_attribute: str = ""
+    input_text: str = "value"
 
     def body(self, value: str = "value") -> str:
         """Return the input without performing I/O."""
@@ -53,9 +54,9 @@ def make_producer(mode):
         )
         p.target = tool
         p.leaf, p.leaf_attribute = tool, "coroutine" if path == "async" else "func"
-        args = {"type": "tool_call", "name": "local", "args": {"value": "value"}, "id": "native-call"}
 
         async def invoke():
+            args = {"type": "tool_call", "name": "local", "args": {"value": p.input_text}, "id": "native-call"}
             if path == "sync":
                 return await asyncio.to_thread(tool.invoke, args)
             return await tool.ainvoke(args)
@@ -78,7 +79,10 @@ def make_producer(mode):
         async def invoke():
             args = {
                 "messages": [
-                    messages.AIMessage(content="", tool_calls=[{"name": "local", "args": {}, "id": "native-call"}])
+                    messages.HumanMessage(content=p.input_text),
+                    messages.AIMessage(
+                        content="", tool_calls=[{"name": "local", "args": {"value": p.input_text}, "id": "native-call"}]
+                    ),
                 ]
             }
             result = await asyncio.to_thread(runnable.invoke, args) if path == "sync" else await runnable.ainvoke(args)
@@ -101,7 +105,9 @@ def make_producer(mode):
         async def invoke():
             history = contents.ChatHistory()
             await p.target.invoke_function_call(
-                contents.FunctionCallContent(id="native-call", name="test-local", arguments='{"value":"value"}'),
+                contents.FunctionCallContent(
+                    id="native-call", name="test-local", arguments=json.dumps({"value": p.input_text})
+                ),
                 history,
             )
             return history.messages[-1].items[0].result
@@ -117,7 +123,9 @@ def make_producer(mode):
         p.leaf, p.leaf_attribute = tool, "func"
 
         async def invoke():
-            context = maf.FunctionInvocationContext(tool, {"value": "value"}, kwargs={"tool_call_id": "native-call"})
+            context = maf.FunctionInvocationContext(
+                tool, {"value": p.input_text}, kwargs={"tool_call_id": "native-call"}
+            )
 
             async def final(ctx):
                 return await tool.invoke(arguments=ctx.arguments, context=ctx, skip_parsing=True)
@@ -133,8 +141,8 @@ def make_producer(mode):
 
         async def invoke():
             if path == "sync":
-                return await asyncio.to_thread(p.target.run_sync, "Run the local tool")
-            return await p.target.run("Run the local tool")
+                return await asyncio.to_thread(p.target.run_sync, p.input_text)
+            return await p.target.run(p.input_text)
 
     elif family == "openai_agents":
         agents = load_sdk("agents")
@@ -145,7 +153,7 @@ def make_producer(mode):
         p.target = agents.Agent(name="original", tools=[tool])
 
         async def invoke():
-            args = '{"value":"value"}'
+            args = json.dumps({"value": p.input_text})
             context = tool_context.ToolContext.from_agent_context(
                 agents.RunContextWrapper(context=None),
                 "native-call",
@@ -173,7 +181,7 @@ def make_producer(mode):
         p.leaf, p.leaf_attribute = p.target.tools["local"], "forward"
 
         async def invoke():
-            return await asyncio.to_thread(p.target.execute_tool_call, "local", {"value": "value"})
+            return await asyncio.to_thread(p.target.execute_tool_call, "local", {"value": p.input_text})
 
     elif family == "crewai":
         crewai = load_sdk("crewai")
@@ -201,8 +209,8 @@ def make_producer(mode):
             action = parser.AgentAction(
                 thought="local",
                 tool="local",
-                tool_input=json.dumps({"value": "value"}),
-                text='Action: local\nAction Input: {"value": "value"}',
+                tool_input=json.dumps({"value": p.input_text}),
+                text=f"Action: local\nAction Input: {json.dumps({'value': p.input_text})}",
             )
             result = await asyncio.to_thread(
                 execute_tool_and_check_finality,

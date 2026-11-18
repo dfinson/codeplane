@@ -31,6 +31,25 @@ failures and unsupported responses fail closed. The relay never launches a
 tool. Caller execution reports are source-attributed observations, not trusted
 execution or usage accrual.
 
+### Caller-owned native input and stop controls
+
+`RuntimeService.start_native` and `invoke_native` accept an optional
+`input_handler`. The original run driver calls `consume_native_input()` at its
+declared run/turn boundary. The receiver passes the Runtime-issued `NativeInput`
+content to the original SDK and calls `acknowledge_native_input(message, native_ids)`
+with that exact object only after observing actual consumption. Missing native
+IDs stay unknown. Operator admission records `input_queued`, not consumption.
+Cancellation or completion drains undelivered input before restoring hooks and
+releasing the exact execution. Native messages never auto-resume a managed session.
+
+This registered boundary is qualified against the eight retained gate families
+and AutoGen, LlamaIndex and Google ADK. An instance without a registered receiver
+cannot accept input, but that does not remove the producer's boundary-input
+capability. Boundary input is not a claim of live steering. Native stop callbacks
+require a separately retained, Runtime-issued control permit after ordinary
+work is revoked. Cancel requested, native acknowledgment and unknown delivery
+remain distinct. Revocation cannot grant permission for another tool call.
+
 ### Standalone interoperability transition
 
 `GET /api/integrations/profiles` exposes the 32 selections from approved
