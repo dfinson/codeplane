@@ -11,6 +11,16 @@
     "xfail": 0,
     "note": "Recorded before the separately committed OpenHands and smolagents repairs. Re-run on the integrated runtime."
   },
+  "post_repair_tests": {
+    "command": "uv run pytest backend/tests/unit/test_native_format_conformance.py backend/tests/unit/test_native_mapping.py -q --tb=short",
+    "qualification_passed": 202,
+    "qualification_failed": 31,
+    "existing_native_mapping_passed": 12,
+    "skipped": 0,
+    "xfail": 0,
+    "raw_history_boundary": "HistoryRegistration -> ObservationRecords -> SQLite commit -> repeated batch receipt -> fresh-session EventRepository read. Missing history reproduced for 23 JSON formats, while MAF passes.",
+    "production_repair_commit": "b538b37f966fe29edc3626bead314e9cd1d3ed40"
+  },
   "legacy_comparison": {
     "revision": "46e0340b7bb3fd4740f8dba02a5e7586fa26608f",
     "fixtures": 26,
@@ -23,7 +33,13 @@
     "compared": ["kind", "complete mapped payload", "source_framework", "ingestion_mode"],
     "excluded": ["random legacy IDs", "wall-clock fallback timestamps", "application grouping and source provenance"],
     "limitation": "Parity is not an oracle. Both implementations inherited the producer-backed OpenHands action overwrite and smolagents flat ToolCall defects.",
-    "environment": "Downloaded source modules only. Namespace package shells bypassed package startup. No TraceForge distribution, ML dependencies, pipeline, or heavy model imports."
+    "environment": "Downloaded source modules only. Namespace package shells bypassed package startup. No TraceForge distribution, ML dependencies, pipeline, or heavy model imports.",
+    "after_repair": {
+      "openhands_records_with_restored_action_fields": 11,
+      "smolagents_records_with_restored_tool_fields": 13,
+      "other_semantic_differences": 0,
+      "emitted_event_counts_unchanged": true
+    }
   },
   "evidence": {
     "retained_recordings": 14,
@@ -36,15 +52,26 @@
     "version_limit": "Mapping ranges are released contract labels, not guarantees about later vendor versions. Some capture metadata reports versions outside those labels, including Codex 0.142.3 versus mapping 1.x."
   },
   "oracle_corrections": [
-    "smolagents FinalAnswerStep is inferred only when output is the sole data field. Adding an unknown extension correctly changes the event to raw, not session.ended."
+    "smolagents FinalAnswerStep is inferred only when output is the sole data field. Adding an unknown extension correctly changes the event to raw, not session.ended.",
+    "Raw history is asserted after actual admission, durable canonical storage and replay, not on an intermediate decoder object.",
+    "A zero-output preprocessor is permitted. Unknown input must be explicitly rejected or retained when accepted, not necessarily emitted as a raw canonical kind.",
+    "OpenCode call_id is explicitly mapped from native part.callID. Pairing must use that available identity rather than treating it as missing. The assertion accepts either canonical tool_call_id or released call_id spelling."
   ],
+  "source_contract_basis": {
+    "raw_history": "SPEC.md retains producer-supplied canonical raw_event through SQLite and replay. Accepted-source history must remain readable after malformed or rewritten input.",
+    "partial_tool_pairs": "The approved source-format contract requires partial tool-pair fixtures without fabricating missing execution evidence. openai/openai-agents-python v0.3.3 src/agents/tracing/spans.py lines 167-172 defines ended_at None as unfinished, and lines 342-352 exports that value.",
+    "version_drift": "copilot_vscode.yaml declares framework_version vscode-chat-v3. The v4 probe is an unsupported-version rejection qualification, not a claim that later vendor versions share the v3 contract.",
+    "unknown_shapes": "The approved accepted-source preservation requirement applies independently of a preprocessor emitting zero records. The test allows explicit unsupported-shape rejection and does not require a fabricated canonical event.",
+    "binding_isolation": "SPEC.md binds decoder context and projection checkpoints to the registered binding/source session. Another binding's snapshot must not replace checkpointed context."
+  },
   "unresolved_baseline_contracts": [
-    "23 JSON mappings omit original raw_event, unlike legacy JsonLineAdapter.parse. MAF retains it.",
+    "23 JSON mappings omit original raw_event. The initial decoder assertion is now exercised through HistoryRegistration, ObservationRecords, committed EventRepository history and batch replay, without requiring an intermediate decoder field.",
     "OpenAI Agents unfinished function spans fabricate tool completion.",
     "VS Code and OpenCode preprocessor state is module-global, outside DecoderState and binding scope.",
+    "OpenCode running/error events retain the same native call_id, but ToolPairing ignores the released alias and marks both missing_identity.",
     "A rejected VS Code snapshot leaves mutated preprocessor state behind.",
     "VS Code v4 journal snapshots are accepted under the declared v3 contract.",
-    "Unknown Antigravity and OpenAI native shapes silently disappear despite default_kind raw."
+    "Unknown Antigravity and OpenAI native shapes must be explicitly rejected or retain raw history when admitted. Zero preprocessor outputs alone are not a defect."
   ],
   "acceptance_limits": [
     "This is decoder and fixture qualification, not a real Copilot workflow or live integration qualification.",
