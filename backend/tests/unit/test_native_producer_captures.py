@@ -25,6 +25,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "native_formats" / "produced
 CAPTURES = {
     "aider_markdown": ("aider-0.86.2.history.md", "aider-0.86.2.provenance.json"),
     "continue_dev": ("continue-cli-1.5.47.session.json", "continue-cli-1.5.47.provenance.json"),
+    "amazonq": ("amazonq-1.19.7.conversation.json", "amazonq-1.19.7.provenance.json"),
 }
 EXPECTED = {
     "aider_markdown": [
@@ -42,6 +43,12 @@ EXPECTED = {
         ["message.user", {"content": "Use the synthetic example 2 plus 3."}],
         ["message.assistant", {"content": "The synthetic example gives 5."}],
     ],
+    "amazonq": [
+        ["message.user", {"content": "Describe addition in this synthetic AmazonQ fixture."}],
+        ["message.assistant", {"content": "Addition combines two numbers in this inert fixture."}],
+        ["message.user", {"content": "Use the synthetic example 2 plus 3."}],
+        ["message.assistant", {"content": "The synthetic example gives 5."}],
+    ],
 }
 
 
@@ -53,6 +60,8 @@ def records(name: str):
     assert provenance["format_id"] == name and provenance["model_inference"] is False
     if name == "aider_markdown":
         return list(AiderPreParser().parse_text(raw.decode()))
+    if name == "amazonq":
+        return [{"key": provenance["sqlite_key"], "value": raw.decode()}]
     return [json.loads(raw)]
 
 
@@ -99,6 +108,20 @@ def test_continue_capture_records_real_cli_resume_and_separate_artifact_harness_
     assert provenance["local_http_requests"] == 2
     # These are native CLI initializers, not provider-reported zero usage.
     assert native["usage"]["promptTokens"] == native["usage"]["completionTokens"] == 0
+
+
+def test_amazonq_capture_came_from_real_chat_session_and_native_sqlite_row():
+    native = json.loads((FIXTURES / CAPTURES["amazonq"][0]).read_text())
+    provenance = json.loads((FIXTURES / CAPTURES["amazonq"][1]).read_text())
+    assert provenance["capture_kind"] == "actual-chat-session/native-sqlite/inert-model"
+    assert provenance["producer"]["source_commit"] == "cf39ab6297ee7654fcbeed253445d35fe5c92b07"
+    assert provenance["execution"]["passed"] == 1 and provenance["execution"]["failed"] == 0
+    assert provenance["execution"]["database"] == "native rusqlite in-memory SQLite under cfg(test)"
+    assert len(native["history"]) == 2 and native["conversation_id"] == "codeplane-native-capture"
+    assert all(not entry["request_metadata"]["tool_use_ids_and_names"] for entry in native["history"])
+    overlay = FIXTURES / provenance["build"]["test_overlay"]
+    assert hashlib.sha256(overlay.read_bytes()).hexdigest() == provenance["build"]["test_overlay_sha256"]
+    assert "Amazon.com" in (FIXTURES / provenance["producer"]["retained_license"]).read_text()
 
 
 @pytest.mark.parametrize("name", CAPTURES)
