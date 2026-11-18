@@ -91,6 +91,11 @@ def _message(value: dict[str, Any]) -> dict[str, Any]:
     parts = copied.get("parts")
     if not isinstance(parts, list) or not parts or len(parts) > 128:
         raise ValueError("A2A message requires bounded content parts")
+    _parts(parts)
+    return copied
+
+
+def _parts(parts: list[Any]) -> None:
     for part in parts:
         if (
             not isinstance(part, dict)
@@ -107,7 +112,6 @@ def _message(value: dict[str, Any]) -> dict[str, Any]:
             supplied = [name for name in ("bytes", "uri") if name in file]
             if len(supplied) != 1 or not isinstance(file[supplied[0]], str):
                 raise ValueError("A2A file part must select bytes or uri")
-    return copied
 
 
 def install(gate: GateAttachment, target: object) -> None:
@@ -165,6 +169,7 @@ def install(gate: GateAttachment, target: object) -> None:
             _identity(result.get("messageId"), "messageId")
             if result.get("role") != "agent" or not isinstance(result.get("parts"), list):
                 raise ValueError("Invalid A2A agent message")
+            _parts(result["parts"])
             if expected_task is not None and result.get("taskId") != expected_task:
                 raise ValueError("A2A message belongs to another task")
             return result
@@ -316,9 +321,13 @@ def install(gate: GateAttachment, target: object) -> None:
                         if not line and data:
                             result = result_from("\n".join(data).encode())
                             data = []
-                            if result.get("final") is True or (
-                                result.get("kind") == "task"
-                                and result["status"]["state"] in {"completed", "canceled", "failed", "rejected"}
+                            if (
+                                result["kind"] == "message"
+                                or (result["kind"] == "status-update" and result["final"])
+                                or (
+                                    result["kind"] == "task"
+                                    and result["status"]["state"] in {"completed", "canceled", "failed", "rejected"}
+                                )
                             ):
                                 return
                         elif line.startswith("data:"):
@@ -336,18 +345,18 @@ def install(gate: GateAttachment, target: object) -> None:
             await work
             started, success, outcome = True, True, "responded"
             if method == "tasks/get":
-                uncertain.discard(task_id)
+                uncertain.discard(correlated_task)
             return tuple(results)
         except A2ARequestRefusedError:
             started, success, outcome = False, False, "refused"
             raise
         except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError, A2ADeliveryUnknownError) as exc:
-            uncertain.add(task_id)
+            uncertain.add(correlated_task)
             raise A2ADeliveryUnknownError("A2A delivery requires reconciliation, not automatic resubmission") from exc
         finally:
             if not work.done():
                 work.cancel()
-                uncertain.add(task_id)
+                uncertain.add(correlated_task)
             revoked.cancel()
             await asyncio.gather(work, revoked, return_exceptions=True)
             await gate.binding.report(call, started, success)
@@ -359,7 +368,7 @@ def install(gate: GateAttachment, target: object) -> None:
                     "rpc_id": rpc_id,
                     "method": method,
                     "outcome": outcome,
-                    "task_id": task_id,
+                    "task_id": correlated_task,
                 }
             )
 
