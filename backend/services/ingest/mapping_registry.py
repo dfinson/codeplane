@@ -19,6 +19,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from backend import config as backend_config
 from backend.config import NativeMappingsConfig
 from backend.models.domain import StateConflictError
 from backend.services.ingest.mapping import PARSER_REVISION, NativeMappingDecoder, resolve_mapping_path
@@ -46,7 +47,7 @@ class MappingRegistry:
         self._migrated_dir = (
             Path(settings.migrated_user_dir).expanduser()
             if settings.migrated_user_dir is not None
-            else Path.home() / ".codeplane" / "mappings"
+            else backend_config.get_codeplane_dir() / "mappings"
         )
 
     def _resolve(self, name: str) -> Path:

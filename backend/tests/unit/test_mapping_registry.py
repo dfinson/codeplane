@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from backend import config as backend_config
 from backend.config import NativeMappingsConfig, load_config, save_config
 from backend.models.domain import StateConflictError
 from backend.services.ingest.mapping import NativeMappingDecoder
@@ -27,6 +28,8 @@ events:
 def mapping_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("CODEPLANE_HOME", raising=False)
+    monkeypatch.setattr(backend_config, "_codeplane_dir", None)
     return tmp_path
 
 
@@ -47,6 +50,13 @@ def test_mapping_configuration_round_trips_search_order(mapping_home):
     assert config.native_mappings == NativeMappingsConfig(["/first", "/second"], "/migrated")
     save_config(config, path)
     assert load_config(path).native_mappings == config.native_mappings
+
+
+def test_registry_looks_up_active_home_when_constructed(mapping_home, monkeypatch):
+    active_home = mapping_home / "configured-home"
+    selected = _write(active_home / "mappings")
+    monkeypatch.setattr(backend_config, "get_codeplane_dir", lambda: active_home)
+    assert MappingRegistry().pin("local")["source_path"] == str(selected.resolve())
 
 
 @pytest.mark.parametrize("section", ["[]", "{extra_dirs: /not-a-list}", "{migrated_user_dir: false}"])

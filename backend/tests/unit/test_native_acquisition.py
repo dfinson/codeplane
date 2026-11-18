@@ -442,10 +442,13 @@ async def test_cancellation_inside_receipt_transaction_keeps_queue_item_pending(
 
 
 async def test_decoder_change_cannot_advance_acquired_source(session_factory, tmp_path, monkeypatch):
+    from backend import config as backend_config
     from backend.services.ingest.mapping import resolve_mapping_path
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("CODEPLANE_HOME", raising=False)
+    monkeypatch.setattr(backend_config, "_codeplane_dir", None)
     channel, job = await _channel(session_factory)
     path = tmp_path / "source.json"
     records = [_message("first", "First")]

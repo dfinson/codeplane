@@ -11,6 +11,7 @@ from dishka.integrations.fastapi import setup_dishka
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from backend import config as backend_config
 from backend.api.integrations import router
 from backend.app_factory import _register_domain_exception_handlers
 from backend.config import CPLConfig, NativeMappingsConfig
@@ -158,6 +159,50 @@ async def test_fresh_legacy_definition_migrates_and_ingests_from_configured_dest
     async with session_factory() as session:
         binding = await IntegrationRepository(session).get("binding")
         assert binding.config["mapping_pin"]["source_path"] == str(migrated.resolve())
+
+
+@pytest.mark.parametrize("explicit_destination", [False, True], ids=["active-home", "explicit-override"])
+async def test_legacy_registration_migration_never_writes_to_inactive_user_home(
+    session_factory, tmp_path, monkeypatch, explicit_destination
+):
+    user_home = tmp_path / "user-home"
+    active_home = tmp_path / "active-home"
+    monkeypatch.setenv("HOME", str(user_home))
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    monkeypatch.setenv("CODEPLANE_HOME", str(active_home))
+    monkeypatch.setattr(backend_config, "_codeplane_dir", None)
+    legacy = _write(user_home / ".traceforge" / "mappings")
+    _write(user_home / ".codeplane" / "mappings", "untouched")
+    original = {path.relative_to(user_home): path.read_bytes() for path in user_home.rglob("*") if path.is_file()}
+    destination = tmp_path / "override" if explicit_destination else active_home / "mappings"
+    config = CPLConfig(
+        native_mappings=NativeMappingsConfig(migrated_user_dir=str(destination) if explicit_destination else None)
+    )
+    async with _api(session_factory, config) as client:
+        registered = await client.post("/api/integrations/observations", json=_registration())
+        assert registered.status_code == 201, registered.text
+        assert {
+            path.relative_to(user_home): path.read_bytes() for path in user_home.rglob("*") if path.is_file()
+        } == original
+        migrated = destination / "local.yaml"
+        assert migrated.read_bytes() == legacy.read_bytes()
+        first = await client.post("/api/integrations/binding/records", json=_batch())
+        assert first.status_code == 200 and first.json()["acceptedRecords"] == 1
+        replay = await client.post("/api/integrations/binding/records", json=_batch())
+        assert replay.status_code == 200 and replay.json()["replay"]
+        history = (await client.get("/api/integrations/binding/events")).json()["events"]
+        assert [event["payload"]["content"] for event in history if event["kind"] == "message.assistant"] == [
+            "Independent expected answer"
+        ]
+    async with session_factory() as session:
+        binding = await IntegrationRepository(session).get("binding")
+        assert binding.config["mapping_pin"]["source_path"] == str(migrated.resolve())
+    assert {
+        path.relative_to(user_home): path.read_bytes() for path in user_home.rglob("*") if path.is_file()
+    } == original
+    active_files = {path.relative_to(active_home) for path in active_home.rglob("*") if path.is_file()}
+    assert active_files == (set() if explicit_destination else {migrated.relative_to(active_home)})
+    assert list(destination.iterdir()) == [migrated]
 
 
 @pytest.mark.parametrize(
