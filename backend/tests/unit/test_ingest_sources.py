@@ -1,4 +1,4 @@
-"""Control-plane tests for TraceForge-backed imported ingestion sources."""
+"""Control-plane tests for imported native ingestion sources."""
 
 from __future__ import annotations
 
@@ -686,7 +686,7 @@ class TestNativeControlMarkers:
             assert copilot_watcher._query_new_sessions() == [("eligible", "C:\\repo\\myproject", "eligible")]
 
 
-class TestTraceForgeReattach:
+class TestNativeReattach:
     @pytest.mark.anyio
     async def test_reattach_skips_already_emitted_events(
         self,
@@ -715,6 +715,11 @@ class TestTraceForgeReattach:
         claude_watcher._job_base_refs["job-skip"] = "HEAD"
         from backend.persistence.job_repo import JobRepository
         from backend.services.ingest._base import _advance_prefix, _canonical_record, _NativeIdentity
+        from backend.services.ingest.jsonl_source import NativeJsonlSource
+
+        async with NativeJsonlSource(jsonl) as source:
+            await anext(source)
+            source_checkpoint = source.checkpoint()
 
         async with db_session() as session:
             repo = JobRepository(session)
@@ -723,8 +728,14 @@ class TestTraceForgeReattach:
             await repo.update_ingest_checkpoint(
                 "job-skip",
                 {
-                    "version": 1,
+                    "version": 2,
+                    "framework": "claude",
                     "record_count": 1,
+                    "decoded_event_count": 1,
+                    "emitted_event_count": 1,
+                    "source": source_checkpoint,
+                    "timestamp_anchor": identity.anchor.isoformat(),
+                    "output_contract": "codeplane-native-v1",
                     "external_session_id": "sess-skip",
                     "mapping_sha256": identity.mapping_digest,
                     "prefix_sha256": _advance_prefix(

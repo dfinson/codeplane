@@ -15,8 +15,7 @@ from backend.services.events.event_bus import EventBus
 from backend.services.events.event_processor import EventProcessor
 from backend.services.events.sse_manager import SSEConnection, SSEManager
 from backend.services.events.tool_pairing import ToolPairing
-from backend.services.ingest._base import TraceForgeIngestBase
-from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest._base import TraceForgeIngestBase, _NativeIdentity
 from backend.tests.unit.test_approval_service import session_factory as _source_factory
 from backend.tests.unit.test_ingest_sources import _LOCAL_ID, _TASK_ID, _write_native_metadata
 
@@ -42,7 +41,11 @@ async def native_disk_factory(native_factory, tmp_path):
         job = await JobRepository(source).get("job-1")
     async with factory() as target:
         await ProjectRepository(target).create("proj-1", "Native fixture", ["/test"])
-        await JobRepository(target).create(job)
+        from backend.models.domain import JobSource
+
+        await JobRepository(target).create(
+            replace(job, source=JobSource.copilot_cli, external_session_id="native-replay")
+        )
         await target.commit()
     try:
         yield factory
@@ -241,14 +244,8 @@ class TestRuntimeContract:
 
         bus.subscribe(persist)
         ingest = TraceForgeIngestBase(EventProcessor(bus), AsyncMock(), native_factory, "copilot")
-        adapter = NativeMappingDecoder(
-            resolve_mapping_path("copilot"),
-            job_id="job-1",
-            external_session_id="native-1",
-            anchor=datetime.now(UTC),
-            framework_id="copilot",
-        )
-        (event,) = adapter.decode({"type": "assistant.message", "data": {"content": "native output"}}, 0)
+        adapter = _NativeIdentity("copilot", "native-1", "job-1", datetime.now(UTC))
+        event = next(adapter.events({"type": "assistant.message", "data": {"content": "native output"}}, 0))
         await ingest._handle_tf_event("job-1", event)
         async with native_factory() as session:
             stored = await EventRepository(session).list_after(0, job_id="job-1")
