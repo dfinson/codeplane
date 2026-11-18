@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_recipe_qualification:
-        description: Run only the two native Windows recipe process-tree cases
+        description: Run native Windows recipe containment and protected audit cases
         type: boolean
         default: false
   push:
@@ -35,7 +35,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra legacy-traceforge
+        run: uv sync
 
       - name: Lint
         run: uv run ruff check backend/
@@ -156,7 +156,7 @@ jobs:
     env:
       UV_CONCURRENT_DOWNLOADS: "2"
       UV_CONCURRENT_BUILDS: "1"
-      HATCH_BUILD_HOOKS_DISABLE: "true"
+      HATCH_BUILD_NO_HOOKS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
