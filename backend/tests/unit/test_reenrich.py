@@ -44,7 +44,7 @@ class TestRuntimeContract:
     async def test_partial_failure_does_not_mark_replay_complete(self, mock_session_factory):
         with (
             patch("backend.persistence.event_repo.EventRepository") as repo_cls,
-            patch("backend.services.events.reenrich.TFEnricher") as enricher_cls,
+            patch("backend.services.events.reenrich._make_legacy_enricher") as enricher_cls,
             patch("backend.services.events.reenrich._append_marker", new_callable=AsyncMock) as marker,
         ):
             repo = repo_cls.return_value
@@ -160,7 +160,7 @@ class TestReenrichConcurrency:
             repo.list_all_events_by_job = AsyncMock(return_value=[marker_event, normal_event])
             repo.update_metadata = AsyncMock()
 
-            with patch("backend.services.events.reenrich.TFEnricher") as mock_enricher_cls:
+            with patch("backend.services.events.reenrich._make_legacy_enricher") as mock_enricher_cls:
                 enricher = mock_enricher_cls.return_value
                 enricher.process = MagicMock(return_value=None)
                 enricher.flush = MagicMock(return_value=[])
@@ -206,7 +206,7 @@ class TestReenrichBatching:
             repo.list_all_events_by_job = AsyncMock(side_effect=_mock_list_all)
             repo.update_metadata = AsyncMock()
 
-            with patch("backend.services.events.reenrich.TFEnricher") as mock_enricher_cls:
+            with patch("backend.services.events.reenrich._make_legacy_enricher") as mock_enricher_cls:
                 enricher = mock_enricher_cls.return_value
                 enricher.process = MagicMock(return_value=None)
                 enricher.flush = MagicMock(return_value=[])
@@ -272,7 +272,7 @@ class TestReenrichMutationSafety:
             repo.list_all_events_by_job = AsyncMock(side_effect=[[event], []])
             repo.update_metadata = AsyncMock()
 
-            with patch("backend.services.events.reenrich.TFEnricher", _InPlaceMutatingEnricher):
+            with patch("backend.services.events.reenrich._make_legacy_enricher", _InPlaceMutatingEnricher):
                 updated = await reenrich_job_events("j1", mock_session_factory)
 
             # Metadata was persisted despite input/result aliasing.
@@ -307,7 +307,7 @@ class TestReenrichMutationSafety:
             repo.list_all_events_by_job = AsyncMock(side_effect=[[event], []])
             repo.update_metadata = AsyncMock()
 
-            with patch("backend.services.events.reenrich.TFEnricher", _NoOpEnricher):
+            with patch("backend.services.events.reenrich._make_legacy_enricher", _NoOpEnricher):
                 updated = await reenrich_job_events("j1", mock_session_factory)
 
             repo.update_metadata.assert_not_awaited()
@@ -527,7 +527,7 @@ class TestReenrichPairingBounded:
             repo.update_metadata = AsyncMock()
 
             with (
-                patch("backend.services.events.reenrich.TFEnricher", _FakePairingEnricher),
+                patch("backend.services.events.reenrich._make_legacy_enricher", _FakePairingEnricher),
                 patch("backend.services.events.reenrich._BATCH_SIZE", 4),
                 patch("backend.services.events.reenrich._StartBaselineTracker", _CapturingTracker),
             ):
@@ -592,7 +592,7 @@ class TestReenrichPairingBounded:
             repo.update_metadata = AsyncMock()
 
             with (
-                patch("backend.services.events.reenrich.TFEnricher", _FakePairingEnricher),
+                patch("backend.services.events.reenrich._make_legacy_enricher", _FakePairingEnricher),
                 patch("backend.services.events.reenrich._BATCH_SIZE", 2),
                 patch("backend.services.events.reenrich._StartBaselineTracker", _CapturingTracker),
             ):
