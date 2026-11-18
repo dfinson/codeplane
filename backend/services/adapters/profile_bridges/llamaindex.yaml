@@ -1,0 +1,47 @@
+framework: llamaindex
+framework_version: "0.14.26"
+ingestion_mode: stream
+type_field: type
+events:
+  response:
+    kind: message.assistant
+    payload:
+      content: response
+      operation: operation
+  callback_started:
+    kind: task.started
+    payload:
+      native_event_id: event_id
+      native_parent_id: parent_id
+      native_kind: native_kind
+  callback_completed:
+    kind: task.completed
+    payload:
+      native_event_id: event_id
+      native_kind: native_kind
+  trace_started:
+    kind: session.info
+    payload:
+      native_trace_label: trace_label
+  trace_completed:
+    kind: session.info
+    payload:
+      native_trace_label: trace_label
+      native_trace_map: trace_map
+  tool_started:
+    kind: tool.call.started
+    payload:
+      tool_name: tool_name
+      app_operation_id: operation_id
+      arguments: arguments
+  tool_completed:
+    kind: tool.call.completed
+    payload:
+      tool_name: tool_name
+      app_operation_id: operation_id
+      result: result
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      tool_name: tool_name
+      app_operation_id: operation_id
