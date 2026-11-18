@@ -41,6 +41,7 @@ class NativeCall:
     fingerprint: Callable[[], str] | None = None
     evidence: ExecutionEvidence = field(default_factory=lambda: ExecutionEvidence())
     execution_probe: Callable[[BaseException | None], bool | None] | None = None
+    entry_check: Callable[[tuple[Any, ...], dict[str, Any]], bool] | None = None
 
 
 @dataclass
@@ -54,6 +55,8 @@ class NativeBinding:
     `is_current` must check the runtime's actual task/handle, pin, enablement,
     cancellation and replacement generation, not merely return a cached boolean.
     The binding id is a CodePlane native handle, not a fabricated managed session.
+    `is_current_inline` is Runtime's immediate ownership predicate for synchronous
+    SDK bodies on the policy loop. Worker entries also await the full check.
     """
 
     def __init__(
@@ -66,6 +69,7 @@ class NativeBinding:
         workspace: str,
         protected_paths: tuple[str, ...],
         is_current: Callable[[], Awaitable[bool]],
+        is_current_inline: Callable[[], bool] | None = None,
         on_result: Callable[[NativeCall, bool | None, bool | None], Awaitable[None]] | None = None,
     ) -> None:
         if (
@@ -83,12 +87,14 @@ class NativeBinding:
         self.workspace = workspace
         self.protected_paths = protected_paths
         self._is_current = is_current
+        self._is_current_inline = is_current_inline
         self._revoked = threading.Event()
         self._revoked_async = asyncio.Event()
         self.loop = asyncio.get_running_loop()
         self._loop_thread = threading.get_ident()
         self._on_result = on_result
         self._authorized: dict[str, NativeCall] = {}
+        self._entry_checks: dict[str, Callable[[], bool]] = {}
         self._permissions: set[asyncio.Task[bool]] = set()
         self._results: dict[str, tuple[bool | None, bool | None]] = {}
         self._work: dict[object, str] = {}
@@ -194,14 +200,15 @@ class NativeBinding:
         action = self.action(call)
         fingerprint = call.fingerprint() if call.fingerprint is not None else None
 
-        async def current() -> bool:
+        def unchanged() -> bool:
             return (
                 attached()
-                and await self.current()
-                and attached()
                 and self.action(call) == action
                 and (call.fingerprint is None or call.fingerprint() == fingerprint)
             )
+
+        async def current() -> bool:
+            return unchanged() and await self.current() and unchanged()
 
         if not await current():
             return False
@@ -241,8 +248,31 @@ class NativeBinding:
             self._permissions.discard(decision)
         if allowed and await current():
             self._authorized[call.operation_id] = call
+            self._entry_checks[call.operation_id] = unchanged
             return True
         return False
+
+    def _entry_unchanged(self, call: NativeCall) -> bool:
+        check = self._entry_checks.get(call.operation_id)
+        return self.active and self._authorized.get(call.operation_id) is call and check is not None and check()
+
+    async def entry_current(self, call: NativeCall) -> bool:
+        """Recheck the original grant at the leaf, without requesting another grant."""
+        if asyncio.get_running_loop() is not self.loop:
+            return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(self.entry_current(call), self.loop))
+        return self._entry_unchanged(call) and await self.current() and self._entry_unchanged(call)
+
+    def entry_current_sync(self, call: NativeCall) -> bool:
+        if threading.get_ident() == self._loop_thread:
+            if self._is_current_inline is None:
+                raise StateError("Inline native entry requires the Runtime's non-awaiting ownership fence")
+            return self._entry_unchanged(call) and self._is_current_inline() and self._entry_unchanged(call)
+        if not self._entry_unchanged(call):
+            return False
+        current = asyncio.run_coroutine_threadsafe(self.entry_current(call), self.loop).result()
+        return (
+            current and (self._is_current_inline is None or self._is_current_inline()) and self._entry_unchanged(call)
+        )
 
     async def report(self, call: NativeCall, started: bool | None, succeeded: bool | None) -> None:
         if asyncio.get_running_loop() is not self.loop:
@@ -257,6 +287,7 @@ class NativeBinding:
         if self._on_result is not None:
             await self._on_result(call, started, succeeded)
         del self._authorized[call.operation_id]
+        self._entry_checks.pop(call.operation_id, None)
         self._results.pop(call.operation_id, None)
 
     def report_sync(self, call: NativeCall, started: bool | None, succeeded: bool | None) -> None:

@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from backend.models.events import EventKind, new_event
 from backend.models.session_event import EventMetadata, ToolMotivation
 from backend.services.events.tool_pairing import ToolPairing
+from backend.services.ingest.mapping import NativeMappingDecoder
 
 
 def test_pair_keeps_completion_identity_duration_and_start_motivation() -> None:
@@ -109,3 +111,72 @@ def test_reused_native_session_and_call_ids_remain_scoped_by_registered_executio
     assert result.payload["tool_name"] == "first"
     assert len(pairing.checkpoint().starts) == 1
     assert pairing.checkpoint().starts[0].metadata.execution_token == "second"
+
+
+@pytest.mark.parametrize("terminal", ["tool_completed", "tool_failed"])
+def test_llama_app_operation_mapping_pairs_with_distinct_identity_and_source_domains(terminal):
+    pairing = ToolPairing()
+    path = Path(__file__).parents[2] / "services/adapters/profile_bridges/llamaindex.yaml"
+    scopes = (
+        ("binding-a", "epoch", "token"),
+        ("binding-b", "epoch", "token"),
+        ("binding-a", "other-epoch", "token"),
+        ("binding-a", "epoch", "other-token"),
+    )
+    sources = []
+    for index, (binding, epoch, token) in enumerate(scopes):
+        decoder = NativeMappingDecoder(
+            path,
+            job_id="job",
+            external_session_id="app-source",
+            binding_id=binding,
+            anchor=datetime.now(UTC),
+            source_key="native-callbacks",
+        )
+        metadata = EventMetadata(
+            source_framework="llamaindex",
+            integration_binding_id=binding,
+            execution_epoch=epoch,
+            execution_token=token,
+            namespace=("observation-source", "native-callbacks"),
+        )
+        (start,) = decoder.decode(
+            {
+                "type": "tool_started",
+                "tool_name": "body",
+                "operation_id": "same-operation",
+                "arguments": {"value": index},
+            },
+            0,
+        )
+        assert pairing.process(start.model_copy(update={"metadata": metadata})) is None
+        sources.append((decoder, metadata, index))
+    native_start = new_event(
+        "job",
+        EventKind.tool_call_started,
+        {"tool_call_id": "same-operation", "tool_name": "native"},
+        metadata=sources[0][1],
+    )
+    assert pairing.process(native_start) is None
+    restored = ToolPairing()
+    restored.restore(pairing.checkpoint())
+    for decoder, metadata, index in reversed(sources):
+        (end,) = decoder.decode(
+            {
+                "type": terminal,
+                "tool_name": "body",
+                "operation_id": "same-operation",
+                "result": str(index),
+            },
+            1,
+        )
+        result = restored.process(end.model_copy(update={"metadata": metadata}))
+        assert result.kind == ("tool.call.completed" if terminal == "tool_completed" else "tool.call.failed")
+        assert result.payload["arguments"] == {"value": index}
+        assert result.payload["app_operation_id"] == "same-operation"
+        assert "tool_call_id" not in result.payload and "_codeplane_pairing" not in result.payload
+    native_end = new_event(
+        "job", EventKind.tool_call_completed, {"tool_call_id": "same-operation"}, metadata=sources[0][1]
+    )
+    assert restored.process(native_end).payload["tool_name"] == "native"
+    assert restored.checkpoint().starts == ()

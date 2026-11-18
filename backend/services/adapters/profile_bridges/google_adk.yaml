@@ -27,3 +27,11 @@ events:
       tool_call_id: tool_call_id
       arguments: arguments
       result: result
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      arguments: arguments
+      error: error
+      error_type: error_type

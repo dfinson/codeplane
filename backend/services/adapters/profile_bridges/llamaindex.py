@@ -7,6 +7,7 @@ import sys
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, is_dataclass
 from functools import wraps
+from inspect import getclosurevars
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -53,17 +54,19 @@ class LlamaIndexTarget:
     tools: tuple[Any, ...]
 
 
-def _arguments(value: Any) -> Any:
+def _arguments(value: Any, *, observation: bool = False) -> Any:
+    if observation and isinstance(value, BaseException):
+        return {"error_type": f"{type(value).__module__}.{type(value).__qualname__}", "message": str(value)}
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, type) and issubclass(value, BaseModel):
         return value.model_json_schema()
     if is_dataclass(value) and not isinstance(value, type):
-        return _arguments(asdict(value))
+        return _arguments(asdict(value), observation=observation)
     if isinstance(value, dict):
-        return {key: _arguments(item) for key, item in value.items()}
+        return {key: _arguments(item, observation=observation) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
-        return [_arguments(item) for item in value]
+        return [_arguments(item, observation=observation) for item in value]
     return value
 
 
@@ -179,7 +182,15 @@ def _tool(gate: GateAttachment, tool: Any) -> None:
     conversion = load_sdk("llama_index.core.tools.function_tool").sync_to_async
     converted = conversion(original_function)
     if getattr(async_fn, "__code__", None) is converted.__code__:
-        async_fn = conversion(tool._fn)
+        selected = getclosurevars(async_fn).nonlocals.get("fn")
+        if selected is original_function:
+            async_fn = conversion(tool._fn)
+        elif callable(selected):
+            entry = SimpleNamespace(invoke=selected)
+            gate.track_callable(entry, "invoke")
+            async_fn = conversion(entry.invoke)
+        else:
+            raise UnsupportedNativeHookError("LlamaIndex async conversion has no qualified original callable")
     else:
         entry = SimpleNamespace(invoke=async_fn)
         gate.track_callable(entry, "invoke")
@@ -262,7 +273,7 @@ def _observe_callbacks(gate: GateAttachment, manager: Any) -> None:
                     "native_kind": str(event_type.value),
                     "event_id": event_id or None,
                     "parent_id": parent_id or None,
-                    "payload": _arguments(payload),
+                    "payload": _arguments(payload, observation=True),
                     **_trace_identity(),
                 }
             )
@@ -274,7 +285,7 @@ def _observe_callbacks(gate: GateAttachment, manager: Any) -> None:
                     "type": "callback_completed",
                     "native_kind": str(event_type.value),
                     "event_id": event_id or None,
-                    "payload": _arguments(payload),
+                    "payload": _arguments(payload, observation=True),
                     **_trace_identity(),
                 }
             )

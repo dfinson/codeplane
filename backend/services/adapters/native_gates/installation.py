@@ -13,6 +13,7 @@ from importlib import import_module
 from inspect import iscoroutine, iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
+from .binding import NativeGateDeniedError
 from .readiness import UnsupportedNativeHookError
 from .selection import require_installation
 
@@ -83,6 +84,9 @@ class GateAttachment:
         @wraps(original)
         def synchronous(*args: Any, **kwargs: Any) -> Any:
             call = self._executing.get()
+            if call is not None:
+                self.require_entry_sync(call)
+                self._require_entry_arguments(call, args, kwargs)
             token = self.binding.begin_work(call) if call is not None else None
             try:
                 return original(*args, **kwargs)
@@ -93,6 +97,9 @@ class GateAttachment:
         @wraps(original)
         async def asynchronous(*args: Any, **kwargs: Any) -> Any:
             call = self._executing.get()
+            if call is not None:
+                await self.require_entry(call)
+                self._require_entry_arguments(call, args, kwargs)
             token = self.binding.begin_work(call) if call is not None else None
             try:
                 return await original(*args, **kwargs)
@@ -103,6 +110,23 @@ class GateAttachment:
         self.patch(target, name, asynchronous if iscoroutinefunction(original) else synchronous)
         self._tracked.add(key)
         return True
+
+    @staticmethod
+    def _require_entry_arguments(call: NativeCall, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        if call.entry_check is not None and not call.entry_check(args, kwargs):
+            raise NativeGateDeniedError("Native callable arguments differ from the approved action")
+
+    async def require_entry(self, call: NativeCall) -> None:
+        self.validate()
+        if not await self.binding.entry_current(call):
+            raise NativeGateDeniedError("Native execution or approved action changed before callable entry")
+        self.validate()
+
+    def require_entry_sync(self, call: NativeCall) -> None:
+        self.validate()
+        if not self.binding.entry_current_sync(call):
+            raise NativeGateDeniedError("Native execution or approved action changed before callable entry")
+        self.validate()
 
     def cleanup(self, undo: Callable[[], None]) -> None:
         self._undo.append(undo)
