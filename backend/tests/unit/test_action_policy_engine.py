@@ -190,4 +190,5 @@ def _make_runtime_service() -> Any:
     svc._adapter_registry._adapters = {}
     svc._session_factory = MagicMock()
     svc._governance_decider = MagicMock()
+    svc._standalone_governance = None
     return svc

@@ -289,6 +289,29 @@ status. It does not make otherwise complete execution identities incomplete.
 Once import evidence exists, missing or emptied original tables require
 reconciliation rather than being treated as a pristine ledger.
 
+`cpl governance-transition quiesce` blocks new admissions without discarding
+in-flight outcomes or audit delivery. Its generation is required by
+`cpl governance-transition select-provider standalone|retained --generation N`.
+Selection requires a drained, stopped runtime and exclusive home ownership.
+Only previously unseen Jobs take the new default. Existing Job implementation
+pins, provider ownership and policy-scoped grants remain unchanged across
+continuations and restarts. An unavailable pinned implementation requires
+reconciliation, not fallback to another provider.
+
+The retained provider uses the same working `governance.db`. Its registered
+canonical outcomes and exact authorizations are journaled before accounting.
+The pinned TF implementation previews each state transition before its actual
+write. Finalization checks all dimensional counters, state fields, processed
+keys and unchanged grants against that transition, while retaining immutable
+original import evidence. Unknown writers, conflicting receipts and missing
+source tables block activation. `cpl governance-transition reconcile-retained`
+is stopped-runtime maintenance that resumes only validated prepared accounting,
+including an exact reserved event-time snapshot. It never repeats the business
+action or restores an older database over newer history. New provider selection
+refuses any unresolved receipt. Retained evaluation preserves its own policy
+namespace and configured spend reader, whose values are estimates, not verified
+currency. Native runnable profiles still require their qualified CP policy.
+
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream
 license. New native event and fallback turn identities are scoped by stable

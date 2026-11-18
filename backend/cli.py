@@ -859,6 +859,22 @@ def governance_transition_commands() -> None:
     """Explicit stopped-runtime governance maintenance, never database restoration."""
 
 
+def _require_governance_stopped(directory: Path) -> None:
+    import json
+
+    from backend.services.dev_restart.launch_profile import LaunchProfile, LaunchProfileInvalidError
+    from backend.services.dev_restart.restart_protocol import is_identity_alive
+
+    profile_path = directory / "run.json"
+    if profile_path.exists():
+        try:
+            profile = LaunchProfile.from_dict(json.loads(profile_path.read_text()))
+        except (ValueError, LaunchProfileInvalidError) as exc:
+            raise click.ClickException("Runtime identity requires reconciliation before maintenance") from exc
+        if is_identity_alive(profile.started_pid, profile.started_process_time):
+            raise click.ClickException("Stop the recorded runtime before governance maintenance")
+
+
 @governance_transition_commands.command("import-legacy")
 def import_legacy_governance_command() -> None:
     """Back up and compare retained counters, processed keys and policy-scoped grants.
@@ -873,22 +889,10 @@ def import_legacy_governance_command() -> None:
     from backend.models.domain import CodePlaneError
     from backend.persistence.governance_ownership import GovernanceRuntimeLease
     from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
-    from backend.services.dev_restart.launch_profile import (
-        LaunchProfile,
-        LaunchProfileInvalidError,
-    )
-    from backend.services.dev_restart.restart_protocol import is_identity_alive
 
     directory = backend_config.get_codeplane_dir()
     try:
-        profile_path = directory / "run.json"
-        if profile_path.exists():
-            try:
-                profile = LaunchProfile.from_dict(json.loads(profile_path.read_text()))
-            except (ValueError, LaunchProfileInvalidError) as exc:
-                raise click.ClickException("Runtime identity requires reconciliation before import") from exc
-            if is_identity_alive(profile.started_pid, profile.started_process_time):
-                raise click.ClickException("Stop the recorded runtime before governance import")
+        _require_governance_stopped(directory)
         with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
             result = LegacyGovernanceRepository(directory / "governance.db", directory / "data.db").import_original(
                 ownership
@@ -896,6 +900,114 @@ def import_legacy_governance_command() -> None:
     except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("quiesce")
+def quiesce_governance_command() -> None:
+    """Block new admissions while preserving existing outcome and audit writes."""
+    import asyncio
+    import json
+    import sqlite3
+    from dataclasses import asdict
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.governance_repo import GovernanceLedger
+
+    directory = backend_config.get_codeplane_dir()
+
+    async def quiesce() -> dict[str, object]:
+        ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+        try:
+            state = await ledger.admission_state()
+            return asdict(
+                await ledger.set_admission_control(
+                    expected_generation=state.generation, blocked=True, reason="Operator requested provider transition"
+                )
+            )
+        finally:
+            await ledger.close()
+
+    try:
+        with GovernanceRuntimeLease(directory):
+            result = asyncio.run(quiesce())
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("select-provider")
+@click.argument("provider", type=click.Choice(["standalone", "retained"]))
+@click.option("--generation", type=click.IntRange(min=0), required=True, help="Generation returned by quiesce.")
+def select_governance_provider_command(provider: str, generation: int) -> None:
+    """Select only unseen Jobs' provider after draining and stopping the runtime."""
+    import json
+    import sqlite3
+    from importlib.metadata import PackageNotFoundError
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+    from backend.services.runtime.contract_catalog import retained_governance_contract, standalone_contract
+
+    directory = backend_config.get_codeplane_dir()
+    try:
+        _require_governance_stopped(directory)
+        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
+            standalone = standalone_contract()
+            target = retained_governance_contract(standalone) if provider == "retained" else standalone
+            repository = GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
+            repository.initialize()
+            result = repository.select_new_jobs(
+                ownership,
+                target=target,
+                default=standalone,
+                available={target.id: target},
+                expected_generation=generation,
+            )
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError, PackageNotFoundError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("reconcile-retained")
+def reconcile_retained_governance_command() -> None:
+    """Reconcile journaled retained outcomes without repeating business actions."""
+    import asyncio
+    import json
+    import sqlite3
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+    from backend.persistence.governance_repo import GovernanceLedger
+    from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
+    from backend.services.action_policy.retained_provider import RetainedGovernance
+
+    directory = backend_config.get_codeplane_dir()
+
+    async def reconcile(ownership: GovernanceRuntimeLease) -> int:
+        ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+        retained = RetainedGovernance(
+            ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
+        )
+        try:
+            return await retained.reconcile(ownership)
+        finally:
+            await retained.close()
+            await ledger.close()
+
+    try:
+        _require_governance_stopped(directory)
+        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
+            count = asyncio.run(reconcile(ownership))
+            LegacyGovernanceRepository(directory / "governance.db", directory / "data.db").require_verified()
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps({"reconciled_receipts": count}, sort_keys=True))
 
 
 # ---------------------------------------------------------------------------

@@ -102,3 +102,36 @@ def standalone_contract() -> ExecutionContract:
         ),
         mappings=tuple(mappings),
     )
+
+
+def retained_governance_contract(base: ExecutionContract) -> ExecutionContract:
+    """Keep retained governance distinct without impersonating an old parser."""
+    retained = _distribution("traceforge-toolkit", "0.1.5")
+    policy = _sources(
+        "tf-policy-v1",
+        "services/action_policy/governance.py",
+        "services/action_policy/tf_classify_adapter.py",
+        "services/action_policy/cost_ceiling.py",
+        "services/action_policy/preset_profiles.py",
+        "services/action_policy/retained_provider.py",
+        "services/action_policy/authority.py",
+        "services/action_policy/agt_policy.py",
+        "services/action_policy/standalone_router.py",
+        "services/action_policy/data/traceforge_overlay.yaml",
+        "services/action_policy/data/governance/autonomous.yaml",
+        "services/action_policy/data/governance/supervised.yaml",
+        "services/action_policy/data/governance/locked.yaml",
+        "persistence/governance_provider_repo.py",
+    )
+    return base.model_copy(
+        update={
+            "id": "cp-retained-governance-v1",
+            "policy": policy.model_copy(
+                update={
+                    "sha256": hashlib.sha256(
+                        json.dumps([policy.sha256, retained.model_dump(mode="json")], sort_keys=True).encode()
+                    ).hexdigest(),
+                }
+            ),
+        }
+    )

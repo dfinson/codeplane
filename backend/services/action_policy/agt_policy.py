@@ -50,7 +50,7 @@ class FactDecision:
     individual_human: bool
     monitor_eligible: bool = False
     policy_version: str = POLICY_VERSION
-    risk_score: None = None
+    risk_score: int | None = None
     risk_band: str = "unknown"
 
 

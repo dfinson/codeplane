@@ -1,7 +1,8 @@
 """Provenance-preserving import of the retained TF governance schema.
 
-The original tables are never rewritten. Imported counters are aggregates, not
-fabricated execution receipts. Grants retain their exact TF policy scope.
+Import leaves source rows unchanged. Original evidence stays immutable when an
+owned retained provider later advances the working tables. Imported counters are
+aggregates, not fabricated execution receipts. Grants keep their exact TF scope.
 """
 
 from __future__ import annotations
@@ -359,6 +360,11 @@ class LegacyGovernanceRepository:
             if "cp_legacy_import" in tables:
                 receipt = connection.execute("SELECT * FROM cp_legacy_import WHERE singleton=1").fetchone()
                 records = _rows(connection)
+                from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+
+                if receipt is not None and GovernanceProviderRepository.verify_forward_state(connection, records):
+                    self.verify_original_import(connection)
+                    return
                 if receipt is None or receipt["source_digest"] != _digest(records):
                     raise StateConflictError(
                         "Legacy governance import requires reconciliation before writer activation"
@@ -368,8 +374,34 @@ class LegacyGovernanceRepository:
             if any(table.startswith("cp_legacy_") for table in tables):
                 raise StateConflictError("Legacy import evidence is incomplete; reconciliation required")
             if not set(_TABLES).intersection(tables):
+                if any(
+                    table in tables and connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                    for table in ("cp_retained_forward", "cp_retained_head")
+                ):
+                    raise StateConflictError("Retained governance source schema is incomplete")
                 return
             records = _rows(connection)
+            from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+
+            if GovernanceProviderRepository.verify_forward_state(connection, records):
+                return
             if not any(records.values()):
                 return
             raise StateConflictError("Legacy governance requires explicit verified import before writer activation")
+
+    @staticmethod
+    def verify_original_import(connection: sqlite3.Connection) -> None:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "cp_legacy_import" not in tables:
+            if any(table.startswith("cp_legacy_") for table in tables):
+                raise StateConflictError("Legacy import evidence is incomplete")
+            return
+        receipt = connection.execute("SELECT * FROM cp_legacy_import WHERE singleton=1").fetchone()
+        if receipt is None:
+            raise StateConflictError("Legacy import evidence is incomplete")
+        with closing(sqlite3.connect(Path(receipt["backup_path"]).as_uri() + "?mode=ro", uri=True)) as backup:
+            backup.row_factory = sqlite3.Row
+            original = _rows(backup)
+        if receipt["source_digest"] != _digest(original):
+            raise StateConflictError("Original import backup provenance changed")
+        LegacyGovernanceRepository._verify(connection, original, receipt)

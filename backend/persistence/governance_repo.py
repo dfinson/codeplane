@@ -502,9 +502,35 @@ class GovernanceLedger:
                 ).fetchone()
             ):
                 legacy = connection.execute("SELECT * FROM cp_legacy_budget WHERE job_id=?", (job_id,)).fetchone()
+            retained = None
+            if (
+                epoch is None
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_retained_forward'"
+                ).fetchone()
+            ):
+                retained = connection.execute(
+                    """SELECT after_json FROM cp_retained_forward
+                       WHERE job_id=? AND status='committed' ORDER BY rowid DESC LIMIT 1""",
+                    (job_id,),
+                ).fetchone()
+            retained_calls = retained_destructive = 0
+            if retained is not None:
+                snapshot = json.loads(retained["after_json"])
+                retained_calls = next(
+                    row["total_tool_calls"] for row in snapshot["session_state"] if row["session_id"] == job_id
+                )
+                retained_destructive = next(
+                    (
+                        row["count"]
+                        for row in snapshot["budget_counters"]
+                        if row["session_id"] == job_id and row["dimension"] == "effect" and row["key"] == "destructive"
+                    ),
+                    0,
+                )
             return GovernanceTotals(
-                (counts[0] or 0) + (legacy["executed_calls"] if legacy else 0),
-                (counts[1] or 0) + (legacy["destructive_calls"] if legacy else 0),
+                (counts[0] or 0) + (retained_calls if retained else legacy["executed_calls"] if legacy else 0),
+                (counts[1] or 0) + (retained_destructive if retained else legacy["destructive_calls"] if legacy else 0),
                 sum((Decimal(row["amount"]) for row in costs), Decimal(0)),
                 missing,
                 bool(costs),

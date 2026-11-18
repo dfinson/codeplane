@@ -6,6 +6,9 @@ import json
 import uuid
 from typing import TYPE_CHECKING
 
+from sqlalchemy import select
+
+from backend.models.db import EventRow
 from backend.models.domain import StateConflictError
 from backend.models.events import SessionEvent, new_event
 from backend.models.execution_contracts import ExecutionContractPin
@@ -16,6 +19,8 @@ from backend.persistence.job_repo import JobRepository
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from backend.models.execution_contracts import ExecutionContract
 
 _PIN_KIND = "execution.contract.pinned"
 _PIN_NAMESPACE = ("control", "execution-contract")
@@ -61,6 +66,26 @@ class ExecutionContractRepository:
                 raise StateConflictError("Only trusted Job execution may consume an admission contract")
             event = await EventRepository(session).get(_identity(job_id, admission_id))
             return _decode(event, job_id, admission_id) if event is not None else None
+
+    async def previous_contract(self, job_id: str) -> ExecutionContract | None:
+        async with self._session_factory() as session:
+            rows = await session.scalars(
+                select(EventRow).where(EventRow.job_id == job_id, EventRow.kind == _PIN_KIND).order_by(EventRow.id)
+            )
+            previous = None
+            for row in rows:
+                event = EventRepository._to_domain(row)
+                md = event.metadata
+                if md.source_framework != "codeplane" or md.namespace != _PIN_NAMESPACE or md.integration_binding_id:
+                    continue
+                parsed = ExecutionContractPin.model_validate(event.payload)
+                pin = _decode(event, job_id, parsed.admission_id)
+                if event.id != _identity(job_id, pin.admission_id) or (
+                    previous is not None and previous != pin.contract
+                ):
+                    raise StateConflictError("Existing Job implementation pins require reconciliation")
+                previous = pin.contract
+            return previous
 
     async def create(self, pin: ExecutionContractPin) -> ExecutionContractPin:
         async with serialized_write(self._session_factory) as session:

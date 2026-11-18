@@ -772,6 +772,8 @@ class RuntimeService:
         """Create an asyncio task to execute the job."""
         from backend.persistence.native_execution_repo import NativeExecutionRepository
 
+        if self._standalone_governance is not None:
+            await self.require_governance_admission()
         if await NativeExecutionRepository(self._session_factory).has_native_admission(job.id):
             raise StateConflictError(
                 "Native continuation requires the original caller-owned runnable and new admission"
@@ -1476,6 +1478,8 @@ class RuntimeService:
         if event.kind != EventKind.policy_settings_changed:
             return
 
+        if self._standalone_governance is not None:
+            await self._standalone_governance.refresh_retained_policy()
         job_ids = list(self._policy_routers.keys())
         if not job_ids:
             return
@@ -2599,6 +2603,7 @@ class RuntimeService:
         *,
         available: Mapping[str, ExecutionContract],
         selected_for_new: str,
+        select_for_job: Callable[[str, ExecutionContract | None], Awaitable[ExecutionContract]] | None = None,
     ) -> None:
         """Trusted composition selects available implementations separately from new admission."""
         from backend.persistence.execution_contract_repo import ExecutionContractRepository
@@ -2608,6 +2613,7 @@ class RuntimeService:
             ExecutionContractRepository(self._session_factory),
             available=available,
             selected_for_new=selected_for_new,
+            select_for_job=select_for_job,
         )
 
     async def prepare_execution_contract(
@@ -3582,6 +3588,9 @@ class RuntimeService:
         # so that recovered jobs in waiting_for_approval can be unblocked.
         if self._approval_service is not None:
             await self._approval_service.recover_pending_approvals()
+        if self._standalone_governance is not None and await self._standalone_governance.admissions_paused():
+            log.info("governance_recovery_quiesced")
+            return
 
         orphaned_jobs: list[tuple[Job, JobState]] = []
         preparing_jobs: list[Job] = []

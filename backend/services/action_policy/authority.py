@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
     from backend.models.execution_contracts import ExecutionContractPin
     from backend.persistence.governance_repo import GovernanceLedger, GovernanceTotals
+    from backend.services.action_policy.classifier import Action
+    from backend.services.action_policy.retained_provider import RetainedGovernance
     from backend.services.adapters.contracts import ExecutionIdentity, TextCompletionProvider
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
@@ -56,6 +58,7 @@ class PolicyAuthority:
         policy: AgtPolicy,
         provider: TextCompletionProvider | None,
         model: str | None,
+        retained: RetainedGovernance | None = None,
     ) -> None:
         self._contracts = contracts
         self._ledger = ledger
@@ -65,6 +68,7 @@ class PolicyAuthority:
         self._policy = policy
         self._provider = provider
         self._model = model
+        self._retained = retained
 
     @staticmethod
     def _budget(local: PolicyInput, totals: GovernanceTotals) -> PolicyInput:
@@ -101,6 +105,7 @@ class PolicyAuthority:
         savepoint: Callable[[], Awaitable[str | None]] | None = None,
         metadata: EventMetadata | None = None,
         tool_call_id: str | None = None,
+        retained_action: Action | None = None,
     ) -> Authorization:
         """The caller owns interception and supplies a live ownership/policy fence.
 
@@ -136,8 +141,15 @@ class PolicyAuthority:
             }
         )
         self._contracts.require_available(pin)
-        if pin.contract.policy.id != POLICY_VERSION:
+        selected_policy = self._retained.policy_id if self._retained is not None else POLICY_VERSION
+        if pin.contract.policy.id != selected_policy:
             raise StateConflictError("The pinned policy cannot be enforced by this authority")
+        if self._retained is not None and (
+            retained_action is None
+            or retained_action.job_id != execution.job_id
+            or (retained_action.command or "") != fields["command"]
+        ):
+            raise StateConflictError("Retained policy requires the exact bound native action")
         await self._ledger.require_policy_scope(execution.job_id, pin.contract.policy.id)
         source_fields = dict(fields)
         if source_fields["command"]:
@@ -152,6 +164,7 @@ class PolicyAuthority:
                 "dialect": dialect,
                 "metadata": origin.model_dump(mode="json"),
                 "tool_call_id": tool_call_id,
+                "retained_action": asdict(retained_action) if retained_action is not None else None,
             },
             fields=source_fields,
         )
@@ -159,6 +172,7 @@ class PolicyAuthority:
         approval_id = checkpoint_ref = None
         totals: GovernanceTotals | None = None
         assessment_reason: str | None = None
+        retained_decision: dict[str, object] | None = None
         decision = FactDecision("reject", "execution_ineligible", False)
         proceed = False
         try:
@@ -173,6 +187,22 @@ class PolicyAuthority:
                     preliminary = self._policy.decide(local)
                     if preliminary.reason_code in {"execution_ineligible", "hard_gate"} or local.trusted_file_read:
                         decision = preliminary
+                    elif self._retained is not None:
+                        if (
+                            local.accounting_unresolved
+                            or local.mcp_drift
+                            or local.local_effect == "unknown"
+                            or (local.syntax is not None and not local.syntax.complete)
+                        ):
+                            decision = FactDecision("escalate", "incomplete_evidence", True)
+                        else:
+                            assert retained_action is not None
+                            decision, retained_decision = await self._retained.classify(retained_action, local.preset)
+                            meta = retained_decision.get("meta")
+                            classification = meta.get("classification") if isinstance(meta, dict) else None
+                            effect = classification.get("effect") if isinstance(classification, dict) else None
+                            if effect in {"read_only", "mutating", "destructive"}:
+                                local = replace(local, local_effect=effect)
                     else:
                         result = await self._assessments.assess(
                             binding,
@@ -211,6 +241,7 @@ class PolicyAuthority:
                 if not checkpoint_ref:
                     decision = FactDecision("escalate", "savepoint_unavailable", True)
 
+        decision = replace(decision, policy_version=selected_policy)
         if decision.action in {"escalate", "deny"} and await is_current():
             proposed = json.dumps(
                 {
@@ -275,6 +306,7 @@ class PolicyAuthority:
                 metadata={
                     "admission_id": pin.admission_id,
                     "budget_id": pin.budget_id,
+                    "preset": str(local.preset),
                     "contract": pin.contract.model_dump(mode="json"),
                     "execution": asdict(execution),
                     "metadata": origin.model_dump(mode="json"),
@@ -293,6 +325,8 @@ class PolicyAuthority:
                     "approval_id": approval_id,
                     "checkpoint_ref": checkpoint_ref,
                     "assessment_reason": assessment_reason,
+                    "retained_decision": retained_decision,
+                    "retained_action": asdict(retained_action) if retained_action is not None else None,
                     "budget_snapshot": None
                     if totals is None
                     else {
@@ -318,4 +352,11 @@ class PolicyAuthority:
             proceed = False
         if not await is_current():
             proceed = False
-        return Authorization(proceed, decision, decision_id, binding, approval_id, checkpoint_ref)
+        return Authorization(
+            proceed,
+            replace(decision, policy_version=selected_policy),
+            decision_id,
+            binding,
+            approval_id,
+            checkpoint_ref,
+        )

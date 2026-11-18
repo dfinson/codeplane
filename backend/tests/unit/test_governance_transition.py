@@ -389,3 +389,29 @@ def test_lazy_operator_import_command_uses_active_home_and_refuses_a_live_runtim
     imported = CliRunner().invoke(cli, ["governance-transition", "import-legacy"])
     assert imported.exit_code == 0, imported.output
     assert json.loads(imported.output)["status"] == "imported"
+
+
+async def test_retained_preview_rehydrates_original_budget_and_scoped_grants_after_restart(populated):
+    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+    from backend.services.action_policy.retained_provider import RetainedGovernance
+
+    directory, original = populated
+    assert original.grant_trust("legacy-job", "mutating_locked", 3600, reason="retained exact write scope")
+    with GovernanceRuntimeLease(directory, exclusive=True) as lease:
+        importer(directory).import_original(lease)
+    ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+    await ledger.initialize()
+    retained = RetainedGovernance(
+        ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
+    )
+    try:
+        action = Action(kind=ActionKind.file, tool_name="write_file", path="code.py", job_id="legacy-job")
+        for _ in range(2):
+            decision, evidence = await retained.classify(action, Preset.locked)
+            assert decision.action == "allow"
+            assert evidence["meta"]["budget"]["total_tool_calls"] == 2
+            assert (await ledger.job_totals("legacy-job")).executed_calls == 1
+        importer(directory).require_verified()
+    finally:
+        await retained.close()
+        await ledger.close()

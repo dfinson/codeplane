@@ -8,7 +8,7 @@ from backend.models.domain import StateConflictError
 from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from backend.persistence.execution_contract_repo import ExecutionContractRepository
 
@@ -20,6 +20,7 @@ class ExecutionContracts:
         *,
         available: Mapping[str, ExecutionContract],
         selected_for_new: str,
+        select_for_job: Callable[[str, ExecutionContract | None], Awaitable[ExecutionContract]] | None = None,
     ) -> None:
         self._repository = repository
         self._available = {key: value.model_copy(deep=True) for key, value in available.items()}
@@ -28,6 +29,7 @@ class ExecutionContracts:
         if selected_for_new not in self._available:
             raise ValueError("Selected admission contract has no available implementation")
         self._selected = selected_for_new
+        self._select_for_job = select_for_job
 
     def require_available(self, pin: ExecutionContractPin) -> None:
         if self._available.get(pin.contract.id) != pin.contract:
@@ -40,12 +42,19 @@ class ExecutionContracts:
         retained = await self._repository.get(job_id, admission_id)
         if retained is not None:
             self.require_available(retained)
+            if self._select_for_job is not None:
+                await self._select_for_job(job_id, retained.contract)
             return retained
+        selected = self._available[self._selected].model_copy(deep=True)
+        if self._select_for_job is not None:
+            selected = await self._select_for_job(job_id, await self._repository.previous_contract(job_id))
+            if self._available.get(selected.id) != selected:
+                raise StateConflictError("The Job's retained implementation requires explicit reconciliation")
         pin = ExecutionContractPin(
             job_id=job_id,
             admission_id=admission_id,
             budget_id=job_id,
-            contract=self._available[self._selected].model_copy(deep=True),
+            contract=selected,
         )
         return await self._repository.create(pin)
 
@@ -54,6 +63,8 @@ class ExecutionContracts:
         pin = await self._repository.get(job_id, admission_id)
         if pin is not None:
             self.require_available(pin)
+            if self._select_for_job is not None:
+                await self._select_for_job(job_id, pin.contract)
         return pin
 
     async def bind_handle(

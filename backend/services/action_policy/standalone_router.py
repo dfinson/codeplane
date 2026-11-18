@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,7 +11,9 @@ import structlog
 
 from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, new_event
+from backend.persistence.legacy_governance_repo import LEGACY_POLICY
 from backend.services.action_policy.agt_policy import PolicyInput
+from backend.services.action_policy.classifier import Action, ActionKind
 from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.auth.permission_policy import is_hard_gated_command
 from backend.services.auth.workspace_paths import workspace_target
@@ -137,6 +140,8 @@ class StandalonePolicyRouter:
             protected_write=protected and request.kind != "read",
             local_scope="external" if paths and not contained else None,
         )
+        if self.pin.contract.policy.id == LEGACY_POLICY and invocation.provider == "codeplane.command" and not command:
+            local = replace(local, local_effect="unknown")
 
         async def savepoint() -> str | None:
             if not await current():
@@ -171,6 +176,25 @@ class StandalonePolicyRouter:
             tool_call_id=invocation.tool_call_id,
             is_current=current,
             savepoint=savepoint,
+            retained_action=Action(
+                kind=ActionKind.shell
+                if command
+                else ActionKind.file
+                if request.kind == "write"
+                else ActionKind.mcp_tool
+                if request.kind == "mcp"
+                else ActionKind.sdk_tool,
+                job_id=invocation.job_id,
+                path=request.file_name or request.path,
+                command=command or None,
+                tool_name=invocation.tool_name or request.kind,
+                mcp_tool=invocation.tool_name if request.kind == "mcp" else None,
+                mcp_read_only=request.read_only is True,
+                workspace_path=invocation.workspace,
+                outside_worktree=bool(paths) and not contained,
+            )
+            if self.pin.contract.policy.id == LEGACY_POLICY
+            else None,
         )
         await self._events.publish(
             new_event(
@@ -179,8 +203,8 @@ class StandalonePolicyRouter:
                 {
                     "recommendedAction": authorized.decision.action,
                     "reasonCode": authorized.decision.reason_code,
-                    "riskScore": None,
-                    "riskBand": "unknown",
+                    "riskScore": authorized.decision.risk_score,
+                    "riskBand": authorized.decision.risk_band,
                     "tool_name": invocation.tool_name,
                     "decision_id": authorized.decision_id,
                     "action_digest": authorized.binding.sha256,
