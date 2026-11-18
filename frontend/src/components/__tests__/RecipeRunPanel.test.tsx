@@ -113,3 +113,23 @@ it("retains the exact continuation request after an unconfirmed response", async
   expect(first?.[1]).toBe("job-run-2");
   expect(resumeJob).not.toHaveBeenCalled();
 });
+
+it("offers explicit same-run recovery without pretending it is a new revision or message", async () => {
+  const interrupted = { ...run(2), state: "interrupted" as const, completedAt: null, resolvedAt: null };
+  vi.mocked(fetchCurrentRecipeRun).mockResolvedValue({ run: interrupted });
+  vi.mocked(fetchRecipeRun).mockResolvedValue(interrupted);
+  vi.mocked(resumeSelectedRecipeRun).mockRejectedValue(new Error("Effects still require reconciliation"));
+  useStore.setState({ jobs: { job: {
+    id: "job", repo: "/repo", prompt: "Original request", state: "failed", baseRef: "main",
+    worktreePath: "/repo/work", branch: "work", createdAt: interrupted.createdAt,
+    updatedAt: interrupted.updatedAt, completedAt: null,
+  } } });
+  render(<RecipeRunPanel jobId="job" />);
+  fireEvent.click(await screen.findByText("Recover pinned run"));
+  await screen.findByRole("alert");
+  expect(resumeSelectedRecipeRun).toHaveBeenCalledWith(
+    "job", "job-run-2", expect.any(String), "Recover only this pinned run and retained attempts.",
+  );
+  expect(screen.queryByLabelText("Recipe continuation instruction")).not.toBeInTheDocument();
+  expect(resumeJob).not.toHaveBeenCalled();
+});

@@ -107,7 +107,7 @@ test("publishes, executes a real command and inspects exact evidence and review 
   const draftResponse = await request.post("/api/recipes", { data: {
     name: "Actual command browser journey", entrySteps: ["check"], steps: [{
       id: "check", title: "Actual Git check", instructions: "Inspect the pinned code.",
-      runner: { kind: "command", argv: ["git", "status", "--porcelain"], timeoutSeconds: 30 },
+      runner: { kind: "command", argv: ["sh", "-c", "printf '\\nFixture review change\\n' >> README.md; git diff --check"], timeoutSeconds: 30 },
       capabilities: ["read", "shell", "write", "external_access"], workspace: { mode: "mutable" },
       outputs: { result: { type: "object" }, code: { type: "code_ref" } },
       routes: { succeeded: { terminal: "succeeded" }, failed: { terminal: "failed" } },
@@ -148,6 +148,7 @@ test("publishes, executes a real command and inspects exact evidence and review 
   await page.getByRole("button", { name: "Review", exact: true }).click();
   const review = page.getByRole("complementary", { name: "Evidence for this decision" });
   await expect(review).toBeVisible();
+  await expect(page.getByText("Recipe questions must target an exact live attempt. Use the Run inspector, or explicit Resume for a new run.")).toBeVisible();
   await review.getByRole("checkbox").first().check();
   await review.getByRole("button", { name: "Retain selected review evidence" }).click();
   await expect(review.getByText("Selected code and evidence retained. Rationale has not been recorded.")).toBeVisible();

@@ -54,6 +54,7 @@ function JobRecipePanel({ jobId, ...target }: RecipeRunTarget) {
 }
 
 function RecipeRunBrowser({ jobId, current, requestedRunId, requestedStepId, requestedAttemptId }: RecipeRunTarget & { current: RecipeRun }) {
+  const jobState = useStore((state) => state.jobs[jobId]?.state);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(requestedRunId ?? null);
   const [historyPage, setHistoryPage] = useState<{ after: number; highWater?: number }>({ after: 0 });
   const [refresh, setRefresh] = useState(0);
@@ -112,13 +113,13 @@ function RecipeRunBrowser({ jobId, current, requestedRunId, requestedStepId, req
       <p className="break-all text-xs text-muted-foreground">{selected.id} / snapshot {selected.snapshotChecksum}</p>
       {selected.id !== current.id && <p className="rounded-md border border-border bg-card p-3 text-sm">Historical run. Current instructions, approvals and completion are not inherited from this record.</p>}
       {selected.instruction && <p className="whitespace-pre-wrap text-sm">{selected.instruction}</p>}
-      {selected.id === current.id && selected.resolvedAt && <RecipeContinuation key={`continue:${selected.id}`} jobId={jobId} run={selected} />}
+      {selected.id === current.id && (selected.resolvedAt || jobState === "failed") && <RecipeContinuation key={`continue:${selected.id}:${Boolean(selected.resolvedAt)}`} jobId={jobId} run={selected} recovery={!selected.resolvedAt} />}
       <RunSteps key={`steps:${selected.id}`} jobId={jobId} run={selected} initialStepId={(!requestedRunId || selected.id === requestedRunId) ? requestedStepId : undefined} initialAttemptId={(!requestedRunId || selected.id === requestedRunId) ? requestedAttemptId : undefined} />
     </> : null}
   </div>;
 }
 
-function RecipeContinuation({ jobId, run }: { jobId: string; run: RecipeRun }) {
+function RecipeContinuation({ jobId, run, recovery }: { jobId: string; run: RecipeRun; recovery: boolean }) {
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,19 +131,20 @@ function RecipeContinuation({ jobId, run }: { jobId: string; run: RecipeRun }) {
     return () => { active.current = false; };
   }, []);
   async function resume() {
-    if (!instruction.trim() || reserved.current) return;
+    if ((!recovery && !instruction.trim()) || reserved.current) return;
     reserved.current = true;
     setBusy(true);
     setError(null);
-    pending.current ??= { key: crypto.randomUUID(), instruction };
+    pending.current ??= { key: crypto.randomUUID(), instruction: recovery ? "Recover only this pinned run and retained attempts." : instruction };
     try {
       const receipt = await resumeSelectedRecipeRun(jobId, run.id, pending.current.key, pending.current.instruction);
       if (!active.current) return;
-      if (receipt.recipeRun.jobId !== jobId || receipt.recipeRun.continuationOfId !== run.id) throw new Error("Resume returned a different run identity.");
+      if (receipt.recipeRun.jobId !== jobId || (recovery ? receipt.recipeRun.id !== run.id : receipt.recipeRun.continuationOfId !== run.id)) throw new Error("Resume returned a different run identity.");
       useStore.setState((state) => ({
         recipeCurrentRuns: { ...state.recipeCurrentRuns, [jobId]: receipt.recipeRun },
         recipeRuns: { ...state.recipeRuns, [receipt.recipeRun.id]: receipt.recipeRun },
         recipeVersions: { ...state.recipeVersions, [jobId]: (state.recipeVersions[jobId] ?? 0) + 1 },
+        jobs: state.jobs[jobId] ? { ...state.jobs, [jobId]: { ...state.jobs[jobId], state: receipt.state, updatedAt: receipt.updatedAt } } : state.jobs,
       }));
     } catch (cause: unknown) {
       if (active.current) setError(`${String(cause)}. The same Resume request is retained; no new run is assumed.`);
@@ -152,10 +154,10 @@ function RecipeContinuation({ jobId, run }: { jobId: string; run: RecipeRun }) {
     }
   }
   return <section className="space-y-2 rounded-lg border border-border bg-card p-3" aria-label="Explicit recipe continuation">
-    <p className="text-sm font-medium">Continue this Job with a new pinned run</p>
-    <p className="text-xs text-muted-foreground">Retains this recipe revision and current code. Prior attempts, approvals and completion remain historical. This is separate from messaging a running attempt.</p>
-    <textarea aria-label="Recipe continuation instruction" value={instruction} disabled={busy || pending.current !== null} onChange={(event) => setInstruction(event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-sm" />
-    <Button size="sm" disabled={busy || !instruction.trim()} onClick={() => void resume()}>{pending.current ? "Retry same Resume receipt" : "Resume Job with new run"}</Button>
+    <p className="text-sm font-medium">{recovery ? "Recover this pinned run" : "Continue this Job with a new pinned run"}</p>
+    <p className="text-xs text-muted-foreground">{recovery ? "Retains the exact run, instructions, completed branches and attempts. Operator-stopped or uncertain effects remain paused for explicit Resume or reconciliation." : "Retains this recipe revision and current code. Prior attempts, approvals and completion remain historical. This is separate from messaging a running attempt."}</p>
+    {!recovery && <textarea aria-label="Recipe continuation instruction" value={instruction} disabled={busy || pending.current !== null} onChange={(event) => setInstruction(event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-sm" />}
+    <Button size="sm" disabled={busy || (!recovery && !instruction.trim())} onClick={() => void resume()}>{pending.current ? "Retry same Resume receipt" : recovery ? "Recover pinned run" : "Resume Job with new run"}</Button>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
   </section>;
 }
