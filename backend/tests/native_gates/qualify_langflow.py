@@ -21,6 +21,7 @@ else:
 Graph = load_sdk("lfx.graph.graph.base").Graph
 Output = load_sdk("lfx.io").Output
 StrInput = load_sdk("lfx.io").StrInput
+async_helpers = load_sdk(Component._get_output_result.__globals__["async_delegate_target"].__module__)
 
 
 class InertComponent(Component):
@@ -52,8 +53,23 @@ class AsyncInertComponent(Component):
         return f"{self.value}:handled"
 
 
-@pytest.mark.parametrize("outcome", ["allow", "deny", "untrusted", "error", "cancel", "mutated"])
-@pytest.mark.parametrize("component_type", [InertComponent, AsyncInertComponent])
+class DelegatedInertComponent(InertComponent):
+    @async_helpers.delegates_to("produce_async")
+    def produce(self) -> str:
+        return str(async_helpers.run_until_complete(self.produce_async()))
+
+    async def produce_async(self) -> str:
+        self.calls.append(self.get_id())
+        self.entered.set()
+        while not self.finish.is_set():
+            await asyncio.sleep(0.01)
+        if self.fail:
+            raise ValueError("inert component failure")
+        return f"{self.value}:handled"
+
+
+@pytest.mark.parametrize("outcome", ["allow", "deny", "untrusted", "error", "cancel", "mutated", "selector-change"])
+@pytest.mark.parametrize("component_type", [InertComponent, AsyncInertComponent, DelegatedInertComponent])
 async def test_real_langflow_graph_connection_and_handler(composed_runtime, outcome, component_type):
     host, approvals, governance, create = composed_runtime
     job = await create()
@@ -78,6 +94,9 @@ async def test_real_langflow_graph_connection_and_handler(composed_runtime, outc
             decisions.append(event)
             if len(decisions) == 2 and outcome == "mutated":
                 destination.value = "changed-after-preflight"
+            if len(decisions) == 1 and outcome == "selector-change":
+                destination._outputs_map["result"].method = "unbound"
+                destination.unbound = lambda: calls.append(destination.get_id())
             await approvals.resolve(
                 event.payload["approval_id"], "rejected" if len(decisions) == 2 and outcome == "deny" else "approved"
             )
@@ -102,7 +121,7 @@ async def test_real_langflow_graph_connection_and_handler(composed_runtime, outc
             destination.finish.set()
             with pytest.raises(asyncio.CancelledError):
                 await task
-        elif outcome in {"deny", "untrusted", "error", "mutated"}:
+        elif outcome in {"deny", "untrusted", "error", "mutated", "selector-change"}:
             with pytest.raises(Exception) as failure:
                 await task
             assert any(word in str(failure.value).lower() for word in ("denied", "trust", "changed", "failure"))
@@ -147,3 +166,34 @@ async def test_exported_trust_configuration_is_not_a_langflow_run(composed_runti
     )
     with pytest.raises(TypeError, match="actual caller-owned"):
         await task
+
+
+async def test_langflow_sync_delegate_counts_one_actual_component_operation(composed_runtime):
+    host, approvals, governance, create = composed_runtime
+    job = await create()
+    component = DelegatedInertComponent()
+    component.calls = []
+    component.entered, component.finish = threading.Event(), threading.Event()
+    component.finish.set()
+    component.fail = False
+    flow = Graph(start=component, end=component, flow_id="caller-owned-flow")
+    trust = TrustGatedFlow()
+    trust.register_node(component.get_id(), trust_score=0.9)
+    decisions = []
+
+    async def approve(event):
+        if event.kind == "permission.requested":
+            decisions.append(event)
+            await approvals.resolve(event.payload["approval_id"], "approved")
+
+    host._event_bus.subscribe(approve)
+    task = await host.start_native(
+        job.id,
+        family="langflow",
+        target=LangflowTarget(flow, trust),
+        invoke=lambda: component.produce(),
+        synchronous=True,
+    )
+    assert await task == "source-input:handled"
+    assert component.calls == [component.get_id()] and len(decisions) == 1
+    assert (await governance._ledger.job_totals(job.id)).executed_calls == 1

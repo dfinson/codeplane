@@ -110,7 +110,9 @@ without that source correlation remains in local history, not inferred accrual.
 Langflow uses the actual `lfx==1.13.3` host engine with core 5.0.0
 `TrustGatedFlow`, `IdentityComponent` and blocking `TrustVerificationComponent`.
 Connection trust and Runtime policy precede the original sync/async output
-method. Real graph edges, node IDs, flow/run IDs and component DIDs remain source
+method, including the host's native async-delegate dispatch. Thin sync delegates
+retain one operation receipt, and changed output selectors fail closed.
+Real graph edges, node IDs, flow/run IDs and component DIDs remain source
 evidence. Runtime retains entered work until completion and exact detach leaves
 the host graph intact. Trust configuration export alone is not execution.
 

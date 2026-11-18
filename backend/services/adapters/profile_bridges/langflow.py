@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import wraps
@@ -63,10 +64,17 @@ def install(gate: GateAttachment, target: object) -> None:
 
     attached = topology()
 
-    def wrap(name: str, component: Any, method: str) -> None:
+    def wrap(
+        name: str,
+        component: Any,
+        method: str,
+        active: ContextVar[tuple[str, NativeCall] | None],
+        delegates: dict[str, str],
+    ) -> None:
         original = getattr(component, method, None)
         if not callable(original):
             raise TypeError("Langflow output must have an actual callable handler")
+        signature = inspect.signature(original)
         holder = SimpleNamespace(call=original)
         gate.track_callable(holder, "call")
 
@@ -115,17 +123,21 @@ def install(gate: GateAttachment, target: object) -> None:
 
         @wraps(original)
         def synchronous(*args: Any, **kwargs: Any) -> Any:
+            signature.bind(*args, **kwargs)
             call = prepare()
             if not gate.allow_sync(call):
                 raise NativeGateDeniedError("Langflow component denied before invocation")
 
             def invoke() -> Any:
+                token = active.set((method, call))
                 observe("component_started", call, arguments=call.arguments)
                 try:
                     result = holder.call(*args, **kwargs)
                 except BaseException as exc:
                     observe("component_failed", call, error_type=type(exc).__name__, success=False)
                     raise
+                finally:
+                    active.reset(token)
                 observe("component_completed", call, success=True)
                 return result
 
@@ -133,17 +145,29 @@ def install(gate: GateAttachment, target: object) -> None:
 
         @wraps(original)
         async def asynchronous(*args: Any, **kwargs: Any) -> Any:
+            signature.bind(*args, **kwargs)
+            parent = active.get()
+            if parent is not None and delegates.get(parent[0]) == method:
+                await gate.require_entry(parent[1])
+                token = active.set(None)
+                try:
+                    return await holder.call(*args, **kwargs)
+                finally:
+                    active.reset(token)
             call = prepare()
             if not await gate.allow(call):
                 raise NativeGateDeniedError("Langflow component denied before invocation")
 
             async def invoke() -> Any:
+                token = active.set((method, call))
                 observe("component_started", call, arguments=call.arguments)
                 try:
                     result = await holder.call(*args, **kwargs)
                 except BaseException as exc:
                     observe("component_failed", call, error_type=type(exc).__name__, success=False)
                     raise
+                finally:
+                    active.reset(token)
                 observe("component_completed", call, success=True)
                 return result
 
@@ -151,10 +175,37 @@ def install(gate: GateAttachment, target: object) -> None:
 
         gate.patch(component, method, asynchronous if inspect.iscoroutinefunction(original) else synchronous)
 
+    def guard_dispatch(component: Any, selectors: dict[str, str], delegates: dict[str, str]) -> None:
+        original = component._get_output_result
+
+        @wraps(original)
+        async def dispatch(output: Any) -> Any:
+            gate.validate()
+            if not gate.active or not await gate.binding.current():
+                raise NativeGateDeniedError("Langflow output dispatch is no longer admitted")
+            gate.validate()
+            method = selectors.get(output.name)
+            if method is None or output.method != method:
+                raise NativeGateDeniedError("Langflow output selector changed after attachment")
+            if getattr(getattr(component, method), "__lfx_async_delegate__", None) != delegates.get(method):
+                raise NativeGateDeniedError("Langflow async delegation changed after attachment")
+            return await original(output)
+
+        gate.patch(component, "_get_output_result", dispatch)
+
     for name, component in nodes:
         gate.claim(component)
         methods = {output.method for output in component._outputs_map.values()}
         if not methods or None in methods:
             raise ValueError("Langflow requires concrete output handlers")
+        delegates = {}
         for method in methods:
-            wrap(name, component, method)
+            delegate = getattr(getattr(component, method), "__lfx_async_delegate__", None)
+            if delegate is not None:
+                if not isinstance(delegate, str) or not inspect.iscoroutinefunction(getattr(component, delegate, None)):
+                    raise ValueError("Langflow async delegation must identify an actual coroutine handler")
+                delegates[method] = delegate
+        active: ContextVar[tuple[str, NativeCall] | None] = ContextVar("langflow_component_call", default=None)
+        for method in methods | set(delegates.values()):
+            wrap(name, component, method, active, delegates)
+        guard_dispatch(component, {output.name: output.method for output in component._outputs_map.values()}, delegates)
