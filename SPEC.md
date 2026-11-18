@@ -34,7 +34,12 @@ and advances the existing source/projection CAS atomically. Exact and overlappin
 retries do not reprocess accepted spans. Changed observations of the same native
 span remain distinct evidence. Concurrent conflicts return retryable HTTP 503,
 not an execution retry. JSON bodies remain bounded to 1 MiB and 1,000 spans.
-HTTP/protobuf is explicitly unsupported (415), independent of exporter packages.
+HTTP/protobuf uses the optional `opentelemetry-proto==1.45.2` and
+`protobuf==7.35.0` codec, independent of exporter packages. An absent or
+unsupported codec returns explicit unavailability, without loading a client.
+Install `codeplane[otlp-ingest]` to enable that codec; the default core omits it.
+Binary requests use the same credentials, limits and durable span receipts as
+JSON, including deduplication across equivalent wire encodings.
 Metadata-only observations retain missing usage and arguments as unknown.
 
 Trusted native acquisition can supply a typed `AcquisitionCheckpoint` to

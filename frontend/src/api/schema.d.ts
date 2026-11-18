@@ -15906,6 +15906,7 @@ export interface operations {
                         [key: string]: unknown;
                     }[];
                 };
+                "application/x-protobuf": string;
             };
         };
         responses: {
@@ -15916,6 +15917,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OtlpExportResponse"];
+                    "application/x-protobuf": string;
                 };
             };
             /** @description Validation Error */

@@ -66,3 +66,20 @@ def test_support_implementation_dependency_validation_enablement_are_independent
         if op.id == "gate"
     )
     assert not gate.dependency.ready and "Unsupported" in gate.dependency.reason
+
+
+@pytest.mark.parametrize("installed", [None, "0.0.0"])
+def test_optional_protobuf_readiness_fails_before_loading_codec(monkeypatch, installed):
+    from backend.services.ingest import otlp_codec
+
+    def version(package):
+        if installed is None:
+            raise otlp_codec.PackageNotFoundError(package)
+        return installed
+
+    monkeypatch.setattr(otlp_codec, "version", version)
+    before = set(sys.modules)
+    assert not otlp_codec.protobuf_readiness().ready
+    with pytest.raises(otlp_codec.OtlpCodecUnavailableError):
+        otlp_codec.protobuf_to_json(b"")
+    assert not any(name.startswith(("opentelemetry", "google.protobuf")) for name in set(sys.modules) - before)

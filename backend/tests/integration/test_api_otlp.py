@@ -95,7 +95,7 @@ async def test_real_http_otlp_scoped_admission_replay_revocation_and_history(
     config.runtime.copilot_only = True
     assert (await source.post(endpoint, json=otlp(3), headers=headers)).status_code == 403
     config.runtime.copilot_only = False
-    binary = await source.post(endpoint, content=b"", headers={**headers, "content-type": "application/x-protobuf"})
+    binary = await source.post(endpoint, content=b"", headers={**headers, "content-type": "application/octet-stream"})
     assert binary.status_code == 415
     revoked = await operator.delete("/api/integrations/first/ingest-credential")
     assert revoked.status_code == 204

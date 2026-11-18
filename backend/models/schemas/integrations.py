@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, RootModel, field_validator, model_validator
 
 from backend.models.schemas.base import CamelModel
 from backend.models.session_event import CanonicalSessionEvent  # noqa: TC001 - Pydantic resolves at runtime.
@@ -73,6 +73,10 @@ class OtlpTraceRequest(CamelModel):
     """OTLP JSON envelope. Typed attributes/spans are validated by the bounded codec."""
 
     resource_spans: list[dict[str, Any]]
+
+
+class OtlpBinaryBody(RootModel[bytes]):
+    """OTLP ExportTraceServiceRequest/Response protobuf wire bytes."""
 
 
 class IntegrationDependencyReadiness(CamelModel):
