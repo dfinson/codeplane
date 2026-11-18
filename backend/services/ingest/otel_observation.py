@@ -24,7 +24,7 @@ _EMPTY_STATE = DecoderState(None, None, (), 0)
 
 def span_receipt_id(binding_id: str, external_session_id: str, span: dict[str, Any]) -> str:
     """Content is included so later, more complete observations are not discarded."""
-    digest = hashlib.sha256(canonical_record(span)).hexdigest()
+    digest = hashlib.sha256(canonical_record(_canonical_identities(span))).hexdigest()
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-otlp-span-v1:{binding_id}:{external_session_id}:{digest}"))
 
 
@@ -33,12 +33,25 @@ def validate_wire_identity(span: dict[str, Any]) -> None:
         value = span.get(key)
         if not isinstance(value, str) or re.fullmatch(rf"[0-9a-fA-F]{{{width}}}", value) is None or int(value, 16) == 0:
             raise ValueError(f"OTLP {key} must be a nonzero {width}-digit hexadecimal identity")
-        span[key] = value.lower()
     parent = span.get("parentSpanId")
-    if parent not in (None, ""):
-        if not isinstance(parent, str) or re.fullmatch(r"[0-9a-fA-F]{16}", parent) is None:
-            raise ValueError("OTLP parentSpanId must be a 16-digit hexadecimal identity")
-        span["parentSpanId"] = parent.lower()
+    if parent not in (None, "") and (not isinstance(parent, str) or re.fullmatch(r"[0-9a-fA-F]{16}", parent) is None):
+        raise ValueError("OTLP parentSpanId must be a 16-digit hexadecimal identity")
+
+
+def _canonical_identities(span: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(span)
+    for key, width in (
+        ("traceId", 32),
+        ("trace_id", 32),
+        ("spanId", 16),
+        ("span_id", 16),
+        ("parentSpanId", 16),
+        ("parent_span_id", 16),
+    ):
+        value = span.get(key)
+        if isinstance(value, str) and re.fullmatch(rf"[0-9a-fA-F]{{{width}}}", value):
+            normalized[key] = value.lower()
+    return normalized
 
 
 class OtelObservationDecoder:
@@ -75,9 +88,10 @@ class OtelObservationDecoder:
                 "record": digest,
             }
         ).decode()
+        identity_span = _canonical_identities(raw)
         try:
             event = span_event(
-                raw,
+                identity_span,
                 job_id=self.job_id,
                 binding_id=self.binding_id,
                 source="generic-otel",
@@ -97,8 +111,8 @@ class OtelObservationDecoder:
                 "end_time",
             )
         )
-        trace = raw.get("traceId", raw.get("trace_id"))
-        span = raw.get("spanId", raw.get("span_id"))
+        trace = identity_span.get("traceId", identity_span.get("trace_id"))
+        span = identity_span.get("spanId", identity_span.get("span_id"))
         owner = {"job": self.job_id, "binding": self.binding_id, "session": self.external_session_id}
         group_scope = {**owner, "trace": trace} if isinstance(trace, str) and trace else owner
         turn_id = str(
