@@ -176,7 +176,10 @@ class NativeExecutions:
 
             async def drain() -> None:
                 results = await asyncio.gather(
-                    *(source.close() for source in admitted_sources), finish_registrations(), return_exceptions=True
+                    *(source.close() for source in admitted_sources),
+                    finish_registrations(),
+                    *(self.cancel_controls(execution) for execution in executions),
+                    return_exceptions=True,
                 )
                 errors = [result for result in results if isinstance(result, BaseException)]
                 if errors:
@@ -316,11 +319,13 @@ class NativeExecutions:
 
     async def cancel_job(self, job_id: str) -> bool:
         executions = self.for_job(job_id)
+        self.host.external_gates.revoke_job(job_id)
         # Fence every binding before the first await.
         for execution in executions:
             execution.cancel_requested = True
             execution.gates.cancel()
-        for execution in executions:
+
+        async def retire(execution: NativeExecution) -> None:
             await self._retire_approvals(execution)
             await self._repository.record(
                 execution.identity,
@@ -329,6 +334,16 @@ class NativeExecutions:
                 "cancel_requested",
                 execution.metadata,
             )
+
+        results = await asyncio.gather(
+            *(retire(execution) for execution in executions),
+            *(self.cancel_controls(execution) for execution in executions),
+            self.host.external_gates.retire_job(job_id),
+            return_exceptions=True,
+        )
+        errors = [value for value in results if isinstance(value, Exception)]
+        if errors:
+            raise ExceptionGroup("Execution cancellation requires reconciliation", errors)
         return bool(executions)
 
     async def detach(self, identity: ExecutionIdentity) -> str:
@@ -337,10 +352,17 @@ class NativeExecutions:
             raise StateConflictError("Native binding has ended or been replaced")
         execution.cancel_requested = True
         execution.gates.cancel()
-        await self._retire_approvals(execution)
-        await self._repository.record(
-            identity, execution.pin, execution.gates.binding.family, "cancel_requested", execution.metadata
+        results = await asyncio.gather(
+            self.cancel_controls(execution),
+            self._retire_approvals(execution),
+            self._repository.record(
+                identity, execution.pin, execution.gates.binding.family, "cancel_requested", execution.metadata
+            ),
+            return_exceptions=True,
         )
+        errors = [value for value in results if isinstance(value, Exception)]
+        if errors:
+            raise ExceptionGroup("Native detach requires reconciliation", errors)
         return "cancel-requested"
 
     async def invoke[T](
@@ -510,6 +532,7 @@ class NativeExecutions:
             await attempt(self._retire_approvals(execution))
             if execution.cancel_requested:
                 await attempt(self._repository.record(identity, pin, family, "cancel_requested", metadata))
+                await attempt(self.cancel_controls(execution))
             if worker is not None:
                 try:
                     await retain_task(worker)
@@ -519,6 +542,7 @@ class NativeExecutions:
                     if execution.cancel_requested:
                         log.warning("native_cancelled_worker_failed", job_id=job_id, error_type=type(exc).__name__)
             await gates.binding.drain_work()
+            await attempt(gates.binding.drain_controls())
             for registration in tuple(execution.observation_registrations.values()):
                 try:
                     await retain_task(registration)
@@ -546,6 +570,9 @@ class NativeExecutions:
 
                 await attempt(record_result())
             await attempt(gates.binding.report_unfinished())
+            if execution.cancel_requested:
+                await attempt(self.cancel_controls(execution))
+            await attempt(gates.binding.drain_controls())
             try:
                 gates.close()
             except Exception as exc:

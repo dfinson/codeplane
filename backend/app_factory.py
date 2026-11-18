@@ -32,6 +32,7 @@ from backend.api import (
     chats,
     credentials,
     events,
+    external_gate,
     health,
     hooks,
     integrations,
@@ -237,6 +238,7 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(tracker_links.router, prefix="/api")
     app.include_router(recipes.router, prefix="/api")
     app.include_router(integrations.router, prefix="/api")
+    app.include_router(external_gate.router, prefix="/api")
     app.include_router(recipe_runs.router, prefix="/api")
     app.include_router(reviews.router, prefix="/api")
 
