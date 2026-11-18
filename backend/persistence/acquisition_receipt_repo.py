@@ -53,9 +53,7 @@ class AcquisitionReceiptRepository(BaseRepository):
             raise ValueError("Acquisition receipt lookup exceeds one bounded page")
         query = (
             """
-SELECT DISTINCT json_extract(record.value, '$.identity') AS identity,
-                json_extract(record.value, '$.sequence') AS sequence,
-                json_extract(record.value, '$.sha256') AS sha256
+SELECT DISTINCT record.value AS record_json
 """
             + _RECEIPTS
             + """
@@ -68,9 +66,17 @@ SELECT DISTINCT json_extract(record.value, '$.identity') AS identity,
         found: dict[str, dict[str, Any]] = {}
         try:
             async for row in result:
-                identity, sequence, digest = row
+                try:
+                    entry = json.loads(row[0])
+                except (TypeError, ValueError):
+                    raise StateConflictError("Acquisition receipt identity history is malformed") from None
+                if not isinstance(entry, dict):
+                    raise StateConflictError("Acquisition receipt identity history is malformed")
+                identity, sequence, digest = entry.get("identity"), entry.get("sequence"), entry.get("sha256")
                 if not isinstance(identity, str) or not isinstance(digest, str):
                     raise StateConflictError("Acquisition receipt identity history is malformed")
+                if sequence is not None and (isinstance(sequence, bool) or not isinstance(sequence, (int, str))):
+                    raise StateConflictError("Acquisition receipt sequence history is malformed")
                 item = {"identity": identity, "sequence": sequence, "sha256": digest}
                 if identity in found and found[identity] != item:
                     raise StateConflictError("Acquisition receipt identity history is inconsistent")
