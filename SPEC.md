@@ -92,8 +92,20 @@ Flowise remote session IDs and MCP protocol-session/request IDs remain source
 evidence, distinct from CodePlane operation identities. A lost response remains
 uncertain, and local cancellation never invents remote abort. MCP revocation
 uses the native cancellation notification and retains acknowledgment or a late
-result separately. Stdio and upstream MCP server trust middleware are not
-qualified by the Streamable HTTP client implementation.
+result separately. The standard stdio client is separately qualified against a
+real local MCP process. Its command/environment snapshot is bound to the
+admitted operation, not exposed as a public process-launch route.
+
+Caller-owned FastMCP servers can attach the released `TrustGatedMCPServer` to
+their actual registered handlers. The client must sign a short-lived,
+single-use proof of the exact binding, epoch, endpoint, native request ID, tool
+and argument digest with its pinned key. Self-asserted DID/capability metadata
+is not authority. Verified identity precedes common policy, then upstream
+trust/capability checks and an exact normalized-argument entry fence precede the
+original handler. SDK cancellation drains receipt transactions outside the
+SDK's cancellation scope. Sync handlers remain retained until actual completion,
+including late successful completion after a cancellation request. No agent
+steering or ownership of the caller's host lifecycle is inferred.
 
 The Haystack bridge qualifies `haystack-ai==3.0.0` with the core 5.0.0
 `TrustedPipeline`/blocking `TrustGateComponent`. The actual caller-owned

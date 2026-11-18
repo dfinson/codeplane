@@ -85,7 +85,7 @@ def test_optional_protobuf_readiness_fails_before_loading_codec(monkeypatch, ins
     assert not any(name.startswith(("opentelemetry", "google.protobuf")) for name in set(sys.modules) - before)
 
 
-def test_qualified_request_bridges_are_reported_without_claiming_unqualified_transports():
+def test_qualified_request_bridges_report_actual_protocol_evidence():
     rows = {row.profile_id: row for row in AdapterRegistry().list_profiles().profiles}
     for profile in ("flowise", "mcp", "a2a"):
         row = rows[profile]
@@ -95,6 +95,10 @@ def test_qualified_request_bridges_are_reported_without_claiming_unqualified_tra
         assert observed.implemented and observed.validation_status == "local-fixture-qualified"
     mcp = rows["mcp"]
     assert all("stdio" in " ".join(operation.limitations) for operation in mcp.operations)
+    assert "TrustGatedMCPServer.invoke_tool" in mcp.hooks
+    assert all(
+        "backend/tests/native_gates/qualify_mcp_transports.py" in operation.evidence for operation in mcp.operations
+    )
     assert not rows["flowise"].utility_completion and not rows["mcp"].utility_completion
     a2a = rows["a2a"]
     cancel = next(operation for operation in a2a.operations if operation.id == "cancel")

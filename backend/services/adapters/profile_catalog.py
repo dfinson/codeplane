@@ -187,6 +187,8 @@ def _operation(
                 f"backend/tests/unit/test_{profile.id}_bridge.py",
                 "backend/tests/unit/test_profile_bridge_revocation.py",
             ]
+            if profile.id == "mcp":
+                evidence.append("backend/tests/native_gates/qualify_mcp_transports.py")
         limitations.append(
             "Requires the existing persisted Runtime admission, exact execution identity and native binding"
         )
@@ -195,11 +197,15 @@ def _operation(
             limitations.append("Stop is local: in-flight synchronous requests drain without claiming remote abort")
         elif profile.id == "mcp":
             limitations.append(
-                "Streamable HTTP client qualified; stdio and upstream server trust middleware are not qualified"
+                "Standard stdio and Streamable HTTP clients and authenticated upstream server trust are qualified"
             )
             limitations.append(
                 "MCP cancellation is requested until native acknowledgment or a separately observed result"
             )
+            limitations.append(
+                "Server caller identity requires a pinned signature over exact binding, epoch, request and arguments"
+            )
+            limitations.append("Runtime revocation fences requests; the caller retains host process lifecycle")
         else:
             limitations.append("Task input requires a source-confirmed input-required task/context")
             limitations.append(
@@ -248,7 +254,7 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
             bridge_hooks = (
                 ["predict", "upsert"]
                 if profile.id == "flowise"
-                else ["ClientSession.call_tool"]
+                else ["ClientSession.call_tool", "stdio_client", "FastMCP.call_tool", "TrustGatedMCPServer.invoke_tool"]
                 if profile.id == "mcp"
                 else ["message/send", "message/stream", "tasks/get", "tasks/cancel"]
             )
