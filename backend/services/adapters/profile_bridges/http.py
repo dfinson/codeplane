@@ -4,6 +4,9 @@ No route or process is launched by this bridge. CodePlane authentication and a
 distinct process-only binding credential precede preflight. HTTP completion is
 not proof that an external agent stopped. Generic HTTP supplies no token/currency
 usage contract, so status/body size never becomes inferred usage.
+Responses remain incremental and unbounded by telemetry limits. Authenticated
+host callbacks restore their previous observation context, and response ownership
+lasts through exhaustion or close. Only the selected framework's release is required.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from contextlib import suppress
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +39,7 @@ from backend.services.adapters.native_gates.binding import (
     encode_arguments,
 )
 from backend.services.adapters.native_gates.lifecycle import retain_task
+from backend.services.adapters.native_gates.observation_scope import native_execution_context
 from backend.services.adapters.native_gates.readiness import UnsupportedNativeHookError
 from backend.services.auth.middleware import AuthPolicy, is_request_authenticated
 from backend.services.ingest.mapping import canonical_record
@@ -98,13 +103,19 @@ def install(gate: GateAttachment, target: object) -> None:
     if not isinstance(target, HttpTarget):
         raise TypeError("HTTP bridge requires an explicitly configured HttpTarget")
     expected = {
-        "fastapi": ("fastapi", "FastAPI"),
-        "flask": ("flask", "Flask"),
-        "django": ("django.core.handlers.wsgi", "WSGIHandler"),
+        "fastapi": ("fastapi", "FastAPI", "0.136.3"),
+        "flask": ("flask", "Flask", "3.1.3"),
+        "django": ("django.core.handlers.wsgi", "WSGIHandler", "6.1.3"),
     }
     if target.framework not in expected:
         raise ValueError("Unqualified HTTP application framework")
-    module, symbol = expected[target.framework]
+    module, symbol, qualified = expected[target.framework]
+    try:
+        installed = version(target.framework)
+    except PackageNotFoundError as exc:
+        raise UnsupportedNativeHookError(f"Missing selected HTTP framework: {target.framework}") from exc
+    if installed != qualified:
+        raise UnsupportedNativeHookError(f"Unsupported {target.framework}; qualified HTTP release is {qualified}")
     if not isinstance(target.app, getattr(load_sdk(module), symbol)):
         raise TypeError("HTTP bridge requires the original framework application")
     if not target.auth_policy.enabled or not target.auth_policy.remote:
@@ -297,35 +308,13 @@ def install(gate: GateAttachment, target: object) -> None:
                 summary["status"] = message["status"]
             if message["type"] == "http.response.body":
                 summary["bytes"] += len(message.get("body", b""))
-                if summary["bytes"] > _LIMIT:
-                    raise ValueError("HTTP response exceeds 1 MiB")
                 summary["complete"] = not message.get("more_body", False)
             await send(message)
 
         await app(scope, receive, observed_send)
 
-    def wsgi_entry(environ: Any, start_response: Any, summary: dict[str, Any]) -> list[bytes]:
-        def observed_start(status: str, response_headers: Any, exc_info: Any = None) -> Any:
-            summary["status"] = int(status.split()[0])
-            return start_response(status, response_headers, exc_info)
-
-        result = app(environ, observed_start)
-        try:
-            content = []
-            for block in result:
-                summary["bytes"] += len(block)
-                if summary["bytes"] > _LIMIT:
-                    raise ValueError("HTTP response exceeds 1 MiB")
-                content.append(block)
-            summary["complete"] = True
-            return content
-        finally:
-            if hasattr(result, "close"):
-                result.close()
-
-    entry = SimpleNamespace(asgi=asgi_entry, wsgi=wsgi_entry)
+    entry = SimpleNamespace(asgi=asgi_entry)
     gate.track_callable(entry, "asgi")
-    gate.track_callable(entry, "wsgi")
 
     async def asgi(scope: Scope, receive: Receive, send: Send) -> None:
         if target.framework != "fastapi":
@@ -334,6 +323,25 @@ def install(gate: GateAttachment, target: object) -> None:
             raise PermissionError("This binding declares HTTP handlers only, not lifespan or WebSocket control")
         try:
             request, request_id = authenticate(scope)
+        except PermissionError as exc:
+            log.warning("native_http_request_refused", reason=str(exc))
+            await send({"type": "http.response.start", "status": 403, "headers": []})
+            await send({"type": "http.response.body", "body": b"Request refused"})
+            return
+        token = native_execution_context.set(binding)
+        try:
+            await authenticated_asgi(scope, receive, send, request, request_id)
+        finally:
+            native_execution_context.reset(token)
+
+    async def authenticated_asgi(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        request: Request,
+        request_id: str,
+    ) -> None:
+        try:
             chunks = bytearray()
             while True:
                 incoming = await receive()
@@ -363,7 +371,6 @@ def install(gate: GateAttachment, target: object) -> None:
             return await receive()
 
         summary = {"status": 0, "bytes": 0, "complete": False}
-        observe("request_started", call, body_sha256=hashlib.sha256(body).hexdigest())
 
         async def execute() -> None:
             pending = asyncio.create_task(entry.asgi(scope, replay, send, summary))
@@ -381,14 +388,19 @@ def install(gate: GateAttachment, target: object) -> None:
                 revoked.cancel()
                 await asyncio.gather(revoked, return_exceptions=True)
 
+        lifetime = gate.binding.begin_work(None)
         try:
-            await gate.complete(
-                call, execute, outcome=lambda _: bool(summary["complete"] and 200 <= summary["status"] < 400)
-            )
-        except BaseException:
-            observe("request_incomplete", call, remote_outcome="unknown")
-            raise
-        observe("request_completed", call, status=summary["status"], response_bytes=summary["bytes"])
+            observe("request_started", call, body_sha256=hashlib.sha256(body).hexdigest())
+            try:
+                await gate.complete(
+                    call, execute, outcome=lambda _: bool(summary["complete"] and 200 <= summary["status"] < 400)
+                )
+            except BaseException:
+                observe("request_incomplete", call, remote_outcome="unknown")
+                raise
+            observe("request_completed", call, status=summary["status"], response_bytes=summary["bytes"])
+        finally:
+            gate.binding.end_work(lifetime)
 
     def wsgi(environ: Any, start_response: Any) -> Any:
         if target.framework == "fastapi":
@@ -411,6 +423,18 @@ def install(gate: GateAttachment, target: object) -> None:
         }
         try:
             request, request_id = authenticate(scope)
+        except PermissionError as exc:
+            log.warning("native_http_request_refused", reason=str(exc))
+            start_response("403 Forbidden", [("Content-Type", "text/plain")])
+            return [b"Request refused"]
+        token = native_execution_context.set(binding)
+        try:
+            return authenticated_wsgi(environ, start_response, request, request_id)
+        finally:
+            native_execution_context.reset(token)
+
+    def authenticated_wsgi(environ: Any, start_response: Any, request: Request, request_id: str) -> Any:
+        try:
             length = int(environ.get("CONTENT_LENGTH") or "0")
             if not 0 <= length <= _LIMIT:
                 raise ValueError("HTTP request exceeds 1 MiB")
@@ -426,18 +450,97 @@ def install(gate: GateAttachment, target: object) -> None:
             return [b"Request refused"]
         replay = {**environ, "wsgi.input": io.BytesIO(body)}
         summary = {"status": 0, "bytes": 0, "complete": False}
-        observe("request_started", call, body_sha256=hashlib.sha256(body).hexdigest())
+        lifetime = gate.binding.begin_work(None)
+        result = None
+        closed = False
+
+        def observed_start(status: str, response_headers: Any, exc_info: Any = None) -> Any:
+            summary["status"] = int(status.split()[0])
+            write = start_response(status, response_headers, exc_info)
+
+            def observed_write(data: bytes) -> Any:
+                summary["bytes"] += len(data)
+                return write(data)
+
+            return observed_write
+
+        def finish() -> None:
+            nonlocal closed
+            if closed:
+                return
+            closed = True
+            try:
+                close = getattr(result, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except BaseException:
+                        summary["complete"] = False
+                        raise
+            finally:
+                try:
+                    if summary["complete"]:
+                        observe("request_completed", call, status=summary["status"], response_bytes=summary["bytes"])
+                    else:
+                        observe("request_incomplete", call, remote_outcome="unknown")
+                finally:
+                    try:
+                        gate.binding.report_sync(
+                            call,
+                            call.evidence.started,
+                            bool(summary["complete"] and 200 <= summary["status"] < 400),
+                        )
+                    finally:
+                        gate.binding.end_work(lifetime)
+
         try:
-            result = gate.complete_sync(
-                call,
-                lambda: entry.wsgi(replay, start_response, summary),
-                outcome=lambda _: bool(summary["complete"] and 200 <= summary["status"] < 400),
-            )
+            observe("request_started", call, body_sha256=hashlib.sha256(body).hexdigest())
+            gate.require_entry_sync(call)
+            entered = gate.binding.begin_work(call)
+            try:
+                result = app(replay, observed_start)
+                iterator = iter(result)
+            finally:
+                gate.binding.end_work(entered)
         except BaseException:
-            observe("request_incomplete", call, remote_outcome="unknown")
+            finish()
             raise
-        observe("request_completed", call, status=summary["status"], response_bytes=summary["bytes"])
-        return result
+
+        # WSGI returns before its body completes. Keep the original iterator and
+        # host thread, retaining ownership until exhaustion or explicit close.
+        class Response:
+            def __iter__(self) -> Response:
+                return self
+
+            def __next__(self) -> bytes:
+                if closed:
+                    raise StopIteration
+                token = native_execution_context.set(binding)
+                try:
+                    gate.require_entry_sync(call)
+                    block = next(iterator)
+                    if not isinstance(block, bytes):
+                        raise TypeError("WSGI response chunks must be bytes")
+                    summary["bytes"] += len(block)
+                    return block
+                except StopIteration:
+                    summary["complete"] = True
+                    finish()
+                    raise
+                except BaseException:
+                    finish()
+                    raise
+                finally:
+                    native_execution_context.reset(token)
+
+            def close(self) -> None:
+                token = native_execution_context.set(binding)
+                try:
+                    finish()
+                finally:
+                    native_execution_context.reset(token)
+
+        return Response()
 
     gate.patch(target, "asgi", asgi)
     gate.patch(target, "wsgi", wsgi)
