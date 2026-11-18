@@ -16,7 +16,20 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
     values: dict[str, int] = {}
     source = ""
     model: str | None = None
-    if family == "openai-client":
+    if family == "swarm":
+        chat = load_sdk("openai.types.chat")
+        if isinstance(result, (chat.ChatCompletion, chat.ChatCompletionChunk)):
+            supplied = getattr(result, "usage", None)
+            if supplied is not None:
+                values = _client_tokens(
+                    supplied, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
+                )
+                details = getattr(supplied, "prompt_tokens_details", None)
+                if details is not None:
+                    values.update(_client_tokens(details, (("cached_tokens", "cache_read_tokens"),)))
+                source = f"{type(result).__name__}.usage"
+                model = getattr(result, "model", None)
+    elif family == "openai-client":
         runs = load_sdk("openai.types.beta.threads.run")
         if isinstance(result, runs.Run) and result.usage is not None:
             values = _client_tokens(
