@@ -460,6 +460,14 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
         return await call_next(request)
     if is_request_authenticated(request):
         return await call_next(request)
+    if (
+        request.method == "POST"
+        and re.fullmatch(r"/api/integrations/[A-Za-z0-9._~-]+/traces", path)
+        and request.headers.get("x-codeplane-ingest-token")
+    ):
+        # This exact handler validates its source credential even in local mode.
+        # Do not promote the credential into operator/SSE/WebSocket authentication.
+        return await call_next(request)
 
     # Not authenticated
     if path.startswith("/api") or path.startswith("/mcp"):

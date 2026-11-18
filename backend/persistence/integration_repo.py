@@ -29,6 +29,7 @@ class IntegrationBinding:
     enabled: bool
     config: dict[str, Any]
     version: int
+    credential_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,74 @@ class ProjectionCheckpoint:
 
 
 class IntegrationRepository(BaseRepository):
+    async def set_ingest_credential(
+        self,
+        binding: IntegrationBinding,
+        credential: dict[str, str] | None,
+        *,
+        enabled: bool,
+        credential_hash: str | None = None,
+    ) -> None:
+        config = {**binding.config}
+        if credential is None:
+            config.pop("ingest_credential", None)
+        else:
+            config["ingest_credential"] = credential
+        try:
+            result = await self._session.execute(
+                update(IntegrationBindingRow)
+                .where(
+                    IntegrationBindingRow.id == binding.id,
+                    IntegrationBindingRow.version == binding.version,
+                    IntegrationBindingRow.project_id == binding.project_id,
+                    IntegrationBindingRow.job_id == binding.job_id,
+                )
+                .values(
+                    config_json=json.dumps(config, sort_keys=True),
+                    credential_hash=credential_hash,
+                    enabled=enabled,
+                    version=binding.version + 1,
+                    updated_at=datetime.now(UTC),
+                )
+                .returning(IntegrationBindingRow.id)
+            )
+            if result.scalar_one_or_none() is None:
+                raise StateConflictError("Integration credential changed concurrently")
+            await self._session.commit()
+        except BaseException:
+            await self._session.rollback()
+            raise
+
+    async def _fence_ingest_credential(self, binding: IntegrationBinding) -> None:
+        # A conditional write both checks the latest durable scope and holds the
+        # SQLite write lock until this admission commits or rolls back.
+        result = await self._session.execute(
+            update(IntegrationBindingRow)
+            .where(
+                IntegrationBindingRow.id == binding.id,
+                IntegrationBindingRow.project_id == binding.project_id,
+                IntegrationBindingRow.job_id == binding.job_id,
+                IntegrationBindingRow.adapter_id == binding.adapter_id,
+                IntegrationBindingRow.mode == "observation",
+                IntegrationBindingRow.enabled.is_(True),
+                IntegrationBindingRow.version == binding.version,
+                IntegrationBindingRow.config_json == json.dumps(binding.config, sort_keys=True),
+                IntegrationBindingRow.credential_hash == binding.credential_hash,
+            )
+            .values(version=IntegrationBindingRow.version)
+            .returning(IntegrationBindingRow.id)
+        )
+        if result.scalar_one_or_none() is None:
+            raise PermissionError("Ingest credential was disabled, replaced or its source ownership changed")
+
+    async def acknowledge_ingest_retry(self, binding: IntegrationBinding) -> None:
+        try:
+            await self._fence_ingest_credential(binding)
+            await self._session.commit()
+        except BaseException:
+            await self._session.rollback()
+            raise
+
     @staticmethod
     def _binding(row: IntegrationBindingRow) -> IntegrationBinding:
         return IntegrationBinding(
@@ -64,6 +133,7 @@ class IntegrationRepository(BaseRepository):
             row.enabled,
             json.loads(row.config_json),
             row.version,
+            row.credential_hash,
         )
 
     async def get(self, binding_id: str) -> IntegrationBinding | None:
@@ -256,6 +326,8 @@ class IntegrationRepository(BaseRepository):
         projection_parser_sha256: str,
         projection_canonical_sha256: str,
         projection_buffer: dict[str, Any],
+        ingest_fence: IntegrationBinding | None = None,
+        absent_receipt_ids: tuple[str, ...] = (),
     ) -> int:
         encoded_projection = json.dumps(projection_buffer, sort_keys=True, ensure_ascii=False, allow_nan=False)
         if len(encoded_projection.encode("utf-8")) > 8 * 1024 * 1024:
@@ -272,6 +344,8 @@ class IntegrationRepository(BaseRepository):
             "updated_at": datetime.now(UTC),
         }
         try:
+            if ingest_fence is not None:
+                await self._fence_ingest_credential(ingest_fence)
             projection_values = {
                 "parser_revision": revision,
                 "parser_sha256": projection_parser_sha256,
@@ -307,6 +381,9 @@ class IntegrationRepository(BaseRepository):
                 )
             if projection_result.scalar_one_or_none() is None:
                 raise StateConflictError("Binding projection changed concurrently")
+            for identity in absent_receipt_ids:
+                if await self.accepted_batch(identity) is not None:
+                    raise StateConflictError("OTLP spans were admitted concurrently; retry the request")
             if expected_version == 0:
                 result = await self._session.execute(
                     insert(IntegrationSourceCheckpointRow)

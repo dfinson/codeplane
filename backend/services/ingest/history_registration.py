@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from backend.models.domain import Job, JobNotFoundError, JobSource, JobState, StateConflictError
 from backend.services.action_policy.credential_filter import filter_credentials
 from backend.services.ingest.mapping import NATIVE_FORMATS
+from backend.services.ingest.otel_observation import OTEL_FORMAT
 from backend.validators import validate_integration_binding_id
 
 if TYPE_CHECKING:
@@ -26,9 +27,9 @@ class HistoryRegistration:
     async def _existing_job(self, binding: IntegrationBinding, project_id: str, config: dict[str, str]) -> Job:
         if (
             binding.project_id != project_id
-            or binding.adapter_id != "native"
+            or binding.adapter_id != ("generic-otel" if config["format"] == OTEL_FORMAT else "native")
             or binding.mode != "observation"
-            or binding.config != config
+            or {key: binding.config.get(key) for key in config} != config
         ):
             raise StateConflictError("Binding identity already belongs to another source")
         if binding.job_id is None:
@@ -52,7 +53,7 @@ class HistoryRegistration:
         base_ref: str | None = None,
     ) -> Job:
         validate_integration_binding_id(binding_id)
-        if format_id not in NATIVE_FORMATS:
+        if format_id not in NATIVE_FORMATS and format_id != OTEL_FORMAT:
             raise ValueError("Unsupported native history format")
         if not binding_id or not external_session_id or len(binding_id) > 128 or len(external_session_id) > 512:
             raise ValueError("History registration requires binding and external source identities")
@@ -63,7 +64,8 @@ class HistoryRegistration:
         existing = await self._bindings.get(binding_id)
         if existing is not None:
             return await self._existing_job(existing, project_id, config)
-        binding, created = await self._bindings.create_observation(binding_id, project_id, "native", config)
+        adapter_id = "generic-otel" if format_id == OTEL_FORMAT else "native"
+        binding, created = await self._bindings.create_observation(binding_id, project_id, adapter_id, config)
         if not created:
             return await self._existing_job(binding, project_id, config)
         now = datetime.now(UTC)
@@ -80,7 +82,7 @@ class HistoryRegistration:
             created_at=now,
             updated_at=now,
             title=label,
-            sdk=f"native:{format_id}",
+            sdk="generic-otel" if format_id == OTEL_FORMAT else f"native:{format_id}",
             source=JobSource.integration,
             external_session_id=external_session_id,
             integration_binding_id=binding_id,
