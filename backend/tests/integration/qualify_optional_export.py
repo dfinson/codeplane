@@ -2,6 +2,7 @@
 
 import asyncio
 import socket
+import threading
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -493,5 +494,91 @@ async def test_preserved_grpc_traces_and_metrics_receive_only_typed_sanitized_us
         assert "codeplane.usage.currency" not in native_attrs
         assert usd_attrs["codeplane.usage.currency"].string_value == "USD"
         assert usd_attrs["codeplane.usage.verified"].bool_value
+    finally:
+        await pipeline.aclose()
+
+
+async def test_export_worker_wait_includes_event_loop_scheduling_delay(collector):
+    from backend.services.events.export_transport import OtlpWire
+
+    endpoint, received, _, _, _ = collector
+    wire = OtlpWire(ExportDestination(endpoint, "http/protobuf", MappingProxyType({}), None))
+    entered, finished = threading.Event(), threading.Event()
+    result = []
+
+    def send():
+        entered.set()
+        try:
+            result.append(wire._http(b"", time.monotonic() + 0.05))
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=send)
+    thread.start()
+    try:
+        assert entered.wait(1)
+        within_budget = finished.wait(0.3)  # Deliberately keep the event loop unavailable.
+        await asyncio.sleep(0.05)
+        await asyncio.to_thread(thread.join, 1)
+        assert within_budget
+        assert result and not result[0].success
+        assert received == [], "Expired queued work must not start a later POST"
+    finally:
+        await wire.aclose()
+        await asyncio.to_thread(thread.join, 1)
+        assert not thread.is_alive()
+
+
+async def test_expired_scheduled_coroutine_cannot_start_a_post(collector):
+    from backend.services.events.export_transport import OtlpWire
+
+    endpoint, received, _, _, _ = collector
+    wire = OtlpWire(ExportDestination(endpoint, "http/protobuf", MappingProxyType({}), None))
+    try:
+        result = await wire._http_request(b"", time.monotonic() - 1)
+        assert not result.success and result.retryable
+        assert received == []
+    finally:
+        await wire.aclose()
+
+
+async def test_metric_underflow_is_withheld_while_exact_trace_amount_and_zero_survive(grpc_collector):
+    endpoint, traces, metrics, _ = grpc_collector
+    destination = ExportDestination(endpoint, "grpc", MappingProxyType({}), None)
+    pipeline = MetadataExportPipeline(
+        ExportBinding(
+            destination,
+            destination,
+            b"private-local-key-material-32-bytes",
+            frozenset({"approved-model"}),
+        )
+    )
+    usage = tuple(
+        UsageAmount(
+            amount=Decimal(amount),
+            unit=unit,
+            producer="fixture",
+            model="approved-model",
+            job_id="job-1",
+            execution_epoch="epoch",
+            role="primary",
+            source="native",
+        )
+        for unit, amount in (("copilot_cost_unit", "1E-400"), ("input_tokens", "0"))
+    )
+    try:
+        assert _enqueue(pipeline, usage=usage).status == "queued"
+        await pipeline.aclose()
+        attributes = {item.key: item.value.string_value for item in _spans(traces[0])[0].attributes}
+        assert attributes["codeplane.usage.0.amount"] == "1E-400"
+        points = {
+            metric.name: metric
+            for resource in metrics[0].resource_metrics
+            for scope in resource.scope_metrics
+            for metric in scope.metrics
+        }
+        assert set(points) == {"codeplane.usage.input_tokens"}
+        assert points["codeplane.usage.input_tokens"].gauge.data_points[0].as_int == 0
+        assert dict(pipeline.health.snapshot().dropped_by_reason)["numeric_underflow"] == 1
     finally:
         await pipeline.aclose()

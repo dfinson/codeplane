@@ -9,11 +9,13 @@ created_at.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from pydantic import Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -26,7 +28,32 @@ from backend.services.events.export_binding import (
     encode_export_credential,
 )
 
-router = APIRouter(prefix="/settings/credentials", tags=["credentials"], route_class=DishkaRoute)
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+
+class CredentialRoute(DishkaRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def without_secret_inputs(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RequestValidationError as exc:
+                # Missing-field errors can carry the entire credential body.
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": [
+                            {"type": error["type"], "loc": error["loc"], "msg": error["msg"]} for error in exc.errors()
+                        ]
+                    },
+                )
+
+        return without_secret_inputs
+
+
+router = APIRouter(prefix="/settings/credentials", tags=["credentials"], route_class=CredentialRoute)
 log = structlog.get_logger()
 
 # NFR9: per-provider PAT scope guidance, copy-paste only — never validated/enforced

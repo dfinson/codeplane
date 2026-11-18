@@ -7,6 +7,7 @@ import math
 import threading
 import time
 from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -84,6 +85,7 @@ class BoundedDelivery:
         self.stop = stop if stop is not None else threading.Event()
 
     def send(self, request: Callable[[float], Delivery]) -> Delivery:
+        """Pass an absolute monotonic deadline to each transport attempt."""
         deadline = self.clock() + TOTAL_TIMEOUT
         for attempt in range(len(BACKOFF) + 1):
             remaining = deadline - self.clock()
@@ -91,7 +93,12 @@ class BoundedDelivery:
                 return Delivery(False, reason=ExportDropReason.shutdown)
             if remaining <= 0:
                 return Delivery(False, reason=ExportDropReason.retry_exhausted)
-            result = request(min(REQUEST_TIMEOUT, remaining))
+            attempt_deadline = min(deadline, self.clock() + REQUEST_TIMEOUT)
+            result = request(attempt_deadline)
+            if self.stop.is_set():
+                return Delivery(False, reason=ExportDropReason.shutdown)
+            if result.success and self.clock() >= attempt_deadline:
+                result = Delivery(False, retryable=True)
             if result.success or not result.retryable:
                 return result
             if attempt == len(BACKOFF):
@@ -150,25 +157,36 @@ class OtlpWire:
     def _send(self, message: Any) -> Delivery:
         if self.destination.protocol == "http/protobuf":
             body = message.SerializeToString()
-            return self.delivery.send(lambda timeout: self._http(body, timeout))
-        return self.delivery.send(lambda timeout: self._grpc(message, timeout))
+            return self.delivery.send(lambda deadline: self._http(body, deadline))
+        return self.delivery.send(lambda deadline: self._grpc(message, deadline))
 
-    def _http(self, body: bytes, timeout: float) -> Delivery:
+    def _http(self, body: bytes, deadline: float) -> Delivery:
         with self._pending_lock:
             if self.delivery.stop.is_set():
                 return Delivery(False, reason=ExportDropReason.shutdown)
-            future = asyncio.run_coroutine_threadsafe(self._http_request(body, timeout), self._loop)
+            if deadline <= self.delivery.clock():
+                return Delivery(False, retryable=True)
+            future = asyncio.run_coroutine_threadsafe(self._http_request(body, deadline), self._loop)
             self._pending.add(future)
         try:
-            return future.result()
+            result = future.result(timeout=max(0.0, deadline - self.delivery.clock()))
+            return Delivery(False, retryable=True) if result.success and self.delivery.clock() >= deadline else result
+        except FutureTimeoutError:
+            future.cancel()
+            return Delivery(False, retryable=True)
         except FutureCancelledError:
             return Delivery(False, reason=ExportDropReason.shutdown)
         finally:
             with self._pending_lock:
                 self._pending.discard(future)
 
-    async def _http_request(self, body: bytes, timeout: float) -> Delivery:
+    async def _http_request(self, body: bytes, deadline: float) -> Delivery:
         assert self._client is not None
+        timeout = deadline - self.delivery.clock()
+        if self.delivery.stop.is_set():
+            return Delivery(False, reason=ExportDropReason.shutdown)
+        if timeout <= 0:
+            return Delivery(False, retryable=True)
         try:
             async with (
                 asyncio.timeout(timeout),
@@ -199,12 +217,20 @@ class OtlpWire:
                     parsed = response_type.FromString(bytes(content))
                 except import_module("google.protobuf.message").DecodeError:
                     return Delivery(False, reason=ExportDropReason.configuration)
-                return Delivery(True, rejected=parsed.partial_success.rejected_spans)
+                rejected = parsed.partial_success.rejected_spans
+            if self.delivery.clock() >= deadline:
+                return Delivery(False, retryable=True)
+            return Delivery(True, rejected=rejected)
         except (httpx.TransportError, TimeoutError):
             return Delivery(False, retryable=True)
 
-    def _grpc(self, message: Any, timeout: float) -> Delivery:
+    def _grpc(self, message: Any, deadline: float) -> Delivery:
+        if self.delivery.stop.is_set():
+            return Delivery(False, reason=ExportDropReason.shutdown)
         grpc = import_module("grpc")
+        timeout = deadline - self.delivery.clock()
+        if timeout <= 0:
+            return Delivery(False, retryable=True)
         try:
             response = self._stub.Export(message, timeout=timeout, metadata=tuple(self.destination.headers.items()))
             rejected = (
@@ -212,7 +238,11 @@ class OtlpWire:
                 if self.signal == "traces"
                 else response.partial_success.rejected_data_points
             )
-            return Delivery(True, rejected=rejected)
+            return (
+                Delivery(True, rejected=rejected)
+                if self.delivery.clock() < deadline
+                else Delivery(False, retryable=True)
+            )
         except grpc.RpcError as exc:
             if self.delivery.stop.is_set():
                 return Delivery(False, reason=ExportDropReason.shutdown)

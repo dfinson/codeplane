@@ -100,3 +100,27 @@ async def test_disabled_export_does_not_resolve_credentials_or_create_identity_k
 
     assert await resolve_binding(ExportConfig(credential_id="unavailable"), NoAccess()) is None
     assert not (tmp_path / "credential.key").exists()
+
+
+@pytest.mark.parametrize("invalid", ["baseUrl", "label", "provider", "object-pat", "jira-email"])
+async def test_pre_handler_credential_validation_never_serializes_secret_inputs(client, invalid):
+    secret = "sentinel-private-credential"
+    body = {
+        "provider": "otlp",
+        "label": "fixture",
+        "baseUrl": "https://collector.example.test/v1/traces",
+        "exportProtocol": "http/protobuf",
+        "pat": json.dumps({"Authorization": f"Bearer {secret}"}),
+    }
+    if invalid == "object-pat":
+        body["pat"] = {"nested": [{"secret": secret}]}
+    elif invalid == "jira-email":
+        body.update(provider="jira", email="invalid", pat=secret)
+        body.pop("exportProtocol")
+    else:
+        body.pop(invalid)
+    response = await client.post("/api/settings/credentials", json=body)
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert all(set(error) <= {"type", "loc", "msg"} for error in response.json()["detail"])
+    assert (await client.get("/api/settings/credentials")).json()["credentials"] == []

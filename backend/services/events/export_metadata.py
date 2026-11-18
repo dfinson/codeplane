@@ -37,6 +37,15 @@ _IDENTIFIERS = frozenset(
 )
 _VERSIONS = frozenset({"schema_version", "policy_version", "rule_version", "grammar_version", "title_version"})
 _COUNTS = frozenset({"tool_count", "input_tokens", "output_tokens"})
+_IDENTIFIER = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*")
+_VERSION = re.compile(
+    r"(?:[A-Za-z][A-Za-z0-9._-]*[-_@:])?[vV]?[0-9]+(?:\.[0-9]+)*(?:[-+][A-Za-z0-9][A-Za-z0-9._-]*)?"
+    r"|(?:sha256:)?[a-f0-9]{40,64}"
+)
+_MODEL_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
+_FILE_SUFFIX = re.compile(
+    r"\.(?:csv|tsv|txt|md|pem|key|jsonl?|ya?ml|toml|ini|py|js|ts|sh|ps1|db|sqlite|log|html|pdf)$", re.I
+)
 
 
 class ExportDisclosureError(ValueError):
@@ -67,6 +76,44 @@ def _opaque(key: bytes, namespace: str, value: str) -> str:
     except UnicodeError as exc:
         raise ExportDisclosureError("Export identity encoding failed") from exc
     return hmac.new(key, encoded, hashlib.sha256).hexdigest()
+
+
+def _identifier(value: str) -> str:
+    if _IDENTIFIER.fullmatch(_string(value)) is None:
+        raise ExportDisclosureError("Metadata requires a categorical identifier")
+    return value
+
+
+def _version(value: str) -> str:
+    if _VERSION.fullmatch(_string(value)) is None:
+        raise ExportDisclosureError("Metadata requires a version identifier")
+    return value
+
+
+def _model(value: str) -> str:
+    _string(value)
+    parts = value.split("/")
+    if any(_MODEL_SEGMENT.fullmatch(part) is None for part in parts) or _FILE_SUFFIX.search(parts[-1]):
+        raise ExportDisclosureError("Metadata requires a model identifier")
+    resource = (
+        len(parts) == 4
+        and parts[0] in {"publishers", "accounts"}
+        and parts[2] == "models"
+        or len(parts) == 6
+        and parts[0] == "projects"
+        and parts[2] == "locations"
+        and parts[4] in {"models", "endpoints"}
+        or len(parts) == 8
+        and parts[0] == "projects"
+        and parts[2] == "locations"
+        and parts[4] == "publishers"
+        and parts[6] == "models"
+        or len(parts) in {3, 4}
+        and parts[0] in {"hf.co", "huggingface.co"}
+    )
+    if len(parts) > 2 and not resource:
+        raise ExportDisclosureError("Unsupported model resource identifier")
+    return value
 
 
 def export_metadata(
@@ -132,8 +179,8 @@ def export_metadata(
         raise ExportDisclosureError("Export inspection input exceeds 32 KiB")
     output: dict[str, object] = {
         "schema": "cp-export-v1",
-        "integration": _string(integration),
-        "provider": _string(provider),
+        "integration": _identifier(integration),
+        "provider": _identifier(provider),
         "role": role,
         "kind": event.kind if event.kind in _KNOWN_KINDS else "integration.event",
         "job_id": _opaque(identity_key, "job", event.session_id),
@@ -178,10 +225,10 @@ def export_metadata(
     for field, value in (versions or {}).items():
         if field not in _VERSIONS:
             raise ExportDisclosureError("Unapproved version metadata field")
-        output[field] = _string(value)
+        output[field] = _version(value)
     model = event.payload.get("model")
     if isinstance(model, str) and model in approved_models:
-        output["model"] = _string(model)
+        output["model"] = _model(model)
     values = []
     for item in usage:
         if item.role not in _ROLES:
@@ -192,8 +239,8 @@ def export_metadata(
             {
                 "amount": str(item.amount),
                 "unit": _string(item.unit),
-                "model": _string(item.model) if item.model is not None else None,
-                "producer": _string(item.producer),
+                "model": _model(item.model) if item.model is not None else None,
+                "producer": _identifier(item.producer),
                 "role": item.role,
                 "verified": item.verified,
                 "currency": item.currency,
@@ -281,13 +328,23 @@ def validate_projection(projection: dict[str, object], approved_models: frozense
                 )
                 if amount.model is not None and amount.model not in approved_models:
                     raise ExportDisclosureError("Unapproved projected usage model")
+                _identifier(amount.producer)
+                if amount.model is not None:
+                    _model(amount.model)
                 for part in item.values():
                     if isinstance(part, str):
                         _string(part)
         else:
             if not isinstance(value, str):
                 raise ExportDisclosureError("Invalid projected metadata")
-            _string(value)
+            if key in {"integration", "provider"}:
+                _identifier(value)
+            elif key in _VERSIONS:
+                _version(value)
+            elif key == "model":
+                _model(value)
+            else:
+                _string(value)
     if "model" in projection and projection["model"] not in approved_models:
         raise ExportDisclosureError("Unapproved projected model")
     if "outcome" in projection and projection["outcome"] not in {"succeeded", "failed"}:
