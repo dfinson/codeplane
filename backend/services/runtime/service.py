@@ -2573,6 +2573,14 @@ class RuntimeService:
             binding = self._attempt_bindings.register(job_id, attempt_id, adapter, session_id, provider)
             return CurrentExecutionContext(job_id, binding.token)
 
+    async def require_governance_admission(self) -> None:
+        """Check the durable transition fence immediately before admitting new work."""
+        if self._shutting_down:
+            raise StateConflictError("The runtime is shutting down and cannot admit new work")
+        if self._standalone_governance is None:
+            raise StateConflictError("Governance admission gate has not been wired")
+        await self._standalone_governance.require_admission()
+
     def configure_execution_contracts(
         self,
         *,

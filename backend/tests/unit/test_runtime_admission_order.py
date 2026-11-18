@@ -63,6 +63,23 @@ async def test_policy_failure_never_opens_a_sidecar(runtime, session_factory, co
     assert job.id not in runtime._queued_session_tokens
 
 
+async def test_runtime_admission_requires_the_wired_durable_gate(runtime, tmp_path):
+    from backend.services.action_policy.production import StandaloneGovernance
+
+    with pytest.raises(StateConflictError, match="not been wired"):
+        await runtime.require_governance_admission()
+    governance = StandaloneGovernance(runtime, tmp_path)
+    runtime._standalone_governance = governance
+    await governance._ledger.initialize()
+    await runtime.require_governance_admission()
+    state = await governance._ledger.admission_state()
+    await governance._ledger.set_admission_control(
+        expected_generation=state.generation, blocked=True, reason="Rollback is draining"
+    )
+    with pytest.raises(StateConflictError, match="Rollback is draining"):
+        await runtime.require_governance_admission()
+
+
 @pytest.mark.parametrize("action", ["start", "cancel"])
 async def test_queued_job_defers_sidecars_and_keeps_token_only_until_needed(runtime, session_factory, config, action):
     manager = sidecars(runtime, [])
