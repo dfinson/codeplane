@@ -41,13 +41,18 @@ class StandaloneGovernance:
         self._titles = TitleRefinement(host, self._assessments)
         self._policy = AgtPolicy()
         self._delivery: asyncio.Task[None] | None = None
+        self._closing: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self.audit_error: str | None = None
         self.accounting_error: str | None = None
 
     async def start(self) -> None:
         contract = await asyncio.to_thread(standalone_contract)
-        await self._ledger.initialize()
+        try:
+            await self._ledger.initialize()
+        except (OSError, sqlite3.DatabaseError, asyncio.CancelledError):
+            await self._ledger.close()
+            raise
         try:
             await self._audit.initialize()
         except (AuditIntegrityError, OSError) as exc:
@@ -316,11 +321,27 @@ class StandaloneGovernance:
     async def close(self) -> None:
         self._stop.set()
         self._host._event_bus.unsubscribe(self.observe)
-        await self._titles.close()
-        await self._assessments.shutdown()
-        if self._delivery is not None:
-            done, _ = await asyncio.wait({self._delivery}, timeout=2)
-            if not done:
-                log.error("governance_audit_shutdown_pending")
-            elif not self._delivery.cancelled():
-                self._delivery.result()
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close_resources(), name="governance-shutdown")
+        interrupted = False
+        while not self._closing.done():
+            try:
+                await asyncio.shield(self._closing)
+            except asyncio.CancelledError:
+                interrupted = True
+        self._closing.result()
+        if interrupted:
+            raise asyncio.CancelledError
+
+    async def _close_resources(self) -> None:
+        try:
+            await self._titles.close()
+        finally:
+            try:
+                await self._assessments.shutdown()
+            finally:
+                try:
+                    if self._delivery is not None:
+                        await self._delivery
+                finally:
+                    await self._ledger.close()
