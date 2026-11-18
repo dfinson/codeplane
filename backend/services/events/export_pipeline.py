@@ -253,6 +253,9 @@ class MetadataExportPipeline:
                     self.health.record_drop(ExportDropReason.metadata_withheld)
                     continue
                 numeric = int(amount) if amount == amount.to_integral_value() else float(amount)
+                if amount != 0 and numeric == 0:
+                    self.health.record_drop(ExportDropReason.numeric_underflow)
+                    continue
                 if not math.isfinite(numeric) or (isinstance(numeric, int) and not -(2**63) <= numeric < 2**63):
                     self.health.record_drop(ExportDropReason.metadata_withheld)
                     continue

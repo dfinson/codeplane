@@ -153,3 +153,86 @@ def test_native_sink_projection_is_rechecked_before_an_sdk_span_can_be_created()
     ):
         with pytest.raises(ExportDisclosureError):
             validate_projection(changed, frozenset())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("integration", "src/private/customer-list.csv"),
+        ("provider", "private customer notes"),
+        ("version", "~/private/keys"),
+        ("model", "src/private/customer-list.csv"),
+        ("producer", "private customer notes"),
+    ],
+)
+@pytest.mark.parametrize("boundary", ["canonical", "native-sink"])
+def test_export_fields_require_identifiers_not_paths_or_free_text(field, value, boundary):
+    from decimal import Decimal
+
+    from backend.models.usage import UsageAmount
+
+    event = new_event("job", "telemetry.usage", {"model": "approved-model"})
+    usage = UsageAmount(
+        amount=Decimal(0),
+        unit="input_tokens",
+        producer="copilot",
+        model=None,
+        job_id="job",
+        execution_epoch=None,
+        role="primary",
+        source="native",
+    )
+    kwargs = {
+        "identity_key": b"x" * 32,
+        "integration": "copilot",
+        "provider": "copilot",
+        "role": "primary",
+        "approved_models": frozenset({"approved-model", value}),
+        "usage": [usage],
+        "versions": {"policy_version": "cp-policy-v1"},
+    }
+    if boundary == "canonical":
+        if field in {"integration", "provider"}:
+            kwargs[field] = value
+        elif field == "version":
+            kwargs["versions"] = {"policy_version": value}
+        elif field == "model":
+            event.payload["model"] = value
+        else:
+            kwargs["usage"] = [usage.model_copy(update={"producer": value})]
+        with pytest.raises(ExportDisclosureError):
+            export_metadata(event, **kwargs)
+    else:
+        safe = export_metadata(event, **kwargs)
+        if field == "producer":
+            safe["usage"][0]["producer"] = value
+        else:
+            safe["policy_version" if field == "version" else field] = value
+        with pytest.raises(ExportDisclosureError):
+            validate_projection(safe, kwargs["approved_models"])
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-4.1",
+        "anthropic/claude-sonnet-4-5",
+        "ft:gpt-4o-mini:organization:custom-suffix:abc123",
+        "publishers/google/models/gemini-2.5-pro",
+        "projects/example/locations/us/publishers/google/models/gemini-2.5-pro",
+        "accounts/fireworks/models/llama-v3p1-8b-instruct",
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-v1:0",
+    ],
+)
+def test_approved_native_model_identifiers_and_version_labels_survive_both_boundaries(model):
+    safe = export_metadata(
+        new_event("job", "llm.call.completed", {"model": model}),
+        identity_key=b"x" * 32,
+        integration="generic-otel",
+        provider="custom_provider.v2",
+        role="primary",
+        approved_models=frozenset({model}),
+        versions={"schema_version": "cp-export-v1", "grammar_version": "tree-sitter-bash@0.25.1"},
+    )
+    assert safe["model"] == model
+    assert validate_projection(safe, frozenset({model})) == safe

@@ -21,6 +21,7 @@ class ExportDropReason(StrEnum):
     configuration = "configuration"
     disabled = "disabled"
     shutdown = "shutdown"
+    numeric_underflow = "numeric_underflow"
 
 
 class ExportHealthSink(Protocol):
