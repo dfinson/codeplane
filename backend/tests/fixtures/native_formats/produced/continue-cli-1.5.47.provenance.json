@@ -1,0 +1,76 @@
+{
+  "capture_kind": "actual-cli/local-inert-sse",
+  "format_id": "continue_dev",
+  "producer": {
+    "distribution": "@continuedev/cli",
+    "version": "1.5.47",
+    "artifact": "continuedev-cli-1.5.47.tgz",
+    "artifact_sha256": "bcf43fd5db041dbff4ee2eb9639a8cc732eba5d7f5ea137c0ef2025976fa3724",
+    "artifact_sha512": "gtpewV3RoIOD9dyTtKIBi1SY0VOHRu3Ehe7C/mmnswm+j34MPyrcQhQaWj/m+jdfGO4fNIKdrgGIlLso1ULDFw==",
+    "files_sha256": {
+      "package.json": "854698a173d9324bd76dcde2e248a7f4a51deec04dbeea4d60b25312b1efc609",
+      "dist/cn.js": "8b9c1d5bff438d558b537e1e8436ae645728bd6f100fa6e7a2a810d01413e18f",
+      "dist/index.js": "500cf1ae9637ba397fcb5ae0856fdd31b9ad49ba45a32e277477452be196e5d6"
+    },
+    "git_head": null,
+    "node": "v26.13.0"
+  },
+  "harness": {
+    "repository": "https://github.com/continuedev/continue",
+    "source_release": "v1.5.45",
+    "source_commit": "abb1fc0439bd335efafd2dc4f39907e25348c572",
+    "source_path": "extensions/cli/src/test-helpers/mock-llm-server.ts",
+    "source_sha256": "aadfc89678d5e0173ea94b01d7b24db7c2553c1461f72a19bad16894c581a420",
+    "compiled_sha256": "3bc393aa16a8b643d4e9b3cab1a1e0979ff5a30e576fc0006c25bf205ababb30",
+    "functions": [
+      "createMockLLMServer",
+      "setupMockLLMTest"
+    ]
+  },
+  "sample": "continue-cli-1.5.47.session.json",
+  "sample_sha256": "0c4a901f5437984e2758fe308fec4c16ca94c195726e57d9de533c647730987f",
+  "native_session_file": "codeplane-native-capture.json",
+  "cli_calls": [
+    {
+      "args": [
+        "-p",
+        "--config",
+        "/tmp/codeplane-continue-capture-JSvgM9/test-config.yaml",
+        "Describe addition in this synthetic CLI fixture."
+      ],
+      "exit_code": 0
+    },
+    {
+      "args": [
+        "--resume",
+        "-p",
+        "--config",
+        "/tmp/codeplane-continue-capture-JSvgM9/test-config.yaml",
+        "Use the synthetic example 2 plus 3."
+      ],
+      "exit_code": 0
+    }
+  ],
+  "prompts": [
+    "Describe addition in this synthetic CLI fixture.",
+    "Use the synthetic example 2 plus 3."
+  ],
+  "replies": [
+    "Addition combines two numbers in this inert fixture.",
+    "The synthetic example gives 5."
+  ],
+  "local_http_requests": 2,
+  "blocked_non_loopback_attempts": [
+    {
+      "host": "api.continue.dev"
+    },
+    {
+      "host": "api.continue.dev"
+    }
+  ],
+  "model_inference": false,
+  "limitations": [
+    "The installed npm artifact is not attributed to the separate harness source commit",
+    "The local SSE fixture supplied no usage counters; native CLI zero initializers are not billing evidence"
+  ]
+}
