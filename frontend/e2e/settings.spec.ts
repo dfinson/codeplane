@@ -226,7 +226,7 @@ test.describe("Settings Screen — Update Settings", () => {
 });
 
 test.describe("Settings Screen — Repository Management", () => {
-  test("remove repo calls unregister API", async ({ page }) => {
+  test("keeps repository removal in each Project", async ({ page }) => {
     await setupSettingsMocks(page);
 
     let unregisterCalled = false;
@@ -240,10 +240,12 @@ test.describe("Settings Screen — Repository Management", () => {
     });
 
     await page.goto("/settings");
-    await expect(page.getByText("Project A")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("heading", { name: "Project A", exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("heading", { name: "Project B", exact: true })).toBeVisible();
 
-    // The delete control is exposed directly via its aria-label.
-    await expect(page.getByText("Project A")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("link", { name: "Project A 1 repos", exact: true }))
+      .toHaveAttribute("href", "/projects/id/project-a/settings");
+    await expect(page.getByRole("button", { name: /^Remove repository/ })).toHaveCount(0);
     expect(unregisterCalled).toBe(false);
   });
 
