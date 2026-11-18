@@ -18,15 +18,15 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
     model: str | None = None
     if family == "openai-client":
         runs = load_sdk("openai.types.beta.threads.run")
-        if isinstance(result, runs.Run) and result.usage is not None:
+        if isinstance(result, runs.Run) and getattr(result, "usage", None) is not None:
             values = _client_tokens(
                 result.usage, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
             )
             source = "Run.usage"
-            model = result.model
+            model = getattr(result, "model", None)
     elif family == "anthropic-client":
         messages = load_sdk("anthropic.types")
-        if isinstance(result, messages.Message):
+        if isinstance(result, messages.Message) and getattr(result, "usage", None) is not None:
             values = _client_tokens(
                 result.usage,
                 (
@@ -37,7 +37,7 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
                 ),
             )
             source = "Message.usage"
-            model = result.model
+            model = getattr(result, "model", None)
     elif family == "gemini-client":
         types = load_sdk("google.genai.types")
         if isinstance(result, types.GenerateContentResponse) and result.usage_metadata is not None:
@@ -53,12 +53,12 @@ def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tupl
             model = result.model_version
     elif family == "mistral-client":
         models = load_sdk("mistralai.client.models")
-        if isinstance(result, models.ChatCompletionResponse):
+        if isinstance(result, models.ChatCompletionResponse) and getattr(result, "usage", None) is not None:
             values = _client_tokens(
                 result.usage, (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"))
             )
             source = "ChatCompletionResponse.usage"
-            model = result.model
+            model = getattr(result, "model", None)
     elif family == "bedrock-client":
         if isinstance(result, dict):
             trace = result.get("trace", {}).get("trace", {})

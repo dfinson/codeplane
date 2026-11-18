@@ -1,0 +1,24 @@
+framework: anthropic-client
+framework_version: "2.10.0"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  request_started:
+    kind: task.started
+    payload: {operation: operation, app_operation_id: operation_id, arguments: arguments}
+  response:
+    kind: task.completed
+    payload: {operation: operation, app_operation_id: operation_id, native_request_id: request_id, native_response_id: response_id, response: response, local_cancel_requested: local_cancel_requested}
+  request_outcome:
+    kind: session.warning
+    payload: {operation: operation, app_operation_id: operation_id, outcome: outcome, response_received: response_received, error_type: error_type}
+  function_started:
+    kind: tool.call.started
+    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, arguments: arguments}
+  function_completed:
+    kind: tool.call.completed
+    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, result: result}
+  function_failed:
+    kind: tool.call.failed
+    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id}
