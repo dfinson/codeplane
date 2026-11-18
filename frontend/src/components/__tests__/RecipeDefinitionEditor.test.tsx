@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 vi.mock("../../api/client", () => ({
@@ -103,8 +103,13 @@ beforeEach(() => {
 
 describe("RecipeDefinitionEditor", () => {
   it("saves an editable definition without launching or publishing work", async () => {
+    let finishRefresh!: (value: RecipeDraft) => void;
+    vi.mocked(fetchRecipe).mockReturnValueOnce(
+      new Promise<RecipeDraft>((resolve) => { finishRefresh = resolve; }),
+    );
     renderEditor();
     await screen.findByRole("heading", { name: "Step definition" });
+    const previousVerify = screen.getByRole("button", { name: /^Verify / });
     fireEvent.change(screen.getByLabelText("Step instructions"), {
       target: {
         value:
@@ -112,6 +117,14 @@ describe("RecipeDefinitionEditor", () => {
       },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await screen.findByText("Loading recipe...");
+    expect(previousVerify).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Step instructions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Verify / })).not.toBeInTheDocument();
+    expect(fetchRecipe).toHaveBeenCalledWith("draft-1");
+    const receipt = savedDraft;
+    if (!receipt) throw new Error("Expected the saved draft receipt");
+    await act(async () => { finishRefresh(receipt); });
     await screen.findByText("Draft version 1");
     expect(createRecipeDraft).toHaveBeenCalledOnce();
     const saved = vi.mocked(createRecipeDraft).mock.calls[0]?.[0];
@@ -120,9 +133,15 @@ describe("RecipeDefinitionEditor", () => {
     ).toBe(
       "Read only the requested files and return their exact source references.",
     );
+    expect(screen.getByLabelText("Step instructions")).toHaveValue(
+      "Read only the requested files and return their exact source references.",
+    );
+    expect(saveRecipeDraft).not.toHaveBeenCalled();
     expect(publishRecipe).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: /^Verify / }));
+    const verify = screen.getByRole("button", { name: /^Verify / });
+    expect(verify).toBeEnabled();
+    fireEvent.click(verify);
     expect(await screen.findByLabelText("Command arguments")).toHaveValue(
       JSON.stringify(
         ["git", "show", "--check", { input: "code", field: "commit" }],
@@ -130,7 +149,10 @@ describe("RecipeDefinitionEditor", () => {
         2,
       ),
     );
+    expect(verify).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByLabelText("Step model")).not.toBeInTheDocument();
+    expect(publishRecipe).not.toHaveBeenCalled();
+    expect(createJob).not.toHaveBeenCalled();
   });
 
   it("retains the successful publication receipt after canonical new-draft navigation", async () => {
