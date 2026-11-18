@@ -32,6 +32,7 @@ from backend.persistence.external_gate_repo import ExternalGateRepository, corre
 from backend.persistence.native_execution_repo import NativeExecutionRepository
 from backend.services.action_policy.agt_policy import POLICY_VERSION
 from backend.services.action_policy.standalone_router import StandalonePolicyRouter
+from backend.services.adapters.capability_guard import invocation_permission_request
 from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.adapters.integration_policy import IntegrationDisabledError
 from backend.services.adapters.native_gates.binding import ExecutionEvidence, NativeBinding, NativeCall
@@ -317,6 +318,11 @@ class ExternalGates:
 
     def _call(self, source: _Source, action: ExternalGatePreflight) -> NativeCall:
         supplied = action.model_dump(exclude={"action_digest"})
+        permission_request = (
+            invocation_permission_request(source.owner.workspace, action.tool_name, action.tool_input)
+            if isinstance(action.tool_input, dict)
+            else None
+        )
         return NativeCall(
             action.tool_name,
             {"source_binding_id": source.id, "action": json.loads(json.dumps(supplied, allow_nan=False))},
@@ -325,6 +331,8 @@ class ExternalGates:
             operation_id=correlation(source.id, action.request_id),
             definition="External preflight only. Consumed permission is not proof of tool execution.",
             evidence=ExecutionEvidence(False),
+            permission_request=permission_request,
+            dialect={"bash": "bash", "powershell": "powershell"}.get(action.tool_name.lower()),
         )
 
     async def preflight(self, source: _Source, action: ExternalGatePreflight) -> ExternalGateDecision:
@@ -487,11 +495,11 @@ class ExternalGates:
                 reason="single_use" if consume else "owner_unavailable",
                 metadata=pending.metadata,
             )
-            allowed = consume and inserted and await self._current(source)
+            allowed = consume and inserted and await pending.binding.entry_current(pending.call)
             if inserted:
                 pending.active = False
                 pending.binding.revoke()
-                await pending.binding.report_unfinished()
+                # Source retirement clears this nonexecuting grant; no await may follow the final entry fence.
                 self._release(source, pending)
         if not consume:
             return await self.retire(source, request_id, "owner_unavailable")

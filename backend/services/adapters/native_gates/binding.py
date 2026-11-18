@@ -7,7 +7,7 @@ import hashlib
 import json
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from backend.services.action_policy.session_policy import PermissionInvocation
@@ -44,6 +44,8 @@ class NativeCall:
     evidence: ExecutionEvidence = field(default_factory=lambda: ExecutionEvidence())
     execution_probe: Callable[[BaseException | None], bool | None] | None = None
     entry_check: Callable[[tuple[Any, ...], dict[str, Any]], bool] | None = None
+    permission_request: PermissionRequest | None = None
+    dialect: str | None = None
 
 
 @dataclass
@@ -212,6 +214,16 @@ class NativeBinding:
                     "parent_id": call.parent_id,
                     "definition": call.definition,
                     "operation_id": call.operation_id,
+                    **(
+                        {
+                            "permission_request": (
+                                asdict(call.permission_request) if call.permission_request is not None else None
+                            ),
+                            "dialect": call.dialect,
+                        }
+                        if call.permission_request is not None or call.dialect is not None
+                        else {}
+                    ),
                 }
             ).encode()
         ).hexdigest()
@@ -248,7 +260,8 @@ class NativeBinding:
             workspace=self.workspace,
             protected_paths=self.protected_paths,
             # Arbitrary framework tools are not trusted file reads or automatic grants.
-            request=PermissionRequest(kind="custom-tool", workspace_path=self.workspace),
+            request=call.permission_request or PermissionRequest(kind="custom-tool", workspace_path=self.workspace),
+            dialect=call.dialect,
             tool_name=call.name,
             arguments_json=encode_arguments(action.arguments),
             tool_definition=call.definition,

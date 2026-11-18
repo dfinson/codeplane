@@ -46,7 +46,9 @@ class ExternalGatePreflight(CamelModel):
 
     @model_validator(mode="after")
     def bounded_action(self) -> Self:
-        encoded = json.dumps(self.model_dump(), allow_nan=False, ensure_ascii=False).encode()
+        encoded = json.dumps(
+            self.model_dump(include=set(ExternalGatePreflight.model_fields)), allow_nan=False, ensure_ascii=False
+        ).encode()
         if len(encoded) > 65536:
             raise ValueError("External gate action exceeds 64 KiB")
         return self
