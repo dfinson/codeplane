@@ -13,6 +13,8 @@ class Producer:
     target: Any = None
     invoke: Any = None
     calls: list = field(default_factory=list)
+    leaf: Any = None
+    leaf_attribute: str = ""
 
     def body(self, value: str = "value") -> str:
         """Return the input without performing I/O."""
@@ -50,6 +52,7 @@ def make_producer(mode):
             p.body, coroutine=p.abody if path != "fallback" else None, name="local"
         )
         p.target = tool
+        p.leaf, p.leaf_attribute = tool, "coroutine" if path == "async" else "func"
         args = {"type": "tool_call", "name": "local", "args": {"value": "value"}, "id": "native-call"}
 
         async def invoke():
@@ -65,6 +68,7 @@ def make_producer(mode):
 
         tool = tools.StructuredTool.from_function(p.body, coroutine=p.abody, name="local")
         p.target = prebuilt.ToolNode([tool])
+        p.leaf, p.leaf_attribute = tool, "coroutine" if path == "async" else "func"
         graph = graph_sdk.StateGraph(graph_sdk.MessagesState)
         graph.add_node("tools", p.target)
         graph.add_edge(graph_sdk.START, "tools")
@@ -92,6 +96,7 @@ def make_producer(mode):
             return p.body(value)
 
         p.target.add_function(plugin_name="test", function=local)
+        p.leaf, p.leaf_attribute = p.target.get_function("test", "local"), "method"
 
         async def invoke():
             history = contents.ChatHistory()
@@ -109,6 +114,7 @@ def make_producer(mode):
 
         p.target = MiddlewareSlot([])
         tool = maf.FunctionTool(name="local", description="Inert local tool", func=p.body)
+        p.leaf, p.leaf_attribute = tool, "func"
 
         async def invoke():
             context = maf.FunctionInvocationContext(tool, {"value": "value"}, kwargs={"tool_call_id": "native-call"})
@@ -123,6 +129,7 @@ def make_producer(mode):
         test_models = load_sdk("pydantic_ai.models.test")
 
         p.target = pydantic_ai.Agent(test_models.TestModel(), tools=[p.body])
+        p.leaf, p.leaf_attribute = p.target._function_toolset.tools["body"].function_schema, "function"
 
         async def invoke():
             if path == "sync":
@@ -163,6 +170,7 @@ def make_producer(mode):
                 return p.body(value)
 
         p.target = smol.ToolCallingAgent(tools=[LocalTool()], model=smol.Model())
+        p.leaf, p.leaf_attribute = p.target.tools["local"], "forward"
 
         async def invoke():
             return await asyncio.to_thread(p.target.execute_tool_call, "local", {"value": "value"})
@@ -187,6 +195,7 @@ def make_producer(mode):
         task = crewai.Task(description="test", expected_output="local output", agent=agent)
         p.target = crewai.Crew(agents=[agent], tasks=[task], memory=False, cache=False, tracing=False)
         tool = structured_tool.CrewStructuredTool.from_function(p.body, name="local", description="Inert local tool")
+        p.leaf, p.leaf_attribute = tool, "func"
 
         async def invoke():
             action = parser.AgentAction(

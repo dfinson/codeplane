@@ -1,4 +1,8 @@
-"""Runtime-owned observation admission and subscription-scoped callback drain."""
+"""Runtime-owned observation admission and subscription-scoped callback drain.
+
+Canonical acceptance failures fence the source for reconciliation. Optional
+post-commit export failures only withhold records and update export health.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ import structlog
 
 from backend.models.domain import StateConflictError
 from backend.services.adapters.integration_policy import IntegrationDisabledError
+from backend.services.events.export_status import ExportDropReason, ExportHealth, ExportHealthSink
 
 from .lifecycle import retain_task
 
@@ -25,6 +30,17 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 native_execution_context: ContextVar[ExecutionIdentity | None] = ContextVar("native_execution_owner", default=None)
+
+
+def record_export_drop(
+    health: ExportHealthSink, reason: ExportDropReason, count: int = 1, *, disable: bool = False
+) -> None:
+    log.warning("native_observation_export_dropped", reason=reason.value, count=count, disabled=disable)
+    try:
+        health.record_drop(reason, count, disable=disable)
+    except Exception as exc:
+        # Health reporting is optional too. Its failure cannot undo local acceptance.
+        log.error("native_export_health_failed", error_type=type(exc).__name__)
 
 
 class NativeObservationOwner:
@@ -112,9 +128,13 @@ class ObservationSubscription:
         self,
         owner: NativeObservationOwner,
         export: Callable[[SessionEvent], None] | None = None,
+        *,
+        export_health: ExportHealthSink | None = None,
     ) -> None:
         self.owner = owner
         self._export = export
+        self._export_requested = export is not None
+        self.export_health = export_health or ExportHealth(enabled=self._export_requested)
         self._closed = False
         self._remove: Callable[[], None] = lambda: None
         self._pending = 0
@@ -162,9 +182,19 @@ class ObservationSubscription:
     async def _accept(self, raw: Mapping[str, Any]) -> None:
         async with self._serial:
             events = await self.owner.append(raw)
-            if self._export is not None and self.owner._enabled():
-                for event in events:
-                    self._export(event)
+            if self._export_requested and (self._export is None or not self.owner._enabled()):
+                record_export_drop(self.export_health, ExportDropReason.disabled, len(events))
+            elif self._export is not None:
+                for index, event in enumerate(events):
+                    try:
+                        self._export(event)
+                    except Exception as exc:
+                        self._export = None
+                        log.warning("native_export_sink_failed", error_type=type(exc).__name__)
+                        record_export_drop(
+                            self.export_health, ExportDropReason.sink_failure, len(events) - index, disable=True
+                        )
+                        break
 
     def _completed(self, future: Future[None]) -> None:
         error = (
