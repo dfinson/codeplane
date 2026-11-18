@@ -104,6 +104,13 @@ graph/trust configuration fail closed. Detach restores the host's exact methods.
 Cancellation remains requested while an entered handler is still running.
 The component bridge neither invents model usage nor supplies live steering.
 
+Langflow uses the actual `lfx==1.13.3` host engine with core 5.0.0
+`TrustGatedFlow`, `IdentityComponent` and blocking `TrustVerificationComponent`.
+Connection trust and Runtime policy precede the original sync/async output
+method. Real graph edges, node IDs, flow/run IDs and component DIDs remain source
+evidence. Runtime retains entered work until completion and exact detach leaves
+the host graph intact. Trust configuration export alone is not execution.
+
 The fixed A2A bridge uses the 0.3 JSON-RPC transport contract rather than
 upstream local `create_task` objects. Signed peer identity and the independent
 endpoint pin are checked before delegation. Actual task/context IDs, status,
