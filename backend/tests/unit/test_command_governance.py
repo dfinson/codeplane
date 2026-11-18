@@ -206,6 +206,9 @@ async def test_executed_command_result_accrues_once_from_durable_replay(sessions
             await RecipeRunRepository(session).finish_attempt(attempt.id, result, outputs)
             await session.commit()
         await root.close()
+        root = StandaloneGovernance(host, tmp_path / "governance")
+        await root.start()
+        host._standalone_governance = root
         from backend.persistence.event_repo import EventRepository
 
         async with sessions() as session:
@@ -250,6 +253,9 @@ async def test_nonstarted_or_unknown_command_is_not_counted_as_executed(sessions
             await RecipeRunRepository(session).finish_attempt(attempt.id, result, outputs)
             await session.commit()
         await root.close()
+        root = StandaloneGovernance(host, tmp_path / "governance")
+        await root.start()
+        host._standalone_governance = root
         from backend.persistence.event_repo import EventRepository
 
         async with sessions() as session:
