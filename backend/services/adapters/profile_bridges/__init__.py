@@ -8,6 +8,13 @@ from backend.services.adapters.native_gates.bridge_contract import BridgeSpec
 
 BRIDGES = MappingProxyType(
     {
+        "autogen": BridgeSpec(
+            id="autogen",
+            module="backend.services.adapters.profile_bridges.autogen",
+            dependencies=(("autogen-core", "0.7.5"),),
+            operations=frozenset({"send_message", "function_call"}),
+            observation_mapping=True,
+        ),
         "flowise": BridgeSpec(
             id="flowise",
             module="backend.services.adapters.profile_bridges.flowise",
