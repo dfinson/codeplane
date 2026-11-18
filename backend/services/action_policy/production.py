@@ -430,7 +430,7 @@ class StandaloneGovernance:
             return bool(
                 job is not None
                 and not job.observation_only
-                and job.state == "running"
+                and job.state in {"running", "waiting_for_approval"}
                 and not host._shutting_down
                 and self.audit_error is None
                 and self.accounting_error is None
@@ -452,6 +452,7 @@ class StandaloneGovernance:
                 provider=provider,
                 model=host._config.runtime.utility_model,
                 retained=retained,
+                preserve_pending_on_cancel=lambda: host._shutting_down,
             ),
             contracts=host._execution_contracts,
             events=host._event_bus,

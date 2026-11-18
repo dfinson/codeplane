@@ -399,6 +399,12 @@ assistant's default presentation prompt; tool access remains disabled and
 permission callbacks still reject requests. Other text completion calls are unchanged.
 Local validation still rejects Markdown, surrounding prose, invalid evidence
 and out-of-bounds spans; provider-side formatting never grants permission.
+Managed SDK policy approvals travel through the owning adapter's event stream
+so Runtime records its waiting state before publishing the request. That live
+waiting state remains eligible for the exact approval's final ownership check.
+Canceled policy invocations retire their own unconsumed requests rather than
+leaving stale approvals behind. Runtime shutdown preserves pending decisions
+for the existing fenced restart/reconciliation path.
 
 The AGT policy component uses the pinned core package's `PolicyEngine` with
 explicit `priority_first_match` priorities and no evaluation-time rate limits.

@@ -173,6 +173,7 @@ class StandalonePolicyRouter:
             },
             dialect=invocation.dialect,
             metadata=metadata,
+            approval_callback=invocation.approval_callback,
             tool_call_id=invocation.tool_call_id,
             is_current=current,
             savepoint=savepoint,

@@ -24,6 +24,7 @@ from backend.services.auth.permission_policy import is_hard_gated_syntax
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
+    from backend.models.events import SessionEvent
     from backend.models.execution_contracts import ExecutionContractPin
     from backend.persistence.governance_repo import GovernanceLedger, GovernanceTotals
     from backend.services.action_policy.classifier import Action
@@ -59,6 +60,7 @@ class PolicyAuthority:
         provider: TextCompletionProvider | None,
         model: str | None,
         retained: RetainedGovernance | None = None,
+        preserve_pending_on_cancel: Callable[[], bool] | None = None,
     ) -> None:
         self._contracts = contracts
         self._ledger = ledger
@@ -69,6 +71,7 @@ class PolicyAuthority:
         self._provider = provider
         self._model = model
         self._retained = retained
+        self._preserve_pending_on_cancel = preserve_pending_on_cancel
 
     @staticmethod
     def _budget(local: PolicyInput, totals: GovernanceTotals) -> PolicyInput:
@@ -106,6 +109,7 @@ class PolicyAuthority:
         metadata: EventMetadata | None = None,
         tool_call_id: str | None = None,
         retained_action: Action | None = None,
+        approval_callback: Callable[[SessionEvent], None] | None = None,
     ) -> Authorization:
         """The caller owns interception and supplies a live ownership/policy fence.
 
@@ -275,21 +279,35 @@ class PolicyAuthority:
                 except ApprovalAlreadyResolvedError:
                     log.info("policy_stale_approval_already_resolved", approval_id=approval.id)
             else:
-                await self._events.publish(
-                    new_event(
-                        session_id=execution.job_id,
-                        kind=EventKind.approval_requested,
-                        payload={
-                            "approval_id": approval.id,
-                            "description": approval.description,
-                            "proposed_action": proposed,
-                            "requires_explicit_approval": decision.individual_human,
-                        },
-                        metadata=origin,
-                    )
+                requested = new_event(
+                    session_id=execution.job_id,
+                    kind=EventKind.approval_requested,
+                    payload={
+                        "approval_id": approval.id,
+                        "description": approval.description,
+                        "proposed_action": proposed,
+                        "requires_explicit_approval": decision.individual_human,
+                    },
+                    metadata=origin,
                 )
-                # Human waits have no machine-decision timeout.
-                resolution = await self._approvals.wait_for_resolution(approval.id)
+                try:
+                    if approval_callback is None:
+                        await self._events.publish(requested)
+                    else:
+                        approval_callback(requested)
+                    # Human waits have no machine-decision timeout.
+                    resolution = await self._approvals.wait_for_resolution(approval.id)
+                except BaseException:
+                    if self._preserve_pending_on_cancel is None or not self._preserve_pending_on_cancel():
+                        try:
+                            await self._approvals.resolve(
+                                approval.id,
+                                ApprovalResolution.rejected,
+                                notes="Originating policy invocation ended before approval was consumed",
+                            )
+                        except ApprovalAlreadyResolvedError:
+                            log.info("policy_ended_approval_already_resolved", approval_id=approval.id)
+                    raise
                 proceed = resolution == ApprovalResolution.approved
         elif decision.action in {"allow", "warn"}:
             proceed = True

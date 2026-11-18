@@ -626,6 +626,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
                     tool_call_id=tool_call_id,
                     dialect=dialect,
                     tool_definition=tool_definition,
+                    approval_callback=lambda event: self._enqueue(session_id, event),
                 )
             )
             return PermissionDecision.allow if allowed and await current() else PermissionDecision.deny
