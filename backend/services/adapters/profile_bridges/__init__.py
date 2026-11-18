@@ -43,6 +43,13 @@ BRIDGES = MappingProxyType(
             operations=frozenset({"invoke", "observe", "gate", "cancel"}),
             observation_mapping=True,
         ),
+        "langflow": BridgeSpec(
+            id="langflow",
+            module="backend.services.adapters.profile_bridges.langflow",
+            dependencies=(("lfx", "1.13.3"), ("agent-governance-toolkit-core", "5.0.0")),
+            operations=frozenset({"invoke", "observe", "gate", "cancel"}),
+            observation_mapping=True,
+        ),
         "a2a": BridgeSpec(
             id="a2a",
             module="backend.services.adapters.profile_bridges.a2a",
