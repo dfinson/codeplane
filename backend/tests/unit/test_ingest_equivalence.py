@@ -1,10 +1,10 @@
-"""§6.1 equivalence oracle for imported ingestion: same vendor log ⇒ same TF stream.
+"""§6.1 equivalence oracle for imported ingestion: same vendor log ⇒ same canonical stream.
 
-Drives the *real* production tail/parse path (``FileWatchSource`` + the bundled
-TraceForge ``MappedJsonAdapter`` for the ``copilot``/``claude`` framework mappings)
-against recorded vendor JSONL and asserts the emitted ``traceforge.SessionEvent``
+Drives the real ``NativeJsonlSource`` tail path and bundled Copilot/Claude mappings
+against recorded vendor JSONL and asserts the emitted canonical ``SessionEvent``
 stream carries the same dotted ``EventKind``s and the same salient payload/metadata
-fields the retired hand-rolled watchers produced.
+fields the retired hand-rolled watchers produced. Version-1 replay explicitly uses
+the optional legacy implementation rather than fabricating a new-decoder checkpoint.
 
 Claude fixtures are ported from the deleted ``test_claude_session_watcher.py``
 inline JSONL shapes (user / assistant-text / thinking / tool_use / tool_result).
@@ -165,7 +165,7 @@ def _emitted(event_processor: AsyncMock) -> list[SessionEvent]:
 
 
 class TestClaudeImportedEquivalence:
-    """Claude Code JSONL ⇒ TF stream via the bundled ``claude`` mapping."""
+    """Claude Code JSONL ⇒ canonical stream via the bundled ``claude`` mapping."""
 
     async def test_full_stream_kinds_and_salient_fields(
         self,
@@ -267,12 +267,12 @@ class TestClaudeImportedEquivalence:
         )
 
         from backend.persistence.job_repo import JobRepository
-        from backend.services.ingest._base import _advance_prefix, _canonical_record, _NativeIdentity
+        from backend.services.ingest._base import _advance_prefix, _canonical_record, _LegacyNativeIdentity
 
         async with db_session() as session:
             repo = JobRepository(session)
             job = await repo.get("job-re")
-            identity = _NativeIdentity("claude", "sess-re", "job-re", job.created_at)
+            identity = _LegacyNativeIdentity("claude", "sess-re", "job-re", job.created_at)
             await repo.update_ingest_checkpoint(
                 "job-re",
                 {
@@ -302,10 +302,15 @@ class TestClaudeImportedEquivalence:
         ]
         assert EventKind.message_user not in kinds
         assert kinds == [EventKind.message_assistant]
+        async with db_session() as session:
+            retained = await JobRepository(session).get_ingest_checkpoint("job-re")
+        assert retained["version"] == 1
+        assert retained["mapping_sha256"] == identity.mapping_digest
+        assert "source" not in retained
 
 
 class TestCopilotImportedEquivalence:
-    """Copilot CLI session JSONL ⇒ TF stream via the bundled ``copilot`` mapping."""
+    """Copilot CLI session JSONL ⇒ canonical stream via the bundled ``copilot`` mapping."""
 
     async def test_full_stream_kinds_and_salient_fields(
         self,
