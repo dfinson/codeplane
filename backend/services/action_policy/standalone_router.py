@@ -58,12 +58,23 @@ class StandalonePolicyRouter:
 
     async def authorize_permission(self, invocation: PermissionInvocation) -> bool:
         metadata = invocation.metadata
+        native = invocation.native_execution
         if (
             invocation.job_id != self.pin.job_id
-            or metadata.run_id != invocation.session_id
+            or (native is None and metadata.run_id != invocation.session_id)
             or metadata.execution_epoch != self.execution_epoch
             or not metadata.execution_token
             or metadata.integration_binding_id is not None
+            or (
+                native is not None
+                and (
+                    native.job_id != invocation.job_id
+                    or native.epoch != metadata.execution_epoch
+                    or native.execution_token != metadata.execution_token
+                    or not native.binding_id
+                    or invocation.session_id != ""
+                )
+            )
         ):
             log.error(
                 "standalone_permission_binding_invalid",
@@ -84,7 +95,7 @@ class StandalonePolicyRouter:
         if not await current():
             return False
         self._contracts.require_available(self.pin)
-        if invocation.provider != "codeplane.command":
+        if native is None and invocation.provider != "codeplane.command":
             await self._contracts.bind_handle(
                 self.pin,
                 sdk=invocation.provider,
@@ -138,7 +149,8 @@ class StandalonePolicyRouter:
 
         authorized = await self._authority.authorize(
             pin=self.pin,
-            execution=ExecutionIdentity(
+            execution=native
+            or ExecutionIdentity(
                 invocation.job_id,
                 f"{invocation.provider}:{invocation.session_id}",
                 self.execution_epoch,
@@ -149,7 +161,10 @@ class StandalonePolicyRouter:
                 "command": command,
                 "arguments": invocation.arguments_json,
                 "tool_definition": invocation.tool_definition,
-                "context": f"Native tool: {invocation.tool_name}; permission kind: {request.kind}",
+                "context": (
+                    f"Native tool: {invocation.tool_name}; permission kind: {request.kind}"
+                    + (f"; producer call ID: {invocation.native_tool_call_id}" if native is not None else "")
+                ),
             },
             dialect=invocation.dialect,
             metadata=metadata,
