@@ -6,6 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test";
+import { mockLegacyRecipe } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -52,6 +53,7 @@ async function setupJobDetailMocks(
   job: ReturnType<typeof makeJob>,
 ) {
   const jobId = job.id as string;
+  await mockLegacyRecipe(page, jobId);
 
   await page.route("**/api/events*", async (route) => {
     await route.fulfill({

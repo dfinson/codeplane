@@ -6,14 +6,17 @@
  */
 
 import { test, expect } from "@playwright/test";
+import type { Job, ProjectResponse } from "../src/api/types";
+import { makeProjectBoard, mockLegacyRecipe, setupProjectBoardMocks } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
 const NOW = new Date().toISOString();
+const REPOSITORY = "/tmp/test-repo";
 
-const MOCK_JOB = {
+const MOCK_JOB: Job = {
   id: "job-1",
   title: "",
   prompt: "Fix the bug in auth module",
@@ -21,7 +24,7 @@ const MOCK_JOB = {
   createdAt: NOW,
   updatedAt: NOW,
   completedAt: null,
-  repo: "/tmp/test-repo",
+  repo: REPOSITORY,
   projectId: "project-1",
   branch: "cpl/job-1",
   baseRef: "main",
@@ -33,6 +36,12 @@ const MOCK_JOB = {
   progressHeadline: null,
   model: "claude-sonnet-4-5-20250514",
   sdk: "copilot",
+  source: "managed",
+  mode: "standard",
+  observationOnly: false,
+};
+const PROJECT: ProjectResponse = {
+  id: "project-1", name: "test-repo", repoPaths: [REPOSITORY], createdAt: NOW, updatedAt: NOW,
 };
 
 const MOCK_SETTINGS = {
@@ -64,6 +73,7 @@ function sseBody(events: { event: string; data: unknown }[]): string {
 
 /** Standard API mocks shared across lifecycle tests. */
 async function setupBaseMocks(page: import("@playwright/test").Page, jobs: unknown[] = []) {
+  await mockLegacyRecipe(page, MOCK_JOB.id);
   await page.route("**/api/events*", async (route) => {
     const snapshotPayload = { jobs, pendingApprovals: [] };
     await route.fulfill({
@@ -240,24 +250,48 @@ test.describe("Job Creation", () => {
 test.describe("Project board SSE Integration", () => {
   test("job appears on project board via SSE snapshot event", async ({ page }) => {
     await setupBaseMocks(page, [MOCK_JOB]);
+    await setupProjectBoardMocks(page, PROJECT, () => makeProjectBoard(PROJECT, { in_progress: [MOCK_JOB] }));
 
     await page.goto("/projects/id/project-1/board");
 
-    // Job should appear in the kanban — use .first() for strict mode
-    await expect(page.getByRole("button", { name: /Job: job-1/i })).toBeVisible({ timeout: 8_000 });
+    const active = page.getByRole("region", { name: "In Progress" });
+    await expect(active.getByRole("link", { name: "Open Job", exact: true })).toHaveAttribute("href", "/jobs/job-1");
+    await expect(active).toContainText("Job: running");
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("1 standalone Jobs");
   });
 
   test("SSE job_state_changed updates job card on project board", async ({ page }) => {
     // Start with a running job
     await setupBaseMocks(page, [MOCK_JOB]);
+    let board = makeProjectBoard(PROJECT, { in_progress: [MOCK_JOB] });
+    await setupProjectBoardMocks(page, PROJECT, () => board);
+    let releaseEvent!: () => void;
+    const released = new Promise<void>((resolve) => { releaseEvent = resolve; });
+    await page.route("**/api/events*", async (route) => {
+      await released;
+      await route.fulfill({
+        headers: { "Content-Type": "text/event-stream" },
+        body: sseBody([
+          { event: "snapshot", data: { jobs: [MOCK_JOB], pendingApprovals: [] } },
+          { event: "job.state_changed", data: {
+            id: "job-1-review", session_id: MOCK_JOB.id, kind: "job.state_changed",
+            timestamp: NOW, payload: { state: "review" }, metadata: {},
+          } },
+        ]),
+      });
+    });
 
     await page.goto("/projects/id/project-1/board");
-    await expect(page.getByRole("button", { name: /Job: job-1/i })).toBeVisible({ timeout: 8_000 });
-
-    // The job card should show "running" state initially — verified by its presence
-    // in the In Progress kanban column
     const activeColumn = page.getByRole("region", { name: "In Progress" });
-    await expect(activeColumn.getByRole("button").first()).toBeVisible();
+    await expect(activeColumn.getByRole("link", { name: "Open Job" })).toHaveAttribute("href", "/jobs/job-1");
+    await expect(activeColumn).toContainText("Job: running");
+    board = makeProjectBoard(PROJECT, { needs_decision: [{ ...MOCK_JOB, state: "review" }] });
+    releaseEvent();
+    const decisions = page.getByRole("region", { name: "Needs a decision" });
+    await expect(decisions.getByRole("link", { name: "Open Job" })).toHaveAttribute("href", "/jobs/job-1");
+    await expect(decisions).toContainText("Job: review");
+    await expect(activeColumn.getByRole("link", { name: "Open Job" })).toHaveCount(0);
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("1 standalone Jobs / 1 Jobs in review");
   });
 });
 
