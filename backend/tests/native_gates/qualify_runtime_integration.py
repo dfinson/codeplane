@@ -14,6 +14,7 @@ from backend.config import CPLConfig, RuntimeConfig
 from backend.models.db import Base, ProjectRow
 from backend.models.domain import ApprovalResolution, Job, JobState, StateConflictError
 from backend.models.events import EventKind, SessionEvent
+from backend.persistence import database
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.execution_contract_repo import ExecutionContractRepository
@@ -30,7 +31,8 @@ from backend.tests.native_gates.producers import make_producer
 
 
 @pytest.fixture
-async def composed_runtime(tmp_path):
+async def composed_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "_write_lock", asyncio.Lock())
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'data.db'}")
     sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as conn:
