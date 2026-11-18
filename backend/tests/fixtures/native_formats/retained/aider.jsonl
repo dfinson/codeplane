@@ -1,0 +1,1 @@
+{"event": "message_send", "properties": {"main_model": "gpt-5", "weak_model": "gpt-5-nano", "editor_model": "gpt-5", "edit_format": "diff", "prompt_tokens": 3647, "completion_tokens": 36, "total_tokens": 3683, "cost": 0.00491875, "total_cost": 0.00491875}, "user_id": "c9e53284-f599-4d00-b70d-a38d813b715d", "time": 1782638643}

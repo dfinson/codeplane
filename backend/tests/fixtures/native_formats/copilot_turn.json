@@ -1,0 +1,7 @@
+{
+  "session_id": "copilot-shape",
+  "turn_index": 7,
+  "timestamp": "2026-01-02T03:04:05Z",
+  "user_message": "Read a.py",
+  "assistant_response": "Reading.\n\n```bash\ncat a.py\n```\n\n```text\nfile contents\n```\n"
+}

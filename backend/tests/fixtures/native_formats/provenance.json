@@ -1,0 +1,263 @@
+{
+  "qualification_base": "b79ddb03d5a94d85aa7dc29fb617407876568090",
+  "specification_sha256": "9941bd11323740358f158baf953083d192873f03b610708d9fad10934aee29c5",
+  "upstream_repository": "dfinson/traceforge",
+  "upstream_revision": "46e0340b7bb3fd4740f8dba02a5e7586fa26608f",
+  "license": "retained/LICENSE",
+  "selection_policy": "Explicit zero-based physical lines, copied byte-for-byte, never decoder generated.",
+  "shape_goldens": "shapes.yaml is manually authored from retained mapping and preprocessor contracts.",
+  "missing_recordings": [
+    "langchain",
+    "semantic_kernel"
+  ],
+  "sources": {
+    "aider": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/aider/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/aider/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "7ba7b1c6d4e6c9093697e855acb3a791c6e9e1e99e2bbd3c56cef67e27eaa334",
+      "selected_zero_based_lines": [
+        4
+      ],
+      "sample_sha256": "740a9a9e4dfca7ba914aa0f3f0da96e853994d5eefd588a6a9f12c1034a93c19",
+      "producer_version": "0.86.2"
+    },
+    "aider_markdown": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/aider_markdown/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/aider_markdown/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "d173d8d0da75c36298fa85f35cd27b923f503e7214172fdcd3ee9e5a727bed0e",
+      "selected_zero_based_lines": [
+        2,
+        3
+      ],
+      "sample_sha256": "6f6cc5e2a965adcc039d11929129431b40dae0dbddcd8ac3c9032b36e4de6b0f",
+      "producer_version": "aider 0.86.2"
+    },
+    "amazonq": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/amazonq/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/amazonq/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "bc02e0f8892139b0c76599f32da39aa5d03b5dd4b24b6a157d5cdbfa702ded31",
+      "selected_zero_based_lines": [
+        0
+      ],
+      "sample_sha256": "bc02e0f8892139b0c76599f32da39aa5d03b5dd4b24b6a157d5cdbfa702ded31",
+      "producer_version": "1.x"
+    },
+    "antigravity": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/antigravity/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/antigravity/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "be30d84808e937f6a8df408feb6cc43df4d7c256165d688d077fa5fdfed2a71e",
+      "selected_zero_based_lines": [
+        12,
+        14
+      ],
+      "sample_sha256": "7888e96d49e469833cf21de2a264b4bdd0c9289051cca03d09a7f65cc94853a4",
+      "producer_version": "google-antigravity 0.1.5"
+    },
+    "claude": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/claude/demo_issue_tracker_contributing.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/claude/demo_issue_tracker_contributing.jsonl",
+      "source_sha256": "898a60dfa14e8fb3f9f87997444d9fcc13da321e49da2834e079093fb87162f2",
+      "selected_zero_based_lines": [
+        11
+      ],
+      "sample_sha256": "0616841f4f92ed3802d91fb0cf8151a43fb188efe6740295826990ca042c9da6",
+      "producer_version": "harvested"
+    },
+    "cline": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/cline/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/cline/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "cc501f5bf039a5e351f1456e551aa2c58ddba0089c79a255077b47f9a09355d0",
+      "selected_zero_based_lines": [
+        3
+      ],
+      "sample_sha256": "8fd9f25a80be22c7df03ff1d854a6b3e4ecab2a5472961b95242d942d8da4077",
+      "producer_version": "4.1.3"
+    },
+    "codex": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/codex/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/codex/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "b34e51d9fc0547dbf2ddb5f61e0f946cf22ad9b8c156ff56163f378227f32ceb",
+      "selected_zero_based_lines": [
+        26
+      ],
+      "sample_sha256": "0e6d22ab03261aa146e5294cd5afaf9626c10701877ecf4c4e1de3a7ce9776fd",
+      "producer_version": "0.142.3"
+    },
+    "continue_dev": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/continue_dev/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/continue_dev/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "8ce765dca04d0385a6b7a487c63c1c44bb93e11723eeb4c0c6772bc5ebb77441",
+      "selected_zero_based_lines": [
+        0
+      ],
+      "sample_sha256": "8ce765dca04d0385a6b7a487c63c1c44bb93e11723eeb4c0c6772bc5ebb77441",
+      "producer_version": "1.x"
+    },
+    "copilot": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/copilot/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/copilot/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "9852ac8259005935b127b7647099b9f7bab5e9d4e17db3334373ec5b4a969715",
+      "selected_zero_based_lines": [
+        7
+      ],
+      "sample_sha256": "cd525881dca178069cb378068fe5a6b74cf81bcd7be61cdf2c157627af6d4a71",
+      "producer_version": "GitHub Copilot CLI 1.0.66-1."
+    },
+    "copilot_markdown": {
+      "evidence_kind": "documented_shape",
+      "source_path": "tests/fixtures/raw_traces/copilot_markdown/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/copilot_markdown/demo_issue_tracker_get_endpoint_shape.jsonl",
+      "source_sha256": "b63272652c42efedfe8f4d36b3b07c634ef0bf78d65eb97c5e91f4280e4c911b",
+      "selected_zero_based_lines": [
+        12,
+        15
+      ],
+      "sample_sha256": "ea201f39cdf8ffe48b3d3c9293a4a00c4bb3cbd148af6b9f14b07ce13c76d34e",
+      "producer_version": "copilot-cli 1.0"
+    },
+    "copilot_vscode": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/copilot_vscode/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/copilot_vscode/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "eee8b42f431ee393ab685a3e857e8cc08dbe086adfebd9d770982d71c7ff19f6",
+      "selected_zero_based_lines": [
+        0,
+        1,
+        2
+      ],
+      "sample_sha256": "8c67ebd4eaf007ef0dfa121a92fe5968f2a5bf9460a2df4c506786315203ec74",
+      "producer_version": "vscode-chat-v3"
+    },
+    "crewai": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/crewai/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/crewai/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "af5bb695793ccc32613964d89a5436e88f31c2133bfb67bb436bcc845920d55b",
+      "selected_zero_based_lines": [
+        0
+      ],
+      "sample_sha256": "f7547440235486a45557ef018fe6d5591349b4c69e3e5725d3bac35ed1e18761",
+      "producer_version": "1.6.1"
+    },
+    "goose": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/goose/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/goose/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "31c6963725c8c5cd6e20ea401012a61801ce640834ed2c7190013858ffcfe621",
+      "selected_zero_based_lines": [
+        1
+      ],
+      "sample_sha256": "b0de8d72368835858a25554a3699941c06370f46769b063ab2b7a9005d281a1c",
+      "producer_version": "1.39.0"
+    },
+    "langgraph": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/langgraph/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/langgraph/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "20c8ead9a5d9b35318e12eac91b88e2cc0c92ec7b46ac73509cebac8fee28c4d",
+      "selected_zero_based_lines": [
+        311
+      ],
+      "sample_sha256": "337b0faff85e6f747e066289e72dd3413bc91b110ab14c5c594ba573f1e4f110",
+      "producer_version": "1.2.5"
+    },
+    "maf": {
+      "evidence_kind": "retained_sdk_telemetry",
+      "source_path": "tests/fixtures/raw_traces/maf/telemetry_span_wrappers_1_3_0.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/maf/telemetry_span_wrappers_1_3_0.jsonl",
+      "source_sha256": "d4657d11e5de1227278315857cbebf80b600a6e851fa7fed517d322f4cf6f0b9",
+      "selected_zero_based_lines": [
+        12
+      ],
+      "sample_sha256": "192dd0895656a1e0ca7987907da99207dee3c63b78970ac35294c2cf16c22e79",
+      "producer_version": "microsoft-agents-hosting-core 1.3.0"
+    },
+    "maf_transcript": {
+      "evidence_kind": "retained_recording_alias_serialization",
+      "source_path": "tests/fixtures/raw_traces/maf_transcript/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/maf_transcript/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "9b005c604550a6a108994766050cd52d4f6096164ab0ec1800e50c0e8af23c2d",
+      "selected_zero_based_lines": [
+        17
+      ],
+      "sample_sha256": "51a528b98dee9250c3f9cd97384978139b930813c07868c38d6ff5479c1fd90e",
+      "producer_version": "1.1.0"
+    },
+    "openai_agents": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/openai_agents/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/openai_agents/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "952424407613a8e6c3fa84fc047dcf45b067b5d52ce5bfb1f5e19b50f0d6658f",
+      "selected_zero_based_lines": [
+        14
+      ],
+      "sample_sha256": "b760745bf97fcd6fa3cf5eeb1a4efdca471c95da1408ff375f08372ccce02a2f",
+      "producer_version": "0.3.3"
+    },
+    "opencode": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/opencode/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/opencode/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "0cd38300727552f320b290f360677bb3b33976a7485ed90fa208a231b415ef59",
+      "selected_zero_based_lines": [
+        29
+      ],
+      "sample_sha256": "0319898f339eaa7b8dc29a42e9ba3712a8e58fea53fd5f0086e6540d372072dc",
+      "producer_version": "1.17.11"
+    },
+    "openhands": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/openhands/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/openhands/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "3edf71d9af62eb05a1546dc3672a0e82227367c566923c3301e1d3a805cb81c2",
+      "selected_zero_based_lines": [
+        4
+      ],
+      "sample_sha256": "4f64c5264d4edfca44c74490fdacd70268272e5fd2a64fa6f64002393e25aa0c",
+      "producer_version": "1.8.0 (openhands-ai; SDK events 1.27.0)"
+    },
+    "pydantic_ai": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/pydantic_ai/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/pydantic_ai/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "09d799baa010f33d467b5192c76a34a59ee3a7e164d217f1dd193cec5518bf5f",
+      "selected_zero_based_lines": [
+        10
+      ],
+      "sample_sha256": "305a8a101c454e3794e33a5a7b69f25d36aab127528f1949830f8dff523bc0f6",
+      "producer_version": "2.0.0"
+    },
+    "smolagents": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/smolagents/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/smolagents/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "1eef60d32b1ce62343284f2c4f1e3d24cb04abbf02b723c760b906af93ed1855",
+      "selected_zero_based_lines": [
+        0,
+        1
+      ],
+      "sample_sha256": "192ab9751cf58a591dfa5cd4e080edd7afc2703418e51b427d98a95f859008e2",
+      "producer_version": "1.26.0"
+    },
+    "sweagent": {
+      "evidence_kind": "retained_recording",
+      "source_path": "tests/fixtures/raw_traces/sweagent/demo_issue_tracker_get_endpoint.jsonl",
+      "url": "https://github.com/dfinson/traceforge/blob/46e0340b7bb3fd4740f8dba02a5e7586fa26608f/tests/fixtures/raw_traces/sweagent/demo_issue_tracker_get_endpoint.jsonl",
+      "source_sha256": "93b562680ed2190c2563d4db34eabfc48fac0be0388327013a61ba4b0ec78457",
+      "selected_zero_based_lines": [
+        7
+      ],
+      "sample_sha256": "25eb3c534d03a64f21427c9faa46b6882039b7d076c8027cf99de5f9eac4723f",
+      "producer_version": "1.1.0 (git tag v1.1.0; PyPI sweagent 0.0.1 is uninstallable due to togetherunidiff)"
+    }
+  }
+}
