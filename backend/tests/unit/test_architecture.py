@@ -34,6 +34,7 @@ ALLOWED_EVENT_REPO_CONSUMERS = {
     "backend/services/action_policy/production.py",  # governance ledger replay
     "backend/services/adapters/adapter_registry.py",  # utility completion receipts
     "backend/services/events/title_refinement.py",  # durable refinement claims
+    "backend/services/events/optional_export.py",  # exports only validated committed receipt metadata
     "backend/services/recipe/control.py",  # attempt stop receipts
     "backend/services/recipe/review_service.py",  # review publication receipts
     "backend/services/runtime/verify.py",  # interrupted verification recovery

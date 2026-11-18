@@ -188,4 +188,5 @@ dev = [
     "pip-audit>=2.10.0",
     "pytest-timeout>=2.4.0",
     "types-psutil",
+    "types-jsonschema>=4.26.0.20261006",
 ]
