@@ -1984,6 +1984,20 @@ class TestBuildSessionConfig:
 
 
 class TestConcurrencyGuards:
+    @pytest.fixture(name="engine")
+    async def disk_engine(self, tmp_path: Path) -> AsyncGenerator[AsyncEngine, None]:
+        from backend.persistence.database import create_engine
+
+        # Concurrent ORM sessions need separate connections, not one shared
+        # in-memory transaction that another session can roll back.
+        engine = create_engine(tmp_path / "runtime-concurrency.db")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
+
     async def test_managed_cleanup_continues_when_artifact_finalization_raises(
         self,
         runtime: RuntimeService,
