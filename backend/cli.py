@@ -783,6 +783,44 @@ def version() -> None:
     click.echo(f"cpl {__version__}")
 
 
+@cli.command("convert-native-checkpoint")
+@click.option("--job-id", required=True, help="Existing native CLI Job to convert.")
+@click.option("--source", "source_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--rollback", is_flag=True, help="Restore the original reader only if no progress/history changed.")
+def convert_native_checkpoint_command(job_id: str, source_path: Path, rollback: bool) -> None:
+    """Explicit native v1/v2 transition. Stop observation first; never rewinds new outcomes.
+
+    Requires the retained legacy parser. Does not convert at startup or perform
+    whole-provider rollback.
+    """
+    import asyncio
+    import json
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.database import create_engine, create_session_factory
+    from backend.services.ingest.checkpoint_conversion import convert_native_checkpoint
+
+    database = backend_config.get_codeplane_dir() / "data.db"
+    if not database.is_file():
+        raise click.ClickException("No existing CodePlane database exists under the active home")
+
+    async def execute() -> dict[str, Any]:
+        engine = create_engine(database)
+        try:
+            return await convert_native_checkpoint(
+                create_session_factory(engine), job_id=job_id, source_path=source_path, rollback=rollback
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(execute())
+    except (CodePlaneError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Server host")
 @click.option("--port", "-p", default=8080, type=int, help="Server port")
