@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 import yaml
 
+from backend.models.domain import StateConflictError
 from backend.models.schemas.integrations import ObservationRecordBatch
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.integration_repo import IntegrationRepository
