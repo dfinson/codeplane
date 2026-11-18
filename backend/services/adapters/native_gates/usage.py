@@ -15,7 +15,35 @@ if TYPE_CHECKING:
 def result_usage(family: str, result: Any, execution: ExecutionIdentity) -> tuple[UsageAmount, ...]:
     values: dict[str, int] = {}
     source = ""
-    if family == "crewai":
+    if family == "autogen":
+        models = load_sdk("autogen_core.models")
+        if isinstance(result, models.CreateResult):
+            values = {"input_tokens": result.usage.prompt_tokens, "output_tokens": result.usage.completion_tokens}
+            source = "CreateResult.usage"
+    elif family == "llamaindex":
+        llms = load_sdk("llama_index.core.base.llms.types")
+        if isinstance(result, (llms.CompletionResponse, llms.ChatResponse)):
+            for native_name, unit in (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens")):
+                amount = result.additional_kwargs.get(native_name)
+                if amount is not None:
+                    if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+                        raise ValueError("Invalid native LlamaIndex token usage")
+                    values[unit] = amount
+            source = f"{type(result).__name__}.additional_kwargs"
+    elif family == "google-adk":
+        events = load_sdk("google.adk.events")
+        if isinstance(result, events.Event) and result.usage_metadata is not None:
+            reported = result.usage_metadata
+            for native_name, unit in (
+                ("prompt_token_count", "input_tokens"),
+                ("candidates_token_count", "output_tokens"),
+                ("cached_content_token_count", "cache_read_tokens"),
+            ):
+                amount = getattr(reported, native_name)
+                if amount is not None:
+                    values[unit] = amount
+            source = "Event.usage_metadata"
+    elif family == "crewai":
         crew_output = load_sdk("crewai.crews.crew_output")
         if isinstance(result, crew_output.CrewOutput):
             reported = result.token_usage

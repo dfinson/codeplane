@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.models.domain import Job
-    from backend.models.execution_contracts import ExecutionContractPin
+    from backend.models.execution_contracts import ExecutionContractPin, ImplementationPin
     from backend.services.adapters.contracts import ExecutionIdentity
 
 
@@ -68,6 +68,7 @@ class NativeExecutionRepository:
         family: str,
         external_session_id: str,
         assert_retained: Callable[[], Awaitable[None]],
+        source_pin: ImplementationPin | None = None,
     ) -> Job:
         from backend.validators import validate_integration_binding_id
 
@@ -79,6 +80,7 @@ class NativeExecutionRepository:
             "admission_id": pin.admission_id,
             "budget_id": pin.budget_id,
             "owner": "native-runtime-observation-v1",
+            "observation_pin": source_pin.model_dump(mode="json") if source_pin is not None else None,
         }
         async with serialized_write(self._factory) as session:
             await assert_retained()
@@ -96,6 +98,7 @@ class NativeExecutionRepository:
                 or bound.payload.get("admission_id") != pin.admission_id
                 or bound.payload.get("budget_id") != pin.budget_id
                 or bound.payload.get("family") != family
+                or bound.payload.get("observation_pin") != config["observation_pin"]
                 or await events.get(f"native:{execution.execution_token}:released") is not None
             ):
                 raise StateConflictError("Native observation has no exact retained execution admission")
@@ -257,18 +260,23 @@ class NativeExecutionRepository:
         family: str,
         phase: str,
         metadata: EventMetadata,
+        *,
+        source_pin: ImplementationPin | None = None,
     ) -> None:
+        payload: dict[str, Any] = {
+            "execution": asdict(execution),
+            "admission_id": pin.admission_id,
+            "budget_id": pin.budget_id,
+            "family": family,
+        }
+        if source_pin is not None:
+            payload["observation_pin"] = source_pin.model_dump(mode="json")
         async with serialized_write(self._factory) as session:
             await EventRepository(session).append(
                 new_event(
                     execution.job_id,
                     f"execution.native.{phase}",
-                    {
-                        "execution": asdict(execution),
-                        "admission_id": pin.admission_id,
-                        "budget_id": pin.budget_id,
-                        "family": family,
-                    },
+                    payload,
                     event_id=f"native:{execution.execution_token}:{phase}",
                     metadata=metadata.model_copy(
                         update={"source_framework": "codeplane", "namespace": ("control", "native-execution")}
