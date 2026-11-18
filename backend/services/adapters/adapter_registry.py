@@ -20,6 +20,7 @@ from backend.services.adapters.integration_policy import IntegrationPolicy
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from backend.models.schemas.integrations import IntegrationProfileList
     from backend.services.adapters.agent_adapter import AgentAdapterInterface, CompletionResult
     from backend.services.adapters.completion_context import CompletionContext
     from backend.services.events.event_bus import EventBus
@@ -186,6 +187,12 @@ class AdapterRegistry:
     def list_descriptors(self) -> tuple[AdapterDescriptor, ...]:
         """Registration is independent of enablement and never constructs clients."""
         return tuple(_DESCRIPTORS.values())
+
+    def list_profiles(self) -> IntegrationProfileList:
+        """Describe selected integrations without constructing or enabling a client."""
+        from backend.services.adapters.profile_catalog import list_profiles
+
+        return list_profiles(self)
 
     def supported_capabilities(self, sdk: AgentSDK | str) -> frozenset[Capability]:
         return self.describe(sdk).capabilities

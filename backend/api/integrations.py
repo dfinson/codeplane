@@ -1,21 +1,94 @@
 """Authenticated operator history registration; no execution admission."""
 
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, HTTPException, Query
+import sqlite3
 
+from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from sqlalchemy.exc import OperationalError
+
+from backend.config import CPLConfig
 from backend.models.api_schemas import (
+    IntegrationProfileList,
+    IssuedIngestCredential,
+    IssueIngestCredentialRequest,
     JobResponse,
     ObservationEventList,
     ObservationRecordBatch,
     ObservationRecordReceipt,
+    OtlpExportResponse,
     RegisterObservationRequest,
 )
+from backend.models.domain import StateConflictError
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.integration_repo import IntegrationRepository
+from backend.services.adapters.adapter_registry import AdapterRegistry
+from backend.services.ingest.credentials import INGEST_TOKEN_HEADER, IngestCredentials
 from backend.services.ingest.history_registration import HistoryRegistration
 from backend.services.ingest.record_service import ObservationRecords
 
 router = APIRouter(prefix="/integrations", tags=["integrations"], route_class=DishkaRoute)
+
+
+@router.get("/profiles", response_model=IntegrationProfileList)
+async def list_integration_profiles(config: FromDishka[CPLConfig]) -> IntegrationProfileList:
+    return AdapterRegistry(config=config).list_profiles()
+
+
+@router.post("/{binding_id}/ingest-credential", response_model=IssuedIngestCredential)
+async def issue_ingest_credential(
+    binding_id: str,
+    body: IssueIngestCredentialRequest,
+    bindings: FromDishka[IntegrationRepository],
+    config: FromDishka[CPLConfig],
+    response: Response,
+) -> IssuedIngestCredential:
+    try:
+        token = await IngestCredentials(bindings, config).issue(binding_id, enabled=body.enabled)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return IssuedIngestCredential(token=token, enabled=body.enabled)
+
+
+@router.delete("/{binding_id}/ingest-credential", status_code=204)
+async def revoke_ingest_credential(
+    binding_id: str,
+    bindings: FromDishka[IntegrationRepository],
+    config: FromDishka[CPLConfig],
+) -> None:
+    try:
+        await IngestCredentials(bindings, config).revoke(binding_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/{binding_id}/traces", response_model=OtlpExportResponse)
+async def ingest_traces(
+    binding_id: str,
+    request: Request,
+    bindings: FromDishka[IntegrationRepository],
+    config: FromDishka[CPLConfig],
+    service: FromDishka[ObservationRecords],
+) -> OtlpExportResponse:
+    try:
+        authorization = await IngestCredentials(bindings, config).authorize(
+            binding_id, request.headers.get(INGEST_TOKEN_HEADER)
+        )
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise HTTPException(status_code=415, detail="Only OTLP HTTP/JSON is currently implemented")
+        await service.append_otlp(binding_id, await request.body(), authorization=authorization)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except StateConflictError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OperationalError as exc:
+        code = getattr(exc.orig, "sqlite_errorcode", 0)
+        if code & 0xFF not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+            raise
+        raise HTTPException(status_code=503, detail="Ingest storage is busy", headers={"Retry-After": "1"}) from exc
+    return OtlpExportResponse()
 
 
 @router.post("/observations", response_model=JobResponse, status_code=201)
