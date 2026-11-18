@@ -33,7 +33,9 @@ class NativeJsonlSource:
             self._file.close()
 
     def _open(self) -> None:
-        self._file = self.path.open("rb")
+        # Integrity checks must not reuse BufferedReader read-ahead after a
+        # same-length in-place rewrite.
+        self._file = self.path.open("rb", buffering=0)
         try:
             stat = os.fstat(self._file.fileno())
             self._identity = (stat.st_dev, stat.st_ino)
@@ -74,6 +76,11 @@ class NativeJsonlSource:
             raise RuntimeError("Native source truncated during observation")
         stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         if stamp != self._stamp:
+            if (
+                self._checkpoint is not None
+                and self._hash_prefix(self._checkpoint["byte_count"]) != self._checkpoint["sha256"]
+            ):
+                raise RuntimeError("Native accepted source prefix rewritten during reconstruction")
             if self._hash_prefix(self._offset) != self._digest.hexdigest():
                 raise RuntimeError("Native source rewritten during observation")
             self._stamp = stamp
@@ -81,6 +88,19 @@ class NativeJsonlSource:
 
     async def verify(self) -> None:
         await asyncio.to_thread(self._verify)
+
+    def _verify_reconstruction(self) -> None:
+        self._verify()
+        if self._checkpoint is not None:
+            saved = self._checkpoint
+            if self._offset != saved["byte_count"]:
+                raise RuntimeError("Native accepted source byte count changed during reconstruction")
+            if self._digest.hexdigest() != saved["sha256"] or self._hash_prefix(saved["byte_count"]) != saved["sha256"]:
+                raise RuntimeError("Native accepted source prefix rewritten during reconstruction")
+
+    async def verify_reconstruction(self) -> None:
+        """Verify both replayed bytes and fresh file contents before new progress."""
+        await asyncio.to_thread(self._verify_reconstruction)
 
     def checkpoint(self) -> dict[str, Any]:
         return {

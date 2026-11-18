@@ -11,6 +11,7 @@ import base64
 import binascii
 import json
 import os
+import tempfile
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -79,11 +80,19 @@ def get_or_create_vapid_keys(codeplane_dir: Path) -> dict[str, str]:
         "private_key": _encode(key.private_numbers().private_value.to_bytes(32, "big")),
     }
     vapid_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, candidate = tempfile.mkstemp(prefix=".vapid-", suffix=".tmp", dir=codeplane_dir)
     try:
-        descriptor = os.open(vapid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return get_or_create_vapid_keys(codeplane_dir)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(keys, stream, indent=2)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(keys, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # A same-directory hard link publishes completed bytes atomically
+            # and fails rather than replacing another initializer's winner.
+            os.link(candidate, vapid_path)
+        except FileExistsError:
+            return get_or_create_vapid_keys(codeplane_dir)
+    finally:
+        os.unlink(candidate)
     log.info("vapid_keys_generated", path=str(vapid_path))
     return keys

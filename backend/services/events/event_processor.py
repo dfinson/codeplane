@@ -430,6 +430,12 @@ class EventProcessor:
             except Exception:
                 log.warning("title_pipeline_close_failed", exc_info=True)
 
+    def discard_source_reconstruction(self, job_id: str) -> None:
+        """Drop failed source pairing/projection state without publishing orphans."""
+        if self._enricher is not None:
+            self._enricher.flush_session(job_id)
+        self.cleanup(job_id)
+
     def cleanup(self, job_id: str) -> None:
         """Clean up per-job tracking state."""
         self._turn_ids.pop(job_id, None)

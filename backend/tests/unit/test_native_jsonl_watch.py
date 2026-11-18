@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import uuid
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -20,6 +21,11 @@ from backend.services.events.tool_pairing import ToolPairing
 from backend.services.ingest._base import TraceForgeIngestBase
 from backend.services.ingest.jsonl_source import MAX_RECORD_BYTES, NativeJsonlSource
 from backend.tests.unit.test_approval_service import session_factory as session_factory
+
+
+@pytest.fixture(autouse=True)
+def isolate_write_lock(monkeypatch):
+    monkeypatch.setattr("backend.persistence.database._write_lock", asyncio.Lock())
 
 
 async def _watcher(factory, framework):
@@ -57,7 +63,9 @@ def _new_watcher(factory, framework):
 async def _checkpoint(factory, count):
     async with asyncio.timeout(5):
         while True:
-            async with factory() as session:
+            # The in-memory fixture shares one SQLite connection. Poll only
+            # between writer transactions, never roll one back by closing a reader.
+            async with serialized_write(factory) as session:
                 checkpoint = await JobRepository(session).get_ingest_checkpoint("native")
             if checkpoint and checkpoint["record_count"] == count:
                 return checkpoint
@@ -263,3 +271,92 @@ async def test_legacy_checkpoint_without_extra_stays_readable_and_does_not_advan
     assert events[0].event.payload["content"] == "Legacy retained"
     assert "codeplane[legacy-traceforge]" in events[-1].event.payload["message"]
     watcher._finalize_session.assert_not_called()
+
+
+@pytest.mark.parametrize("framework", ["copilot", "claude"])
+@pytest.mark.parametrize("rewrite_after", ["first_replayed_event", "last_replayed_event"])
+async def test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction(
+    framework, rewrite_after, session_factory, tmp_path, monkeypatch
+):
+    records = (
+        [
+            {"type": "assistant.message", "data": {"content": "Inspect"}},
+            {"type": "session.info", "data": {"message": "padding" * 4096}},
+            {
+                "type": "tool.execution_start",
+                "data": {"toolCallId": "call", "toolName": "view", "arguments": {"path": "before.py"}},
+            },
+        ]
+        if framework == "copilot"
+        else [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Inspect"}]}},
+            {"type": "system", "subtype": "unmapped-padding", "padding": "padding" * 4096},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "tool_use", "id": "call", "name": "view", "input": {"path": "before.py"}}]
+                },
+            },
+        ]
+    )
+    completion = (
+        {"type": "tool.execution_complete", "data": {"toolCallId": "call", "result": {"content": "Body"}}}
+        if framework == "copilot"
+        else {
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "call", "content": "Body"}]},
+        }
+    )
+    path = tmp_path / "events.jsonl"
+    prefix = b"".join((json.dumps(raw) + "\n").encode() for raw in records)
+    assert prefix.index(b"before.py") > 16384
+    path.write_bytes(prefix)
+    first = await _watcher(session_factory, framework)
+    task = asyncio.create_task(first._tail_traceforge_events("source", "native", path))
+    try:
+        accepted = await _checkpoint(session_factory, 3)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    async with session_factory() as session:
+        history = await EventRepository(session).list_after(0, job_id="native")
+    with path.open("ab") as stream:
+        stream.write((json.dumps(completion) + "\n").encode())
+
+    second = _new_watcher(session_factory, framework)
+    process = second._event_processor.process_event
+    rewritten = False
+
+    async def rewrite_while_replaying(job_id, event, *args, **kwargs):
+        nonlocal rewritten
+        result = await process(job_id, event, *args, **kwargs)
+        ordinal = event.payload.get("_codeplane_source", {}).get("record_index")
+        target = 0 if rewrite_after == "first_replayed_event" else 2
+        if kwargs.get("replay") and ordinal == target and not rewritten:
+            before = path.stat()
+            with path.open("r+b", buffering=0) as source:
+                source.seek(prefix.index(b"before.py"))
+                source.write(b"after_.py")
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            assert path.stat().st_size == before.st_size
+            rewritten = True
+        return result
+
+    monkeypatch.setattr(second._event_processor, "process_event", rewrite_while_replaying)
+    # A completion would terminate this bounded probe on the broken code.
+    await asyncio.wait_for(
+        second._tail_traceforge_events("source", "native", path, finalize_on_raw=lambda raw: (raw == completion, None)),
+        5,
+    )
+    assert rewritten
+    async with session_factory() as session:
+        assert await JobRepository(session).get_ingest_checkpoint("native") == accepted
+        rows = await EventRepository(session).list_after(0, job_id="native")
+    assert rows[: len(history)] == history
+    assert len(rows) == len(history) + 1
+    assert "rewritten" in rows[-1].event.payload["message"].lower()
+    second._finalize_session.assert_not_called()
+    # Shutdown must not publish a start reconstructed from an invalid prefix.
+    await second._event_processor.on_job_terminal("native", "source_failed")
+    async with session_factory() as session:
+        assert await EventRepository(session).list_after(0, job_id="native") == rows
