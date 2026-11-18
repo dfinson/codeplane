@@ -1790,13 +1790,22 @@ class TestComplete:
             patch.object(session, "send", side_effect=send) as sent,
             completion_context(CompletionContext(role="assessment", response_schema=schema if structured else None)),
         ):
-            result = await adapter.complete("fixture", model="approved-model", excluded_tools=["*"])
+            result = await adapter.complete(
+                "fixture",
+                model="approved-model",
+                system_message="Bounded classifier instructions",
+                excluded_tools=["*"],
+            )
         assert result.text == '{"ready":true}' and result.model == "approved-model"
         if structured:
             sent.assert_awaited_once_with("fixture", mode="enqueue", response_schema=schema)
         else:
             sent.assert_awaited_once_with("fixture", mode="immediate")
         assert client.create_session.await_args.kwargs["available_tools"] == []
+        assert client.create_session.await_args.kwargs["system_message"] == {
+            "mode": "replace" if structured else "append",
+            "content": "Bounded classifier instructions",
+        }
         assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
 
     @pytest.mark.asyncio

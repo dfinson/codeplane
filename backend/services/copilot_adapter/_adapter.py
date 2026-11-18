@@ -59,6 +59,7 @@ if TYPE_CHECKING:
         PreToolUseHookOutput,
         SessionHooks,
         SystemMessageAppendConfig,
+        SystemMessageReplaceConfig,
     )
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -1017,12 +1018,12 @@ class CopilotAdapter(BaseAgentAdapter):
         try:
             import tempfile
 
-            sys_msg_config: SystemMessageAppendConfig | None = None
+            sys_msg_config: SystemMessageAppendConfig | SystemMessageReplaceConfig | None = None
             if system_message is not None:
-                sys_msg_config = {
-                    "mode": "append",
-                    "content": system_message,
-                }
+                if completion.response_schema is None:
+                    sys_msg_config = {"mode": "append", "content": system_message}
+                else:
+                    sys_msg_config = {"mode": "replace", "content": system_message}
 
             collected: list[str] = []
             done_event = asyncio.Event()

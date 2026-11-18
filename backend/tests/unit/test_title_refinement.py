@@ -12,9 +12,10 @@ from backend.models.session_event import EventMetadata
 from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.assessment import AssessmentService
 from backend.services.adapters.agent_adapter import CompletionResult
+from backend.services.adapters.completion_context import CompletionContext, current_completion_context
 from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
-from backend.services.events.title_refinement import TitleRefinement
+from backend.services.events.title_refinement import TitleRefinement, _Title
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 from backend.tests.unit.test_execution_contracts import _contract
 
@@ -25,11 +26,18 @@ from backend.tests.unit.test_execution_contracts import _contract
         ('{"title":"Inspect worker cancellation ownership"}', True),
         ('{"title":"one"}', False),
         ('{"title":"Inspect worker cancellation ownership","extra":true}', False),
+        ('```json\n{"title":"Inspect worker cancellation ownership"}\n```', False),
     ],
 )
 async def test_title_claim_is_once_and_uses_only_closed_activity_context(session_factory, text, refined):
     events = EventBus()
-    provider = SimpleNamespace(complete=AsyncMock(return_value=CompletionResult(text=text, model="claude-test")))
+    contexts: list[CompletionContext] = []
+
+    async def complete(*args: object, **kwargs: object) -> CompletionResult:
+        contexts.append(current_completion_context())
+        return CompletionResult(text=text, model="claude-test")
+
+    provider = SimpleNamespace(complete=AsyncMock(side_effect=complete))
     registry = MagicMock()
     registry.get_completion_provider.return_value = provider
     pin = ExecutionContractPin(job_id="job-1", admission_id="run", budget_id="job-1", contract=_contract("test"))
@@ -64,6 +72,7 @@ async def test_title_claim_is_once_and_uses_only_closed_activity_context(session
             "Review ownership guards",
         ]
         assert call.kwargs["excluded_tools"] == ["*"]
+        assert contexts[0].response_schema == _Title.model_json_schema()
         async with session_factory() as session:
             records = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
         assert len([record for record in records if record.kind == "activity.title.claimed"]) == 1

@@ -375,7 +375,9 @@ bindings and invalid evidence cannot become automatic permission. A completed
 utility call retains its known model and usage even when its assessment is
 rejected for stale state or invalid output. Copilot assessment calls request the
 existing evidence schema through native per-run structured output on a fresh
-session, not immediate steering. Other text completion calls are unchanged.
+session, not immediate steering. Its classifier instructions replace the coding
+assistant's default presentation prompt; tool access remains disabled and
+permission callbacks still reject requests. Other text completion calls are unchanged.
 Local validation still rejects Markdown, surrounding prose, invalid evidence
 and out-of-bounds spans; provider-side formatting never grants permission.
 

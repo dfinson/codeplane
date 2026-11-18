@@ -165,6 +165,7 @@ class TitleRefinement:
                         execution_epoch=self._host.execution_epoch,
                         execution_contract=request.pin,
                         max_output_bytes=512,
+                        response_schema=_Title.model_json_schema(),
                     )
                 ):
                     result = await provider.complete(
