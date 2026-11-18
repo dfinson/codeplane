@@ -39,7 +39,7 @@ BRIDGES = MappingProxyType(
         "haystack": BridgeSpec(
             id="haystack",
             module="backend.services.adapters.profile_bridges.haystack",
-            dependencies=(("haystack-ai", "3.5.0"), ("agent-governance-toolkit-core", "5.0.0")),
+            dependencies=(("haystack-ai", "3.0.0"), ("openai", "2.38.0"), ("agent-governance-toolkit-core", "5.0.0")),
             operations=frozenset({"invoke", "observe", "gate", "cancel"}),
             observation_mapping=True,
         ),

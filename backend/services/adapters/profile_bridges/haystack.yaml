@@ -1,5 +1,5 @@
 framework: haystack
-framework_version: "haystack-ai==3.5.0;agent-governance-toolkit-core==5.0.0"
+framework_version: "haystack-ai==3.0.0;openai==2.38.0;agent-governance-toolkit-core==5.0.0"
 ingestion_mode: stream
 type_field: type
 timestamp_field: timestamp
@@ -26,6 +26,8 @@ events:
       component_did: component_did
       method: method
       success: success
+      reported_usage: reported_usage
+      usage_correlation: usage_correlation
   component_failed:
     kind: tool.call.failed
     payload:

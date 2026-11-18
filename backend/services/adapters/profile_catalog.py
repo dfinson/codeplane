@@ -275,7 +275,13 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                 ),
                 usage_units=sorted(managed.usage_units)
                 if managed
-                else (["input_tokens", "output_tokens"] if profile.id == "generic-otel" else []),
+                else (
+                    ["input_tokens", "output_tokens", "cache_read_tokens"]
+                    if profile.id in {"swarm", "haystack"}
+                    else ["input_tokens", "output_tokens"]
+                    if profile.id == "generic-otel"
+                    else []
+                ),
                 utility_completion=managed.utility if managed else False,
                 operations=operations,
                 admission_enabled=registry.policy.enabled("copilot" if profile.id.startswith("copilot-") else "claude"),
