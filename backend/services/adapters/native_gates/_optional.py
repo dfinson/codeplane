@@ -98,3 +98,17 @@ class TracingProcessor(Protocol):
     def shutdown(self) -> None: ...
 
     def force_flush(self) -> None: ...
+
+
+class InterventionHandler(Protocol):
+    async def on_send(self, message: Any, *, message_context: Any, recipient: Any) -> Any: ...
+
+
+class CallbackHandler(Protocol):
+    def __init__(self, event_starts_to_ignore: list[Any], event_ends_to_ignore: list[Any]) -> None:
+        return None
+
+
+class ADKPlugin(Protocol):
+    def __init__(self, name: str) -> None:
+        return None

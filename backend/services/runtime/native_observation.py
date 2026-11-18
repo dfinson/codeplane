@@ -12,6 +12,7 @@ from backend.models.domain import StateConflictError
 from backend.models.events import SessionEvent, new_event
 from backend.models.session_event import EventMetadata
 from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
+from backend.services.adapters.native_gates.selection import select_installation
 from backend.services.events.activity_projection import ActivityProjection
 from backend.services.events.event_bus import EventBus
 from backend.services.events.event_processor import EventProcessor
@@ -47,11 +48,17 @@ async def open_native_observation(
             return existing
     source_digest = hashlib.sha256(f"{format_id}:{external_session_id}".encode()).hexdigest()[:24]
     binding_id = f"native-observation-{identity.execution_token}-{source_digest}"
-    path = resolve_mapping_path(format_id)
+    profile_source = select_installation(format_id).observation_source()
+    path = profile_source[1] if profile_source is not None else resolve_mapping_path(format_id)
     if path is None:
         raise StateConflictError("Native observation mapping is unavailable")
-    selected = next((item for item in execution.pin.contract.mappings if item.id == format_id), None)
-    if selected != _pin(format_id, [(format_id, path)]):
+    selected = (
+        execution.observation_pin
+        if profile_source is not None
+        else next((item for item in execution.pin.contract.mappings if item.id == format_id), None)
+    )
+    expected = profile_source[0] if profile_source is not None else _pin(format_id, [(format_id, path)])
+    if selected != expected:
         raise StateConflictError("Native observation mapping differs from the original admission pin")
     owner: NativeObservationOwner
     index = version = 0
@@ -70,7 +77,10 @@ async def open_native_observation(
             update={
                 "source_framework": format_id,
                 "integration_binding_id": binding_id,
-                "run_id": event.metadata.run_id or external_session_id,
+                "run_id": (event.raw_event or {}).get("run_id")
+                or (event.metadata.run_id if output and event.metadata.run_id != external_session_id else None)
+                if profile_source is not None
+                else event.metadata.run_id or external_session_id,
                 "namespace": namespace,
                 "execution_epoch": identity.epoch,
                 "execution_token": identity.execution_token,
@@ -252,6 +262,7 @@ async def open_native_observation(
         family=format_id,
         external_session_id=external_session_id,
         assert_retained=owner.assert_retained,
+        source_pin=execution.observation_pin,
     )
     registered = True
     try:
@@ -264,7 +275,8 @@ async def open_native_observation(
             framework_id=format_id,
             source_key="native-callbacks",
         )
-        if selected != _pin(format_id, [(format_id, path)]):
+        source_now = select_installation(format_id).observation_source()
+        if selected != (source_now[0] if source_now is not None else _pin(format_id, [(format_id, path)])):
             raise StateConflictError("Native observation mapping changed during source creation")
         projection_digest = hashlib.sha256(
             f"{_projection_digest(decoder)}:{hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}".encode()
