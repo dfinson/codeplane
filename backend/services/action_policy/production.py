@@ -92,7 +92,58 @@ class StandaloneGovernance:
         if metadata.integration_binding_id is not None or not event.session_id or not metadata.execution_epoch:
             return
         try:
-            if event.kind == "execution.command.result":
+            if event.kind in {"execution.native.tool_result", "execution.native.usage"}:
+                from backend.persistence.native_execution_repo import NativeExecutionRepository
+
+                if not await NativeExecutionRepository(self._host._session_factory).trusted_receipt(event):
+                    log.warning("native_accounting_receipt_rejected", event_id=event.id, job_id=event.session_id)
+                    return
+                if event.kind == "execution.native.usage":
+                    for raw in event.payload.get("usage", []):
+                        usage = UsageAmount.model_validate(raw)
+                        if (
+                            usage.job_id != event.session_id
+                            or usage.execution_epoch != metadata.execution_epoch
+                            or usage.producer != event.payload["family"]
+                        ):
+                            raise ValueError("Native usage receipt changed execution ownership")
+                        await self._ledger.record_usage(event.id, usage)
+                    return
+                started = event.payload.get("started")
+                if started is False:
+                    return
+                call_id = event.payload.get("operation_id")
+                if started is not True or not isinstance(call_id, str) or not metadata.execution_token:
+                    await self._ledger.record_uncertainty(
+                        event.session_id, metadata.execution_epoch, event.id, "native_execution_unconfirmed"
+                    )
+                    return
+                decision = await self._ledger.authorized_tool(
+                    event.session_id, metadata.execution_epoch, metadata.execution_token, call_id
+                )
+                if decision is None or decision.decision != "allow":
+                    await self._ledger.record_uncertainty(
+                        event.session_id, metadata.execution_epoch, event.id, "native_authorization_unreconciled"
+                    )
+                    return
+                if decision.metadata.get("execution") != event.payload["execution"]:
+                    raise ValueError("Native completion changed its authorized binding")
+                if not isinstance(decision.metadata.get("destructive"), bool):
+                    await self._ledger.record_uncertainty(
+                        event.session_id, metadata.execution_epoch, event.id, "unknown_executed_effect"
+                    )
+                await self._ledger.record_completion(
+                    job_id=event.session_id,
+                    epoch=metadata.execution_epoch,
+                    event_id=event.id,
+                    tool_call_id=call_id,
+                    source_id=event.payload["execution"]["binding_id"],
+                    action_digest=decision.action_digest,
+                    executed=True,
+                    succeeded=event.payload.get("succeeded") is True,
+                    destructive=decision.metadata.get("destructive") is True,
+                )
+            elif event.kind == "execution.command.result":
                 from backend.models.schemas.recipes import RecipeCommandResult
 
                 if metadata.source_framework != "codeplane.recipe" or not metadata.attempt_id:
