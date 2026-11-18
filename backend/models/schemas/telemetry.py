@@ -281,7 +281,7 @@ class TelemetryToolCall(CamelModel):
     activity: str = "overhead"
     tool_category: str = "other"
     duration_ms: float = 0
-    success: bool = True
+    success: bool | None = Field(default=True, description="Null preserves an unknown or conflicting observed outcome.")
     offset_sec: float = 0
     motivation_summary: str | None = None
     edit_motivations: list[object] | None = None
@@ -513,6 +513,7 @@ class ToolStatsEntry(CamelModel, extra="allow"):
     avg_duration_ms: float = 0.0
     total_duration_ms: float = 0.0
     failure_count: int = 0
+    unknown_count: int = 0
     p50_duration_ms: float = 0.0
     p95_duration_ms: float = 0.0
     p99_duration_ms: float = 0.0
@@ -587,7 +588,10 @@ class AnalyticsOverviewResponse(CamelModel):
     total_tool_failures: int = 0
     total_agent_errors: int = 0
     total_tool_errors: int = 0
-    tool_success_rate: float = 0.0
+    total_tool_unknown: int = 0
+    tool_success_rate: float | None = Field(
+        default=None, description="Percentage among known tool outcomes, or null when no known outcomes exist."
+    )
     cache_hit_rate: float = 0.0
     cost_trend: list[CostTrendEntry] = []
     total_subagent_cost_usd: float = 0.0

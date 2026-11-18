@@ -75,14 +75,17 @@ class OtelObservationDecoder:
                 "record": digest,
             }
         ).decode()
-        event = span_event(
-            raw,
-            job_id=self.job_id,
-            binding_id=self.binding_id,
-            source="generic-otel",
-            event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-otel-observation-v1:{occurrence}")),
-            fallback_timestamp=self.anchor,
-        )
+        try:
+            event = span_event(
+                raw,
+                job_id=self.job_id,
+                binding_id=self.binding_id,
+                source="generic-otel",
+                event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-otel-observation-v1:{occurrence}")),
+                fallback_timestamp=self.anchor,
+            )
+        except OverflowError as exc:
+            raise ValueError("OTLP timestamp is outside the supported range") from exc
         has_time = any(
             raw.get(key) is not None
             for key in (
@@ -94,8 +97,27 @@ class OtelObservationDecoder:
                 "end_time",
             )
         )
+        trace = raw.get("traceId", raw.get("trace_id"))
+        span = raw.get("spanId", raw.get("span_id"))
+        owner = {"job": self.job_id, "binding": self.binding_id, "session": self.external_session_id}
+        group_scope = {**owner, "trace": trace} if isinstance(trace, str) and trace else owner
+        turn_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-otel-group-v1:{canonical_record(group_scope).decode()}")
+        )
+        observation = dict(event.payload.get("_codeplane_observation", {}))
+        if isinstance(trace, str) and trace and isinstance(span, str) and span:
+            operation_scope = canonical_record({**owner, "trace": trace, "span": span}).decode()
+            observation["operation_id"] = str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"codeplane-otel-operation-v1:{operation_scope}")
+            )
         payload = {
             **event.payload,
+            "turn_id": turn_id,
+            "_codeplane_grouping": {
+                "version": "cp-otel-groups-v1",
+                "kind": "source-trace" if "trace" in group_scope else "source-session",
+            },
+            "_codeplane_observation": observation,
             "_codeplane_source": {
                 "record_index": index,
                 "output_index": 0,
@@ -109,7 +131,9 @@ class OtelObservationDecoder:
                 update={
                     "payload": payload,
                     "raw_event": raw,
-                    "metadata": event.metadata.model_copy(update={"run_id": self.external_session_id}),
+                    "metadata": event.metadata.model_copy(
+                        update={"run_id": self.external_session_id, "turn_id": turn_id}
+                    ),
                 }
             ),
         )

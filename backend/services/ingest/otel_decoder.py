@@ -179,6 +179,15 @@ def span_event(
     status = span.get("status", {})
     if not isinstance(status, dict):
         raise ValueError("Span status must be an object")
+    code = status.get("code", status.get("status_code"))
+    if mapping is None and (is_tool or is_llm):
+        payload["success"] = (
+            True
+            if not isinstance(code, bool) and code in (1, "STATUS_CODE_OK")
+            else False
+            if not isinstance(code, bool) and code in (2, "STATUS_CODE_ERROR")
+            else None
+        )
     if status.get("code", status.get("status_code")) in (2, "STATUS_CODE_ERROR"):
         kind = (
             "session.error"

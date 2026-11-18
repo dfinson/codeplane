@@ -53,6 +53,17 @@ remain claims, not action permissions or verified delegation attestations.
 Removal disables retained identity evidence, and subsequent lookup rechecks
 validity rather than trusting a cached verification.
 
+OTLP revisions retain immutable canonical events but share the stable
+binding/source-session/trace/span operation identity. Step and telemetry totals
+count that observed operation once across batches and restarts. The telemetry
+read projection retains explicit success, failure, unknown and conflicting
+evidence. Unknown outcomes produce no success/failure display hint, are excluded
+from known-outcome success rates, and yield a null rate when all outcomes are
+unknown. Source-derived trace/session grouping gives model and raw spans local
+metadata-only activity labels without fabricated messages or utility calls.
+Every accepted-batch replay rechecks its scoped ingest credential, including
+the interleaving where another request committed the batch first.
+
 `POST /api/integrations/observations` registers a binding-owned history Job
 without launching an SDK, creating a workspace or attaching runtime sidecars.
 Repeated registration of the same binding/source returns the same Job. These

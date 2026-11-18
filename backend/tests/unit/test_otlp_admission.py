@@ -131,7 +131,7 @@ async def test_named_preset_local_storage_replay_and_unknown_versus_zero_usage(o
         assert "1234567890abcdef" not in json.dumps(exported)
 
 
-@pytest.mark.parametrize("change", ["invalid-id", "invalid-time", "oversized", "too-many"])
+@pytest.mark.parametrize("change", ["invalid-id", "invalid-time", "time-overflow", "oversized", "too-many"])
 async def test_invalid_entire_batch_has_no_ack_or_partial_events(otlp_store, change):
     factory, job, token = otlp_store
     body = otlp(1, 2)
@@ -140,6 +140,8 @@ async def test_invalid_entire_batch_has_no_ack_or_partial_events(otlp_store, cha
         second["traceId"] = "0" * 32
     elif change == "invalid-time":
         second["endTimeUnixNano"] = "0"
+    elif change == "time-overflow":
+        second["endTimeUnixNano"] = "9" * 100
     elif change == "oversized":
         second["large"] = "a" * 1024 * 1024
     else:

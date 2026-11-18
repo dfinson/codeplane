@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from backend.models.events import EventKind
+from backend.services.events.observation import has_source_grouping, observed_operation_id
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
@@ -104,6 +105,10 @@ class TelemetrySubscriber:
         metadata = event.metadata
         sdk = (metadata.source_framework if metadata is not None else None) or "unknown"
         kind = str(event.kind)
+        operation = observed_operation_id(event)
+        if has_source_grouping(event) and kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
+            self._schedule_write(self._record_observed_tool(event, operation or f"event:{event.id}", sdk))
+            return
         if kind == EventKind.execution_phase_changed:
             phase = event.payload.get("phase")
             if phase:
@@ -266,6 +271,71 @@ class TelemetrySubscriber:
             motivation_summary=self._motivation_summary(event.metadata.motivation),
             sdk=sdk,
         )
+
+    async def _record_observed_tool(self, event: SessionEvent, operation_id: str, sdk: str) -> None:
+        from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
+        from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+        from backend.services.tools.tool_classifier import classify_tool, extract_tool_target
+
+        payload = event.payload
+        supplied = payload.get("success")
+        success = supplied if isinstance(supplied, bool) else None
+        tool_name = str(payload.get("tool_name") or "tool")
+        arguments = self._stringify_tool_arguments(payload.get("arguments"))
+        async with self._get_db_session() as session:
+            spans = TelemetrySpansRepository(session)
+            previous = await spans.observed_tool(event.session_id, operation_id)
+            old = previous["attrs"] if previous is not None else {}
+            old_success = old.get("success")
+            conflict = old.get("outcome_conflict") is True or (
+                isinstance(old_success, bool) and isinstance(success, bool) and success != old_success
+            )
+            if conflict:
+                success = None
+            elif success is None and isinstance(old_success, bool):
+                success = old_success
+            duration = event.metadata.duration_ms
+            if duration is None:
+                duration = float(previous["duration_ms"]) if previous is not None else 0.0
+            attrs = {
+                **old,
+                "observation_operation_id": operation_id,
+                "operation_identity_known": observed_operation_id(event) is not None,
+                "latest_observation_event_id": event.id,
+                "integration_binding_id": event.metadata.integration_binding_id,
+                "span_id": event.metadata.span_id,
+                "native_tool_call_id": payload.get("tool_call_id"),
+                "success": success,
+                "outcome_conflict": conflict,
+                "source_timestamp": event.timestamp.isoformat(),
+            }
+            if event.metadata.duration_ms is not None:
+                attrs["source_duration_ms"] = event.metadata.duration_ms
+            if previous is None:
+                observed_at = time.monotonic()
+                await spans.insert(
+                    job_id=event.session_id,
+                    span_type="tool",
+                    name=tool_name,
+                    started_at=round(observed_at - self._job_start_times.get(event.session_id, observed_at), 2),
+                    duration_ms=duration,
+                    attrs=attrs,
+                    tool_category=classify_tool(tool_name),
+                    tool_target=extract_tool_target(tool_name, arguments),
+                    tool_args_json=arguments,
+                    turn_id=payload.get("turn_id"),
+                )
+            else:
+                await spans.update_observed_tool(previous["id"], attrs=attrs, duration_ms=duration)
+            summary = TelemetrySummaryRepository(session)
+            await summary.init_job(event.session_id, sdk=sdk)
+            await summary.increment(
+                job_id=event.session_id,
+                tool_call_count=int(previous is None),
+                tool_failure_count=int(success is False) - int(old_success is False),
+                total_tool_duration_ms=int(duration)
+                - int(float(previous["duration_ms"]) if previous is not None else 0),
+            )
 
     def _record_tool_telemetry(
         self,

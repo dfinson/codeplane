@@ -9,6 +9,7 @@ from datetime import UTC
 
 from backend.models.events import EventKind, SessionEvent
 from backend.models.session_event import EventMetadata
+from backend.services.events.observation import has_source_grouping
 from backend.services.tool_formatters import format_tool_display
 
 
@@ -107,10 +108,11 @@ class ToolPairing:
             result = payload.get(
                 "result", payload.get("output") if event.metadata.source_framework == "opencode" else None
             )
+            known_outcome = not has_source_grouping(event) or isinstance(payload.get("success"), bool)
             updates["tool_display"] = event.metadata.tool_display or format_tool_display(
                 name,
                 arguments if isinstance(arguments, str) else json.dumps(arguments),
-                tool_result=result if isinstance(result, str) else None,
+                tool_result=result if isinstance(result, str) and known_outcome else None,
                 tool_success=event.kind != EventKind.tool_call_failed and payload.get("success") is not False,
             )
         return event.model_copy(update={"payload": payload, "metadata": EventMetadata.model_validate(updates)})

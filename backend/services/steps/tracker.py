@@ -37,6 +37,7 @@ from backend.models.events import (
     new_event,
 )
 from backend.models.session_event import EventMetadata
+from backend.services.events.observation import has_source_grouping, is_observation_revision, observation_label
 from backend.services.git.git_service import GitError
 from backend.services.tools.tool_classifier import TOOL_CATEGORIES
 
@@ -259,6 +260,8 @@ class StepTracker:
         """Process a TranscriptUpdated event."""
         if is_admission_receipt(event):
             return
+        if is_observation_revision(event):
+            return
         if self._metadata is None and event.metadata.attempt_id is not None:
             tracker = self._attempt_tracker(job_id, event.metadata)
             tracker._metadata = event.metadata
@@ -268,7 +271,9 @@ class StepTracker:
         content = str(payload.get("content", "") or "")
         turn_id = payload.get("turn_id") or ""
         motivation = getattr(event.metadata, "motivation", None)
-        tool_intent = str(getattr(motivation, "intent", "") or "")
+        tool_intent = (
+            observation_label(event) if has_source_grouping(event) else str(getattr(motivation, "intent", "") or "")
+        )
 
         if event.kind == EventKind.message_delta:
             return
@@ -301,7 +306,7 @@ class StepTracker:
         # Skip SDK-internal tools (they carry a new turn_id but shouldn't
         # trigger a step boundary).
         tool_name = payload.get("tool_name", "")
-        if tool_name == "report_intent":
+        if tool_name == "report_intent" and not has_source_grouping(event):
             # Extract the intent label and attach it to the current step
             # so the title generator can use it later.
             current = self._current.get(job_id)
@@ -356,6 +361,8 @@ class StepTracker:
             self._accumulate_step(job_id, current, event)
 
     def _accumulate_step(self, job_id: str, current: _StepState, event: SessionEvent) -> None:
+        if is_observation_revision(event):
+            return
         payload = event.payload
         turn_id = payload.get("turn_id")
         content = str(payload.get("content") or "")
@@ -366,7 +373,11 @@ class StepTracker:
             tool_name = payload.get("tool_name", "")
             if tool_name and tool_name not in current.tool_names:
                 current.tool_names.append(tool_name)
-            if event.kind == EventKind.tool_call_failed or payload.get("success") is False:
+            if (
+                event.kind == EventKind.tool_call_failed
+                or payload.get("success") is False
+                or (has_source_grouping(event) and payload.get("success") is not True)
+            ):
                 return
             tool_args = _tool_args_to_str(payload.get("arguments"))
             path = _extract_file_path(tool_name, tool_args)

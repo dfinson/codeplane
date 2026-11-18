@@ -1956,33 +1956,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__delete"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__delete"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__delete"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__delete"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__delete"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__delete"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -3759,10 +3759,15 @@ export interface components {
              */
             totalToolErrors: number;
             /**
-             * Toolsuccessrate
+             * Totaltoolunknown
              * @default 0
              */
-            toolSuccessRate: number;
+            totalToolUnknown: number;
+            /**
+             * Toolsuccessrate
+             * @description Percentage among known tool outcomes, or null when no known outcomes exist.
+             */
+            toolSuccessRate?: number | null;
             /**
              * Cachehitrate
              * @default 0
@@ -9219,9 +9224,10 @@ export interface components {
             durationMs: number;
             /**
              * Success
+             * @description Null preserves an unknown or conflicting observed outcome.
              * @default true
              */
-            success: boolean;
+            success: boolean | null;
             /**
              * Offsetsec
              * @default 0
@@ -9381,6 +9387,11 @@ export interface components {
              * @default 0
              */
             failureCount: number;
+            /**
+             * Unknowncount
+             * @default 0
+             */
+            unknownCount: number;
             /**
              * P50Durationms
              * @default 0
@@ -13182,7 +13193,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13212,7 +13223,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13242,7 +13253,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13272,7 +13283,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13302,7 +13313,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -13332,7 +13343,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__delete: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;

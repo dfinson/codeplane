@@ -95,18 +95,25 @@ class TelemetryAnalyticsRepository(BaseRepository):
             text(f"""
                 SELECT
                     COUNT(*) as total_jobs,
-                    SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) as review,
-                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END) as succeeded,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-                    SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
-                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
+                    COALESCE(SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END), 0) as review,
+                    COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
+                    COALESCE(SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END), 0) as succeeded,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+                    COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
+                    COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running,
                     COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
                     COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
                     COALESCE(SUM(premium_requests), 0) as total_premium_requests,
                     COALESCE(SUM(tool_call_count), 0) as total_tool_calls,
                     COALESCE(SUM(tool_failure_count), 0) as total_tool_failures,
+                    COALESCE(SUM((
+                        SELECT COUNT(*) FROM job_telemetry_spans AS observed
+                        WHERE observed.job_id = job_telemetry_summary.job_id
+                          AND observed.session_kind = 'job' AND observed.span_type = 'tool'
+                          AND json_extract(observed.attrs_json, '$.observation_operation_id') IS NOT NULL
+                          AND json_type(observed.attrs_json, '$.success') = 'null'
+                    )), 0) as total_tool_unknown,
                     COALESCE(SUM(agent_error_count), 0) as total_agent_errors,
                     COALESCE(SUM(cache_read_tokens), 0) as total_cache_read,
                     COALESCE(SUM(input_tokens), 0) as total_input_tokens,

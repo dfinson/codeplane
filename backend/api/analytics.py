@@ -80,9 +80,11 @@ async def analytics_overview(
 
     total_tools = agg.get("total_tool_calls", 0)
     total_failures = agg.get("total_tool_failures", 0)
+    total_unknown = agg.get("total_tool_unknown", 0)
+    known_tools = total_tools - total_unknown
     total_agent_errors = agg.get("total_agent_errors", 0)
     total_tool_errors = total_failures - total_agent_errors
-    tool_success_rate = ((total_tools - total_failures) / total_tools * 100) if total_tools else 100
+    tool_success_rate = (known_tools - total_failures) / known_tools * 100 if known_tools > 0 else None
 
     return AnalyticsOverviewResponse(
         period=period,
@@ -99,9 +101,10 @@ async def analytics_overview(
         total_premium_requests=float(agg.get("total_premium_requests", 0)),
         total_tool_calls=total_tools,
         total_tool_failures=total_failures,
+        total_tool_unknown=total_unknown,
         total_agent_errors=total_agent_errors,
         total_tool_errors=max(0, total_tool_errors),
-        tool_success_rate=round(tool_success_rate, 1),
+        tool_success_rate=round(tool_success_rate, 1) if tool_success_rate is not None else None,
         cache_hit_rate=round(cache_rate, 1),
         cost_trend=cost_trend,
         total_subagent_cost_usd=float(agg.get("total_subagent_cost_usd", 0)),
