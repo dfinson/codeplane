@@ -38,6 +38,14 @@ class NativeCall:
     parent_id: str | None = None
     definition: str = ""
     operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    fingerprint: Callable[[], str] | None = None
+    evidence: ExecutionEvidence = field(default_factory=lambda: ExecutionEvidence())
+    execution_probe: Callable[[BaseException | None], bool | None] | None = None
+
+
+@dataclass
+class ExecutionEvidence:
+    started: bool | None = None
 
 
 class NativeBinding:
@@ -76,10 +84,16 @@ class NativeBinding:
         self.protected_paths = protected_paths
         self._is_current = is_current
         self._revoked = threading.Event()
+        self._revoked_async = asyncio.Event()
         self.loop = asyncio.get_running_loop()
         self._loop_thread = threading.get_ident()
         self._on_result = on_result
         self._authorized: dict[str, NativeCall] = {}
+        self._permissions: set[asyncio.Task[bool]] = set()
+        self._results: dict[str, tuple[bool | None, bool | None]] = {}
+        self._work: dict[object, str] = {}
+        self._work_lock = threading.Lock()
+        self._work_changed = asyncio.Event()
 
     @property
     def active(self) -> bool:
@@ -88,6 +102,40 @@ class NativeBinding:
     def revoke(self) -> None:
         """Fence callbacks immediately. This is not a claim that a worker stopped."""
         self._revoked.set()
+        if not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self._revoked_async.set)
+
+    async def wait_revoked(self) -> None:
+        """Observe app revocation, not a native stop acknowledgment."""
+        if asyncio.get_running_loop() is not self.loop:
+            await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(self.wait_revoked(), self.loop))
+            return
+        await self._revoked_async.wait()
+
+    def begin_work(self, call: NativeCall) -> object:
+        token = object()
+        with self._work_lock:
+            self._work[token] = call.operation_id
+        call.evidence.started = True
+        return token
+
+    def end_work(self, token: object) -> None:
+        with self._work_lock:
+            del self._work[token]
+        self.loop.call_soon_threadsafe(self._work_changed.set)
+
+    async def drain_work(self, operation_id: str | None = None) -> None:
+        while True:
+            self._work_changed.clear()
+            with self._work_lock:
+                pending = bool(self._work) if operation_id is None else operation_id in self._work.values()
+            if not pending:
+                return
+            await self._work_changed.wait()
+
+    async def drain_permissions(self) -> None:
+        while self._permissions:
+            await asyncio.gather(*tuple(self._permissions), return_exceptions=True)
 
     async def current(self) -> bool:
         return self.active and await self._is_current() and self.active
@@ -124,31 +172,53 @@ class NativeBinding:
 
     async def _authorize(self, call: NativeCall, attached: Callable[[], bool]) -> bool:
         action = self.action(call)
+        fingerprint = call.fingerprint() if call.fingerprint is not None else None
 
         async def current() -> bool:
-            return attached() and await self.current() and attached() and self.action(call) == action
+            return (
+                attached()
+                and await self.current()
+                and attached()
+                and self.action(call) == action
+                and (call.fingerprint is None or call.fingerprint() == fingerprint)
+            )
 
         if not await current():
             return False
-        allowed = await self.policy.authorize_permission(
-            PermissionInvocation(
-                job_id=self.execution.job_id,
-                session_id="",
-                provider=self.family,
-                metadata=self.metadata.model_copy(update={"parent_id": call.parent_id, "run_id": call.run_id}),
-                workspace=self.workspace,
-                protected_paths=self.protected_paths,
-                # Arbitrary framework tools are not trusted file reads or automatic grants.
-                request=PermissionRequest(kind="custom-tool", workspace_path=self.workspace),
-                tool_name=call.name,
-                arguments_json=encode_arguments(action.arguments),
-                tool_definition=call.definition,
-                tool_call_id=call.operation_id,
-                is_current=current,
-                native_execution=self.execution,
-                native_tool_call_id=call.tool_call_id,
-            )
+        invocation = PermissionInvocation(
+            job_id=self.execution.job_id,
+            session_id="",
+            provider=self.family,
+            metadata=self.metadata.model_copy(update={"parent_id": call.parent_id, "run_id": call.run_id}),
+            workspace=self.workspace,
+            protected_paths=self.protected_paths,
+            # Arbitrary framework tools are not trusted file reads or automatic grants.
+            request=PermissionRequest(kind="custom-tool", workspace_path=self.workspace),
+            tool_name=call.name,
+            arguments_json=encode_arguments(action.arguments),
+            tool_definition=call.definition,
+            tool_call_id=call.operation_id,
+            is_current=current,
+            native_execution=self.execution,
+            native_tool_call_id=call.tool_call_id,
         )
+        decision = asyncio.create_task(self.policy.authorize_permission(invocation))
+        self._permissions.add(decision)
+        decision.add_done_callback(self._permissions.discard)
+        revoked = asyncio.create_task(self._revoked_async.wait())
+        try:
+            await asyncio.wait((decision, revoked), return_when=asyncio.FIRST_COMPLETED)
+            if self._revoked.is_set():
+                decision.cancel()
+                await asyncio.gather(decision, return_exceptions=True)
+                return False
+            allowed = await decision
+        finally:
+            revoked.cancel()
+            if not decision.done():
+                decision.cancel()
+            await asyncio.gather(decision, revoked, return_exceptions=True)
+            self._permissions.discard(decision)
         if allowed and await current():
             self._authorized[call.operation_id] = call
             return True
@@ -162,9 +232,12 @@ class NativeBinding:
             return
         if self._authorized.get(call.operation_id) is not call:
             raise StateError("Native result has no exact authorized invocation")
+        await self.drain_work(call.operation_id)
+        self._results[call.operation_id] = (started, succeeded)
         if self._on_result is not None:
             await self._on_result(call, started, succeeded)
         del self._authorized[call.operation_id]
+        self._results.pop(call.operation_id, None)
 
     def report_sync(self, call: NativeCall, started: bool | None, succeeded: bool | None) -> None:
         if threading.get_ident() == self._loop_thread:
@@ -173,7 +246,8 @@ class NativeBinding:
 
     async def report_unfinished(self) -> None:
         for call in tuple(self._authorized.values()):
-            await self.report(call, None, None)
+            started, succeeded = self._results.get(call.operation_id, (call.evidence.started, None))
+            await self.report(call, started, succeeded)
 
     def authorize_sync(self, call: NativeCall, attached: Callable[[], bool]) -> bool:
         if threading.get_ident() == self._loop_thread:

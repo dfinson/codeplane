@@ -1,139 +1,94 @@
-"""Additive native observation, explicitly not a permission or accounting gate.
-
-The pinned SDKs expose registration but not targeted public unregistration.
-Removal below is version-validated and uses the SDK's own registry locks.
-Only metadata-only projections reach the supplied export sink.
-"""
+"""Native observations enter canonical local history before optional safe export."""
 
 from __future__ import annotations
 
-import threading
-from decimal import Decimal
+import asyncio
 from typing import TYPE_CHECKING, Any
 
-from backend.models.events import new_event
-from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
 from backend.services.events.export_metadata import export_metadata
 
 from ._optional import load_sdk
+from .observation_scope import NativeObservationOwner, ObservationSubscription
 from .readiness import UnsupportedNativeHookError, require_ready
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from backend.services.adapters.contracts import ExecutionIdentity
+    from backend.models.session_event import SessionEvent
 
 
-class ObservationSubscription:
-    blocking = False
-
-    def __init__(self) -> None:
-        self._closed = threading.Event()
-        self._remove: Callable[[], None] = lambda: None
-
-    @property
-    def active(self) -> bool:
-        return not self._closed.is_set()
-
-    def detach(self) -> None:
-        self._closed.set()
-        self._remove()
-
-
-def subscribe_openai(
-    execution: ExecutionIdentity,
-    trace_id: str,
-    *,
-    identity_key: bytes,
+def _exporter(
+    owner: NativeObservationOwner,
+    sink: Callable[[dict[str, object]], None] | None,
+    identity_key: bytes | None,
     approved_models: frozenset[str],
-    sink: Callable[[dict[str, object]], None],
+) -> Callable[[SessionEvent], None] | None:
+    if sink is None:
+        return None
+    if identity_key is None or len(identity_key) < 32:
+        raise ValueError("Native metadata export requires a protected 256-bit identity key")
+
+    def export(event: SessionEvent) -> None:
+        sink(
+            export_metadata(
+                event,
+                identity_key=identity_key,
+                integration=owner.family,
+                provider="openai" if owner.family == "openai_agents" else owner.family,
+                role="primary",
+                approved_models=approved_models,
+                usage=tuple(UsageAmount.model_validate(value) for value in event.payload.get("native_usage", ())),
+            )
+        )
+
+    return export
+
+
+async def subscribe_openai(
+    owner: NativeObservationOwner,
+    *,
+    export_sink: Callable[[dict[str, object]], None] | None = None,
+    identity_key: bytes | None = None,
+    approved_models: frozenset[str] = frozenset(),
     provider: Any = None,
 ) -> ObservationSubscription:
+    await owner.require_registration("openai_agents")
+    export = _exporter(owner, export_sink, identity_key, approved_models)
     require_ready("openai_agents")
     tracing = load_sdk("agents.tracing")
     if TYPE_CHECKING:
         from ._optional import TracingProcessor
     else:
-        TracingProcessor = tracing.TracingProcessor  # noqa: N806 - runtime SDK base, not a local value.
+        TracingProcessor = tracing.TracingProcessor  # noqa: N806 - real SDK base.
     trace_provider = load_sdk("agents.tracing.provider")
-
     provider = provider if provider is not None else tracing.get_trace_provider()
     if not isinstance(provider, trace_provider.DefaultTraceProvider):
-        raise UnsupportedNativeHookError("Exact unsubscription is qualified only for the native DefaultTraceProvider")
-    subscription = ObservationSubscription()
-
-    def emit(native: dict[str, Any] | None) -> None:
-        if not subscription.active or native is None or native.get("trace_id", native.get("id")) != trace_id:
-            return
-        data = native.get("span_data", {})
-        model = data.get("model")
-        model = model if isinstance(model, str) and model in approved_models else None
-        usage = []
-        provided = data.get("usage")
-        if isinstance(provided, dict):
-            for unit in ("input_tokens", "output_tokens"):
-                amount = provided.get(unit)
-                if isinstance(amount, int) and not isinstance(amount, bool) and amount >= 0:
-                    usage.append(
-                        UsageAmount(
-                            amount=Decimal(amount),
-                            unit=unit,
-                            producer="openai_agents",
-                            model=model,
-                            job_id=execution.job_id,
-                            execution_epoch=execution.epoch,
-                            role="primary",
-                            source=f"Span.export.span_data.usage.{unit}",
-                        )
-                    )
-        event = new_event(
-            execution.job_id,
-            "integration.event",
-            {"model": model},
-            event_id=native["id"],
-            metadata=EventMetadata(
-                source_framework="openai_agents",
-                run_id=trace_id,
-                span_id=native.get("id") if "span_data" in native else None,
-                parent_id=native.get("parent_id"),
-                execution_epoch=execution.epoch,
-                execution_token=execution.execution_token,
-            ),
-        )
-        sink(
-            export_metadata(
-                event,
-                identity_key=identity_key,
-                integration="openai_agents",
-                provider="openai",
-                role="primary",
-                approved_models=approved_models,
-                usage=usage,
-            )
-        )
+        raise UnsupportedNativeHookError("Exact unsubscription requires the qualified native DefaultTraceProvider")
+    subscription = ObservationSubscription(owner, export)
 
     class Processor(TracingProcessor):
         def on_trace_start(self, trace: Any) -> None:
-            pass
+            subscription.capture(lambda: trace.export() if trace.trace_id == owner.source_id else None)
 
         def on_trace_end(self, trace: Any) -> None:
-            emit(trace.export())
+            if trace.trace_id == owner.source_id and owner.admits_callback():
+                asyncio.run_coroutine_threadsafe(owner.close(), owner.loop)
 
         def on_span_start(self, span: Any) -> None:
             pass
 
         def on_span_end(self, span: Any) -> None:
-            emit(span.export())
+            subscription.capture(lambda: span.export() if span.trace_id == owner.source_id else None)
 
         def shutdown(self) -> None:
-            subscription.detach()
+            # The Runtime owner awaits the subscription drain before releasing.
+            subscription.request_detach()
 
         def force_flush(self) -> None:
             pass
 
     processor = Processor()
-    provider.register_processor(processor)
 
     def remove() -> None:
         processors = provider._multi_processor
@@ -141,61 +96,67 @@ def subscribe_openai(
             processors._processors = tuple(item for item in processors._processors if item is not processor)
 
     subscription._remove = remove
+    try:
+        provider.register_processor(processor)
+    except BaseException:
+        subscription.request_detach()
+        raise
     return subscription
 
 
-def subscribe_crewai(
-    execution: ExecutionIdentity,
+async def subscribe_crewai(
+    owner: NativeObservationOwner,
     crew: Any,
     *,
-    identity_key: bytes,
-    sink: Callable[[dict[str, object]], None],
+    export_sink: Callable[[dict[str, object]], None] | None = None,
+    identity_key: bytes | None = None,
+    approved_models: frozenset[str] = frozenset(),
 ) -> ObservationSubscription:
+    await owner.require_registration("crewai")
+    export = _exporter(owner, export_sink, identity_key, approved_models)
     require_ready("crewai")
     crewai = load_sdk("crewai")
-    crewai_event_bus = load_sdk("crewai.events").crewai_event_bus
-    finished_event = load_sdk("crewai.events.types.tool_usage_events").ToolUsageFinishedEvent
-
-    if not isinstance(crew, crewai.Crew):
-        raise TypeError("CrewAI observation requires the original Crew")
+    event_bus = load_sdk("crewai.events").crewai_event_bus
+    events = load_sdk("crewai.events.types.tool_usage_events")
+    if not isinstance(crew, crewai.Crew) or str(crew.id) != owner.source_id:
+        raise TypeError("CrewAI observation requires its exact caller-owned Crew/source")
     agents = tuple(crew.agents)
-    tasks = frozenset(str(task.id) for task in crew.tasks)
-    subscription = ObservationSubscription()
+    tasks = tuple(crew.tasks)
+    subscription = ObservationSubscription(owner, export)
+    event_types = (events.ToolUsageStartedEvent, events.ToolUsageFinishedEvent, events.ToolUsageErrorEvent)
 
-    def completed(source: Any, native: Any) -> None:
-        if not subscription.active or not any(source.agent is agent for agent in agents) or native.task_id not in tasks:
+    def observe(source: Any, event: Any) -> None:
+        if not any(source.agent is agent for agent in agents) or not any(source.task is task for task in tasks):
             return
-        event = new_event(
-            execution.job_id,
-            "integration.event",
-            {},
-            metadata=EventMetadata(
-                source_framework="crewai",
-                run_id=str(crew.id),
-                execution_epoch=execution.epoch,
-                execution_token=execution.execution_token,
-                duration_ms=(native.finished_at - native.started_at).total_seconds() * 1000,
-            ),
-        )
-        sink(
-            export_metadata(
-                event,
-                identity_key=identity_key,
-                integration="crewai",
-                provider="crewai",
-                role="primary",
-                approved_models=frozenset(),
-            )
-        )
 
-    crewai_event_bus.on(finished_event)(completed)
+        def record() -> dict[str, Any]:
+            data = event.to_json(exclude={"agent", "from_agent", "from_task"})
+            if not isinstance(data, dict):
+                raise TypeError("Native CrewAI observation did not export a record object")
+            data.update(
+                {
+                    "agent_id": str(source.agent.id),
+                    "task_id": str(source.task.id),
+                    "crew_id": str(crew.id),
+                }
+            )
+            return data
+
+        subscription.capture(record)
 
     def remove() -> None:
-        with crewai_event_bus._rwlock.w_locked():
-            handlers = crewai_event_bus._sync_handlers.get(finished_event, frozenset())
-            crewai_event_bus._sync_handlers[finished_event] = handlers - {completed}
-            crewai_event_bus._handler_dependencies.get(finished_event, {}).pop(completed, None)
-            crewai_event_bus._execution_plan_cache.pop(finished_event, None)
+        with event_bus._rwlock.w_locked():
+            for event_type in event_types:
+                handlers = event_bus._sync_handlers.get(event_type, frozenset())
+                event_bus._sync_handlers[event_type] = handlers - {observe}
+                event_bus._handler_dependencies.get(event_type, {}).pop(observe, None)
+                event_bus._execution_plan_cache.pop(event_type, None)
 
     subscription._remove = remove
+    try:
+        for event_type in event_types:
+            event_bus.on(event_type)(observe)
+    except BaseException:
+        subscription.request_detach()
+        raise
     return subscription

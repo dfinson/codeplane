@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ._optional import load_sdk
-from .binding import NativeCall, encode_arguments
+from .binding import ExecutionEvidence, NativeCall, encode_arguments
 
 if TYPE_CHECKING:
     from ._optional import SmolToolCallingAgent
@@ -21,7 +21,26 @@ def install(gate: GateAttachment, agent: SmolToolCallingAgent) -> None:
 
     def execute(tool_name: str, arguments: dict[str, str] | str) -> Any:
         resolved = agent._substitute_state_variables(arguments)
-        call = NativeCall(tool_name, resolved if isinstance(resolved, dict) else {"input": resolved})
+        available = {**agent.tools, **agent.managed_agents}
+        tool = available.get(tool_name)
+        tracked = tool is not None and gate.track_callable(tool, "forward")
+
+        def fingerprint() -> str:
+            actual = {**agent.tools, **agent.managed_agents}.get(tool_name)
+            return encode_arguments(
+                {
+                    "tool": id(actual),
+                    "forward": id(getattr(actual, "forward", None)),
+                    "arguments": agent._substitute_state_variables(arguments),
+                }
+            )
+
+        call = NativeCall(
+            tool_name,
+            resolved if isinstance(resolved, dict) else {"input": resolved},
+            fingerprint=fingerprint,
+            evidence=ExecutionEvidence(False if tracked else None),
+        )
         snapshot = encode_arguments(resolved)
         if not gate.allow_sync(call):
             return "[BLOCKED] Denied by CodePlane"

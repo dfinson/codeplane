@@ -45,6 +45,9 @@ class KernelFilters(Protocol):
 
 
 class SmolToolCallingAgent(Protocol):
+    tools: dict[str, Any]
+    managed_agents: dict[str, Any]
+
     def execute_tool_call(self, tool_name: str, arguments: dict[str, str] | str) -> Any: ...
 
     def _substitute_state_variables(self, arguments: dict[str, str] | str) -> Any: ...
