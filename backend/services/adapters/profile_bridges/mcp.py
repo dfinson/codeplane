@@ -151,8 +151,13 @@ def install(gate: GateAttachment, target: object) -> None:
                 pending = asyncio.create_task(
                     session.call_tool(name, payload, meta={"codeplane-operation-id": call.operation_id})
                 )
+                revoked = asyncio.create_task(gate.binding.wait_revoked())
                 try:
-                    result = await asyncio.shield(pending)
+                    done, _ = await asyncio.wait((pending, revoked), return_when=asyncio.FIRST_COMPLETED)
+                    if pending not in done:
+                        await revoked
+                        raise asyncio.CancelledError
+                    result = await pending
                 except asyncio.CancelledError:
                     outcome = "cancel-requested"
                     await session.send_notification(
@@ -180,9 +185,18 @@ def install(gate: GateAttachment, target: object) -> None:
                         with contextlib.suppress(asyncio.CancelledError, McpError):
                             await pending
                     raise
+                finally:
+                    revoked.cancel()
+                    await asyncio.gather(revoked, return_exceptions=True)
                 decode_json_body(result.model_dump_json(by_alias=True).encode())
                 started, succeeded = True, not result.isError
-                outcome = "tool-error" if result.isError else "responded"
+                outcome = (
+                    "responded-after-cancel"
+                    if not gate.binding.active
+                    else "tool-error"
+                    if result.isError
+                    else "responded"
+                )
                 return result
         except (httpx.HTTPError, McpError, ValueError) as exc:
             # A returned protocol error or a lost transport is not proof that
