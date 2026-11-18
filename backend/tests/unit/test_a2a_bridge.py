@@ -30,7 +30,13 @@ if TYPE_CHECKING:
 async def a2a_peer():
     app = FastAPI()
     calls: list[dict[str, Any]] = []
-    state = {"value": "input-required", "drop": False, "refuse_cancel": False, "wrong_task": False}
+    state = {
+        "value": "input-required",
+        "drop": False,
+        "refuse_cancel": False,
+        "wrong_task": False,
+        "stream_mode": "normal",
+    }
     hold = asyncio.Event()
     hold.set()
 
@@ -66,6 +72,35 @@ async def a2a_peer():
         if method == "message/stream":
 
             async def stream():
+                mode = state["stream_mode"]
+                if mode in {
+                    "message",
+                    "malformed-message",
+                    "malformed-parts",
+                    "partial-json",
+                    "partial-frame",
+                    "no-result",
+                }:
+                    result = {
+                        "kind": "message",
+                        "messageId": "native-reply",
+                        "role": "agent",
+                        "parts": [{"kind": "text", "text": "Immediate source reply"}],
+                    }
+                    if mode == "malformed-message":
+                        result.pop("messageId")
+                    elif mode == "malformed-parts":
+                        result["parts"] = [{"kind": "text", "text": 1}]
+                    document = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode()
+                    if mode == "no-result":
+                        yield b": heartbeat\r\n\r\n"
+                    elif mode == "partial-json":
+                        yield b"data: " + document[:-1] + b"\r\n\r\n"
+                    elif mode == "partial-frame":
+                        yield b"data: " + document + b"\r\n"
+                    else:
+                        yield b"data: " + document + b"\r\n\r\n"
+                    return
                 results = [
                     task(),
                     {
@@ -85,6 +120,8 @@ async def a2a_peer():
                         "final": True,
                     },
                 ]
+                if mode == "task-eof":
+                    results = results[:1]
                 for result in results:
                     yield (
                         b"data: "
@@ -268,6 +305,107 @@ async def test_a2a_known_uncertain_request_requires_get_reconciliation(composed_
     task = await host.start_native(job.id, family="a2a", target=target, invoke=invoke)
     await asyncio.wait_for(task, 10)
     assert [call["method"] for call in calls] == ["message/send", "message/send", "tasks/get", "message/send"]
+
+
+async def test_a2a_new_stream_reconciles_the_task_learned_before_response_loss(composed_runtime, a2a_peer):
+    host, approvals, _, create = composed_runtime
+    endpoint, calls, state, _ = a2a_peer
+    state["stream_mode"] = "task-eof"
+    target = target_for(endpoint)
+
+    async def approve(event):
+        if event.kind == EventKind.approval_requested:
+            await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
+
+    host._event_bus.subscribe(approve)
+    job = await create()
+
+    async def invoke():
+        with pytest.raises(A2ADeliveryUnknownError):
+            await target.send_message(message("new-stream"), stream=True)
+        with pytest.raises(A2ADeliveryUnknownError, match="Reconcile"):
+            await target.send_message(message("blocked", taskId="native-task", contextId="native-context"))
+        reconciled = await target.get_task("native-task")
+        assert reconciled["status"]["state"] == "input-required"
+        return await target.send_message(message("resumed", taskId="native-task", contextId="native-context"))
+
+    task = await host.start_native(job.id, family="a2a", target=target, invoke=invoke)
+    result = await asyncio.wait_for(task, 10)
+    assert result[0]["id"] == "native-task"
+    assert [call["method"] for call in calls] == ["message/stream", "tasks/get", "message/send"]
+    history = await events_for(host, job.id)
+    lost = next(event for event in history if event.payload.get("outcome") == "delivery_unknown")
+    assert lost.payload["task_id"] == "native-task"
+
+
+@pytest.mark.parametrize(
+    "mode", ["message", "malformed-message", "malformed-parts", "partial-json", "partial-frame", "no-result"]
+)
+async def test_a2a_message_only_stream_requires_a_complete_valid_result(composed_runtime, a2a_peer, mode):
+    host, approvals, governance, create = composed_runtime
+    endpoint, calls, state, _ = a2a_peer
+    state["stream_mode"] = mode
+    target = target_for(endpoint)
+
+    async def approve(event):
+        if event.kind == EventKind.approval_requested:
+            await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
+
+    host._event_bus.subscribe(approve)
+    job = await create()
+    task = await host.start_native(
+        job.id, family="a2a", target=target, invoke=lambda: target.send_message(message("immediate"), stream=True)
+    )
+    if mode == "message":
+        results = await asyncio.wait_for(task, 10)
+        assert results == (
+            {
+                "kind": "message",
+                "messageId": "native-reply",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "Immediate source reply"}],
+            },
+        )
+    else:
+        with pytest.raises(A2ADeliveryUnknownError):
+            await asyncio.wait_for(task, 10)
+    assert len(calls) == 1
+    history = await events_for(host, job.id)
+    observed = [event for event in history if event.kind == "integration.remote.observed"]
+    if mode == "message":
+        assert len(observed) == 1 and observed[0].payload["result"]["messageId"] == "native-reply"
+        assert any(event.payload.get("outcome") == "responded" for event in history)
+        assert not any(event.payload.get("outcome") == "delivery_unknown" for event in history)
+    else:
+        assert observed == []
+        assert any(event.payload.get("outcome") == "delivery_unknown" for event in history)
+    assert (await governance._ledger.job_totals(job.id)).executed_calls == int(mode == "message")
+
+
+async def test_a2a_get_cannot_clear_uncertainty_when_the_lost_submission_had_no_task_id(composed_runtime, a2a_peer):
+    host, approvals, _, create = composed_runtime
+    endpoint, calls, state, _ = a2a_peer
+    state["stream_mode"] = "no-result"
+    target = target_for(endpoint)
+
+    async def approve(event):
+        if event.kind == EventKind.approval_requested:
+            await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
+
+    host._event_bus.subscribe(approve)
+    job = await create()
+
+    async def invoke():
+        with pytest.raises(A2ADeliveryUnknownError):
+            await target.send_message(message("unbound-stream"), stream=True)
+        await target.get_task("native-task")
+        with pytest.raises(A2ADeliveryUnknownError, match="Reconcile"):
+            await target.send_message(message("unproven-resubmit"))
+        return "still unconfirmed"
+
+    task = await host.start_native(job.id, family="a2a", target=target, invoke=invoke)
+    assert await asyncio.wait_for(task, 10) == "still unconfirmed"
+    assert [call["method"] for call in calls] == ["message/stream", "tasks/get"]
 
 
 async def test_a2a_stream_cannot_attach_another_tasks_updates(composed_runtime, a2a_peer):
