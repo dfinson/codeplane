@@ -30,3 +30,45 @@ copilot_markdown:
     - [message.assistant, {content: "**Fix Complete**"}]
     - - message.assistant
       - content: "The arithmetic defect in `sum.py` has been corrected. Changed line 2 from `return a - b` to `return a + b`. The `add()` function now correctly returns the sum of its two arguments. The verification step will confirm the fix passes the check.py test."
+cline:
+  - - session.info
+    - <<: &cline_source {producer_version: "4.1.3", source_representation: sdk-ui-update, message_type: say}
+      partial: true
+      subtype: text
+      content: Inspect the synthetic fixture.
+  - - message.assistant
+    - <<: *cline_source
+      partial: false
+      subtype: text
+      content: Inspect the synthetic fixture.
+  - - session.info
+    - <<: *cline_source
+      partial: true
+      subtype: tool
+      content: '{"tool":"readFile","path":"fixture.txt"}'
+      data: {tool: readFile, path: fixture.txt}
+      tool_name: readFile
+      path: fixture.txt
+  - - session.info
+    - <<: *cline_source
+      partial: false
+      subtype: tool
+      content: '{"tool":"readFile","path":"fixture.txt"}'
+      data: {tool: readFile, path: fixture.txt}
+      tool_name: readFile
+      path: fixture.txt
+  - - session.info
+    - <<: *cline_source
+      partial: true
+      subtype: text
+      content: Synthetic fixture complete.
+  - - message.assistant
+    - <<: *cline_source
+      partial: false
+      subtype: text
+      content: Synthetic fixture complete.
+  - - session.info
+    - <<: *cline_source
+      partial: false
+      subtype: completion_result
+      content: Synthetic fixture complete.

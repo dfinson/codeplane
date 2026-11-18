@@ -563,32 +563,171 @@ async def test_actual_copilot_sqlite_bytes_acquisition_preparser_and_independent
         assert not event.kind.startswith(("tool.call.", "telemetry.", "llm."))
 
 
-def test_actual_cline_ui_minter_ids_are_not_timestamps_or_tool_correlation():
+def _cline_ui_records():
+    # Explicit acquisition metadata, not a guess from ts magnitude or a native
+    # producer field. The actual message and its numeric identity stay intact.
     records = [json.loads(line) for line in _transferred_bytes("cline").splitlines()]
     assert [raw["ts"] for raw in records] == [1, 1, 2, 2, 3, 3, 3]
+    return [
+        {
+            "id": raw["ts"],
+            "_codeplane_source_format": {"producer": "cline", "version": "4.1.3", "representation": "sdk-ui-update"},
+            "message": raw,
+        }
+        for raw in records
+    ]
+
+
+def test_actual_cline_ui_minter_ids_are_not_timestamps_or_tool_correlation():
+    records = _cline_ui_records()
+    before = deepcopy(records)
     groups = _decode("cline", records)
     assert groups == _decode("cline", records)
     events = [event for group in groups for event in group]
+    assert records == before
+    assert _semantic(events) == PRODUCED_EXPECTED["cline"]
     assert len({event.id for event in events}) == len(events)
     for event in events:
         source = event.payload["_codeplane_source"]
         index = source["record_index"]
         assert source["timestamp_fallback"] is True, "Native UI minter IDs are not Unix dates"
         assert event.timestamp == ANCHOR + timedelta(microseconds=index)
-        assert source["vendor_event_id"] == records[index]["ts"], "Preserve the actual native UI identity"
-        assert not {"tool_call_id", "input_tokens", "output_tokens", "cost_usd", "success"} & event.payload.keys()
+        assert source["vendor_event_id"] == records[index]["message"]["ts"], "Preserve the actual native UI identity"
+        assert (
+            not {
+                "tool_call_id",
+                "input_tokens",
+                "output_tokens",
+                "cost_usd",
+                "success",
+                "duration_ms",
+                "elapsed_ms",
+            }
+            & event.payload.keys()
+        )
 
 
 def test_actual_cline_partial_ui_tool_update_does_not_claim_completion():
-    records = [json.loads(line) for line in _transferred_bytes("cline").splitlines()]
-    assert records[2]["say"] == "tool" and records[2]["partial"] is True
+    records = _cline_ui_records()
+    assert records[2]["message"]["say"] == "tool" and records[2]["message"]["partial"] is True
     before_final = [event for group in _decode("cline", records[:3]) for event in group]
     assert not any(event.kind in {"tool.call.completed", "tool.call.failed"} for event in before_final)
     events = [event for group in _decode("cline", records) for event in group]
-    completed = [event for event in events if event.kind == "tool.call.completed"]
-    assert len(completed) == 1
-    assert completed[0].payload["tool_name"] == "readFile" and completed[0].payload["path"] == "fixture.txt"
-    assert completed[0].payload["_codeplane_source"]["record_index"] == 3
+    assert not any(event.kind.startswith("tool.call.") or event.kind == "session.ended" for event in events)
+    previews = [event for event in events if event.payload["subtype"] == "tool"]
+    assert len(previews) == 2 and [event.payload["partial"] for event in previews] == [True, False]
+    assert all(
+        event.payload["tool_name"] == "readFile"
+        and event.payload["path"] == "fixture.txt"
+        and "result" not in event.payload
+        and "success" not in event.payload
+        for event in previews
+    )
+
+
+@pytest.mark.parametrize("defect", ["version", "representation", "identity", "partial", "structured-text"])
+def test_cline_ui_metadata_and_native_message_fail_atomically(defect):
+    decoder = _decoder("cline")
+    records = _cline_ui_records()
+    decoder.decode(records[0], 0)
+    before = decoder.checkpoint()
+    bad = deepcopy(records[2])
+    if defect == "version":
+        bad["_codeplane_source_format"]["version"] = "4.2.0"
+    elif defect == "representation":
+        bad["_codeplane_source_format"]["representation"] = "session.messages.json"
+    elif defect == "identity":
+        bad["id"] = True
+    elif defect == "partial":
+        del bad["message"]["partial"]
+    else:
+        bad["message"]["text"] = "{"
+    with pytest.raises(ValueError, match="Cline SDK UI"):
+        decoder.decode(bad, 1)
+    assert decoder.checkpoint() == before
+
+
+def test_cline_explicit_representation_not_number_magnitude_selects_timestamp_semantics():
+    legacy = {"type": "say", "say": "text", "ts": 1767323045000, "text": "Legacy timestamp"}
+    (old,) = _decoder("cline").decode(legacy, 0)
+    assert old.timestamp == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    assert old.payload["_codeplane_source"]["timestamp_fallback"] is False
+    assert _semantic([old]) == [["message.assistant", {"content": "Legacy timestamp"}]]
+    explicit = _cline_ui_records()[1]
+    explicit["id"] = explicit["message"]["ts"] = 1767323045000
+    (new,) = _decoder("cline").decode(explicit, 0)
+    assert new.timestamp == ANCHOR and new.payload["_codeplane_source"]["timestamp_fallback"] is True
+    assert new.payload["_codeplane_source"]["vendor_event_id"] == 1767323045000
+
+
+def test_documented_cline_ui_defaulted_usage_display_does_not_claim_execution_usage():
+    record = _cline_ui_records()[1]
+    display = {"tokensIn": 0, "tokensOut": 0, "cacheWrites": 0, "cacheReads": 0, "cost": 0}
+    record["message"].update(say="api_req_started", text=json.dumps(display))
+    (event,) = _decoder("cline").decode(record, 0)
+    assert event.kind == "session.info" and event.payload["data"] == display
+    assert not {"input_tokens", "output_tokens", "cost_usd", "success", "model"} & event.payload.keys()
+
+
+@pytest.mark.parametrize("defect", ["rewrite", "version-drift"])
+async def test_actual_cline_incremental_registered_history_preserves_ui_evidence_and_native_ids(
+    defect, session_factory, tmp_path
+):
+    from backend.services.ingest.acquisition import AcquisitionChannel
+    from backend.services.ingest.acquisition_sources import file_journal
+    from backend.tests.unit.test_native_acquisition import _channel, _history
+
+    records = _cline_ui_records()
+    wire = b"".join(_canonical_record(record) + b"\n" for record in records)
+    path = tmp_path / "app-owned-ui-capture.jsonl"
+    path.write_bytes(b"".join(_canonical_record(record) + b"\n" for record in records[:3]))
+    channel, job_id = await _channel(session_factory, "cline")
+    first = await channel.accept(await file_journal(path))
+    assert first.accepted_records == first.next_index == 3
+    partial = await _history(session_factory, job_id)
+    assert not any(row.event.kind.startswith("tool.call.") for row in partial)
+    channel = AcquisitionChannel(session_factory, EventBus(), binding_id="binding", source_key="source")
+    path.write_bytes(wire)
+    page = await file_journal(path)
+    assert page.physical_count == 7 and all(record.sequence is None for record in page.records)
+    second = await channel.accept(page)
+    assert second.accepted_records == 4 and second.next_index == 7 and not second.session_closed
+    history = await _history(session_factory, job_id)
+    retained = [
+        record
+        for row in history
+        if row.event.kind == "integration.batch.accepted"
+        for record in row.event.raw_event["records"]
+    ]
+    assert retained == records
+    assert [record["message"] for record in retained] == [
+        json.loads(line) for line in _transferred_bytes("cline").splitlines()
+    ]
+    canonical = [
+        row.event for row in history if row.event.payload.get("_codeplane_source", {}).get("framework") == "cline"
+    ]
+    assert [
+        [kind, {key: value for key, value in payload.items() if key not in {"step_id", "step_number"}}]
+        for kind, payload in _semantic(canonical)
+    ] == PRODUCED_EXPECTED["cline"]
+    assert [event.payload["_codeplane_source"]["vendor_event_id"] for event in canonical] == [1, 1, 2, 2, 3, 3, 3]
+    assert not any(row.event.kind.startswith(("tool.call.", "telemetry.")) for row in history)
+    restarted = AcquisitionChannel(session_factory, EventBus(), binding_id="binding", source_key="source")
+    assert await restarted.accept(page) is None
+    assert await _history(session_factory, job_id) == history
+    if defect == "rewrite":
+        changed = deepcopy(records)
+        changed[0]["message"]["text"] = "Rewritten UI evidence"
+        path.write_bytes(b"".join(_canonical_record(record) + b"\n" for record in changed))
+        with pytest.raises(StateConflictError, match="rewritten"):
+            await restarted.accept(await file_journal(path))
+    else:
+        drift = deepcopy(records[-1])
+        drift["_codeplane_source_format"]["version"] = "4.2.0"
+        path.write_bytes(wire + _canonical_record(drift) + b"\n")
+        with pytest.raises(ValueError, match="Unsupported Cline SDK UI producer version"):
+            await restarted.accept(await file_journal(path))
+    assert await _history(session_factory, job_id) == history
 
 
 @pytest.mark.parametrize(
