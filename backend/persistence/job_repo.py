@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 
 from backend.models.db import DiffSnapshotRow, JobRow
-from backend.models.domain import GitMergeOutcome, Job, JobMode, JobNotFoundError, JobState, Preset, Resolution
+from backend.models.domain import (
+    GitMergeOutcome,
+    Job,
+    JobMode,
+    JobNotFoundError,
+    JobState,
+    Preset,
+    Resolution,
+    StateConflictError,
+)
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -26,6 +36,18 @@ def _safe_job_state(raw: str) -> JobState:
 
         structlog.get_logger().warning("unknown_job_state_defaulting_to_queued", raw_state=raw)
         return JobState.queued
+
+
+@dataclass(frozen=True)
+class IngestCheckpointState:
+    job: Job
+    encoded_checkpoint: str | None
+
+    @property
+    def checkpoint(self) -> dict[str, Any] | None:
+        import json
+
+        return json.loads(self.encoded_checkpoint) if self.encoded_checkpoint is not None else None
 
 
 class JobRepository(BaseRepository):
@@ -86,6 +108,40 @@ class JobRepository(BaseRepository):
         import json
 
         await self._update_row(job_id, ingest_checkpoint=json.dumps(checkpoint, sort_keys=True), tail_offset=emitted)
+
+    async def get_ingest_state(self, job_id: str) -> IngestCheckpointState:
+        result = await self._session.execute(
+            select(JobRow).where(JobRow.id == job_id).execution_options(populate_existing=True)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise JobNotFoundError(f"Native Job {job_id!r} no longer exists")
+        return IngestCheckpointState(self._to_domain(row), row.ingest_checkpoint)
+
+    async def compare_and_set_ingest_checkpoint(
+        self, expected: IngestCheckpointState, checkpoint: dict[str, Any], decoded: int
+    ) -> IngestCheckpointState:
+        """Join the caller's transaction; never overwrite another source or cursor."""
+        import json
+
+        encoded = json.dumps(checkpoint, sort_keys=True, allow_nan=False)
+        result = await self._session.execute(
+            update(JobRow)
+            .where(
+                JobRow.id == expected.job.id,
+                JobRow.source == expected.job.source,
+                JobRow.external_session_id == expected.job.external_session_id,
+                JobRow.created_at == expected.job.created_at,
+                JobRow.ingest_checkpoint == expected.encoded_checkpoint,
+                JobRow.tail_offset == expected.job.tail_offset,
+            )
+            .values(ingest_checkpoint=encoded, tail_offset=decoded, version=JobRow.version + 1)
+            .returning(JobRow.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.scalar_one_or_none() is None:
+            raise StateConflictError("Native checkpoint or source ownership changed concurrently")
+        return IngestCheckpointState(replace(expected.job, tail_offset=decoded), encoded)
 
     @staticmethod
     def _to_domain(row: JobRow) -> Job:

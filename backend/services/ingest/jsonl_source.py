@@ -91,6 +91,8 @@ class NativeJsonlSource:
 
     def _verify_reconstruction(self) -> None:
         self._verify()
+        if self._hash_prefix(self._offset) != self._digest.hexdigest():
+            raise RuntimeError("Native consumed source prefix rewritten during reconstruction")
         if self._checkpoint is not None:
             saved = self._checkpoint
             if self._offset != saved["byte_count"]:
@@ -101,6 +103,10 @@ class NativeJsonlSource:
     async def verify_reconstruction(self) -> None:
         """Verify both replayed bytes and fresh file contents before new progress."""
         await asyncio.to_thread(self._verify_reconstruction)
+
+    async def read_available(self) -> bytes | None:
+        """Read one complete record without polling beyond the current file boundary."""
+        return await asyncio.to_thread(self._read_line)
 
     def checkpoint(self) -> dict[str, Any]:
         return {

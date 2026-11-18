@@ -25,11 +25,12 @@ from typing import TYPE_CHECKING, Any
 import structlog
 import yaml
 
-from backend.models.domain import JobState
+from backend.models.domain import JobState, StateConflictError
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
 from backend.services.ingest.jsonl_source import MAX_RECORD_BYTES, NativeJsonlSource
-from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest.mapping import DecoderState, NativeMappingDecoder, resolve_mapping_path
 from backend.services.ingest.otel_decoder import decode_json_body
+from backend.services.ingest.source_ownership import hold_native_source
 from backend.services.runtime.execution_control import ExecutionControl
 
 if TYPE_CHECKING:
@@ -93,13 +94,14 @@ class _LegacyNativeIdentity:
         if resolved_mapping is None:
             raise ValueError(f"No native event mapping for framework {framework}")
         mapping_path = Path(resolved_mapping)
-        self.mapping = FrameworkMapping.model_validate(yaml.safe_load(mapping_path.read_text(encoding="utf-8")))
+        mapping_bytes = mapping_path.read_bytes()
+        self.mapping = FrameworkMapping.model_validate(yaml.safe_load(mapping_bytes.decode("utf-8")))
         self.adapter = MappedJsonAdapter(self.mapping, session_id=external_id)
         preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
         source = inspect.getsourcefile(preprocessor) if preprocessor else None
         identity = {
             "distribution_version": version("traceforge-toolkit"),
-            "mapping_file_sha256": hashlib.sha256(mapping_path.read_bytes()).hexdigest(),
+            "mapping_file_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
             "preprocessor_file_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest() if source else None,
         }
         self.mapping_digest = hashlib.sha256(_canonical_record(identity)).hexdigest()
@@ -111,6 +113,15 @@ class _LegacyNativeIdentity:
         self.window = self.mapping.get_motivation_config().source_window
         self.source_kinds = {kind for item in self.mapping.get_motivation_config().sources for kind in item.events}
         self.turn = 0
+
+    def checkpoint(self) -> DecoderState:
+        """Expose retained legacy continuation state for explicit equivalence checks."""
+        return DecoderState(
+            self.adapter._latest_intent,
+            self.adapter._latest_reasoning,
+            tuple(self.references.values()),
+            self.turn,
+        )
 
     def events(self, raw: dict[str, Any], ordinal: int) -> Iterator[SessionEvent]:
         digest = hashlib.sha256(_canonical_record(raw)).hexdigest()
@@ -270,7 +281,20 @@ class TraceForgeIngestBase:
             return
         try:
             async with lock:
-                await self._tail_source(session_id, job_id, jsonl_path, initial_skip_count, finalize_on_raw)
+                try:
+                    with hold_native_source(self._session_factory, job_id):
+                        await self._tail_source(session_id, job_id, jsonl_path, initial_skip_count, finalize_on_raw)
+                except (OSError, StateConflictError) as exc:
+                    log.error("native_observation_ownership_failed", job_id=job_id, error=str(exc))
+                    await self._publish_lifecycle(
+                        job_id,
+                        EventKind.log_line_emitted,
+                        {
+                            "level": "error",
+                            "message": f"Native observation stopped: {exc}",
+                            "context": {"observation_status": "failed"},
+                        },
+                    )
         finally:
             self._source_locks.pop(job_id, None)
 
@@ -295,10 +319,9 @@ class TraceForgeIngestBase:
         try:
             async with self._session_factory() as session:
                 repo = JobRepository(session)
-                job = await repo.get(job_id)
-                if job is None:
-                    raise RuntimeError("Native job no longer exists")
-                checkpoint = await repo.get_ingest_checkpoint(job_id)
+                checkpoint_state = await repo.get_ingest_state(job_id)
+                job = checkpoint_state.job
+                checkpoint = checkpoint_state.checkpoint
                 prior = await EventRepository(session).list_by_job(job_id, list(TRANSCRIPT_KINDS), limit=1)
             if job.external_session_id != session_id or job.source != f"{self._mapping_name}_cli":
                 raise RuntimeError("Native source does not belong to this Job")
@@ -370,6 +393,7 @@ class TraceForgeIngestBase:
                             raise RuntimeError("Native decoded event count changed before its accepted checkpoint")
                         reconstructing = False
                     if not reconstruct:
+                        conversion = checkpoint.get("conversion") if checkpoint else None
                         checkpoint = {
                             "version": revision,
                             "framework": self._mapping_name,
@@ -380,6 +404,8 @@ class TraceForgeIngestBase:
                             "timestamp_anchor": normalizer.anchor.isoformat(),
                             "output_contract": "codeplane-native-v1",
                         }
+                        if conversion is not None:
+                            checkpoint["conversion"] = conversion
                         if revision == 2:
                             checkpoint.update(source=source.checkpoint(), decoded_event_count=decoded)
                         async with serialized_write(self._session_factory) as session:
@@ -387,7 +413,9 @@ class TraceForgeIngestBase:
                                 checkpoint["emitted_event_count"] = await EventRepository(session).count_native_events(
                                     job_id, self._mapping_name, session_id
                                 )
-                            await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, decoded)
+                            checkpoint_state = await JobRepository(session).compare_and_set_ingest_checkpoint(
+                                checkpoint_state, checkpoint, decoded
+                            )
                     if terminal_seen and ordinal >= accepted:
                         await self._finalize_session(job_id, error_reason=terminal_reason)
                         if revision == 2:
@@ -396,7 +424,9 @@ class TraceForgeIngestBase:
                                 checkpoint["emitted_event_count"] = await EventRepository(session).count_native_events(
                                     job_id, self._mapping_name, session_id
                                 )
-                                await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, decoded)
+                                checkpoint_state = await JobRepository(session).compare_and_set_ingest_checkpoint(
+                                    checkpoint_state, checkpoint, decoded
+                                )
                         return
         except asyncio.CancelledError:
             if reconstructing:
