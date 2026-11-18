@@ -12,8 +12,58 @@ from backend.models.events import EventKind, SessionEvent
 from backend.services.adapters.contracts import ExecutionIdentity
 from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.usage import result_usage
+from backend.tests.native_gates.producers import make_producer
 from backend.tests.native_gates.qualify_runtime_integration import composed_runtime as composed_runtime
 from backend.tests.native_gates.qualify_runtime_integration import events_for
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "langchain-sync",
+        "langchain-async",
+        "langchain-fallback",
+        "langgraph-sync",
+        "langgraph-async",
+        "semantic_kernel-async",
+        "maf-async",
+        "smolagents-sync",
+        "pydantic_ai-async",
+        "crewai-sync",
+    ],
+)
+async def test_replaced_leaf_requires_exact_detach_before_readmission(mode, binding_factory):
+    producer = make_producer(mode)
+    gates, decision, _ = binding_factory(mode.split("-")[0])
+    receipts = []
+    replacements = []
+
+    async def record(call, started, succeeded):
+        receipts.append((started, succeeded))
+
+    def replacement(value: str = "value") -> str:
+        replacements.append(value)
+        return value
+
+    async def async_replacement(value: str = "value") -> str:
+        return replacement(value)
+
+    gates.binding._on_result = record
+    await gates.attach(producer.target)
+    await producer.invoke()
+    assert len(producer.calls) == 1
+    assert receipts == [(True, True)]
+    leaf = async_replacement if producer.leaf_attribute == "coroutine" else replacement
+    object.__setattr__(producer.leaf, producer.leaf_attribute, leaf)
+    await asyncio.gather(producer.invoke(), return_exceptions=True)
+    assert not replacements, "Uninstrumented replacement executed under the previous attachment"
+    assert receipts == [(True, True)]
+    assert len(decision.invocations) == 1
+    gates.detach(producer.target)
+    assert getattr(producer.leaf, producer.leaf_attribute) is leaf, "Detach overwrote the caller's edit"
+    await gates.attach(producer.target)
+    await producer.invoke()
+    assert replacements and receipts == [(True, True), (True, True)]
 
 
 async def approve_next(host, approvals, start):

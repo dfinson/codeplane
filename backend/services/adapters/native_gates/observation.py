@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from backend.models.usage import UsageAmount
 from backend.services.events.export_metadata import export_metadata
+from backend.services.events.export_status import ExportDropReason, ExportHealth, ExportHealthSink
 
 from ._optional import load_sdk
-from .observation_scope import NativeObservationOwner, ObservationSubscription
+from .observation_scope import NativeObservationOwner, ObservationSubscription, record_export_drop
 from .readiness import UnsupportedNativeHookError, require_ready
 
 if TYPE_CHECKING:
@@ -17,12 +20,15 @@ if TYPE_CHECKING:
 
     from backend.models.session_event import SessionEvent
 
+log = structlog.get_logger()
+
 
 def _exporter(
     owner: NativeObservationOwner,
     sink: Callable[[dict[str, object]], None] | None,
     identity_key: bytes | None,
     approved_models: frozenset[str],
+    health: ExportHealthSink,
 ) -> Callable[[SessionEvent], None] | None:
     if sink is None:
         return None
@@ -30,8 +36,8 @@ def _exporter(
         raise ValueError("Native metadata export requires a protected 256-bit identity key")
 
     def export(event: SessionEvent) -> None:
-        sink(
-            export_metadata(
+        try:
+            record = export_metadata(
                 event,
                 identity_key=identity_key,
                 integration=owner.family,
@@ -40,7 +46,11 @@ def _exporter(
                 approved_models=approved_models,
                 usage=tuple(UsageAmount.model_validate(value) for value in event.payload.get("native_usage", ())),
             )
-        )
+        except Exception as exc:
+            log.warning("native_export_metadata_withheld", error_type=type(exc).__name__)
+            record_export_drop(health, ExportDropReason.metadata_withheld)
+            return
+        sink(record)
 
     return export
 
@@ -52,9 +62,11 @@ async def subscribe_openai(
     identity_key: bytes | None = None,
     approved_models: frozenset[str] = frozenset(),
     provider: Any = None,
+    export_health: ExportHealthSink | None = None,
 ) -> ObservationSubscription:
     await owner.require_registration("openai_agents")
-    export = _exporter(owner, export_sink, identity_key, approved_models)
+    health = export_health or ExportHealth(enabled=export_sink is not None)
+    export = _exporter(owner, export_sink, identity_key, approved_models, health)
     require_ready("openai_agents")
     tracing = load_sdk("agents.tracing")
     if TYPE_CHECKING:
@@ -65,7 +77,7 @@ async def subscribe_openai(
     provider = provider if provider is not None else tracing.get_trace_provider()
     if not isinstance(provider, trace_provider.DefaultTraceProvider):
         raise UnsupportedNativeHookError("Exact unsubscription requires the qualified native DefaultTraceProvider")
-    subscription = ObservationSubscription(owner, export)
+    subscription = ObservationSubscription(owner, export, export_health=health)
 
     class Processor(TracingProcessor):
         def on_trace_start(self, trace: Any) -> None:
@@ -111,9 +123,11 @@ async def subscribe_crewai(
     export_sink: Callable[[dict[str, object]], None] | None = None,
     identity_key: bytes | None = None,
     approved_models: frozenset[str] = frozenset(),
+    export_health: ExportHealthSink | None = None,
 ) -> ObservationSubscription:
     await owner.require_registration("crewai")
-    export = _exporter(owner, export_sink, identity_key, approved_models)
+    health = export_health or ExportHealth(enabled=export_sink is not None)
+    export = _exporter(owner, export_sink, identity_key, approved_models, health)
     require_ready("crewai")
     crewai = load_sdk("crewai")
     event_bus = load_sdk("crewai.events").crewai_event_bus
@@ -122,7 +136,7 @@ async def subscribe_crewai(
         raise TypeError("CrewAI observation requires its exact caller-owned Crew/source")
     agents = tuple(crew.agents)
     tasks = tuple(crew.tasks)
-    subscription = ObservationSubscription(owner, export)
+    subscription = ObservationSubscription(owner, export, export_health=health)
     event_types = (events.ToolUsageStartedEvent, events.ToolUsageFinishedEvent, events.ToolUsageErrorEvent)
 
     def observe(source: Any, event: Any) -> None:

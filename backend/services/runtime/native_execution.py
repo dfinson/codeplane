@@ -104,11 +104,39 @@ class NativeExecutions:
 
     async def reconcile_observers(self) -> None:
         if self.host._config.runtime.copilot_only:
-            for execution in tuple(self._live.values()):
+            executions = tuple(self._live.values())
+            for execution in executions:
                 execution.cancel_requested = True
                 execution.gates.cancel()
-                for source in tuple(execution.observation_sources):
-                    await source.close()
+            admitted_sources = tuple(source for execution in executions for source in execution.observation_sources)
+
+            async def finish_registrations() -> None:
+                registrations = await asyncio.gather(
+                    *(task for execution in executions for task in tuple(execution.observation_registrations.values())),
+                    return_exceptions=True,
+                )
+                sources = await asyncio.gather(
+                    *(
+                        source.close()
+                        for execution in executions
+                        for source in tuple(execution.observation_sources)
+                        if source not in admitted_sources
+                    ),
+                    return_exceptions=True,
+                )
+                errors = [result for result in (*registrations, *sources) if isinstance(result, BaseException)]
+                if errors:
+                    raise BaseExceptionGroup("Native observation registration retirement failed", errors)
+
+            async def drain() -> None:
+                results = await asyncio.gather(
+                    *(source.close() for source in admitted_sources), finish_registrations(), return_exceptions=True
+                )
+                errors = [result for result in results if isinstance(result, BaseException)]
+                if errors:
+                    raise BaseExceptionGroup("Native observation retirement failed after all sources drained", errors)
+
+            await retain_task(asyncio.create_task(drain(), name="native-observation-retirement"))
 
     async def start[T](
         self,

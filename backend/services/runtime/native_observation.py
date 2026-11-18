@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -136,6 +137,8 @@ async def open_native_observation(
                 decode_json_body(encoded)
                 next_prefix = _advance(prefix, encoded)
                 for event in decoder.decode(dict(raw), index):
+                    if event.raw_event is None:
+                        event = event.model_copy(update={"raw_event": deepcopy(dict(raw))})
                     event = scoped(event, output=False)
                     next_canonical = _advance(next_canonical, canonical_record(event.model_dump(mode="json")))
                     tracker.observe_source_time(identity.job_id, event)

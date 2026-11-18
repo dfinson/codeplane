@@ -1,4 +1,8 @@
-"""Exact, fail-closed attachment ownership and lazy native hook installation."""
+"""Exact, fail-closed attachment ownership and lazy native hook installation.
+
+Caller edits to installed entry points require detach and fresh attachment.
+They are never silently treated as instrumented or executed under the old gate.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ class GateAttachment:
         self._undo: list[Callable[[], None]] = []
         self._executing: ContextVar[NativeCall | None] = ContextVar("native_execution", default=None)
         self._tracked: set[tuple[int, str]] = set()
+        self._installed: dict[tuple[int, str], tuple[Any, Any]] = {}
 
     @property
     def active(self) -> bool:
@@ -45,6 +50,7 @@ class GateAttachment:
     def patch(self, target: Any, name: str, replacement: Any) -> None:
         original = vars(target).get(name, _MISSING)
         object.__setattr__(target, name, replacement)
+        self._installed[id(target), name] = (target, replacement)
 
         def restore() -> None:
             # Never unwrap a replacement's hook or overwrite a caller's later edit.
@@ -56,10 +62,18 @@ class GateAttachment:
 
         self._undo.append(restore)
 
+    def validate(self) -> None:
+        for (_, name), (target, installed) in tuple(self._installed.items()):
+            if getattr(target, name, _MISSING) is not installed:
+                raise UnsupportedNativeHookError(
+                    f"Native attachment attribute {name!r} changed; detach before admitting its replacement"
+                )
+
     def track_callable(self, target: Any, name: str) -> bool:
         """Observe actual callable entry, independently of permission wrappers."""
         key = (id(target), name)
         if key in self._tracked:
+            self.validate()
             return True
         original = getattr(target, name, None)
         if not callable(original):
@@ -101,10 +115,18 @@ class GateAttachment:
             self._undo.pop()
 
     async def allow(self, call: NativeCall) -> bool:
-        return await self.binding.authorize(call, lambda: self.active)
+        self.validate()
+        allowed = await self.binding.authorize(call, lambda: self.active)
+        if allowed:
+            self.validate()
+        return allowed
 
     def allow_sync(self, call: NativeCall) -> bool:
-        return self.binding.authorize_sync(call, lambda: self.active)
+        self.validate()
+        allowed = self.binding.authorize_sync(call, lambda: self.active)
+        if allowed:
+            self.validate()
+        return allowed
 
     async def complete[T](
         self, call: NativeCall, invoke: Callable[[], Awaitable[T]], *, outcome: Callable[[T], bool | None] | None = None
@@ -153,6 +175,7 @@ class NativeGates:
             raise PermissionError("Native execution is not currently admitted")
         previous = self._attachments.get(id(target))
         if previous is not None and previous.active:
+            previous.validate()
             return previous
         selected = require_installation(self.binding.family)
         module = import_module(selected.module)
