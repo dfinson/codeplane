@@ -8,6 +8,41 @@ from backend.services.adapters.native_gates.bridge_contract import BridgeSpec
 
 BRIDGES = MappingProxyType(
     {
+        "openai-client": BridgeSpec(
+            id="openai-client",
+            module="backend.services.adapters.profile_bridges.openai_client",
+            dependencies=(("openai", "2.38.0"), ("httpx", "0.28.1")),
+            operations=frozenset({"request", "function_call", "run_cancel"}),
+            observation_mapping=True,
+        ),
+        "anthropic-client": BridgeSpec(
+            id="anthropic-client",
+            module="backend.services.adapters.profile_bridges.anthropic_client",
+            dependencies=(("anthropic", "2.10.0"), ("httpx2", "2.16.2")),
+            operations=frozenset({"request", "function_call"}),
+            observation_mapping=True,
+        ),
+        "gemini-client": BridgeSpec(
+            id="gemini-client",
+            module="backend.services.adapters.profile_bridges.gemini_client",
+            dependencies=(("google-genai", "2.34.0"), ("httpx", "0.28.1")),
+            operations=frozenset({"request", "function_call"}),
+            observation_mapping=True,
+        ),
+        "mistral-client": BridgeSpec(
+            id="mistral-client",
+            module="backend.services.adapters.profile_bridges.mistral_client",
+            dependencies=(("mistralai", "3.7.0"), ("httpx2", "2.16.2")),
+            operations=frozenset({"request", "function_call"}),
+            observation_mapping=True,
+        ),
+        "bedrock-client": BridgeSpec(
+            id="bedrock-client",
+            module="backend.services.adapters.profile_bridges.bedrock_client",
+            dependencies=(("boto3", "1.44.5"), ("botocore", "1.44.5")),
+            operations=frozenset({"request", "event_stream", "function_call"}),
+            observation_mapping=True,
+        ),
         "autogen": BridgeSpec(
             id="autogen",
             module="backend.services.adapters.profile_bridges.autogen",
