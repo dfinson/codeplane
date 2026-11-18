@@ -13,10 +13,18 @@ from backend.services.adapters.native_gates.binding import encode_arguments
 from backend.services.adapters.native_gates.readiness import UnsupportedNativeHookError
 from backend.services.ingest.mapping import canonical_record
 
-from ._client_calls import FunctionDispatcher, LocalFunction, install_functions, install_request
+from ._client_calls import (
+    FunctionDispatcher,
+    LocalFunction,
+    call_native,
+    install_functions,
+    install_request,
+    install_turn_boundary,
+)
 
 if TYPE_CHECKING:
     from backend.services.adapters.native_gates import GateAttachment
+    from backend.services.adapters.native_gates.controls import NativeInput
 
 
 @dataclass
@@ -67,6 +75,12 @@ def install(gate: GateAttachment, target: object) -> None:
         if client.meta.config.retries.get("total_max_attempts") != 1:
             raise UnsupportedNativeHookError("Bedrock retries changed after attachment")
 
+    def identity(result: Any) -> dict[str, Any]:
+        return {
+            "request_id": result.get("ResponseMetadata", {}).get("RequestId"),
+            "session_id": result.get("sessionId"),
+        }
+
     def response(result: Any) -> dict[str, Any]:
         if not isinstance(result, dict) or not isinstance(result.get("completion"), streams.EventStream):
             raise ValueError("Bedrock did not return its actual SDK EventStream")
@@ -79,20 +93,6 @@ def install(gate: GateAttachment, target: object) -> None:
             for index, event in enumerate(stream):
                 if index >= 1000:
                     raise ValueError("Bedrock stream exceeds 1000 native events")
-                retained = _wire_json(event)
-                total_bytes += len(canonical_record(retained))
-                if total_bytes > 1024 * 1024:
-                    raise ValueError("Bedrock stream exceeds 1 MiB")
-                consumed.append(event)
-                gate.binding.observe(
-                    {
-                        "type": "stream_event",
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "request_id": request_id,
-                        "session_id": session_id,
-                        "event": retained,
-                    }
-                )
                 trace = event.get("trace", {}).get("trace", {})
                 for phase in (
                     "orchestrationTrace",
@@ -108,6 +108,20 @@ def install(gate: GateAttachment, target: object) -> None:
                         asyncio.run_coroutine_threadsafe(
                             gate.binding.supplied_usage(f"{request_id}:{phase}:{trace_id}", event), gate.binding.loop
                         ).result()
+                retained = _wire_json(event)
+                total_bytes += len(canonical_record(retained))
+                if total_bytes > 1024 * 1024:
+                    raise ValueError("Bedrock stream exceeds 1 MiB")
+                consumed.append(event)
+                gate.binding.observe(
+                    {
+                        "type": "stream_event",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "event": retained,
+                    }
+                )
                 if not gate.active:
                     raise asyncio.CancelledError
         finally:
@@ -124,6 +138,13 @@ def install(gate: GateAttachment, target: object) -> None:
         fingerprint=fingerprint,
         validate=validate,
         response=response,
+        identity=identity,
         usage_key=lambda _: None,
+        streaming_response=True,
     )
     install_functions(gate, target)
+
+    async def next_request(message: NativeInput, parameters: dict[str, Any]) -> Any:
+        return await call_native(client.invoke_agent, **{**parameters, "inputText": message.content})
+
+    install_turn_boundary(gate, target, request=next_request)

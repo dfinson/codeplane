@@ -9,10 +9,20 @@ from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.binding import encode_arguments
 from backend.services.adapters.native_gates.readiness import UnsupportedNativeHookError
 
-from ._client_calls import FunctionDispatcher, LocalFunction, install_functions, install_request, plain, refuse_stream
+from ._client_calls import (
+    FunctionDispatcher,
+    LocalFunction,
+    call_native,
+    install_functions,
+    install_request,
+    install_turn_boundary,
+    plain,
+    refuse_stream,
+)
 
 if TYPE_CHECKING:
     from backend.services.adapters.native_gates import GateAttachment
+    from backend.services.adapters.native_gates.controls import NativeInput
 
 
 @dataclass
@@ -66,13 +76,15 @@ def install(gate: GateAttachment, target: object) -> None:
         if options.retry_options is None or options.retry_options.attempts not in (0, 1):
             raise UnsupportedNativeHookError("Gemini retries changed after attachment")
 
-    def response(result: Any) -> dict[str, Any]:
+    def identity(result: Any) -> dict[str, Any]:
         headers = result.sdk_http_response.headers if result.sdk_http_response is not None else None
         return {
-            "response": result.model_dump(mode="json", exclude_unset=True),
             "response_id": result.response_id,
             "request_id": headers.get("x-request-id") if headers else None,
         }
+
+    def response(result: Any) -> dict[str, Any]:
+        return {"response": result.model_dump(mode="json", exclude_unset=True), **identity(result)}
 
     for models in resources:
         install_request(
@@ -83,7 +95,16 @@ def install(gate: GateAttachment, target: object) -> None:
             fingerprint=fingerprint,
             validate=validate,
             response=response,
+            identity=identity,
             usage_key=lambda result: f"response:{result.response_id}" if result.response_id else None,
         )
         gate.patch(models, "generate_content_stream", refuse_stream)
     install_functions(gate, target)
+
+    async def next_request(message: NativeInput, parameters: dict[str, Any]) -> Any:
+        contents = parameters.get("contents", [])
+        history = list(contents) if isinstance(contents, (list, tuple)) else [contents]
+        history.append({"role": "user", "parts": [{"text": message.content}]})
+        return await call_native(client.aio.models.generate_content, **{**parameters, "contents": history})
+
+    install_turn_boundary(gate, target, request=next_request)
