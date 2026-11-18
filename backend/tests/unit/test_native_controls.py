@@ -91,3 +91,57 @@ async def test_stop_permit_requires_runtime_intent_and_cannot_reopen_normal_work
     assert any(
         event.kind == "execution.native.stop_result" and event.payload["status"] == "acknowledged" for event in events
     )
+
+
+async def test_stop_is_reserved_before_pin_await_and_final_drain_fences_new_admission(composed_runtime, monkeypatch):
+    host, _, _, create = composed_runtime
+    job = await create()
+    target = target_for("http://127.0.0.1:1")
+    ready, finish, checking, release = (asyncio.Event() for _ in range(4))
+    calls = []
+
+    async def invoke():
+        (execution,) = host._native_executions.for_job(job.id)
+        binding = execution.gates.binding
+        gate = await execution.gates.attach(target)
+
+        async def stop(permit):
+            await binding.require_control(permit)
+            calls.append(permit.operation_id)
+            return StopEvidence("acknowledged", source="local-handler")
+
+        gate.cleanup(binding.controls.register(stop_handler=stop))
+        ready.set()
+        await finish.wait()
+
+    task = await host.start_native(job.id, family="flowise", target=target, invoke=invoke)
+    control = draining = None
+    try:
+        await asyncio.wait_for(ready.wait(), 5)
+        (execution,) = host._native_executions.for_job(job.id)
+        binding = execution.gates.binding
+        await host.detach_native(execution.identity)
+        actual = binding._control_retained
+
+        async def paused():
+            checking.set()
+            await release.wait()
+            return await actual()
+
+        monkeypatch.setattr(binding, "_control_retained", paused)
+        control = asyncio.create_task(host._native_executions.cancel_controls(execution))
+        await asyncio.wait_for(checking.wait(), 5)
+        draining = asyncio.create_task(binding.drain_controls())
+        await asyncio.wait({draining}, timeout=0.05)
+        assert not draining.done(), "Finalization missed an already-admitted stop awaiting its pin"
+        release.set()
+        await control
+        await draining
+        assert len(calls) == 1
+        with pytest.raises(StateConflictError, match="clos"):
+            await binding.controls.stop(refresh=True)
+    finally:
+        release.set()
+        await asyncio.gather(*(item for item in (control, draining) if item is not None), return_exceptions=True)
+        finish.set()
+        await task
