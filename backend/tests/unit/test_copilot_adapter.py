@@ -1784,10 +1784,17 @@ class TestComplete:
             session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content='{"ready":true}')))
             session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
 
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            await send(*args, **kwargs)
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content='{"ready":true}'))
+
         client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send", side_effect=send) as sent,
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as waited,
             completion_context(CompletionContext(role="assessment", response_schema=schema if structured else None)),
         ):
             result = await adapter.complete(
@@ -1798,14 +1805,45 @@ class TestComplete:
             )
         assert result.text == '{"ready":true}' and result.model == "approved-model"
         if structured:
-            sent.assert_awaited_once_with("fixture", mode="enqueue", response_schema=schema)
+            waited.assert_awaited_once()
+            assert waited.await_args.args == ("fixture",)
+            assert waited.await_args.kwargs["mode"] == "enqueue"
+            assert waited.await_args.kwargs["response_schema"] == schema
+            sent.assert_not_awaited()
         else:
             sent.assert_awaited_once_with("fixture", mode="immediate")
+            waited.assert_not_awaited()
         assert client.create_session.await_args.kwargs["available_tools"] == []
         assert client.create_session.await_args.kwargs["system_message"] == {
             "mode": "replace" if structured else "append",
             "content": "Bounded classifier instructions",
         }
+        assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
+
+    @pytest.mark.asyncio
+    async def test_structured_stream_limit_cancels_the_native_response_wait(self, adapter: CopilotAdapter) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+        cancelled = asyncio.Event()
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> None:
+            session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="too long")))
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
+            completion_context(CompletionContext(max_output_bytes=4, response_schema={"type": "object"})),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("fixture")
+        assert failure.value.reason == "output_limit"
+        assert cancelled.is_set()
         assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
 
     @pytest.mark.asyncio

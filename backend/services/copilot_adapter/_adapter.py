@@ -1096,7 +1096,8 @@ class CopilotAdapter(BaseAgentAdapter):
                     )
                     done_event.set()
                 elif kind_str in ("session.task_complete", "session.idle", "session.shutdown"):
-                    done_event.set()
+                    if completion.response_schema is None:
+                        done_event.set()
 
             async with asyncio.timeout(COMPLETION_TIMEOUT_S):
                 session = await client.create_session(
@@ -1115,14 +1116,39 @@ class CopilotAdapter(BaseAgentAdapter):
                     self._unsubscribe[tmp_session_id] = unsubscribe
                 if completion.response_schema is None:
                     await session.send(prompt, mode="immediate")
+                    await done_event.wait()
                 else:
-                    await session.send(prompt, mode="enqueue", response_schema=completion.response_schema)
-                await done_event.wait()
+                    pending_response = asyncio.create_task(
+                        session.send_and_wait(
+                            prompt,
+                            mode="enqueue",
+                            response_schema=completion.response_schema,
+                            timeout=COMPLETION_TIMEOUT_S,
+                        )
+                    )
+                    guard = asyncio.create_task(done_event.wait())
+                    try:
+                        await asyncio.wait((pending_response, guard), return_when=asyncio.FIRST_COMPLETED)
+                        if failure is not None:
+                            raise failure
+                        response = await pending_response
+                        content = response.data.to_dict().get("content") if response and response.data else None
+                        if not isinstance(content, str):
+                            raise UtilityCompletionError(
+                                "Structured completion returned no text", reason="empty_response"
+                            )
+                        collected[:] = [content]
+                    finally:
+                        pending_response.cancel()
+                        guard.cancel()
+                        await asyncio.gather(pending_response, guard, return_exceptions=True)
             if failure is not None:
                 raise failure
             if tool_attempted:
                 raise UtilityCompletionError("Text-only completion requested tool permission", reason="tool_request")
             text = "\n".join(collected)
+            if len(text.encode("utf-8")) > completion.max_output_bytes:
+                raise UtilityCompletionError("Text-only output exceeds its bound", reason="output_limit")
             if not text.strip():
                 raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
             validate_completion_identity(model, served_model, completion)
