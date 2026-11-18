@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,6 +15,9 @@ from backend.services.ingest.credentials import IngestCredentials
 from backend.services.ingest.record_service import ObservationRecords
 from backend.tests.unit.test_otlp_admission import CONFIG, _ingest, otlp
 from backend.tests.unit.test_otlp_admission import otlp_store as otlp_store
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 
 def _tool(identity, status=None):
@@ -32,7 +36,7 @@ def _tool(identity, status=None):
 
 class ProductionConsumer:
     def __init__(self, factory):
-        self.pending = []
+        self.pending: list[Awaitable[None]] = []
         self.bus = EventBus()
         self.subscriber = TelemetrySubscriber(session_factory=factory, schedule_write=self.pending.append)
         self.subscriber.subscribe(self.bus)
