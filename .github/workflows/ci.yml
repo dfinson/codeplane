@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_recipe_qualification:
-        description: Run native Windows containment, protected audit, and VAPID publication cases
+        description: Run native Windows containment, audit, VAPID, and source ownership/watch cases
         type: boolean
         default: false
   push:
@@ -192,6 +192,50 @@ jobs:
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v backend/tests/unit/test_vapid_keys.py --timeout=60 --junitxml=vapid-windows-results.xml --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --no-project python -c "from xml.etree import ElementTree as E; cases=E.parse('vapid-windows-results.xml').findall('.//testcase'); assert len(cases)==21, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases); print('All 21 VAPID key/publication cases passed without skips.')"
+      - name: Qualify native Windows source ownership and fresh observation
+        shell: pwsh
+        run: |
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -c "import importlib.util, sys; assert sys.platform == 'win32', sys.platform; assert all(importlib.util.find_spec(name) is None for name in ('traceforge', 'numpy', 'torch', 'onnxruntime')), 'Native source qualification requires default-only dependencies'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $targets = @(
+            "backend/tests/unit/test_native_source_ownership.py",
+            "backend/tests/unit/test_native_jsonl_watch.py::test_fresh_tail_keeps_physical_decoded_emitted_and_storage_counts",
+            "backend/tests/unit/test_native_jsonl_watch.py::test_incomplete_suffix_waits_for_newline_without_advancing",
+            "backend/tests/unit/test_native_jsonl_watch.py::test_restart_rejects_rewritten_bytes_even_if_json_semantics_match",
+            "backend/tests/unit/test_native_jsonl_watch.py::test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction"
+          )
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v @targets --timeout=60 --junitxml=native-source-windows-results.xml --tb=short
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require all exact native source cases without skips or errors
+        shell: pwsh
+        run: |
+          @'
+          from xml.etree import ElementTree as E
+          root = E.parse("native-source-windows-results.xml")
+          cases = root.findall(".//testcase")
+          ownership = "backend.tests.unit.test_native_source_ownership"
+          watcher = "backend.tests.unit.test_native_jsonl_watch"
+          expected = {
+              (ownership, "test_child_owner_blocks_until_release[graceful]"),
+              (ownership, "test_child_owner_blocks_until_release[terminated]"),
+              (ownership, "test_parent_owner_keeps_other_jobs_and_databases_independent"),
+              (watcher, "test_incomplete_suffix_waits_for_newline_without_advancing"),
+              (watcher, "test_restart_rejects_rewritten_bytes_even_if_json_semantics_match"),
+          }
+          for framework in ("copilot", "claude"):
+              expected.add((ownership, f"test_fresh_v2_watcher_owns_source_across_processes[{framework}]"))
+              expected.add((watcher, f"test_fresh_tail_keeps_physical_decoded_emitted_and_storage_counts[{framework}]"))
+              for boundary in ("first_replayed_event", "last_replayed_event"):
+                  expected.add((watcher, f"test_resume_rejects_late_accepted_rewrite_and_discards_reconstruction[{boundary}-{framework}]"))
+          actual = {(case.get("classname"), case.get("name")) for case in cases}
+          assert len(cases) == len(expected) == 13, (len(cases), len(expected))
+          assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+          assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error"))
+          assert all(int(suite.get(tag, "0")) == 0 for suite in root.findall(".//testsuite") for tag in ("skipped", "failures", "errors"))
+          print("All 13 exact native source cases passed without skips, failures, or errors:")
+          print("\n".join(f"{module}::{name}" for module, name in sorted(actual)))
+          '@ | uv run --no-project python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -200,5 +244,6 @@ jobs:
             recipe-windows-results.xml
             audit-windows-results.xml
             vapid-windows-results.xml
+            native-source-windows-results.xml
           if-no-files-found: warn
           retention-days: 14

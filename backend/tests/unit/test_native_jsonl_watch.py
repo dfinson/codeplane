@@ -103,14 +103,15 @@ async def test_fresh_tail_keeps_physical_decoded_emitted_and_storage_counts(fram
     path = tmp_path / "events.jsonl"
     text = "\n" + "".join(json.dumps(raw) + "\n" for raw in records) + "\n"
     path.write_text(text)
+    written = path.read_bytes()
     task = asyncio.create_task(watcher._tail_traceforge_events("source", "native", path))
     try:
         checkpoint = await _checkpoint(session_factory, 5)
         assert checkpoint["version"] == 2
         assert checkpoint["decoded_event_count"] == 3
         assert checkpoint["emitted_event_count"] == 2
-        assert checkpoint["source"]["byte_count"] == len(text.encode())
-        assert checkpoint["source"]["sha256"] == hashlib.sha256(text.encode()).hexdigest()
+        assert checkpoint["source"]["byte_count"] == len(written)
+        assert checkpoint["source"]["sha256"] == hashlib.sha256(written).hexdigest()
         async with session_factory() as session:
             stored = await EventRepository(session).list_after(0, job_id="native")
             assert (await JobRepository(session).get("native")).tail_offset == 3
