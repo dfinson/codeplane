@@ -1,13 +1,16 @@
 import hashlib
 import json
+import subprocess
+import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 from backend.persistence.event_repo import EventRepository
-from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 ANCHOR = datetime(2026, 1, 2, tzinfo=UTC)
@@ -20,14 +23,51 @@ def _decoder(name, **kwargs):
     )
 
 
-def test_all_released_mapping_definitions_load_without_tf_or_model_imports() -> None:
-    import sys
+def _assert_standalone_native_imports() -> None:
+    root = Path(__file__).parents[3]
+    script = """
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
-    for name in NATIVE_FORMATS:
-        decoder = _decoder(name)
-        assert decoder.mapping.events or decoder.mapping.spans
-    assert not any(name == "traceforge" or name.startswith("traceforge.") for name in sys.modules)
-    assert "onnxruntime" not in sys.modules
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+import backend.compat.traceformats.parsers
+import backend.services.ingest._base
+import backend.services.ingest.record_service
+from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder
+
+for name in NATIVE_FORMATS:
+    decoder = NativeMappingDecoder(
+        root / "backend" / "compat" / "traceformats" / "mappings" / f"{name}.yaml",
+        job_id="job", external_session_id="external", anchor=datetime(2026, 1, 2, tzinfo=UTC),
+        framework_id=name,
+    )
+    assert decoder.mapping.events or decoder.mapping.spans, name
+for package in ("traceforge", "onnxruntime", "transformers", "torch"):
+    imported = [name for name in sys.modules if name == package or name.startswith(package + ".")]
+    assert not imported, f"Native imports loaded optional dependency: {imported}"
+"""
+    result = subprocess.run(
+        ["uv", "run", "--no-project", "--python", sys.executable, "python", "-I", "-c", script, str(root)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_all_released_mapping_definitions_load_without_tf_or_model_imports() -> None:
+    _assert_standalone_native_imports()
+
+
+def test_native_import_check_is_independent_of_loaded_optional_modules(monkeypatch) -> None:
+    names = [f"{package}._legacy_test" for package in ("traceforge", "onnxruntime", "transformers", "torch")]
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    _assert_standalone_native_imports()
+    assert all(name in sys.modules for name in names)
 
 
 def test_copilot_native_identity_and_source_motivation_are_stable() -> None:
