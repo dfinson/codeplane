@@ -6,6 +6,10 @@ import contextlib
 import os
 import signal
 
+import structlog
+
+log = structlog.get_logger()
+
 # Claude SDK tool names that are internal / should not appear in transcript
 _HIDDEN_TOOLS: frozenset[str] = frozenset()
 
@@ -20,6 +24,8 @@ def _kill_sdk_subprocess(client: object | None) -> None:
 
     Pure OS calls (``os.kill`` / ``os.waitpid``) bypass anyio entirely
     and cannot contaminate other asyncio tasks.
+    Only concrete integer PIDs above 1 and distinct from this process are
+    accepted. This validates the PID value, not process ownership.
     """
     if client is None:
         return
@@ -31,12 +37,17 @@ def _kill_sdk_subprocess(client: object | None) -> None:
         return
     # anyio Process wraps an asyncio.subprocess.Process in _process
     inner = getattr(process, "_process", None)
-    pid: int | None = None
+    pid: object = None
     if inner is not None:
         pid = getattr(inner, "pid", None)
     if pid is None:
         pid = getattr(process, "pid", None)
-    if pid is None:
+    if type(pid) is not int or pid <= 1 or pid == os.getpid():
+        log.warning(
+            "claude_sdk_subprocess_invalid_pid",
+            pid=pid if type(pid) is int else None,
+            pid_type=type(pid).__name__,
+        )
         return
     with contextlib.suppress(ProcessLookupError, OSError):
         os.kill(pid, signal.SIGTERM)

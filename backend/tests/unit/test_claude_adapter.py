@@ -319,6 +319,90 @@ class TestHiddenTools:
         assert "TodoWrite" not in _HIDDEN_TOOLS
 
 
+class TestKillSdkSubprocess:
+    @pytest.fixture(autouse=True)
+    def process_calls(self, monkeypatch):
+        from backend.services.claude_adapter import _helpers
+
+        kill, waitpid = MagicMock(), MagicMock()
+        monkeypatch.setattr(_helpers.os, "kill", kill)
+        monkeypatch.setattr(_helpers.os, "waitpid", waitpid)
+        monkeypatch.setattr(_helpers.os, "getpid", lambda: 12345)
+        return kill, waitpid
+
+    @pytest.mark.parametrize(
+        "pid",
+        [
+            pytest.param(None, id="missing"),
+            pytest.param(False, id="false"),
+            pytest.param(True, id="true"),
+            pytest.param(-1, id="all-processes"),
+            pytest.param(0, id="process-group"),
+            pytest.param(1, id="init"),
+            pytest.param(12345, id="self"),
+            pytest.param("23456", id="string"),
+            pytest.param(23456.0, id="float"),
+            pytest.param(MagicMock(), id="coercible-mock"),
+        ],
+    )
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_invalid_identity_never_signals_or_waits(self, process_calls, pid, nested):
+        from structlog.testing import capture_logs
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        process = SimpleNamespace(pid=pid, _process=SimpleNamespace(pid=pid) if nested else None)
+        transport = SimpleNamespace(_process=process)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        with capture_logs() as logs:
+            _kill_sdk_subprocess(client)
+
+        kill.assert_not_called()
+        waitpid.assert_not_called()
+        assert client._transport is transport
+        assert transport._process is process
+        assert client._query is query
+        assert logs == [
+            {
+                "event": "claude_sdk_subprocess_invalid_pid",
+                "log_level": "warning",
+                "pid": pid if type(pid) is int else None,
+                "pid_type": type(pid).__name__,
+            }
+        ]
+        if isinstance(pid, MagicMock):
+            pid.__index__.assert_not_called()
+
+    @pytest.mark.parametrize("layout", ["direct", "nested", "fallback"])
+    def test_valid_identity_preserves_signal_reap_and_cleanup(self, process_calls, layout):
+        import os
+        import signal
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        inner = None if layout == "direct" else SimpleNamespace(pid=23456 if layout == "nested" else None)
+        process = SimpleNamespace(pid=34567 if layout == "nested" else 23456, _process=inner)
+        transport = SimpleNamespace(_process=process, _stdout_stream=object(), _stdin_stream=object(), _ready=True)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        _kill_sdk_subprocess(client)
+
+        kill.assert_called_once_with(23456, signal.SIGTERM)
+        waitpid.assert_called_once_with(23456, getattr(os, "WNOHANG", 0))
+        assert transport._process is None
+        assert transport._stdout_stream is None
+        assert transport._stdin_stream is None
+        assert not transport._ready
+        assert query._tg is None
+        assert client._query is None
+        assert client._transport is None
+
+
 # ---------------------------------------------------------------------------
 # Tests: ClaudeAdapter internals
 # ---------------------------------------------------------------------------
