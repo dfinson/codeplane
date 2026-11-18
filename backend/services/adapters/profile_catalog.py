@@ -103,6 +103,31 @@ def _operation(
         evidence = ["backend/tests/unit/test_ai_card.py"]
         limitations.append("Identity evidence grants no execution, steering, tool or cancellation authority")
         limitations.append("Registration verifies supplied cards; it does not fetch arbitrary discovery URLs")
+    elif profile.id == "http":
+        from backend.services.adapters.native_gates.selection import select_installation
+
+        selected = select_installation("http")
+        if operation in selected.operations:
+            readiness = selected.readiness()
+            producer = (
+                "backend.services.runtime.RuntimeService.start_native"
+                if operation == "invoke"
+                else f"{selected.module}.install"
+                if operation == "gate"
+                else "backend.services.runtime.native_observation.open_native_observation"
+                if operation == "observe"
+                else "backend.services.runtime.RuntimeService.detach_native"
+            )
+            evidence = ["backend/tests/native_gates/qualify_http_profile.py"]
+        limitations.extend(
+            (
+                "Caller-owned exact-route FastAPI/Flask/Django handlers only; no server or launch route is created",
+                "CodePlane authentication plus a separate binding/epoch credential precede request preflight",
+                "Optional actor identity requires pinned card/key checks and a signed request, not claimed headers",
+                "Only declared endpoint operations are available; local stop does not acknowledge remote completion",
+                "HTTP status/body size is not token/currency usage; existing HTTP/SSE/WebSocket auth is unchanged",
+            )
+        )
     elif profile.id in _CLIENTS:
         from backend.services.adapters.native_gates.selection import select_installation
 
@@ -266,11 +291,13 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
             if profile.id == "a2a":
                 bridge_versions.append("A2A JSON-RPC 0.3.0")
             channels.extend(("native-request-boundary", "pinned-canonical-observations"))
-        if profile.id in _CLIENTS:
+        if profile.id in _CLIENTS or profile.id == "http":
             from backend.services.adapters.native_gates.selection import select_installation
 
             bridge_versions = [f"{package}=={pin}" for package, pin in select_installation(profile.id).dependencies]
-            channels.append("native-client-request-and-local-function")
+            channels.append(
+                "authenticated-request" if profile.id == "http" else "native-client-request-and-local-function"
+            )
         if profile.id in {"haystack", "langflow", "swarm"}:
             from backend.services.adapters.native_gates.selection import select_installation
 

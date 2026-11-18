@@ -8,6 +8,18 @@ from backend.services.adapters.native_gates.bridge_contract import BridgeSpec
 
 BRIDGES = MappingProxyType(
     {
+        "http": BridgeSpec(
+            id="http",
+            module="backend.services.adapters.profile_bridges.http",
+            dependencies=(
+                ("agent-governance-toolkit-core", "5.0.0"),
+                ("fastapi", "0.136.3"),
+                ("flask", "3.1.3"),
+                ("django", "6.1.3"),
+            ),
+            operations=frozenset({"invoke", "observe", "gate", "stop-waiting"}),
+            observation_mapping=True,
+        ),
         "openai-client": BridgeSpec(
             id="openai-client",
             module="backend.services.adapters.profile_bridges.openai_client",
