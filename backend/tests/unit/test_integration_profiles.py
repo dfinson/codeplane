@@ -104,3 +104,41 @@ def test_qualified_request_bridges_report_actual_protocol_evidence():
     cancel = next(operation for operation in a2a.operations if operation.id == "cancel")
     assert cancel.producer.endswith("A2ATarget.cancel_task")
     assert "only stops local waiting" in " ".join(cancel.limitations)
+
+
+def test_external_gate_is_blocking_only_and_readiness_requires_its_modules(monkeypatch):
+    from backend.services.adapters import profile_catalog
+    from backend.services.adapters.profile_bridges import BRIDGES
+
+    row = next(row for row in AdapterRegistry().list_profiles().profiles if row.profile_id == "external-gate")
+    operations = {operation.id: operation for operation in row.operations}
+    assert set(operations) == {"gate", "observe"} and "external-gate" not in BRIDGES
+    assert operations["gate"].producer.endswith("ExternalGates.before_call")
+    assert operations["observe"].producer.endswith("ExternalGates.reported")
+    assert all(operation.dependency.ready and operation.implemented for operation in operations.values())
+    assert not row.admission_enabled and not row.live_ready and row.binding_enabled is None
+    assert row.supported_versions == ["codeplane-external-gate-v1"]
+    assert "Reports are observational, not accounting proof" in operations["observe"].limitations
+
+    class Absent:
+        def joinpath(self, path):
+            return self
+
+        def is_file(self):
+            return False
+
+    monkeypatch.setattr(profile_catalog, "files", lambda package: Absent())
+    absent = next(row for row in AdapterRegistry().list_profiles().profiles if row.profile_id == "external-gate")
+    assert all(not operation.implemented and not operation.dependency.ready for operation in absent.operations)
+
+
+def test_retained_gate_boundary_input_is_not_unconditional_live_steering():
+    from backend.services.adapters.profile_catalog import _GATES
+
+    rows = {row.profile_id: row for row in AdapterRegistry().list_profiles().profiles}
+    for profile in _GATES:
+        operation = next(operation for operation in rows[profile].operations if operation.id == "steer")
+        assert operation.implemented and operation.producer.endswith("consume_native_input")
+        assert "input_handler registration" in " ".join(operation.limitations)
+        assert operation.evidence == ["backend/tests/native_gates/qualify_boundary_input.py"]
+        assert not rows[profile].live_ready and rows[profile].binding_enabled is None
