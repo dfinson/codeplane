@@ -72,6 +72,18 @@ known. Mixed success rates use only known outcomes.
 Every accepted-batch replay rechecks its scoped ingest credential, including
 the interleaving where another request committed the batch first.
 
+Optional outbound export uses explicit `export.enabled`, endpoint/protocol and
+destination-scoped encrypted credential references. Disabled startup does not
+construct a background exporter, and legacy endpoint environment variables do
+not install unfiltered global exporters. The existing local provider/readers
+remain separate. Sanitized metadata is bounded before any SDK span/queue entry,
+then batched by the qualified 1.45.2 SDK with 2,048 queued spans, batches of 128,
+a five-second cadence, five-second requests, bounded 1/2/4/8 retry delays and a
+30-second delivery window. Two seconds are allowed for shutdown flush.
+HTTP/protobuf traces and explicit gRPC traces/typed-usage metrics share this
+boundary. Missing role and unverified currency are withheld, not inferred.
+Optional route errors/drop counters are local health, never execution failures.
+
 `POST /api/integrations/observations` registers a binding-owned history Job
 without launching an SDK, creating a workspace or attaching runtime sidecars.
 Repeated registration of the same binding/source returns the same Job. These

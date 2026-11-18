@@ -126,3 +126,12 @@ class IntegrationProfileResponse(CamelModel):
 class IntegrationProfileList(CamelModel):
     specification_sha256: str
     profiles: list[IntegrationProfileResponse]
+
+
+class OptionalExportHealthResponse(CamelModel):
+    enabled: bool = False
+    last_reason: str | None = None
+    dropped_spans: int = 0
+    dropped_by_reason: dict[str, int] = Field(default_factory=dict)
+    queued_spans: int = 0
+    exported_spans: int = 0

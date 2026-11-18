@@ -914,6 +914,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     config = load_config()
 
+    from backend.services.events.optional_export import OptionalExportOwner
+
+    optional_export = OptionalExportOwner(config.export, session_factory)
+    app.state.optional_export = optional_export
+
     from backend.services.auth.middleware import configure_internal_endpoint
 
     launch = getattr(app.state, "banner_args", None) or {}
@@ -1297,6 +1302,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             name="publish-restart-readiness",
         )
 
+    await optional_export.start(event_bus)
     yield
 
     # Shutdown in reverse initialisation order.
@@ -1345,3 +1351,5 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.error("shutdown_timeout", msg="Shutdown exceeded its 45s resource-drain deadline")
     except (asyncio.CancelledError, Exception) as exc:
         log.debug("shutdown_interrupted", error=str(exc))
+    finally:
+        await optional_export.close()

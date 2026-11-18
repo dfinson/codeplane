@@ -15,6 +15,7 @@ from backend.models.api_schemas import (
     ObservationEventList,
     ObservationRecordBatch,
     ObservationRecordReceipt,
+    OptionalExportHealthResponse,
     OtlpBinaryBody,
     OtlpExportResponse,
     OtlpTraceRequest,
@@ -30,6 +31,16 @@ from backend.services.ingest.otlp_codec import OtlpCodecUnavailableError, protob
 from backend.services.ingest.record_service import ObservationRecords
 
 router = APIRouter(prefix="/integrations", tags=["integrations"], route_class=DishkaRoute)
+
+
+@router.get("/export-health", response_model=OptionalExportHealthResponse)
+async def optional_export_health(request: Request) -> OptionalExportHealthResponse:
+    owner = getattr(request.app.state, "optional_export", None)
+    return (
+        OptionalExportHealthResponse.model_validate(owner.snapshot())
+        if owner is not None
+        else OptionalExportHealthResponse()
+    )
 
 
 @router.get("/profiles", response_model=IntegrationProfileList)

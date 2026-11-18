@@ -86,6 +86,7 @@ export type TrackerOperationListResponse = components["schemas"]["TrackerOperati
 export type ReconcileTrackerOperationRequest = components["schemas"]["ReconcileTrackerOperationRequest"];
 export type RetryTrackerOperationRequest = components["schemas"]["RetryTrackerOperationRequest"];
 export type CredentialResponse = components["schemas"]["CredentialResponse"];
+export type CreateCredentialRequest = components["schemas"]["CreateCredentialRequest"];
 export type CredentialListResponse = components["schemas"]["CredentialListResponse"];
 export type CompletionStrategy = "auto_merge" | "pr_only" | "manual";
 

@@ -6,7 +6,10 @@ import threading
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class ExportDropReason(StrEnum):
@@ -30,6 +33,8 @@ class ExportHealthSnapshot:
     last_reason: ExportDropReason | None
     dropped_spans: int
     dropped_by_reason: tuple[tuple[str, int], ...]
+    queued_spans: int = 0
+    exported_spans: int = 0
 
 
 class ExportHealth:
@@ -38,6 +43,17 @@ class ExportHealth:
         self._enabled = enabled
         self._last_reason: ExportDropReason | None = None
         self._dropped: Counter[str] = Counter()
+        self._queue_probe: Callable[[], int] = lambda: 0
+        self._exported = 0
+
+    def set_queue_probe(self, probe: Callable[[], int]) -> None:
+        self._queue_probe = probe
+
+    def record_exported(self, count: int) -> None:
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ValueError("Invalid exported-span count")
+        with self._lock:
+            self._exported += count
 
     def record_drop(self, reason: ExportDropReason, count: int = 1, *, disable: bool = False) -> None:
         if (
@@ -56,5 +72,10 @@ class ExportHealth:
     def snapshot(self) -> ExportHealthSnapshot:
         with self._lock:
             return ExportHealthSnapshot(
-                self._enabled, self._last_reason, sum(self._dropped.values()), tuple(sorted(self._dropped.items()))
+                self._enabled,
+                self._last_reason,
+                sum(self._dropped.values()),
+                tuple(sorted(self._dropped.items())),
+                self._queue_probe(),
+                self._exported,
             )

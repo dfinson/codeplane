@@ -241,8 +241,8 @@ class PlatformConfig:
 class TelemetryConfig:
     """Telemetry / observability configuration."""
 
-    # Set to push telemetry to an external OTLP collector (e.g. "http://localhost:4317").
-    # When unset, telemetry is in-process only (InMemoryReader).
+    # Retained legacy setting. Only the explicit export binding can enable
+    # sanitized network export; this field alone has no transport authority.
     otel_exporter_endpoint: str = ""
     # Optional budget caps for burn-rate projection in the analytics dashboard.
     claude_monthly_budget_usd: float = 0.0
@@ -253,6 +253,19 @@ class TelemetryConfig:
     # Unique identifier for this CodePlane instance.  Auto-generated on first run
     # if not set.  Used for future Hub telemetry push.
     instance_id: str = ""
+
+
+@dataclass
+class ExportConfig:
+    """Explicit optional export binding; no endpoint alone enables a transport."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    protocol: str = "http/protobuf"
+    credential_id: str | None = None
+    approved_models: list[str] = field(default_factory=list)
+    metrics_endpoint: str = ""
+    metrics_credential_id: str | None = None
 
 
 @dataclass
@@ -303,6 +316,7 @@ class CPLConfig:
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     trail: TrailConfig = field(default_factory=TrailConfig)
     native_mappings: NativeMappingsConfig = field(default_factory=NativeMappingsConfig)
@@ -397,6 +411,7 @@ def load_config(path: Path | None = None) -> CPLConfig:
         terminal=_parse_section(raw, TerminalConfig, "terminal"),
         verification=_parse_section(raw, VerificationConfig, "verification"),
         telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
+        export=_parse_section(raw, ExportConfig, "export"),
         pricing=_parse_section(raw, PricingConfig, "pricing"),
         trail=_parse_section(raw, TrailConfig, "trail"),
         native_mappings=_parse_section(raw, NativeMappingsConfig, "native_mappings"),
@@ -469,6 +484,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # repos is intentionally omitted — managed by register_repo / unregister_repo
     existing["verification"] = _to_dict(config.verification)
     existing["telemetry"] = _to_dict(config.telemetry)
+    existing["export"] = _to_dict(config.export)
     existing["native_mappings"] = _to_dict(config.native_mappings)
     # Tracker synchronization uses a fixed production cadence. Remove the
     # retired persisted section when any settings save occurs.

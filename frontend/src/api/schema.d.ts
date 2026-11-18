@@ -3182,6 +3182,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/integrations/export-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Optional Export Health */
+        get: operations["optional_export_health_api_integrations_export_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/profiles": {
         parameters: {
             query?: never;
@@ -4199,8 +4216,11 @@ export interface components {
         };
         /** CreateCredentialRequest */
         CreateCredentialRequest: {
-            /** Provider */
-            provider: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "github" | "jira" | "azure_devops" | "otlp";
             /** Label */
             label: string;
             /** Baseurl */
@@ -4209,6 +4229,8 @@ export interface components {
             pat: string;
             /** Email */
             email?: string | null;
+            /** Exportprotocol */
+            exportProtocol?: string | null;
         };
         /** CreateJobRequest */
         CreateJobRequest: {
@@ -6246,6 +6268,35 @@ export interface components {
              * @default []
              */
             observations: components["schemas"]["ObservationEntry"][];
+        };
+        /** OptionalExportHealthResponse */
+        OptionalExportHealthResponse: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Lastreason */
+            lastReason?: string | null;
+            /**
+             * Droppedspans
+             * @default 0
+             */
+            droppedSpans: number;
+            /** Droppedbyreason */
+            droppedByReason?: {
+                [key: string]: number;
+            };
+            /**
+             * Queuedspans
+             * @default 0
+             */
+            queuedSpans: number;
+            /**
+             * Exportedspans
+             * @default 0
+             */
+            exportedSpans: number;
         };
         /**
          * OtlpExportResponse
@@ -15799,6 +15850,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    optional_export_health_api_integrations_export_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionalExportHealthResponse"];
                 };
             };
         };

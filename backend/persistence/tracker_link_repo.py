@@ -43,7 +43,10 @@ class TrackerLinkRepository(BaseRepository):
             raise TrackerLinkProjectNotFoundError(f"Project '{project_id}' does not exist")
 
         credential_result = await self._session.execute(
-            select(CredentialRow.id).where(CredentialRow.id == credential_id)
+            select(CredentialRow.id).where(
+                CredentialRow.id == credential_id,
+                CredentialRow.provider.in_(("github", "jira", "azure_devops")),
+            )
         )
         if credential_result.scalar_one_or_none() is None:
             raise TrackerLinkCredentialNotFoundError(f"Credential '{credential_id}' does not exist")
