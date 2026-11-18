@@ -10,6 +10,12 @@
     "langchain",
     "semantic_kernel"
   ],
+  "supplemental_local_sdk_evidence": {
+    "provenance": "sdk_local/provenance.json",
+    "classification": "actual SDK callback/serialization with inert local input",
+    "formats": ["langchain", "semantic_kernel", "maf_transcript"],
+    "scope": "Adds real local SDK evidence, not live vendor/model recordings. Existing upstream evidence labels and missing live recordings remain unchanged."
+  },
   "sources": {
     "aider": {
       "evidence_kind": "retained_recording",
