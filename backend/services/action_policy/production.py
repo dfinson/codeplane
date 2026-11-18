@@ -13,6 +13,7 @@ import structlog
 from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, SessionEvent
 from backend.models.usage import UsageAmount
+from backend.persistence.governance_ownership import GovernanceRuntimeLease
 from backend.persistence.governance_repo import GovernanceLedger
 from backend.services.action_policy.agt_policy import AgtPolicy
 from backend.services.action_policy.assessment import AssessmentService
@@ -36,6 +37,7 @@ class StandaloneGovernance:
     def __init__(self, host: RuntimeService, directory: Path) -> None:
         self._host = host
         self._ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+        self._runtime_ownership = GovernanceRuntimeLease(directory)
         self._audit = GovernanceAudit(directory / "audit", self._ledger)
         self._assessments = AssessmentService()
         self._titles = TitleRefinement(host, self._assessments)
@@ -47,6 +49,21 @@ class StandaloneGovernance:
         self.accounting_error: str | None = None
 
     async def start(self) -> None:
+        self._runtime_ownership.acquire()
+        started = False
+        try:
+            await self._start()
+            started = True
+        finally:
+            if not started:
+                await self.close()
+
+    async def _start(self) -> None:
+        from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
+
+        await asyncio.to_thread(
+            LegacyGovernanceRepository(self._ledger.path, self._ledger.path.parent / "data.db").require_verified
+        )
         contract = await asyncio.to_thread(standalone_contract)
         try:
             await self._ledger.initialize()
@@ -344,4 +361,7 @@ class StandaloneGovernance:
                     if self._delivery is not None:
                         await self._delivery
                 finally:
-                    await self._ledger.close()
+                    try:
+                        await self._ledger.close()
+                    finally:
+                        self._runtime_ownership.close()

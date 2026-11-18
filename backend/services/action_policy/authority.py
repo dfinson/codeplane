@@ -138,6 +138,7 @@ class PolicyAuthority:
         self._contracts.require_available(pin)
         if pin.contract.policy.id != POLICY_VERSION:
             raise StateConflictError("The pinned policy cannot be enforced by this authority")
+        await self._ledger.require_policy_scope(execution.job_id, pin.contract.policy.id)
         source_fields = dict(fields)
         if source_fields["command"]:
             local = replace(local, trusted_file_read=False)
@@ -299,6 +300,10 @@ class PolicyAuthority:
                         "destructive_calls": totals.destructive_calls,
                         "unaccounted": totals.unaccounted,
                         "verified_usd": str(totals.verified_usd) if totals.verified_usd_present else None,
+                        "legacy_estimated_usd": str(totals.legacy_estimated_usd)
+                        if totals.legacy_estimated_usd is not None
+                        else None,
+                        "legacy_currency_unverified": totals.legacy_currency_unverified,
                     },
                 },
             )

@@ -273,6 +273,18 @@ paths and rationale and keys external identities before any exporter queue.
 These components are introduced ahead of runtime cutover and full integration
 qualification; their presence is not a claim that TraceForge retirement is done.
 
+`cpl governance-transition import-legacy` is explicit stopped-runtime maintenance
+for an existing legacy governance database under the active CodePlane home. It
+retains a read-only original backup, source digests and exact counter/processed-key
+comparisons before a replacement writer can activate. Scoped grants keep their
+original TF policy, timestamps and expiry. They do not become AGT waivers.
+Conflicting, reserved or unmapped state requires reconciliation. Legacy spend
+reader values remain estimated or unknown, never verified currency, and imported
+aggregates do not fabricate completed-call receipts. Runtime ownership excludes
+concurrent maintenance. This import command does not switch providers or complete
+forward-preserving provider rollback, and never restores an old application
+database over newer history, approvals or outcomes.
+
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream
 license. New native event and fallback turn identities are scoped by stable

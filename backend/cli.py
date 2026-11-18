@@ -854,6 +854,50 @@ def doctor(as_json: bool) -> None:
         raise SystemExit(1)
 
 
+@cli.group("governance-transition")
+def governance_transition_commands() -> None:
+    """Explicit stopped-runtime governance maintenance, never database restoration."""
+
+
+@governance_transition_commands.command("import-legacy")
+def import_legacy_governance_command() -> None:
+    """Back up and compare retained counters, processed keys and policy-scoped grants.
+
+    Does not select a provider, restore an older application database or complete
+    provider rollback. Stop the runtime before this maintenance operation.
+    """
+    import json
+    import sqlite3
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
+    from backend.services.dev_restart.launch_profile import (
+        LaunchProfile,
+        LaunchProfileInvalidError,
+    )
+    from backend.services.dev_restart.restart_protocol import is_identity_alive
+
+    directory = backend_config.get_codeplane_dir()
+    try:
+        profile_path = directory / "run.json"
+        if profile_path.exists():
+            try:
+                profile = LaunchProfile.from_dict(json.loads(profile_path.read_text()))
+            except (ValueError, LaunchProfileInvalidError) as exc:
+                raise click.ClickException("Runtime identity requires reconciliation before import") from exc
+            if is_identity_alive(profile.started_pid, profile.started_process_time):
+                raise click.ClickException("Stop the recorded runtime before governance import")
+        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
+            result = LegacyGovernanceRepository(directory / "governance.db", directory / "data.db").import_original(
+                ownership
+            )
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
 # ---------------------------------------------------------------------------
 # ``cpl down`` — gracefully stop the server
 # ---------------------------------------------------------------------------

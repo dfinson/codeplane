@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -30,10 +31,12 @@ class GovernanceTotals:
     verified_usd: Decimal
     unaccounted: int
     verified_usd_present: bool
+    legacy_estimated_usd: Decimal | None = None
+    legacy_currency_unverified: bool = False
 
     @property
     def budget_accountable(self) -> bool:
-        return self.unaccounted == 0
+        return self.unaccounted == 0 and not self.legacy_currency_unverified
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +217,23 @@ class GovernanceLedger:
         if state.blocked:
             raise StateConflictError(f"New governance admission is blocked: {state.reason}")
 
+    async def require_policy_scope(self, job_id: str, policy_id: str) -> None:
+        await self._io(self._require_policy_scope, job_id, policy_id)
+
+    def _require_policy_scope(self, job_id: str, policy_id: str) -> None:
+        with self._connect(read_only=True) as connection:
+            if not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_legacy_grants'"
+            ).fetchone():
+                return
+            grants = connection.execute("SELECT policy_id,expires_at FROM cp_legacy_grants WHERE job_id=?", (job_id,))
+            now = datetime.now(UTC)
+            for grant in grants:
+                if datetime.fromisoformat(grant["expires_at"]) > now and grant["policy_id"] != policy_id:
+                    raise StateConflictError(
+                        "An unexpired legacy grant belongs to another policy; explicit reconciliation is required"
+                    )
+
     async def set_admission_control(
         self, *, expected_generation: int, blocked: bool, reason: str
     ) -> GovernanceAdmission:
@@ -300,6 +320,16 @@ class GovernanceLedger:
             # Only storage identity is qualified; the canonical event's vendor
             # tool_call_id remains unchanged on the wire and in history.
             identity = json.dumps(["cp-tool-v1", source_id, tool_call_id], separators=(",", ":"))
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_legacy_rows'"
+            ).fetchone():
+                imported = connection.execute(
+                    """SELECT 1 FROM cp_legacy_rows WHERE table_name='processed_events'
+                       AND source_key=? AND json_extract(row_json,'$.session_id')=?""",
+                    (json.dumps([f"exec:{tool_call_id}"], separators=(",", ":")), job_id),
+                ).fetchone()
+                if imported:
+                    raise ValueError("Imported processed identity cannot be recounted; reconcile its scope")
             legacy = connection.execute(
                 "SELECT 1 FROM cp_executed_tools WHERE job_id=? AND epoch=? AND tool_call_id=?",
                 (job_id, epoch, tool_call_id),
@@ -464,12 +494,22 @@ class GovernanceLedger:
                 f"SELECT COUNT(*) FROM cp_unaccounted_tools WHERE {scope}",
                 parameters,
             ).fetchone()[0]
+            legacy = None
+            if (
+                epoch is None
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_legacy_budget'"
+                ).fetchone()
+            ):
+                legacy = connection.execute("SELECT * FROM cp_legacy_budget WHERE job_id=?", (job_id,)).fetchone()
             return GovernanceTotals(
-                counts[0] or 0,
-                counts[1] or 0,
+                (counts[0] or 0) + (legacy["executed_calls"] if legacy else 0),
+                (counts[1] or 0) + (legacy["destructive_calls"] if legacy else 0),
                 sum((Decimal(row["amount"]) for row in costs), Decimal(0)),
                 missing,
                 bool(costs),
+                Decimal(legacy["estimated_usd"]) if legacy and legacy["estimated_usd"] is not None else None,
+                legacy is not None,
             )
 
     async def enqueue_decision(
