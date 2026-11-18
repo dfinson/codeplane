@@ -2,6 +2,7 @@
 
 import base64
 import builtins
+import errno
 import json
 import os
 
@@ -200,3 +201,21 @@ def test_candidate_sync_failure_does_not_publish_keys(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="candidate sync failed"):
         get_or_create_vapid_keys(tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_unsupported_publication_is_explicit_but_existing_keys_still_load(tmp_path, monkeypatch):
+    retained = tmp_path / "retained"
+    keys = get_or_create_vapid_keys(retained)
+    before = (retained / "vapid.json").read_bytes()
+
+    def unsupported_link(source, destination):
+        raise OSError(errno.EOPNOTSUPP, "Hard-link publication unsupported")
+
+    monkeypatch.setattr(os, "link", unsupported_link)
+    assert get_or_create_vapid_keys(retained) == keys
+    assert (retained / "vapid.json").read_bytes() == before
+    fresh = tmp_path / "fresh"
+    with pytest.raises(OSError) as error:
+        get_or_create_vapid_keys(fresh)
+    assert error.value.errno == errno.EOPNOTSUPP
+    assert list(fresh.iterdir()) == []
