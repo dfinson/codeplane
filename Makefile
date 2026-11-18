@@ -3,8 +3,8 @@
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install backend and frontend dependencies
-	uv sync
+install: ## Install contributor dependencies, including legacy compatibility tests
+	uv sync --extra legacy-traceforge
 	cd frontend && npm ci
 
 lint: ## Run linters (ruff + eslint)
@@ -15,11 +15,11 @@ format: ## Auto-format backend code
 	uv run ruff format backend/
 
 typecheck: ## Run type checkers (mypy + tsc)
-	uv run mypy backend/
+	uv run --extra legacy-traceforge mypy backend/
 	cd frontend && npm run typecheck
 
 test: ## Run backend and frontend tests with coverage
-	uv run pytest --cov=backend --cov-report=term-missing
+	uv run --extra legacy-traceforge pytest --cov=backend --cov-report=term-missing
 	cd frontend && npm run test:coverage
 
 run: ## Build frontend (if changed) and start server with remote access

@@ -14,7 +14,7 @@ This guide is for contributors working from source. If you just want to use Code
 ```bash
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
-make install                  # uv sync + npm ci
+make install                  # uv sync --extra legacy-traceforge + npm ci
 cp .env.sample .env           # optional — set CPL_PASSWORD for remote auth
 ```
 
@@ -43,16 +43,21 @@ make test        # pytest (70% coverage threshold) + vitest
 make ci          # all of the above
 ```
 
+The full backend suite and type check include legacy compatibility coverage, so
+these Make targets explicitly select `legacy-traceforge`. The default core
+package remains TF-free. For a core-only environment, use
+`uv sync --no-default-groups` without the legacy extra.
+
 ## Testing
 
 ### Backend Tests
 
 ```bash
-uv run pytest                              # run all tests
-uv run pytest backend/tests/unit/          # unit tests only
-uv run pytest backend/tests/integration/   # integration tests only
-uv run pytest -k "test_job_creation"       # run specific test by name
-uv run pytest --cov=backend --cov-report=term-missing  # with coverage
+uv run --extra legacy-traceforge pytest                           # all tests
+uv run --extra legacy-traceforge pytest backend/tests/unit/        # unit tests
+uv run --extra legacy-traceforge pytest backend/tests/integration/ # integration tests
+uv run --extra legacy-traceforge pytest -k "test_job_creation"      # specific test
+uv run --extra legacy-traceforge pytest --cov=backend --cov-report=term-missing
 ```
 
 ### Frontend Tests

@@ -115,3 +115,88 @@ def test_competing_initializer_does_not_overwrite_the_winning_keys(tmp_path, mon
     monkeypatch.setattr(os, "open", competing_open)
     assert get_or_create_vapid_keys(tmp_path) == winner
     assert json.loads(path.read_text()) == winner
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_initializer_cannot_observe_another_writers_unfinished_keys(tmp_path, monkeypatch, partial):
+    path = tmp_path / "vapid.json"
+    original_dump = json.dump
+    paused = False
+    winner = None
+
+    def pause_writer(keys, stream, **kwargs):
+        nonlocal paused, winner
+        if paused:
+            return original_dump(keys, stream, **kwargs)
+        paused = True
+        encoded = json.dumps(keys, **kwargs)
+        split = len(encoded) // 2 if partial else 0
+        stream.write(encoded[:split])
+        stream.flush()
+        # A second real initializer runs after creation, before completion.
+        winner = get_or_create_vapid_keys(tmp_path)
+        stream.write(encoded[split:])
+
+    monkeypatch.setattr(json, "dump", pause_writer)
+    first = get_or_create_vapid_keys(tmp_path)
+    assert first == winner == json.loads(path.read_text())
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("failure", [OSError, KeyboardInterrupt])
+def test_interrupted_key_write_never_publishes_invalid_destination(tmp_path, monkeypatch, failure):
+    def interrupted_dump(keys, stream, **kwargs):
+        stream.write("{")
+        stream.flush()
+        raise failure("interrupted candidate write")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(json, "dump", interrupted_dump)
+        with pytest.raises(failure, match="interrupted candidate write"):
+            get_or_create_vapid_keys(tmp_path)
+    assert not (tmp_path / "vapid.json").exists()
+    assert list(tmp_path.iterdir()) == []
+    keys = get_or_create_vapid_keys(tmp_path)
+    assert json.loads((tmp_path / "vapid.json").read_text()) == keys
+
+
+def test_candidate_is_synced_and_closed_before_atomic_publication(tmp_path, monkeypatch):
+    original_dump, original_sync, original_link = json.dump, os.fsync, os.link
+    order: list[str] = []
+    stream_ref = None
+    written_bytes = 0
+
+    def dump(keys, stream, **kwargs):
+        nonlocal stream_ref, written_bytes
+        stream_ref = stream
+        original_dump(keys, stream, **kwargs)
+        written_bytes = len(json.dumps(keys, **kwargs).encode())
+        order.append("write")
+
+    def sync(fd):
+        assert stream_ref is not None
+        assert os.fstat(fd).st_size == written_bytes
+        order.append("sync")
+        return original_sync(fd)
+
+    def publish(source, destination):
+        assert stream_ref.closed
+        assert not (tmp_path / "vapid.json").exists()
+        order.append("publish")
+        return original_link(source, destination)
+
+    monkeypatch.setattr(json, "dump", dump)
+    monkeypatch.setattr(os, "fsync", sync)
+    monkeypatch.setattr(os, "link", publish)
+    get_or_create_vapid_keys(tmp_path)
+    assert order == ["write", "sync", "publish"]
+
+
+def test_candidate_sync_failure_does_not_publish_keys(tmp_path, monkeypatch):
+    def failed_sync(fd):
+        raise OSError("candidate sync failed")
+
+    monkeypatch.setattr(os, "fsync", failed_sync)
+    with pytest.raises(OSError, match="candidate sync failed"):
+        get_or_create_vapid_keys(tmp_path)
+    assert list(tmp_path.iterdir()) == []

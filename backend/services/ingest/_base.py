@@ -290,6 +290,8 @@ class TraceForgeIngestBase:
         self._emitted_counts[job_id] = decoded
         terminal_reason: str | None = None
         terminal_seen = False
+        source_state_started = False
+        reconstructing = False
         try:
             async with self._session_factory() as session:
                 repo = JobRepository(session)
@@ -321,6 +323,8 @@ class TraceForgeIngestBase:
                 await asyncio.to_thread(_verify_source_prefix, jsonl_path, accepted, checkpoint["prefix_sha256"])
             elif initial_skip_count or job.tail_offset or prior:
                 raise RuntimeError("Legacy native history has no provable source checkpoint")
+            source_state_started = True
+            reconstructing = accepted > 0
             if checkpoint:
                 offset = 0
                 while True:
@@ -357,14 +361,14 @@ class TraceForgeIngestBase:
                     prefix = _advance_prefix(prefix, _canonical_record(raw) if raw is not None else b"")
                     ordinal += 1
                     await source.verify()
-                    if (
-                        reconstruct
-                        and ordinal == accepted
-                        and revision == 2
-                        and checkpoint is not None
-                        and decoded != checkpoint["decoded_event_count"]
-                    ):
-                        raise RuntimeError("Native decoded event count changed before its accepted checkpoint")
+                    if reconstruct and ordinal == accepted:
+                        assert checkpoint is not None
+                        if prefix.hex() != checkpoint["prefix_sha256"]:
+                            raise RuntimeError("Native accepted source prefix changed during reconstruction")
+                        await source.verify_reconstruction()
+                        if revision == 2 and decoded != checkpoint["decoded_event_count"]:
+                            raise RuntimeError("Native decoded event count changed before its accepted checkpoint")
+                        reconstructing = False
                     if not reconstruct:
                         checkpoint = {
                             "version": revision,
@@ -395,8 +399,12 @@ class TraceForgeIngestBase:
                                 await JobRepository(session).update_ingest_checkpoint(job_id, checkpoint, decoded)
                         return
         except asyncio.CancelledError:
+            if reconstructing:
+                self._event_processor.discard_source_reconstruction(job_id)
             raise
         except Exception as exc:
+            if source_state_started:
+                self._event_processor.discard_source_reconstruction(job_id)
             log.error("native_observation_failed", job_id=job_id, error=str(exc), exc_info=True)
             await self._publish_lifecycle(
                 job_id,
