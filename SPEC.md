@@ -373,7 +373,11 @@ Canceled provider cleanup retains its concurrency slot until it actually ends,
 without delaying the caller's unavailable result. Redacted semantics, stale
 bindings and invalid evidence cannot become automatic permission. A completed
 utility call retains its known model and usage even when its assessment is
-rejected for stale state or invalid output.
+rejected for stale state or invalid output. Copilot assessment calls request the
+existing evidence schema through native per-run structured output on a fresh
+session, not immediate steering. Other text completion calls are unchanged.
+Local validation still rejects Markdown, surrounding prose, invalid evidence
+and out-of-bounds spans; provider-side formatting never grants permission.
 
 The AGT policy component uses the pinned core package's `PolicyEngine` with
 explicit `priority_first_match` priorities and no evaluation-time rate limits.

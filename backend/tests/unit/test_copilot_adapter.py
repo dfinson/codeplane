@@ -1766,6 +1766,40 @@ class TestTfEventEmission:
 
 class TestComplete:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_response_schema_uses_a_fresh_run_not_immediate_steering(
+        self, adapter: CopilotAdapter, structured: bool
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        schema: dict[str, object] = {
+            "type": "object",
+            "properties": {"ready": {"type": "boolean"}},
+            "required": ["ready"],
+        }
+        session = _FakeCopilotSession()
+
+        async def send(*args: Any, **kwargs: Any) -> None:
+            session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
+            session.fire_event(_FakeSdkSessionEvent("assistant.message", _FakeEventData(content='{"ready":true}')))
+            session.fire_event(_FakeSdkSessionEvent("session.idle", _FakeEventData()))
+
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(session, "send", side_effect=send) as sent,
+            completion_context(CompletionContext(role="assessment", response_schema=schema if structured else None)),
+        ):
+            result = await adapter.complete("fixture", model="approved-model", excluded_tools=["*"])
+        assert result.text == '{"ready":true}' and result.model == "approved-model"
+        if structured:
+            sent.assert_awaited_once_with("fixture", mode="enqueue", response_schema=schema)
+        else:
+            sent.assert_awaited_once_with("fixture", mode="immediate")
+        assert client.create_session.await_args.kwargs["available_tools"] == []
+        assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("excluded_tools", "sdk_exclusions"),
         [(None, ["builtin:*", "mcp:*", "custom:*"]), (["bash"], ["bash"]), (["*"], ["builtin:*", "mcp:*", "custom:*"])],

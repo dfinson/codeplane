@@ -20,6 +20,7 @@ class CompletionContext:
     job_id: str | None = None
     execution_epoch: str | None = None
     execution_contract: ExecutionContractPin | None = None
+    response_schema: dict[str, object] | None = None
 
 
 _CURRENT: ContextVar[CompletionContext | None] = ContextVar("utility_completion_context", default=None)

@@ -1112,7 +1112,10 @@ class CopilotAdapter(BaseAgentAdapter):
                 unsubscribe = session.on(_on_event)
                 if callable(unsubscribe):
                     self._unsubscribe[tmp_session_id] = unsubscribe
-                await session.send(prompt, mode="immediate")
+                if completion.response_schema is None:
+                    await session.send(prompt, mode="immediate")
+                else:
+                    await session.send(prompt, mode="enqueue", response_schema=completion.response_schema)
                 await done_event.wait()
             if failure is not None:
                 raise failure
