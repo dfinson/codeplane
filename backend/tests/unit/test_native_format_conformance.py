@@ -7,6 +7,7 @@ import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -24,6 +25,9 @@ from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder
 from backend.services.ingest.record_service import ObservationRecords
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 from backend.tests.unit.test_native_mapping import _assert_standalone_native_imports
+
+if TYPE_CHECKING:
+    from backend.models.session_event import SessionEvent
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "native_formats"
 MAPPINGS = Path(__file__).parents[2] / "compat" / "traceformats" / "mappings"
@@ -212,7 +216,7 @@ def test_aider_markdown_preparser_full_and_chunked_source():
     ]
     full = list(AiderPreParser().parse_text(text))
     parser = AiderPreParser()
-    chunked = []
+    chunked: list[dict[str, object]] = []
     for line in text.splitlines(keepends=True):
         chunked.extend(parser.parse_chunk(line))
     chunked.extend(parser.flush())
@@ -295,7 +299,7 @@ def test_released_tool_pairing_preserves_unresolved_evidence(name, expected):
 
 
 async def test_all_formats_durable_replay_keeps_storage_cursor_separate(session_factory, tmp_path):
-    all_events = []
+    all_events: list[SessionEvent] = []
     for name, case in SHAPES.items():
         groups = _decode(name, case["records"], job_id="job-1")
         all_events.extend(event for group in groups for event in group)
