@@ -5,16 +5,20 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from agents import Agent, FunctionTool
-
+from ._optional import load_sdk
 from .binding import NativeCall, NativeGateDeniedError
 from .readiness import UnsupportedNativeHookError
 
 if TYPE_CHECKING:
+    from ._optional import AgentTools
+    from ._optional import FunctionTool as FunctionToolBoundary
     from .installation import GateAttachment
 
+_agents = load_sdk("agents")
+Agent, FunctionTool = _agents.Agent, _agents.FunctionTool
 
-def install(gate: GateAttachment, agent: Agent[Any]) -> None:
+
+def install(gate: GateAttachment, agent: AgentTools) -> None:
     if not isinstance(agent, Agent):
         raise TypeError("OpenAI Agents gating requires the original Agent")
     tools = tuple(agent.tools)
@@ -24,7 +28,7 @@ def install(gate: GateAttachment, agent: Agent[Any]) -> None:
         assert isinstance(tool, FunctionTool)
         gate.claim(tool)
 
-        def wrap(original: Any, native_tool: FunctionTool) -> Any:
+        def wrap(original: Any, native_tool: FunctionToolBoundary) -> Any:
             async def invoke(ctx: Any, input_str: str) -> Any:
                 arguments = json.loads(input_str)
                 if not isinstance(arguments, dict):

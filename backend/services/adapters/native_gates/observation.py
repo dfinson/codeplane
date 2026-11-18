@@ -16,6 +16,7 @@ from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
 from backend.services.events.export_metadata import export_metadata
 
+from ._optional import load_sdk
 from .readiness import UnsupportedNativeHookError, require_ready
 
 if TYPE_CHECKING:
@@ -50,11 +51,15 @@ def subscribe_openai(
     provider: Any = None,
 ) -> ObservationSubscription:
     require_ready("openai_agents")
-    from agents.tracing import TracingProcessor, get_trace_provider
-    from agents.tracing.provider import DefaultTraceProvider
+    tracing = load_sdk("agents.tracing")
+    if TYPE_CHECKING:
+        from ._optional import TracingProcessor
+    else:
+        TracingProcessor = tracing.TracingProcessor  # noqa: N806 - runtime SDK base, not a local value.
+    trace_provider = load_sdk("agents.tracing.provider")
 
-    provider = provider if provider is not None else get_trace_provider()
-    if not isinstance(provider, DefaultTraceProvider):
+    provider = provider if provider is not None else tracing.get_trace_provider()
+    if not isinstance(provider, trace_provider.DefaultTraceProvider):
         raise UnsupportedNativeHookError("Exact unsubscription is qualified only for the native DefaultTraceProvider")
     subscription = ObservationSubscription()
 
@@ -147,11 +152,11 @@ def subscribe_crewai(
     sink: Callable[[dict[str, object]], None],
 ) -> ObservationSubscription:
     require_ready("crewai")
-    from crewai import Crew
-    from crewai.events import crewai_event_bus
-    from crewai.events.types.tool_usage_events import ToolUsageFinishedEvent
+    crewai = load_sdk("crewai")
+    crewai_event_bus = load_sdk("crewai.events").crewai_event_bus
+    finished_event = load_sdk("crewai.events.types.tool_usage_events").ToolUsageFinishedEvent
 
-    if not isinstance(crew, Crew):
+    if not isinstance(crew, crewai.Crew):
         raise TypeError("CrewAI observation requires the original Crew")
     agents = tuple(crew.agents)
     tasks = frozenset(str(task.id) for task in crew.tasks)
@@ -183,14 +188,14 @@ def subscribe_crewai(
             )
         )
 
-    crewai_event_bus.on(ToolUsageFinishedEvent)(completed)
+    crewai_event_bus.on(finished_event)(completed)
 
     def remove() -> None:
         with crewai_event_bus._rwlock.w_locked():
-            handlers = crewai_event_bus._sync_handlers.get(ToolUsageFinishedEvent, frozenset())
-            crewai_event_bus._sync_handlers[ToolUsageFinishedEvent] = handlers - {completed}
-            crewai_event_bus._handler_dependencies.get(ToolUsageFinishedEvent, {}).pop(completed, None)
-            crewai_event_bus._execution_plan_cache.pop(ToolUsageFinishedEvent, None)
+            handlers = crewai_event_bus._sync_handlers.get(finished_event, frozenset())
+            crewai_event_bus._sync_handlers[finished_event] = handlers - {completed}
+            crewai_event_bus._handler_dependencies.get(finished_event, {}).pop(completed, None)
+            crewai_event_bus._execution_plan_cache.pop(finished_event, None)
 
     subscription._remove = remove
     return subscription
