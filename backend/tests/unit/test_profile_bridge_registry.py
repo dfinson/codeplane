@@ -26,6 +26,7 @@ def test_fixed_bridge_registration_cannot_promote_identity_or_observation_profil
         ("google-adk", "google-adk"),
         ("haystack", "haystack-ai"),
         ("langflow", "lfx"),
+        ("swarm", "swarm"),
     ],
 )
 def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, profile, package):
@@ -39,7 +40,7 @@ def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, 
     assert not readiness.ready and package in readiness.reason
 
 
-@pytest.mark.parametrize("profile,module", [("haystack", "haystack"), ("langflow", "lfx")])
+@pytest.mark.parametrize("profile,module", [("haystack", "haystack"), ("langflow", "lfx"), ("swarm", "swarm")])
 def test_host_catalogue_does_not_load_optional_host_or_invent_live_input(monkeypatch, profile, module):
     from backend.services.adapters import profile_bridges
     from backend.services.adapters.adapter_registry import AdapterRegistry

@@ -85,6 +85,13 @@ BRIDGES = MappingProxyType(
             operations=frozenset({"invoke", "observe", "gate", "cancel"}),
             observation_mapping=True,
         ),
+        "swarm": BridgeSpec(
+            id="swarm",
+            module="backend.services.adapters.profile_bridges.swarm",
+            dependencies=(("swarm", "0.1.0"), ("openai", "2.38.0"), ("agent-governance-toolkit-core", "5.0.0")),
+            operations=frozenset({"invoke", "observe", "gate", "cancel"}),
+            observation_mapping=True,
+        ),
         "a2a": BridgeSpec(
             id="a2a",
             module="backend.services.adapters.profile_bridges.a2a",

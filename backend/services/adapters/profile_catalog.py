@@ -139,7 +139,7 @@ def _operation(
             limitations.append("Streaming is refused before dispatch; only complete response requests are qualified")
         if profile.id == "gemini-client":
             limitations.append("Native automatic function calling must be explicitly disabled")
-    elif profile.id in {"haystack", "langflow"}:
+    elif profile.id in {"haystack", "langflow", "swarm"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
         selected = select_installation(profile.id)
@@ -162,6 +162,9 @@ def _operation(
         )
         if profile.id == "langflow":
             limitations.append("LFX host execution is required; exported trust configuration is not a runnable")
+        if profile.id == "swarm":
+            limitations.append("Original Swarm dispatch checks exact bound peers before handoff context transfer")
+            limitations.append("Only source-present completion usage is retained; missing stream usage stays unknown")
     elif profile.id in {"flowise", "mcp", "a2a"}:
         from backend.services.adapters.native_gates.selection import select_installation
 
@@ -257,7 +260,7 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
 
             bridge_versions = [f"{package}=={pin}" for package, pin in select_installation(profile.id).dependencies]
             channels.append("native-client-request-and-local-function")
-        if profile.id in {"haystack", "langflow"}:
+        if profile.id in {"haystack", "langflow", "swarm"}:
             from backend.services.adapters.native_gates.selection import select_installation
 
             selected = select_installation(profile.id)
@@ -266,6 +269,8 @@ def list_profiles(registry: AdapterRegistry) -> IntegrationProfileList:
                 ["Pipeline.run", "Pipeline.run_async", "component.run", "component.run_async"]
                 if profile.id == "haystack"
                 else ["Graph.async_start", "Component output methods", "TrustGatedFlow.verify_connection"]
+                if profile.id == "langflow"
+                else ["Swarm.run", "Swarm.run_and_stream", "handle_tool_calls", "HandoffVerifier.verify_handoff"]
             )
             channels.extend(("native-component-boundary", "pinned-canonical-observations"))
         if profile.id == "generic-otel":

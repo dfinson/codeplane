@@ -50,8 +50,8 @@ def test_support_implementation_dependency_validation_enablement_are_independent
     assert gate.validation_status == "not-qualified"
     assert not profiles["langchain"].admission_enabled
     assert profiles["langchain"].historical_import_available
-    missing_bridge = next(op for op in profiles["swarm"].operations if op.id == "invoke")
-    assert missing_bridge.supported and not missing_bridge.implemented and not missing_bridge.dependency.ready
+    missing_input = next(op for op in profiles["swarm"].operations if op.id == "steer")
+    assert missing_input.supported and not missing_input.implemented
     for profile in ("ai-card", "generic-otel", "m365-agents", "native-formats"):
         assert not {"invoke", "steer", "gate", "cancel"}.intersection(op.id for op in profiles[profile].operations)
     config.runtime.copilot_only = False
