@@ -1,0 +1,42 @@
+framework: autogen
+framework_version: "0.7.5"
+ingestion_mode: stream
+type_field: type
+events:
+  message_started:
+    kind: agent.message.sent
+    payload:
+      message_id: message_id
+      sender: sender
+      recipient: recipient
+      content: message
+  message_completed:
+    kind: agent.message.received
+    payload:
+      message_id: message_id
+      sender: sender
+      recipient: recipient
+      result: result
+      input_tokens: result.usage.prompt_tokens
+      output_tokens: result.usage.completion_tokens
+  tool_started:
+    kind: tool.call.started
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      message_id: message_id
+      arguments: arguments
+  tool_completed:
+    kind: tool.call.completed
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      message_id: message_id
+      result: result
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      message_id: message_id
+      error: error_type
