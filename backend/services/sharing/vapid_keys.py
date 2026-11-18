@@ -7,10 +7,16 @@ subscriptions remain valid.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
-from typing import TYPE_CHECKING, cast
+import os
+from typing import TYPE_CHECKING, Any
 
 import structlog
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_der_private_key
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -18,41 +24,66 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+def _decode(value: str) -> bytes:
+    encoded = value.replace("\n", "").encode("ascii")
+    return base64.b64decode(encoded + b"=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+
+
+def _encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _retained_keys(data: Any) -> dict[str, str]:
+    if not isinstance(data, dict) or not isinstance(private := data.get("private_key"), str) or not private:
+        raise ValueError("Persisted VAPID private key is missing or malformed")
+    try:
+        raw = _decode(private)
+        # Match py_vapid 1.9.4 from_string: 32 raw scalar octets, otherwise DER.
+        key = (
+            ec.derive_private_key(int.from_bytes(raw, "big"), ec.SECP256R1())
+            if len(raw) == 32
+            else load_der_private_key(raw, password=None)
+        )
+        if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
+            raise ValueError("Wrong curve")
+        public_bytes = key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        public = data.get("public_key")
+        if public is None or public == "":
+            public = _encode(public_bytes)
+            log.info("vapid_public_key_derived_from_retained_private_key")
+        elif not isinstance(public, str) or _decode(public) != public_bytes:
+            raise ValueError("Mismatched public key")
+    except (ValueError, TypeError, binascii.Error, UnicodeError, UnsupportedAlgorithm):
+        raise ValueError("Persisted VAPID key material is malformed or inconsistent") from None
+    return {"private_key": private, "public_key": public}
+
+
 def get_or_create_vapid_keys(codeplane_dir: Path) -> dict[str, str]:
-    """Return ``{public_key, private_key}`` — generate if not present."""
+    """Generate only for an absent file; never rotate or rewrite retained keys."""
     vapid_path = codeplane_dir / "vapid.json"
 
-    if vapid_path.exists():
+    try:
+        retained = vapid_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        retained = None
+    if retained is not None:
         try:
-            data = json.loads(vapid_path.read_text())
-            if data.get("public_key") and data.get("private_key"):
-                return cast("dict[str, str]", data)
-        except (json.JSONDecodeError, KeyError):
-            log.warning("vapid_keys_corrupt_regenerating", path=str(vapid_path))
+            return _retained_keys(json.loads(retained))
+        except (ValueError, UnicodeError):
+            log.error("vapid_keys_invalid", path=str(vapid_path))
+            raise ValueError("Persisted VAPID keys are invalid; explicit repair is required") from None
 
-    from py_vapid import Vapid  # type: ignore[import-untyped]
-
-    vapid = Vapid()
-    vapid.generate_keys()
-    raw_public = vapid.public_key
-
-    # Application server key is the raw uncompressed point encoded as URL-safe base64
-    import base64
-
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
-    public_bytes = raw_public.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
-    public_key_urlsafe = base64.urlsafe_b64encode(public_bytes).decode().rstrip("=")
-    private_bytes = vapid.private_key.private_numbers().private_value.to_bytes(32, "big")
-    private_key_urlsafe = base64.urlsafe_b64encode(private_bytes).decode().rstrip("=")
-
-    # For pywebpush we need the PEM or raw keys
+    key = ec.generate_private_key(ec.SECP256R1())
     keys = {
-        "public_key": public_key_urlsafe,
-        "private_key": private_key_urlsafe,
+        "public_key": _encode(key.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)),
+        "private_key": _encode(key.private_numbers().private_value.to_bytes(32, "big")),
     }
     vapid_path.parent.mkdir(parents=True, exist_ok=True)
-    vapid_path.write_text(json.dumps(keys, indent=2))
-    vapid_path.chmod(0o600)
+    try:
+        descriptor = os.open(vapid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return get_or_create_vapid_keys(codeplane_dir)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(keys, stream, indent=2)
     log.info("vapid_keys_generated", path=str(vapid_path))
     return keys
