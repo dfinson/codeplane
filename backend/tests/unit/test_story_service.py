@@ -379,6 +379,33 @@ class TestBuildReferencesDedup:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def local_story_encoding(monkeypatch):
+    import importlib.util
+
+    from backend.services.story import service
+
+    get_tokenizer = service._get_tokenizer
+    get_tokenizer.cache_clear()
+    if importlib.util.find_spec("tiktoken") is not None:
+        import tiktoken
+
+        encoding = tiktoken.Encoding(
+            name="local-story-fixture",
+            pat_str=r"(?s).+",
+            mergeable_ranks={
+                **{bytes([value]): value for value in range(256)},
+                b"aa": 256,
+                b"aaaa": 257,
+                b"aaaaaaaa": 258,
+            },
+            special_tokens={},
+        )
+        monkeypatch.setattr(tiktoken, "get_encoding", lambda _: encoding)
+    yield
+    get_tokenizer.cache_clear()
+
+
 class TestEstimateTokens:
     def test_basic_estimate(self):
         from backend.services.story import service
