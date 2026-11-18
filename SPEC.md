@@ -66,7 +66,10 @@ actual Continue CLI 1.5.47 session JSON from a two-turn local SSE run under
 `backend/tests/fixtures/native_formats/produced/`. Aider is native-writer/inert
 evidence, not a live vendor conversation. Continue's fetched artifact/file
 hashes are separate from its v1.5.45 test-harness source pin, with no inferred
-gitHead. Raw bytes, independent canonical expectations and durable replay are
+gitHead. AmazonQ v1.19.7 adds a real `ChatSession` capture from its native
+in-memory SQLite writer, built with Rust 1.87.0 and run without a network.
+Its test-only extraction overlay, license and build provenance are retained.
+Raw bytes, independent canonical expectations and durable replay are
 checked. The local model fixture supplied no usage, so the CLI's zero-initialized
 counters remain raw history rather than billing evidence.
 
