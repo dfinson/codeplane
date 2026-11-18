@@ -2,15 +2,9 @@
 // Types shared across MetricsPanel and its section sub-components.
 // ---------------------------------------------------------------------------
 
-export interface ToolCall {
-  name: string;
-  displayLabel?: string;
-  activity?: string;
-  toolCategory?: string;
-  durationMs: number;
-  success: boolean;
-  offsetSec?: number;
-}
+import type { TelemetryToolCall } from "../api/types";
+
+export type ToolCall = TelemetryToolCall;
 
 export interface LLMCall {
   model: string;
@@ -210,6 +204,7 @@ export interface ToolAggregate {
   totalMs: number;
   avgMs: number;
   fails: number;
+  unknown: number;
 }
 
 // ---------------------------------------------------------------------------

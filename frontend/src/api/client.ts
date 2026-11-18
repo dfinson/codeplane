@@ -53,6 +53,7 @@ import type {
   CreateChatRequest,
   TaskLinkListResponse,
   TaskLinkInspection,
+  TelemetryToolCall,
   ProjectBoard,
   ProjectBoardPage,
   ProjectBoardColumn,
@@ -547,7 +548,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   tokensCompacted?: number;
   toolCallCount?: number;
   totalToolDurationMs?: number;
-  toolCalls?: { name: string; durationMs: number; success: boolean }[];
+  toolCalls?: TelemetryToolCall[];
   llmCallCount?: number;
   totalLlmDurationMs?: number;
   llmCalls?: { model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; cost: number; durationMs: number; isSubagent: boolean }[];

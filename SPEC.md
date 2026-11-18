@@ -66,6 +66,9 @@ evidence. Unknown outcomes produce no success/failure display hint, are excluded
 from known-outcome success rates, and yield a null rate when all outcomes are
 unknown. Source-derived trace/session grouping gives model and raw spans local
 metadata-only activity labels without fabricated messages or utility calls.
+The existing job Tool Breakdown and fleet Tool Health retain unknown counts
+separately from failures. They render neutral `Unknown` when no outcomes are
+known. Mixed success rates use only known outcomes.
 Every accepted-batch replay rechecks its scoped ingest credential, including
 the interleaving where another request committed the batch first.
 
