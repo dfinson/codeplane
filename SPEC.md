@@ -284,6 +284,10 @@ aggregates do not fabricate completed-call receipts. Runtime ownership excludes
 concurrent maintenance. This import command does not switch providers or complete
 forward-preserving provider rollback, and never restores an old application
 database over newer history, approvals or outcomes.
+Unavailable historical currency makes the USD guard abstain with explicit audit
+status. It does not make otherwise complete execution identities incomplete.
+Once import evidence exists, missing or emptied original tables require
+reconciliation rather than being treated as a pristine ledger.
 
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream

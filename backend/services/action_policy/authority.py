@@ -300,6 +300,7 @@ class PolicyAuthority:
                         "destructive_calls": totals.destructive_calls,
                         "unaccounted": totals.unaccounted,
                         "verified_usd": str(totals.verified_usd) if totals.verified_usd_present else None,
+                        "usd_guard_status": "verified_only" if totals.verified_usd_present else "abstained_unavailable",
                         "legacy_estimated_usd": str(totals.legacy_estimated_usd)
                         if totals.legacy_estimated_usd is not None
                         else None,

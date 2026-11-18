@@ -11,7 +11,56 @@ from typing import TYPE_CHECKING
 from backend.models.domain import StateConflictError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+
+if sys.platform == "win32":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    def _windows_acquire(descriptor: int, exclusive: bool) -> Callable[[], None]:
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.LockFileEx.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(_Overlapped),
+        ]
+        kernel.LockFileEx.restype = wintypes.BOOL
+        kernel.UnlockFileEx.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(_Overlapped),
+        ]
+        kernel.UnlockFileEx.restype = wintypes.BOOL
+        handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+        overlapped = _Overlapped()
+        flags = 0x00000001 | (0x00000002 if exclusive else 0)
+        if not kernel.LockFileEx(handle, flags, 0, 1, 0, ctypes.byref(overlapped)):
+            error = ctypes.get_last_error()
+            if error == 33:  # ERROR_LOCK_VIOLATION
+                raise StateConflictError("A runtime or governance maintenance owner is still active")
+            raise ctypes.WinError(error)
+
+        def release() -> None:
+            if not kernel.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(overlapped)):
+                raise ctypes.WinError(ctypes.get_last_error())
+
+        return release
 
 
 class GovernanceRuntimeLease:
@@ -20,6 +69,7 @@ class GovernanceRuntimeLease:
         self.exclusive = exclusive
         self.path = self.directory / ".governance-runtime.lock"
         self._descriptor: int | None = None
+        self._windows_release: Callable[[], None] | None = None
 
     def acquire(self) -> GovernanceRuntimeLease:
         if self._descriptor is not None:
@@ -42,10 +92,7 @@ class GovernanceRuntimeLease:
             os.lseek(descriptor, 0, os.SEEK_SET)
             try:
                 if sys.platform == "win32":
-                    import msvcrt
-
-                    mode = msvcrt.LK_NBLCK if self.exclusive else msvcrt.LK_NBRLCK
-                    msvcrt.locking(descriptor, mode, 1)
+                    self._windows_release = _windows_acquire(descriptor, self.exclusive)
                 elif os.name == "posix":
                     import fcntl
 
@@ -64,6 +111,7 @@ class GovernanceRuntimeLease:
         finally:
             if not retained:
                 self._descriptor = None
+                self._windows_release = None
                 os.close(descriptor)
 
     def _require_current(self) -> None:
@@ -86,10 +134,9 @@ class GovernanceRuntimeLease:
         self._descriptor = None
         try:
             if sys.platform == "win32":
-                import msvcrt
-
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                release, self._windows_release = self._windows_release, None
+                if release is not None:
+                    release()
             else:
                 import fcntl
 

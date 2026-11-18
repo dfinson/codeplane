@@ -356,14 +356,20 @@ class LegacyGovernanceRepository:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN")
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "cp_legacy_import" in tables:
+                receipt = connection.execute("SELECT * FROM cp_legacy_import WHERE singleton=1").fetchone()
+                records = _rows(connection)
+                if receipt is None or receipt["source_digest"] != _digest(records):
+                    raise StateConflictError(
+                        "Legacy governance import requires reconciliation before writer activation"
+                    )
+                self._verify(connection, records, receipt)
+                return
+            if any(table.startswith("cp_legacy_") for table in tables):
+                raise StateConflictError("Legacy import evidence is incomplete; reconciliation required")
             if not set(_TABLES).intersection(tables):
                 return
             records = _rows(connection)
             if not any(records.values()):
                 return
-            if "cp_legacy_import" not in tables:
-                raise StateConflictError("Legacy governance requires explicit verified import before writer activation")
-            receipt = connection.execute("SELECT * FROM cp_legacy_import WHERE singleton=1").fetchone()
-            if receipt is None or receipt["source_digest"] != _digest(records):
-                raise StateConflictError("Legacy governance import requires reconciliation before writer activation")
-            self._verify(connection, records, receipt)
+            raise StateConflictError("Legacy governance requires explicit verified import before writer activation")

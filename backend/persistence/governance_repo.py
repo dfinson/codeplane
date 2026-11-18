@@ -36,7 +36,7 @@ class GovernanceTotals:
 
     @property
     def budget_accountable(self) -> bool:
-        return self.unaccounted == 0 and not self.legacy_currency_unverified
+        return self.unaccounted == 0
 
 
 @dataclass(frozen=True, slots=True)
