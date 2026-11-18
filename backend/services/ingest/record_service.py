@@ -1,4 +1,9 @@
-"""Atomic operator-import batches through the canonical event processor."""
+"""Atomic operator imports with original records retained on batch receipts.
+
+The receipt's versioned raw_event envelope retains physical inputs even when
+preprocessing emits nothing or tool pairing consumes an intermediate event.
+It is readable as operator history, not published as a producer event.
+"""
 
 from __future__ import annotations
 
@@ -60,6 +65,7 @@ class ObservationRecords:
     async def append(self, binding_id: str, batch: ObservationRecordBatch) -> ObservationRecordReceipt:
         # Also applies decoder structural limits to programmatic/in-process calls.
         decode_json_body(batch.model_dump_json().encode("utf-8"))
+        batch = batch.model_copy(deep=True)
         binding = await self._bindings.get(binding_id)
         if binding is None or binding.mode != "observation" or binding.job_id is None:
             raise StateConflictError("No observation source is registered for this binding")
@@ -204,6 +210,7 @@ class ObservationRecords:
                     tuple(saved["decoder"]["references"]),
                     saved["decoder"]["turn"],
                     saved["decoder"].get("active_turn"),
+                    saved["decoder"].get("preprocessor"),
                 )
             )
             pending = tuple(SessionEvent.model_validate(item) for item in saved["pairing"])
@@ -264,8 +271,6 @@ class ObservationRecords:
         total_bytes = len(encoded.encode("utf-8")) + sum(
             len(event.model_dump_json().encode("utf-8")) for event in staged
         )
-        if total_bytes > 8 * 1024 * 1024:
-            raise ValueError("Observation projection exceeds its bounded buffer")
         projection_prefix = bytes.fromhex(projection.canonical_sha256) if projection else bytes(32)
         for event in staged:
             projection_prefix = _advance(projection_prefix, canonical_record(event.model_dump(mode="json")))
@@ -285,11 +290,21 @@ class ObservationRecords:
             timestamp=datetime.now(UTC),
             kind="integration.batch.accepted",
             payload=receipt.model_dump(mode="json"),
+            raw_event={
+                "contract": "codeplane-source-batch-v1",
+                "source_key": batch.source_key,
+                "start_index": batch.start_index,
+                "prefix_sha256": batch.prefix_sha256,
+                "records": batch.records,
+            },
             metadata=EventMetadata(
                 integration_binding_id=binding.id,
                 namespace=(OBSERVATION_NAMESPACE, batch.source_key),
             ),
         )
+        total_bytes += len(receipt_event.model_dump_json().encode("utf-8"))
+        if total_bytes > 8 * 1024 * 1024:
+            raise ValueError("Observation projection exceeds its bounded buffer")
         await self._bindings.commit_records(
             binding_id=binding.id,
             source_key=batch.source_key,

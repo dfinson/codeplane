@@ -18,6 +18,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.compat.traceformats.preprocessors import get_preprocessor
+from backend.compat.traceformats.preprocessors.registry import StatefulPreprocessor
 from backend.models.session_event import EventMetadata, SessionEvent, ToolMotivation
 
 _BUNDLED = Path(__file__).parents[2] / "compat" / "traceformats" / "mappings"
@@ -49,7 +50,7 @@ NATIVE_FORMATS = frozenset(
         "sweagent",
     ]
 )
-PARSER_REVISION = "cp-mappings-v2"
+PARSER_REVISION = "cp-mappings-v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class DecoderState:
     references: tuple[str, ...]
     turn: int
     active_turn: str | None = None
+    preprocessor: dict[str, Any] | None = None
 
 
 class _MappingModel(BaseModel):
@@ -195,7 +197,13 @@ class NativeMappingDecoder:
         self._preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
         if self.mapping.preprocessor and self._preprocessor is None:
             raise ValueError(f"Unregistered trace preprocessor: {self.mapping.preprocessor}")
-        preprocessor_file = inspect.getsourcefile(self._preprocessor) if self._preprocessor is not None else None
+        preprocessor_file = (
+            inspect.getsourcefile(
+                type(self._preprocessor) if isinstance(self._preprocessor, StatefulPreprocessor) else self._preprocessor
+            )
+            if self._preprocessor is not None
+            else None
+        )
         self.mapping_digest = hashlib.sha256(
             canonical_record(
                 {
@@ -339,17 +347,38 @@ class NativeMappingDecoder:
     def decode(self, raw: dict[str, Any], record_index: int) -> tuple[SessionEvent, ...]:
         previous = self.checkpoint()
         try:
-            return self._decode(raw, record_index)
+            events = self._decode(raw, record_index)
+            if (
+                isinstance(self._preprocessor, StatefulPreprocessor)
+                and len(canonical_record(self._preprocessor.checkpoint())) > 8 * 1024 * 1024
+            ):
+                raise ValueError("Preprocessor checkpoint exceeds its 8 MiB bound")
+            return events
         except (ValueError, TypeError, KeyError, RecursionError):
             self.restore(previous)
             raise
 
     def checkpoint(self) -> DecoderState:
-        return DecoderState(self._intent, self._reasoning, tuple(self._references), self._turn, self._active_turn)
+        return DecoderState(
+            self._intent,
+            self._reasoning,
+            tuple(self._references),
+            self._turn,
+            self._active_turn,
+            self._preprocessor.checkpoint() if isinstance(self._preprocessor, StatefulPreprocessor) else None,
+        )
 
     def restore(self, state: DecoderState) -> None:
         if state.turn < 0 or len(state.references) > self._config.source_window:
             raise ValueError("Invalid decoder checkpoint")
+        if state.preprocessor is not None and len(canonical_record(state.preprocessor)) > 8 * 1024 * 1024:
+            raise ValueError("Preprocessor checkpoint exceeds its 8 MiB bound")
+        if isinstance(self._preprocessor, StatefulPreprocessor):
+            if state.preprocessor is None:
+                raise ValueError("Stateful preprocessor checkpoint is missing; reconciliation required")
+            self._preprocessor.restore(state.preprocessor)
+        elif state.preprocessor is not None:
+            raise ValueError("Unexpected stateful preprocessor checkpoint")
         self._intent = state.intent
         self._reasoning = state.reasoning
         self._references = deque(state.references, maxlen=self._config.source_window)
