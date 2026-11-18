@@ -88,6 +88,7 @@ def test_registry_uses_existing_precedence_and_migrates_only_selected_legacy_fil
         _DEFINITION + "preprocessor: nonexistent\n",
         "x" * (1024 * 1024 + 1),
     ],
+    ids=["malformed", "invalid-schema", "unknown-preprocessor", "oversized"],
 )
 def test_invalid_selected_definition_never_falls_back_to_bundled(mapping_home, definition):
     directory = mapping_home / "explicit"

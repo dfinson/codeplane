@@ -50,6 +50,7 @@ from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
 from backend.services.ingest.claude_source import ClaudeSessionStateWatcher
 from backend.services.ingest.history_registration import HistoryRegistration
+from backend.services.ingest.mapping_registry import MappingRegistry
 from backend.services.ingest.record_service import ObservationRecords
 from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
@@ -178,8 +179,9 @@ class RequestProvider(Provider):
         bindings: IntegrationRepository,
         jobs: JobRepository,
         projects: ProjectRepository,
+        config: CPLConfig,
     ) -> HistoryRegistration:
-        return HistoryRegistration(bindings, jobs, projects)
+        return HistoryRegistration(bindings, jobs, projects, mapping_registry=MappingRegistry(config.native_mappings))
 
     @provide
     def observation_records(
@@ -187,8 +189,9 @@ class RequestProvider(Provider):
         bindings: IntegrationRepository,
         jobs: JobRepository,
         event_bus: EventBus,
+        config: CPLConfig,
     ) -> ObservationRecords:
-        return ObservationRecords(bindings, jobs, event_bus)
+        return ObservationRecords(bindings, jobs, event_bus, mapping_registry=MappingRegistry(config.native_mappings))
 
     @provide
     async def session(

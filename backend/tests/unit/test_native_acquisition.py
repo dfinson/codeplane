@@ -442,20 +442,22 @@ async def test_cancellation_inside_receipt_transaction_keeps_queue_item_pending(
 
 
 async def test_decoder_change_cannot_advance_acquired_source(session_factory, tmp_path, monkeypatch):
-    from backend.services.ingest import record_service
+    from backend.services.ingest.mapping import resolve_mapping_path
 
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     channel, job = await _channel(session_factory)
     path = tmp_path / "source.json"
     records = [_message("first", "First")]
     path.write_text(json.dumps(records))
     await channel.accept(await file_snapshot(path, identity_field="id"))
     history = await _history(session_factory, job)
-    original = record_service.resolve_mapping_path("copilot")
-    mapping = tmp_path / "copilot.yaml"
+    original = resolve_mapping_path("copilot")
+    mapping = tmp_path / ".codeplane" / "mappings" / "copilot.yaml"
+    mapping.parent.mkdir(parents=True)
     mapping.write_bytes(original.read_bytes() + b"\n# changed producer-contract implementation\n")
-    monkeypatch.setattr(record_service, "resolve_mapping_path", lambda name: mapping)
     path.write_text(json.dumps([*records, _message("second", "Second")]))
-    with pytest.raises(StateConflictError, match="implementation changed"):
+    with pytest.raises(StateConflictError, match="Native mapping.*changed.*reconciliation"):
         await channel.accept(await file_snapshot(path, identity_field="id"))
     assert await _history(session_factory, job) == history
     assert (await _checkpoint(session_factory)).record_count == 1

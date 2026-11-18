@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from backend.models.schemas.integrations import ObservationRecordReceipt
     from backend.services.events.event_bus import EventBus
+    from backend.services.ingest.mapping_registry import MappingRegistry
 
 _STATE_CONTRACTS = {"native-acquisition-records-v1", "native-acquisition-records-v2"}
 
@@ -44,6 +45,7 @@ class AcquisitionChannel:
         *,
         binding_id: str,
         source_key: str,
+        mapping_registry: MappingRegistry | None = None,
     ) -> None:
         if not source_key or len(source_key) > 128:
             raise ValueError("Acquisition source key must contain between 1 and 128 characters")
@@ -51,6 +53,7 @@ class AcquisitionChannel:
         self._bus = event_bus
         self.binding_id = binding_id
         self.source_key = source_key
+        self._mapping_registry = mapping_registry
 
     async def last_event_id(self) -> str | None:
         async with self._sessions() as session:
@@ -197,9 +200,9 @@ class AcquisitionChannel:
                 records=new_records,
                 end_session=end_session,
             )
-            return await ObservationRecords(bindings, JobRepository(session), self._bus).append(
-                self.binding_id, batch, acquisition=acquisition
-            )
+            return await ObservationRecords(
+                bindings, JobRepository(session), self._bus, mapping_registry=self._mapping_registry
+            ).append(self.binding_id, batch, acquisition=acquisition)
 
     async def accept_queue(self, source: QueueSource) -> ObservationRecordReceipt | None:
         async with source.delivery_lock:
@@ -233,7 +236,9 @@ class AcquisitionChannel:
                 expected_checkpoint_version=checkpoint.version,
                 state=state,
             )
-            return await ObservationRecords(bindings, JobRepository(session), self._bus).append(
+            return await ObservationRecords(
+                bindings, JobRepository(session), self._bus, mapping_registry=self._mapping_registry
+            ).append(
                 self.binding_id,
                 ObservationRecordBatch(
                     source_key=self.source_key,
