@@ -24,6 +24,7 @@ def test_fixed_bridge_registration_cannot_promote_identity_or_observation_profil
         ("autogen", "autogen-core"),
         ("llamaindex", "llama-index-core"),
         ("google-adk", "google-adk"),
+        ("haystack", "haystack-ai"),
     ],
 )
 def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, profile, package):
@@ -35,3 +36,20 @@ def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, 
     monkeypatch.setattr(profile_bridges, "version", missing)
     readiness = profile_bridges.dependency_readiness(profile)
     assert not readiness.ready and package in readiness.reason
+
+
+def test_haystack_catalogue_does_not_load_optional_host_or_invent_live_input(monkeypatch):
+    from backend.services.adapters import profile_bridges
+    from backend.services.adapters.adapter_registry import AdapterRegistry
+
+    def missing(package):
+        raise profile_bridges.PackageNotFoundError(package)
+
+    monkeypatch.setattr(profile_bridges, "version", missing)
+    before = set(sys.modules)
+    row = next(profile for profile in AdapterRegistry().list_profiles().profiles if profile.profile_id == "haystack")
+    operations = {operation.id: operation for operation in row.operations}
+    assert operations["invoke"].implemented and not operations["invoke"].dependency.ready
+    assert operations["observe"].implemented and operations["gate"].implemented
+    assert not operations["steer"].implemented and not row.live_ready and not row.admission_enabled
+    assert "haystack" not in set(sys.modules) - before
