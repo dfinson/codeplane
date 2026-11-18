@@ -95,6 +95,10 @@ retention:
   max_artifact_size_mb: 100
   cleanup_on_startup: false
 
+native_mappings:
+  extra_dirs: []
+  migrated_user_dir: null  # Defaults to ~/.codeplane/mappings
+
 logging:
   level: info
   file: ~/.codeplane/logs/server.log
@@ -269,6 +273,26 @@ class TrailConfig:
 
 
 @dataclass
+class NativeMappingsConfig:
+    """Local declarative definitions, in explicit search order before user/bundled files."""
+
+    extra_dirs: list[str] = field(default_factory=list)
+    migrated_user_dir: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.extra_dirs, list) or any(
+            not isinstance(path, str) or not path.strip() or "\x00" in path for path in self.extra_dirs
+        ):
+            raise ValueError("native_mappings.extra_dirs must be a list of nonempty directory paths")
+        if self.migrated_user_dir is not None and (
+            not isinstance(self.migrated_user_dir, str)
+            or not self.migrated_user_dir.strip()
+            or "\x00" in self.migrated_user_dir
+        ):
+            raise ValueError("native_mappings.migrated_user_dir must be a nonempty directory path")
+
+
+@dataclass
 class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -281,6 +305,7 @@ class CPLConfig:
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     trail: TrailConfig = field(default_factory=TrailConfig)
+    native_mappings: NativeMappingsConfig = field(default_factory=NativeMappingsConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -348,6 +373,8 @@ def load_config(path: Path | None = None) -> CPLConfig:
         return CPLConfig()
 
     raw = _read_config_data(path)
+    if "native_mappings" in raw and not isinstance(raw["native_mappings"], dict):
+        raise ValueError("native_mappings must be a configuration mapping")
 
     # Parse platforms section: platforms.<name>.{auth, repos}
     platforms: dict[str, PlatformConfig] = {}
@@ -372,6 +399,7 @@ def load_config(path: Path | None = None) -> CPLConfig:
         telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
         pricing=_parse_section(raw, PricingConfig, "pricing"),
         trail=_parse_section(raw, TrailConfig, "trail"),
+        native_mappings=_parse_section(raw, NativeMappingsConfig, "native_mappings"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )
@@ -441,6 +469,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # repos is intentionally omitted — managed by register_repo / unregister_repo
     existing["verification"] = _to_dict(config.verification)
     existing["telemetry"] = _to_dict(config.telemetry)
+    existing["native_mappings"] = _to_dict(config.native_mappings)
     # Tracker synchronization uses a fixed production cadence. Remove the
     # retired persisted section when any settings save occurs.
     existing.pop("tracker", None)
