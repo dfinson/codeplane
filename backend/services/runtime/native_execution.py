@@ -131,6 +131,7 @@ class NativeExecutions:
             raise IntegrationDisabledError("Native framework execution is disabled by runtime.copilot_only")
         if host._standalone_governance is None or host._execution_contracts is None:
             raise StateConflictError("Native admission requires standalone governance composition")
+        await host.require_governance_admission()
         require_installation(family)
         starting = asyncio.current_task()
         if starting is None:
@@ -146,6 +147,7 @@ class NativeExecutions:
             async with host._execution_control.hold(job_id):
                 if host._config.runtime.copilot_only or host._shutting_down or starting.cancelling():
                     raise StateConflictError("Native admission was revoked while waiting for capacity")
+                await host.require_governance_admission()
                 async with serialized_write(host._session_factory) as session:
                     job = await JobRepository(session).get(job_id)
                     if job is None or job.observation_only or job.state != JobState.queued:
@@ -280,6 +282,7 @@ class NativeExecutions:
         if host._config.runtime.copilot_only:
             await self.reconcile_observers()
             raise IntegrationDisabledError("Native framework execution is disabled by runtime.copilot_only")
+        await host.require_governance_admission()
         require_installation(family)
         owner = asyncio.current_task()
         controller = host._recipe_controllers.get(job_id)
@@ -378,6 +381,11 @@ class NativeExecutions:
         self._live[identity.execution_token] = execution
         worker: asyncio.Task[T] | None = None
 
+        async def require_dispatch() -> None:
+            await host.require_governance_admission()
+            if not await current():
+                raise StateConflictError("Native ownership changed before invocation")
+
         async def finalize() -> None:
             errors: list[Exception] = []
 
@@ -456,6 +464,9 @@ class NativeExecutions:
 
                     token = native_execution_context.set(identity)
                     try:
+                        asyncio.run_coroutine_threadsafe(require_dispatch(), gates.binding.loop).result()
+                        if not gates.binding.active or execution.cancel_requested:
+                            raise StateConflictError("Native ownership changed before invocation")
                         value = invoke()
                         if inspect.isawaitable(value):
                             if inspect.iscoroutine(value):
@@ -473,6 +484,7 @@ class NativeExecutions:
 
                     token = native_execution_context.set(identity)
                     try:
+                        await require_dispatch()
                         pending = invoke()
                         if not inspect.isawaitable(pending):
                             raise TypeError("An asynchronous native invocation must return an awaitable")
