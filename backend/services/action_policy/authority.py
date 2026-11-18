@@ -19,6 +19,7 @@ from backend.services.action_policy.assessment import DECISION_SECONDS, ActionBi
 from backend.services.action_policy.classifier import Preset
 from backend.services.action_policy.credential_filter import filter_credentials
 from backend.services.action_policy.syntax import analyze_syntax_async
+from backend.services.auth.permission_policy import is_hard_gated_syntax
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -165,7 +166,8 @@ class PolicyAuthority:
                     totals = await self._ledger.job_totals(execution.job_id)
                     local = self._budget(local, totals)
                     if source_fields["command"]:
-                        local = replace(local, syntax=await analyze_syntax_async(source_fields["command"], dialect))
+                        syntax = await analyze_syntax_async(source_fields["command"], dialect)
+                        local = replace(local, syntax=syntax, hard_gate=local.hard_gate or is_hard_gated_syntax(syntax))
                     # These local decisions never need a model to preserve their priority.
                     preliminary = self._policy.decide(local)
                     if preliminary.reason_code in {"execution_ineligible", "hard_gate"} or local.trusted_file_read:

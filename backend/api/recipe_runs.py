@@ -4,10 +4,13 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Query, Response
 
 from backend.models.api_schemas import (
+    JobPendingDecisionPage,
     RecipeAttemptControl,
     RecipeAttemptInspection,
     RecipeAttemptResumeRequest,
+    RecipeConsumedInputPage,
     RecipeCurrentRunResponse,
+    RecipeGateDecisionRequest,
     RecipeMessageReceipt,
     RecipeMessageRequest,
     RecipeOperationReceipt,
@@ -31,6 +34,16 @@ router = APIRouter(
 @router.get("/current", response_model=RecipeCurrentRunResponse, response_model_exclude_unset=True)
 async def current_run(job_id: str, service: FromDishka[RecipeInspectionService]) -> RecipeCurrentRunResponse:
     return await service.current(job_id)
+
+
+@router.get("/decisions", response_model=JobPendingDecisionPage)
+async def pending_decisions(
+    job_id: str,
+    service: FromDishka[RecipeInspectionService],
+    after: str = Query("", max_length=128),
+    limit: int = Query(20, ge=1, le=100),
+) -> JobPendingDecisionPage:
+    return await service.pending_decisions(job_id, after=after, limit=limit)
 
 
 @router.get("/runs", response_model=RecipeRunListResponse, response_model_exclude_unset=True)
@@ -80,6 +93,22 @@ async def inspect_attempt(
     service: FromDishka[RecipeInspectionService],
 ) -> RecipeAttemptInspection:
     return await service.attempt(job_id, run_id, step_id, attempt_id)
+
+
+@router.get(
+    "/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/consumers",
+    response_model=RecipeConsumedInputPage,
+)
+async def consumed_inputs(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    service: FromDishka[RecipeInspectionService],
+    after: str = Query("", max_length=256),
+    limit: int = Query(30, ge=1, le=100),
+) -> RecipeConsumedInputPage:
+    return await service.consumed_by(job_id, run_id, step_id, attempt_id, after=after, limit=limit)
 
 
 @router.get(
@@ -150,3 +179,15 @@ async def reconcile_attempt(
     service: FromDishka[RecipeControlService],
 ) -> RecipeOperationReceipt:
     return await service.reconcile(job_id, run_id, step_id, attempt_id, body)
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/decision", response_model=RecipeOperationReceipt)
+async def decide_attempt(
+    job_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_id: str,
+    body: RecipeGateDecisionRequest,
+    service: FromDishka[RecipeControlService],
+) -> RecipeOperationReceipt:
+    return await service.decide(job_id, run_id, step_id, attempt_id, body)

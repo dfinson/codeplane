@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from alembic.config import Config
 from alembic.util import CommandError
-from sqlalchemy import create_engine, event
+from sqlalchemy import MetaData, create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -126,9 +126,11 @@ def _seed_predecessor(db_path: Path) -> None:
     try:
         with engine.begin() as conn:
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            predecessor = MetaData()
+            predecessor.reflect(bind=conn)
 
             def insert(table: str, **values: Any) -> None:
-                conn.execute(Base.metadata.tables[table].insert().values(**values))
+                conn.execute(predecessor.tables[table].insert().values(**values))
 
             insert(
                 "projects",
@@ -384,6 +386,8 @@ def test_upgrade_preserves_scout_and_unrelated_evidence(predecessor_db: Path) ->
 
 async def test_replay_advances_over_deleted_ids_without_resequencing(predecessor_db: Path) -> None:
     command.upgrade(_alembic(predecessor_db), "0074")
+    # Current repository models require the current schema, not the retirement boundary.
+    command.upgrade(_alembic(predecessor_db), "head")
     engine = create_async_engine(f"sqlite+aiosqlite:///{predecessor_db}")
     try:
         async with async_sessionmaker(engine)() as session:

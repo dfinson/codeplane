@@ -335,21 +335,18 @@ _STORY_COLUMN = "story_text"
 # Token estimation and model-context lookup
 # ---------------------------------------------------------------------------
 
+_tok_enc = None
 try:
     import tiktoken as _tiktoken
 
     _tok_enc = _tiktoken.get_encoding("cl100k_base")
-
-    def _estimate_tokens(text: str) -> int:
-        """Count tokens using tiktoken (accurate for OpenAI and Claude models)."""
-        return len(_tok_enc.encode(text))
-
 except (ImportError, OSError) as exc:
     log.warning("story_tokenizer_unavailable", error=str(exc), fallback="character_estimate")
 
-    def _estimate_tokens(text: str) -> int:
-        """Fallback: rough token count (~4 chars/token)."""
-        return len(text) // 4
+
+def _estimate_tokens(text: str) -> int:
+    """Use the tokenizer when available, otherwise the logged character estimate."""
+    return len(_tok_enc.encode(text)) if _tok_enc is not None else len(text) // 4
 
 
 def _truncate(s: str | None, max_len: int) -> str:

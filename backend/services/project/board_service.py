@@ -32,16 +32,18 @@ class ProjectBoardService:
         return project
 
     async def get(self, project_id: str) -> ProjectBoardResponse:
-        project = await self._project(project_id)
-        return ProjectBoardResponse(
-            project=ProjectResponse.model_validate(project, from_attributes=True),
-            totals=await self._board.totals(project_id),
-            columns={column: await self._board.page(project_id, column) for column in BOARD_COLUMNS},
-        )
+        async with self._board.read_snapshot():
+            project = await self._project(project_id)
+            return ProjectBoardResponse(
+                project=ProjectResponse.model_validate(project, from_attributes=True),
+                totals=await self._board.totals(project_id),
+                columns={column: await self._board.page(project_id, column) for column in BOARD_COLUMNS},
+            )
 
     async def page(self, project_id: str, column: ProjectBoardColumn, *, after: str, limit: int) -> ProjectBoardPage:
-        await self._project(project_id)
-        return await self._board.page(project_id, column, after=after, limit=limit)
+        async with self._board.read_snapshot():
+            await self._project(project_id)
+            return await self._board.page(project_id, column, after=after, limit=limit)
 
     async def approvals(self, project_id: str, *, after: str, limit: int) -> ProjectApprovalPage:
         await self._project(project_id)

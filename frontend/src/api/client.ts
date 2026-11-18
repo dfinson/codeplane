@@ -22,11 +22,14 @@ import type {
   RecipeStepList,
   RecipeStepInspection,
   RecipeAttemptInspection,
+  RecipeConsumedInputPage,
   RecipeAttemptControl,
   RecipeMessageReceipt,
   RecipeOperationReceipt,
   RecipeReconcileRequest,
   RecipeResumeResponse,
+  RecipeGateDecisionRequest,
+  JobPendingDecisionPage,
   ReviewPreparation,
   ReviewRecord,
   ReviewHistoryPage,
@@ -105,6 +108,10 @@ export function fetchCurrentRecipeRun(jobId: string): Promise<RecipeCurrentRun> 
   return request(`/jobs/${encodeURIComponent(jobId)}/recipe/current`);
 }
 
+export function fetchJobPendingDecisions(jobId: string, after = ""): Promise<JobPendingDecisionPage> {
+  return request(`/jobs/${encodeURIComponent(jobId)}/recipe/decisions?${new URLSearchParams({ after })}`);
+}
+
 export function resumeSelectedRecipeRun(jobId: string, expectedRunId: string, startRequestKey: string, instruction: string): Promise<RecipeResumeResponse> {
   return request(`/jobs/${encodeURIComponent(jobId)}/resume`, {
     method: "POST", body: JSON.stringify({ expectedRunId, startRequestKey, instruction }),
@@ -154,6 +161,10 @@ export function fetchRecipeAttempt(
   return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}`);
 }
 
+export function fetchRecipeConsumers(jobId: string, runId: string, stepId: string, attemptId: string, after = ""): Promise<RecipeConsumedInputPage> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/consumers?${new URLSearchParams({ after })}`);
+}
+
 export function fetchRecipeAttemptControl(
   jobId: string, runId: string, stepId: string, attemptId: string,
 ): Promise<RecipeAttemptControl> {
@@ -174,6 +185,12 @@ export function resumeRecipeAttempt(jobId: string, runId: string, stepId: string
 
 export function reconcileRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, body: RecipeReconcileRequest): Promise<RecipeOperationReceipt> {
   return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/reconcile`, {
+    method: "POST", body: JSON.stringify(body),
+  });
+}
+
+export function decideRecipeAttempt(jobId: string, runId: string, stepId: string, attemptId: string, body: RecipeGateDecisionRequest): Promise<RecipeOperationReceipt> {
+  return request(`${recipeRunPath(jobId, runId)}/steps/${encodeURIComponent(stepId)}/attempts/${encodeURIComponent(attemptId)}/decision`, {
     method: "POST", body: JSON.stringify(body),
   });
 }

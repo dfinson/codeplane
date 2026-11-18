@@ -4,7 +4,35 @@ from __future__ import annotations
 
 import pytest
 
-from backend.services.auth.permission_policy import is_git_reset_hard
+from backend.services.auth.permission_policy import is_git_reset_hard, is_hard_gated_argv, is_hard_gated_syntax
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C . merge topic",
+        "'/usr/bin/git' -C . rebase topic",
+        "env LANG=C git -C . merge topic",
+        "bash -c 'git -C . merge topic'",
+    ],
+)
+def test_ast_hard_gate_uses_executable_nodes(command):
+    from backend.services.action_policy.syntax import analyze_syntax
+
+    assert is_hard_gated_syntax(analyze_syntax(command, "bash"))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "status"],
+        ["env", "LANG=C", "git", "status"],
+        ["bash", "-c", "echo 'git -C . merge topic'"],
+        ["bash", "-c", "git commit -m 'git merge topic'"],
+    ],
+)
+def test_wrapper_inspection_does_not_gate_quoted_prose_or_readonly_git(argv):
+    assert not is_hard_gated_argv(argv)
 
 
 class TestIsGitResetHard:

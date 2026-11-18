@@ -243,7 +243,9 @@ export function JobDetailScreen() {
     if (!nextTab) return;
     // Clear then re-set so consecutive same-direction swipes re-trigger the CSS animation
     setSlideDir(null);
-    requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    }
     handleTabChange(nextTab);
   }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable, recipeRun]);
 
@@ -535,7 +537,7 @@ export function JobDetailScreen() {
   }
 
   const canCancel = !job.observationOnly && ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
-  const canResume = !job.observationOnly && job.state === "failed";
+  const canResume = !job.observationOnly && job.state === "failed" && recipeRun === null;
   const isRunning = !job.observationOnly && job.state === "running";
   const isPreparing = job.state === "preparing";
 

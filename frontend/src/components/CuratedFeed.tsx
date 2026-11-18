@@ -229,7 +229,7 @@ function ReasoningHint({ content, streamingText }: { content: string; streamingT
   );
 }
 
-function InlineApprovalCard({ approval }: { approval: ApprovalRequest }) {
+export function InlineApprovalCard({ approval }: { approval: ApprovalRequest }) {
   const [resolving, setResolving] = useState<"approved" | "rejected" | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");

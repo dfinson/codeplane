@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import case, delete, exists, func, select, update
+from sqlalchemy import case, delete, exists, func, literal, select, true, update
 from sqlalchemy.dialects.sqlite import insert
 
 from backend.models.db import (
@@ -38,6 +38,8 @@ from backend.models.schemas.recipes import (
     RecipeCodeReference,
     RecipeCommandResult,
     RecipeCommandRunner,
+    RecipeConsumedInput,
+    RecipeConsumedInputPage,
     RecipeDefinition,
     RecipeGateBinding,
     RecipeGateProposal,
@@ -1213,6 +1215,50 @@ class RecipeRunRepository(BaseRepository):
         )
         return [RecipeAttemptSummary.model_validate(dict(row)) for row in rows.mappings()]
 
+    async def consumed_by(
+        self, run_id: str, attempt_id: str, *, after: str = "", limit: int = 30
+    ) -> RecipeConsumedInputPage:
+        if not 1 <= limit <= 100:
+            raise StateConflictError("Invalid consumed-input page size.")
+        inputs = func.json_each(RecipeAttemptRow.inputs_json).table_valued("key", "value").alias("received")
+        cursor = RecipeAttemptRow.id + literal("/") + inputs.c.key
+        rows = list(
+            (
+                await self._session.execute(
+                    select(
+                        RecipeStepInstanceRow.id.label("step_instance_id"),
+                        RecipeStepInstanceRow.step_path,
+                        RecipeAttemptRow.id.label("attempt_id"),
+                        RecipeAttemptRow.number.label("attempt_number"),
+                        inputs.c.key.label("input_name"),
+                        func.json_extract(inputs.c.value, "$.receipt_id").label("receipt_id"),
+                        func.json_extract(inputs.c.value, "$.checksum").label("checksum"),
+                        func.json_extract(inputs.c.value, "$.producer_outcome").label("producer_outcome"),
+                        RecipeAttemptResultRow.outcome.label("consumer_outcome"),
+                        cursor.label("cursor"),
+                    )
+                    .select_from(RecipeAttemptRow)
+                    .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
+                    .join(inputs, true())
+                    .outerjoin(RecipeAttemptResultRow, RecipeAttemptResultRow.attempt_id == RecipeAttemptRow.id)
+                    .where(
+                        RecipeStepInstanceRow.run_id == run_id,
+                        func.json_extract(inputs.c.value, "$.producing_attempt_id") == attempt_id,
+                        cursor > after,
+                    )
+                    .order_by(cursor)
+                    .limit(limit + 1)
+                )
+            ).mappings()
+        )
+        return RecipeConsumedInputPage(
+            items=[
+                RecipeConsumedInput.model_validate({key: value for key, value in row.items() if key != "cursor"})
+                for row in rows[:limit]
+            ],
+            next_cursor=rows[limit - 1]["cursor"] if len(rows) > limit else None,
+        )
+
     async def record_execution(self, attempt_id: str, execution: RecipeAttemptExecution) -> None:
         attempt = await self.get_attempt(attempt_id)
         if attempt is None or attempt.runner.kind != "agent" or attempt.result is not None:
@@ -1317,6 +1363,31 @@ class RecipeRunRepository(BaseRepository):
             or payload.get("native_session_id") != execution.session_id
         ):
             raise StateConflictError("The completed-turn receipt has conflicting execution ownership.")
+        if execution.provider == "claude":
+            native = await self._session.scalar(
+                select(EventRow)
+                .where(
+                    EventRow.job_id == run.job_id,
+                    EventRow.kind == "session.ended",
+                    EventRow.id < receipt.id,
+                    func.json_extract(EventRow.event_metadata, "$.source_framework") == "claude",
+                    func.json_extract(EventRow.event_metadata, "$.integration_binding_id").is_(None),
+                    func.json_extract(EventRow.event_metadata, "$.recipe_run_id") == run.id,
+                    func.json_extract(EventRow.event_metadata, "$.step_instance_id") == instance.id,
+                    func.json_extract(EventRow.event_metadata, "$.attempt_id") == attempt.id,
+                    func.json_extract(EventRow.event_metadata, "$.execution_token") == execution.execution_token,
+                    func.json_extract(EventRow.event_metadata, "$.execution_epoch") == metadata.get("execution_epoch"),
+                    func.json_extract(EventRow.event_metadata, "$.run_id") == execution.session_id,
+                )
+                .order_by(EventRow.id.desc())
+                .limit(1)
+            )
+            if native is None:
+                return False, None
+            text = json.loads(native.payload).get("result")
+            if text is not None and not isinstance(text, str):
+                raise StateConflictError("The native completed-turn output is invalid.")
+            return True, text
         if "result_text" in payload and payload.get("final_response_qualified") is True:
             text = payload["result_text"]
             if text is not None and not isinstance(text, str):

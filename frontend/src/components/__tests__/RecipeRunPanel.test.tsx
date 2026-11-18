@@ -8,6 +8,7 @@ vi.mock("../../api/client", () => ({
   fetchRecipeRun: vi.fn(),
   fetchRecipeRunHistory: vi.fn(),
   fetchRecipeRunSteps: vi.fn(),
+  fetchJobPendingDecisions: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   resumeSelectedRecipeRun: vi.fn(),
   resumeJob: vi.fn(),
 }));
@@ -15,7 +16,7 @@ vi.mock("../RecipeStepInspector", () => ({
   RecipeStepInspector: ({ runId, stepId }: { runId: string; stepId: string }) => <div>Selected {runId} / {stepId}</div>,
 }));
 
-import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob, resumeSelectedRecipeRun } from "../../api/client";
+import { fetchCurrentRecipeRun, fetchRecipeRun, fetchRecipeRunHistory, fetchRecipeRunSteps, resumeJob, resumeSelectedRecipeRun, fetchJobPendingDecisions } from "../../api/client";
 import { RecipeRunPanel } from "../RecipeRunPanel";
 
 function run(number: number, jobId = "job"): RecipeRun {
@@ -41,6 +42,7 @@ beforeEach(() => {
   vi.mocked(fetchRecipeRun).mockImplementation(async (_job, id) => run(id.endsWith("1") ? 1 : 2));
   vi.mocked(fetchRecipeRunHistory).mockResolvedValue({ items: [run(1)], nextCursor: 1, highWater: 2 });
   vi.mocked(fetchRecipeRunSteps).mockResolvedValue({ items: [], nextCursor: null });
+  vi.mocked(fetchJobPendingDecisions).mockResolvedValue({ items: [], nextCursor: null });
 });
 
 it("inspects historical runs without replacing the current run and preserves the history bound", async () => {
@@ -109,5 +111,25 @@ it("retains the exact continuation request after an unconfirmed response", async
   await waitFor(() => expect(resumeSelectedRecipeRun).toHaveBeenCalledTimes(2));
   expect(vi.mocked(resumeSelectedRecipeRun).mock.calls[1]).toEqual(first);
   expect(first?.[1]).toBe("job-run-2");
+  expect(resumeJob).not.toHaveBeenCalled();
+});
+
+it("offers explicit same-run recovery without pretending it is a new revision or message", async () => {
+  const interrupted = { ...run(2), state: "interrupted" as const, completedAt: null, resolvedAt: null };
+  vi.mocked(fetchCurrentRecipeRun).mockResolvedValue({ run: interrupted });
+  vi.mocked(fetchRecipeRun).mockResolvedValue(interrupted);
+  vi.mocked(resumeSelectedRecipeRun).mockRejectedValue(new Error("Effects still require reconciliation"));
+  useStore.setState({ jobs: { job: {
+    id: "job", repo: "/repo", prompt: "Original request", state: "failed", baseRef: "main",
+    worktreePath: "/repo/work", branch: "work", createdAt: interrupted.createdAt,
+    updatedAt: interrupted.updatedAt, completedAt: null,
+  } } });
+  render(<RecipeRunPanel jobId="job" />);
+  fireEvent.click(await screen.findByText("Recover pinned run"));
+  await screen.findByRole("alert");
+  expect(resumeSelectedRecipeRun).toHaveBeenCalledWith(
+    "job", "job-run-2", expect.any(String), "Recover only this pinned run and retained attempts.",
+  );
+  expect(screen.queryByLabelText("Recipe continuation instruction")).not.toBeInTheDocument();
   expect(resumeJob).not.toHaveBeenCalled();
 });

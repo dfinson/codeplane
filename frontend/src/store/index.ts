@@ -331,6 +331,7 @@ export function _resetSdkInitForTesting() {
 }
 
 export const useStore = create<AppState>((set, get) => ({
+  jobPendingDecisionPages: {},
   reviewPreparations: {},
   reviewHistoryPages: {},
   recipeAttemptControls: {},

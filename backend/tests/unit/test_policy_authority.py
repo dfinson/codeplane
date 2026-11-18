@@ -85,12 +85,14 @@ async def test_known_read_records_real_agt_decision_before_permission_release(tm
         (ApprovalResolution.approved, False, False),
     ],
 )
+@pytest.mark.parametrize("command", ["git reset --hard HEAD", "env LANG=C git -C . merge topic"])
 async def test_durable_hard_gate_and_final_live_fence_control_permission(
     tmp_path,
     session_factory,
     resolution,
     current,
     allowed,
+    command,
 ):
     authority, pin, _, audit, approvals, events, provider = await _services(tmp_path, session_factory)
     requested = asyncio.Event()
@@ -108,8 +110,8 @@ async def test_durable_hard_gate_and_final_live_fence_control_permission(
         authority.authorize(
             pin=pin,
             execution=ExecutionIdentity("job-1", "managed-session", "epoch", "token"),
-            local=PolicyInput(job_id="job-1", preset=Preset.autonomous, hard_gate=True),
-            fields={"command": "git reset --hard HEAD", "arguments": "", "tool_definition": "", "context": ""},
+            local=PolicyInput(job_id="job-1", preset=Preset.autonomous),
+            fields={"command": command, "arguments": "", "tool_definition": "", "context": ""},
             dialect="bash",
             is_current=is_current,
         )

@@ -64,15 +64,9 @@ function fileSpanRef(file: DiffFileModel): string {
   return `${file.path}:${spans.join(",")}`;
 }
 
-/** Determine if the diff is askable; historical jobs create follow-up jobs. */
-function computeAskState(): { canAsk: boolean; reason: string | null } {
-  // Active jobs accept an operator message. Historical terminal jobs create
-  // a follow-up job instead of mutating the original job in place.
-  return { canAsk: true, reason: null };
-}
-
 export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onClearStepFilter, onNavigateToStep }: DiffViewerProps) {
   const navigate = useNavigate();
+  const recipeRun = useStore((state) => state.recipeCurrentRuns[jobId]);
   const allDiffs = useStore(selectJobDiffs(jobId));
   const isMobile = useIsMobile();
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -231,7 +225,10 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
   const [checkedHunks, setCheckedHunks] = useState<Set<string>>(new Set());
   const [askMsg, setAskMsg] = useState("");
   const [askSending, setAskSending] = useState(false);
-  const { canAsk, reason: disabledReason } = computeAskState();
+  const canAsk = recipeRun === null;
+  const disabledReason = recipeRun === undefined
+    ? "Execution identity is still loading. No message or Resume will be sent."
+    : "Recipe questions must target an exact live attempt. Use the Run inspector, or explicit Resume for a new run.";
   const isReview = jobState === "review";
   const isTerminal = ["completed", "failed", "canceled"].includes(jobState ?? "");
   const needsResume = isReview || isTerminal;
@@ -452,7 +449,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
   }, [toggleHunk]);
 
   const handleAskSend = useCallback(async () => {
-    if (!askMsg.trim() || checkedHunks.size === 0) return;
+    if (!canAsk || !askMsg.trim() || checkedHunks.size === 0) return;
 
     // Group checked hunks by file index
     const fileHunks = new Map<number, number[]>();
@@ -513,7 +510,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
     } finally {
       setAskSending(false);
     }
-  }, [jobId, askMsg, checkedHunks, diffs, needsResume, navigate, onAskSent]);
+  }, [jobId, askMsg, checkedHunks, diffs, needsResume, navigate, onAskSent, canAsk]);
 
   const totalAdditions = diffs.reduce((sum, f) => sum + (f.additions ?? 0), 0);
   const totalDeletions = diffs.reduce((sum, f) => sum + (f.deletions ?? 0), 0);
@@ -814,6 +811,7 @@ export default function DiffViewer({ jobId, jobState, onAskSent, stepFilter, onC
       {!canAsk && (
         <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <Lock size={14} className="text-muted-foreground shrink-0" />
+          {recipeRun && <a className="text-xs text-primary underline" href={`/jobs/${encodeURIComponent(jobId)}?run=${encodeURIComponent(recipeRun.id)}`}>Open run inspector</a>}
           <span className="text-xs text-muted-foreground">
             {disabledReason} — asking about changes is only available for pending diffs
           </span>

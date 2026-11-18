@@ -6,6 +6,7 @@
  */
 
 import type { Page } from "@playwright/test";
+import type { Job, ProjectBoard, ProjectBoardColumn, ProjectResponse, RecipeCurrentRun } from "../src/api/types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -39,6 +40,64 @@ export function makeJob(overrides: Record<string, unknown> = {}) {
     sdk: "copilot",
     ...overrides,
   };
+}
+
+export async function mockLegacyRecipe(page: Page, jobId: string) {
+  await page.route(`**/api/jobs/${encodeURIComponent(jobId)}/recipe/current`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response: RecipeCurrentRun = { run: null };
+    await route.fulfill({ json: response });
+  });
+}
+
+export function makeProjectBoard(
+  project: ProjectResponse,
+  jobsByColumn: Partial<Record<ProjectBoardColumn, Job[]>> = {},
+): ProjectBoard {
+  const board: ProjectBoard = {
+    project,
+    totals: {
+      taskCount: 0, linkedJobCount: 0, standaloneJobCount: 0, reviewJobCount: 0,
+      pendingApprovalCount: 0, deliveryAttentionCount: 0,
+      workCounts: { ready_blocked: 0, in_progress: 0, needs_decision: 0, failed: 0 },
+    },
+    columns: {
+      ready_blocked: { items: [], nextCursor: null }, in_progress: { items: [], nextCursor: null },
+      needs_decision: { items: [], nextCursor: null }, failed: { items: [], nextCursor: null },
+    },
+  };
+  for (const column of ["ready_blocked", "in_progress", "needs_decision", "failed"] as const) {
+    const jobs = jobsByColumn[column] ?? [];
+    board.columns[column]!.items = jobs.map((job) => ({
+      id: `job:${job.id}`, column, job, tasks: [], taskCount: 0,
+      pendingApprovalCount: 0, deliveryAttentionCount: 0, recipe: null, hasFailure: job.state === "failed",
+    }));
+    board.totals.workCounts[column] = jobs.length;
+    board.totals.standaloneJobCount += jobs.length;
+    board.totals.reviewJobCount += jobs.filter((job) => job.state === "review").length;
+  }
+  return board;
+}
+
+export async function setupProjectBoardMocks(page: Page, project: ProjectResponse, read: () => ProjectBoard) {
+  await page.route("**/api/settings/projects", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({ json: { items: [project] } });
+  });
+  await page.route(`**/api/settings/projects/${project.id}`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({ json: project });
+  });
+  await page.route(`**/api/settings/projects/${project.id}/board`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({ json: read() });
+  });
+  for (const collection of ["approvals", "deliveries"]) {
+    await page.route(`**/api/settings/projects/${project.id}/board/${collection}?*`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ json: { items: [], nextCursor: null } });
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +222,7 @@ export async function setupJobDetailMocks(
   await setupBaseMocks(page, [job]);
 
   const jobId = job.id as string;
+  await mockLegacyRecipe(page, jobId);
   const transcript = overrides.transcript ?? [];
   const timeline = overrides.timeline ?? [];
   const diff = overrides.diff ?? [];

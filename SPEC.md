@@ -55,9 +55,11 @@ being passed to legacy USD rollups without typed accounting qualification.
 
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
-`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge remains installed during
-the compatibility transition until decoder, policy and integration qualification
-permits retirement. Existing history is never discarded to complete migration.
+`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge is an explicit
+`codeplane[legacy-traceforge]` compatibility extra for version-1 native checkpoints
+and historical re-enrichment, and remains installed for the legacy CI tests.
+The default dependency graph omits it; this does not establish full default-core
+qualification or retirement. Existing history is never discarded to complete migration.
 Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
 and replay. Historical NULL remains unknown, never reconstructed, and downgrade
 refuses to erase retained raw data. Event timestamps are stored as UTC instants.
@@ -215,8 +217,14 @@ if a record fails. Configured
 mapping directories override migrated user definitions, legacy user definitions
 and bundled assets in that order. Inbound OTLP JSON is independent of exporter
 packages and bounds raw input to 1 MiB/1000 spans, nesting to 32 levels and
-10,000 nodes, and normalized expansion to 8 MiB. Complete format parity and
-checkpoint conversion remain qualification gates before live parser cutover.
+10,000 nodes, and normalized expansion to 8 MiB. Fresh Copilot/Claude JSONL
+watchers use the standalone decoder with the retained `codeplane-native-v1`
+identity seed and explicit version-2 acquisition checkpoints. Physical records,
+decoded outputs, emitted events and storage cursors remain separate counts.
+Version-1 checkpoints retain their optional legacy decoder; absence of that
+implementation reports readiness failure without converting or erasing history.
+Complete format, acquisition and checkpoint-conversion qualification remain
+separate gates.
 
 ### Recipe definitions and publication
 
@@ -329,6 +337,10 @@ finalized without opening another SDK session. New receipts retain the exact
 completion text; older receipts may use only a matching execution token,
 native session and epoch before that receipt's event boundary. A later
 uncompleted message is never substituted for completed output.
+Claude recipe executions additionally require a successful native terminal result,
+including on recovery. Initialization/status messages and stream exhaustion do not
+qualify as output or completion. A genuine result with no text may still fulfill
+a contract with no model-produced outputs, including code-ref-only steps.
 `POST /api/recipes/resolve-default` validates and retains a content-addressed
 published revision of that actual configuration, without launching a Job.
 Repeated resolution reuses the same revision. A configuration change creates
@@ -354,6 +366,10 @@ instances and attempt summaries at most 20 entries; full evidence is fetched
 only for the selected attempt. Active step pages are live cursor projections,
 not a claim of a frozen historical snapshot. Resolved run history retains its
 recorded definitions, outcomes and gate receipts after a successor is admitted.
+Keyboard selection preserves focus while attempt evidence refreshes. The
+inspector's read-refresh control remains focusable while busy but cannot issue
+another read. Job tab swipes remain usable without spatial animation when
+reduced motion is requested.
 
 Selected-attempt `/control` reads describe the actual owned message channel and
 its disabled reason, not a model's presumed capabilities. `/messages` requires
@@ -363,6 +379,11 @@ Conflict, failed and uncertain delivery remain distinct; accepted means a
 durable admission receipt, not observed execution. Read refreshes do not resend,
 resume or clear gates. Receipts capture the original canonical recipe scope,
 native session and execution fence before provider awaits.
+
+The Run tab retains bounded pending Job decisions and the existing permission
+Approve/Reject controls. Positively bound human recipe gates link to their exact
+input/output decision inspector instead. Unknown scope is shown as a Job-wide
+blocker, never silently excluded or treated as an agent message.
 
 Selected stop targets the exact owned runner task, not the Job or sibling
 attempts. A safe read-only/no-dispatch stop requires explicit attempt Resume.
@@ -375,6 +396,9 @@ The shared inspector lists pinned predecessor outcomes and declared consumers
 within the exact block invocation. Deep links carry run, step and optional
 attempt identities. Declared consumer bindings are not represented as proof
 that a selected historical attempt's output was consumed.
+The selected attempt also exposes paged actual consuming input receipts,
+including the consuming attempt, original receipt/checksum and both recorded
+outcomes. These references prove input admission, not consumer completion.
 
 `POST /api/jobs/{jobId}/reviews/prepare` seals the explicitly selected attempt
 and event evidence plus an exact current-code snapshot without executing work.
@@ -383,11 +407,17 @@ snapshot metadata is limited to 1 MiB and copied artifact evidence to 256 MiB.
 Copies are checksummed before short metadata writes; original mutable artifact
 IDs alone are not review evidence. Captures follow ordinary artifact retention,
 while the recorded event keeps the selected structured evidence and checksums.
+A canonical app-owned preparation receipt binds the snapshot artifact to its
+original checksum, so replacing bytes and supplying a replacement checksum
+cannot manufacture a new trusted capture.
 
 `POST /api/jobs/{jobId}/reviews` records rationale with a stable request key,
 snapshot identity and checksum after revalidating Job/run versions, code and
 selected evidence. It is an append-only `review.recorded` event, not an
 accept/reject state machine, agent message, approval, merge or tracker command.
+An HTTP 409 rejection invalidates the selected capture and unlocks explicit
+recapture with a new request key while preserving the operator's rationale.
+Uncertain delivery retains the exact request and key for an idempotent retry.
 Legacy Jobs have no fabricated recipe correlation. Review history uses bounded
 storage cursors and a frozen high-water mark, not a reconstruction of unsaved
 Story annotations. Changes and Story remain central, with the selected
@@ -420,6 +450,10 @@ text-only refinement, with one worker, queue 64, at most 12 bounded snippets,
 claims are never retried during recovery.
 
 Direct command argv is checked for mandatory Git hard gates before assessment.
+Known executable wrappers and literal nested shell scripts retain that gate.
+The authority also inspects executable AST nodes, including Git global options
+and quoted executable paths, independently of model-provided mechanism labels.
+Quoted prose in ordinary arguments is not treated as an executable command.
 Committed command results join the canonical replay cursor and accrue exactly
 once, including executed failures. A known non-start does not accrue; an unknown
 start/effect remains explicitly unaccountable. Windows audit keys use user-bound
@@ -466,6 +500,9 @@ Ready / blocked, In Progress, Needs a decision and Failed. A linked Task and Job
 share one work card; recipe steps are nested evidence, not extra work items.
 Full-scope totals name task, linked-Job, standalone-Job and approval units.
 Column, approval and tracker-delivery reads are bounded and paginated.
+Each Board response reads its totals, columns and hydrated items from one
+database snapshot. A column page also retains one snapshot while hydrating its
+items; later page requests remain live reads, not a frozen multi-page view.
 Pending approvals remain visible on completed or archived Jobs. Tracker
 approval and delivery states remain distinct from code completion.
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_recipe_qualification:
-        description: Run only the two native Windows recipe process-tree cases
+        description: Run native Windows containment, protected audit, and VAPID publication cases
         type: boolean
         default: false
   push:
@@ -21,7 +21,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.windows_recipe_qualification
     name: Backend
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -156,7 +156,7 @@ jobs:
     env:
       UV_CONCURRENT_DOWNLOADS: "2"
       UV_CONCURRENT_BUILDS: "1"
-      HATCH_BUILD_HOOKS_DISABLE: "true"
+      HATCH_BUILD_NO_HOOKS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -186,6 +186,12 @@ jobs:
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -q backend/tests/unit/test_windows_audit.py --junitxml=audit-windows-results.xml --tb=short
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --no-project python -c "from xml.etree import ElementTree as E; cases=E.parse('audit-windows-results.xml').findall('.//testcase'); assert len(cases)==2, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Qualify native Windows VAPID key publication
+        shell: pwsh
+        run: |
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v backend/tests/unit/test_vapid_keys.py --timeout=60 --junitxml=vapid-windows-results.xml --tb=short
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-project python -c "from xml.etree import ElementTree as E; cases=E.parse('vapid-windows-results.xml').findall('.//testcase'); assert len(cases)==21, len(cases); assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases); print('All 21 VAPID key/publication cases passed without skips.')"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -193,5 +199,6 @@ jobs:
           path: |
             recipe-windows-results.xml
             audit-windows-results.xml
+            vapid-windows-results.xml
           if-no-files-found: warn
           retention-days: 14

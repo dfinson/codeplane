@@ -9,6 +9,7 @@ import asyncio
 import sys
 import time
 import uuid
+from dataclasses import dataclass, replace
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,7 @@ from backend.models.domain import (
 )
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent, new_event
 from backend.services.adapters.base_adapter import PermissionDecision
+from backend.tests.unit.test_recipe_runs import sessions as sessions
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -123,6 +125,12 @@ class _FakeClaudeCodeOptions:
             setattr(self, k, v)
 
 
+@dataclass
+class _FakeHookMatcher:
+    hooks: list[Any]
+    matcher: str | None = None
+
+
 class _FakeTransport:
     """Fake transport for _FakeClaudeSDKClient."""
 
@@ -175,6 +183,7 @@ def _build_fake_sdk_module() -> ModuleType:
     mod.AssistantMessage = _FakeAssistantMessage
     mod.ResultMessage = _FakeResultMessage
     mod.ClaudeCodeOptions = _FakeClaudeCodeOptions
+    mod.HookMatcher = _FakeHookMatcher
     mod.ClaudeSDKClient = _FakeClaudeSDKClient
     mod.StreamEvent = _FakeStreamEvent
     mod.query = AsyncMock()
@@ -308,6 +317,90 @@ class TestHiddenTools:
 
     def test_todo_write_not_hidden(self) -> None:
         assert "TodoWrite" not in _HIDDEN_TOOLS
+
+
+class TestKillSdkSubprocess:
+    @pytest.fixture(autouse=True)
+    def process_calls(self, monkeypatch):
+        from backend.services.claude_adapter import _helpers
+
+        kill, waitpid = MagicMock(), MagicMock()
+        monkeypatch.setattr(_helpers.os, "kill", kill)
+        monkeypatch.setattr(_helpers.os, "waitpid", waitpid)
+        monkeypatch.setattr(_helpers.os, "getpid", lambda: 12345)
+        return kill, waitpid
+
+    @pytest.mark.parametrize(
+        "pid",
+        [
+            pytest.param(None, id="missing"),
+            pytest.param(False, id="false"),
+            pytest.param(True, id="true"),
+            pytest.param(-1, id="all-processes"),
+            pytest.param(0, id="process-group"),
+            pytest.param(1, id="init"),
+            pytest.param(12345, id="self"),
+            pytest.param("23456", id="string"),
+            pytest.param(23456.0, id="float"),
+            pytest.param(MagicMock(), id="coercible-mock"),
+        ],
+    )
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_invalid_identity_never_signals_or_waits(self, process_calls, pid, nested):
+        from structlog.testing import capture_logs
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        process = SimpleNamespace(pid=pid, _process=SimpleNamespace(pid=pid) if nested else None)
+        transport = SimpleNamespace(_process=process)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        with capture_logs() as logs:
+            _kill_sdk_subprocess(client)
+
+        kill.assert_not_called()
+        waitpid.assert_not_called()
+        assert client._transport is transport
+        assert transport._process is process
+        assert client._query is query
+        assert logs == [
+            {
+                "event": "claude_sdk_subprocess_invalid_pid",
+                "log_level": "warning",
+                "pid": pid if type(pid) is int else None,
+                "pid_type": type(pid).__name__,
+            }
+        ]
+        if isinstance(pid, MagicMock):
+            pid.__index__.assert_not_called()
+
+    @pytest.mark.parametrize("layout", ["direct", "nested", "fallback"])
+    def test_valid_identity_preserves_signal_reap_and_cleanup(self, process_calls, layout):
+        import os
+        import signal
+
+        from backend.services.claude_adapter._helpers import _kill_sdk_subprocess
+
+        inner = None if layout == "direct" else SimpleNamespace(pid=23456 if layout == "nested" else None)
+        process = SimpleNamespace(pid=34567 if layout == "nested" else 23456, _process=inner)
+        transport = SimpleNamespace(_process=process, _stdout_stream=object(), _stdin_stream=object(), _ready=True)
+        query = SimpleNamespace(_tg=object())
+        client = SimpleNamespace(_transport=transport, _query=query)
+        kill, waitpid = process_calls
+
+        _kill_sdk_subprocess(client)
+
+        kill.assert_called_once_with(23456, signal.SIGTERM)
+        waitpid.assert_called_once_with(23456, getattr(os, "WNOHANG", 0))
+        assert transport._process is None
+        assert transport._stdout_stream is None
+        assert transport._stdin_stream is None
+        assert not transport._ready
+        assert query._tg is None
+        assert client._query is None
+        assert client._transport is None
 
 
 # ---------------------------------------------------------------------------
@@ -1039,6 +1132,59 @@ class TestProcessStreamEvent:
 
 
 class TestConsumeMessages:
+    @pytest.mark.parametrize(
+        "terminal,final_text,output_type",
+        [
+            (False, None, "string"),
+            (False, None, "code_ref"),
+            (True, "Actual final answer", "string"),
+            (True, None, "code_ref"),
+            (True, None, None),
+        ],
+    )
+    async def test_recipe_requires_native_result_not_initialization(
+        self, sessions, terminal, final_text, output_type
+    ) -> None:
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+        from backend.services.recipe.agent_runner import AgentStepRunner
+        from backend.tests.unit.test_recipe_agent_runner import agent_context
+
+        run, instance, attempt, owned, configs, make_runtime, _ = await agent_context(
+            sessions, provider="claude", output_type=output_type
+        )
+        native = ClaudeAdapter()
+        emitted = []
+
+        async def stream(session_id):
+            native._queues[session_id] = asyncio.Queue()
+            native.set_job_id(session_id, run.job_id)
+            native.set_session_kind(session_id, "job")
+            native.set_session_metadata(
+                session_id,
+                replace(configs[-1], execution_token=owned.attach_attempt_policy.call_args.kwargs["execution_token"]),
+            )
+            client = _FakeClaudeSDKClient()
+            client._messages = [_FakeSystemMessage()]
+            if terminal:
+                client._messages.append(_FakeResultMessage(result=final_text))
+            await native._consume_messages(session_id, client)
+            async for event in native.stream_events(session_id):
+                emitted.append(event)
+                yield event
+
+        owned.stream_events = stream
+        host = make_runtime()
+        pin = await host.prepare_execution_contract(run.job_id, run.id, recovery=False)
+        result, outputs = await AgentStepRunner(host).run(run, instance, attempt, _make_config(), contract_pin=pin)
+        assert result.outcome == ("succeeded" if terminal else "interrupted")
+        assert result.evidence.text == final_text
+        assert outputs == ({"result": final_text} if terminal and output_type == "string" else {})
+        assert not any(event.kind == EventKind.message_assistant for event in emitted)
+        async with sessions() as session:
+            repository = RecipeRunRepository(session)
+            assert (await repository.agent_progress(attempt.id))[0] == int(terminal)
+            assert await repository.completed_execution_text(attempt.id) == (terminal, final_text)
+
     @pytest.mark.asyncio
     async def test_system_message_emits_log(self, adapter: ClaudeAdapter) -> None:
         sid = "sess-1"
@@ -1229,13 +1375,15 @@ class TestAbortSession:
 
     @pytest.mark.asyncio
     async def test_abort_handles_exception(self, adapter: ClaudeAdapter) -> None:
-        client = MagicMock()
+        client = _FakeClaudeSDKClient()
         client.interrupt = AsyncMock(side_effect=RuntimeError("fail"))
         client.disconnect = AsyncMock()
         adapter._clients["sess-1"] = client
 
         await adapter.abort_session("sess-1")
 
+        client.interrupt.assert_awaited_once()
+        client.disconnect.assert_not_awaited()
         assert "sess-1" not in adapter._clients
 
 

@@ -17,11 +17,9 @@ from backend.services.auth.middleware import check_websocket_auth, set_password
 @pytest.fixture(autouse=True)
 def _reset_auth_state() -> Generator[None, None, None]:
     """Ensure each test starts with clean auth state."""
-    orig_hash = auth_mod._password_hash
-    orig_tokens = auth_mod._session_tokens.copy()
+    auth_mod._reset_for_testing()
     yield
-    auth_mod._password_hash = orig_hash
-    auth_mod._session_tokens = orig_tokens
+    auth_mod._reset_for_testing()
 
 
 class TestCheckWebsocketAuth:

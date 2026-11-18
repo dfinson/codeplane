@@ -184,6 +184,7 @@ def _make_runtime_service() -> Any:
     svc = object.__new__(RuntimeService)
     svc._event_bus = EventBus()
     svc._policy_routers = {}
+    svc._repo_policies = {}
     svc._policy_batchers = {}
     svc._adapter_registry = MagicMock()
     svc._adapter_registry._adapters = {}

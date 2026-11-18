@@ -1,11 +1,12 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { fetchRecipeAttempt, fetchRecipeStep } from "../api/client";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { fetchRecipeAttempt, fetchRecipeStep, fetchRecipeConsumers } from "../api/client";
 import type { RecipeAttemptInspection } from "../api/types";
 import { useStore } from "../store";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { ViewTabBar } from "./ViewTabBar";
 import { RecipeAttemptMessage } from "./RecipeAttemptMessage";
+import { RecipeGateDecision } from "./RecipeGateDecision";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="grid min-w-0 gap-2 py-[11px] sm:grid-cols-[155px_minmax(0,1fr)] sm:gap-[18px]"><dt className="text-[13px] leading-relaxed text-muted-foreground">{label}</dt><dd className="min-w-0 break-words text-[13px] leading-relaxed">{children}</dd></div>;
@@ -81,6 +82,43 @@ export function RecipeStepInspector(props: RecipeStepInspectorProps) {
   return <SelectedRecipeStepInspector key={JSON.stringify([props.jobId, props.runId, props.stepId])} {...props} />;
 }
 
+function ActualConsumers({ jobId, runId, stepId, inspection }: RecipeStepInspectorProps & { inspection: RecipeAttemptInspection }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const page = inspection.consumedBy;
+  async function load(after = "") {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const value = await fetchRecipeConsumers(jobId, runId, stepId, inspection.attempt.id, after);
+      if (!active.current) return;
+      const key = JSON.stringify([jobId, runId, stepId, inspection.attempt.id]);
+      useStore.setState((state) => {
+        const current = state.recipeAttemptInspections[key];
+        return current ? { recipeAttemptInspections: { ...state.recipeAttemptInspections, [key]: { ...current, consumedBy: value } } } : state;
+      });
+    } catch (cause: unknown) {
+      if (active.current) setError(String(cause));
+    } finally { if (active.current) setBusy(false); }
+  }
+  return <section className="space-y-2" aria-label="Actual consuming attempts">
+    <h4 className="text-sm font-medium">Actual consuming attempts</h4>
+    <p className="text-xs text-muted-foreground">These immutable admitted input receipts name this exact producing attempt. Admission does not prove consumer completion.</p>
+    {page?.items.map((consumer) => <div key={`${consumer.attemptId}:${consumer.inputName}`} className="rounded-md border border-border p-3 text-xs">
+      <a className="text-primary underline" href={`/jobs/${encodeURIComponent(jobId)}?${new URLSearchParams({ run: runId, step: consumer.stepInstanceId, attempt: consumer.attemptId })}`}>{consumer.stepPath} / attempt {consumer.attemptNumber}</a>
+      <p>Input {consumer.inputName} / outcome {consumer.consumerOutcome ?? "Unfinished"} / producer outcome {consumer.producerOutcome ?? "Unrecorded"}</p>
+      <p className="break-all text-muted-foreground">Receipt {consumer.receiptId ?? "No receipt recorded"} / {consumer.checksum ?? "No checksum recorded"}</p>
+    </div>)}
+    {page?.items.length === 0 && <p className="text-xs text-muted-foreground">No admitted input receipts consume this attempt's outputs.</p>}
+    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => void load()}>First consumers</Button>
+      {page?.nextCursor && <Button size="sm" variant="outline" disabled={busy} onClick={() => void load(page.nextCursor!)}>More consumers</Button>}</div>
+  </section>;
+}
+
 function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }: RecipeStepInspectorProps) {
   const key = JSON.stringify([jobId, runId, stepId]);
   const inspection = useStore((state) => state.recipeStepInspections[key]);
@@ -141,7 +179,13 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
   return <section aria-label="Recipe step inspector" className="min-w-0 space-y-4 rounded-lg border border-border bg-card px-[22px] py-[18px]">
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div><p className="text-xs text-muted-foreground">{definition.runner.kind} step / {step.stepPath}</p><h3 className="text-lg font-semibold">{definition.title}</h3><p className="break-all text-xs text-muted-foreground">Run {runId}</p></div>
-      <Button size="sm" variant="outline" disabled={loading || attemptLoading} onClick={() => setRefresh((v) => v + 1)}>Refresh read</Button>
+      <Button
+        size="sm"
+        variant="outline"
+        aria-disabled={loading || attemptLoading}
+        className="aria-disabled:cursor-wait aria-disabled:opacity-50"
+        onClick={() => { if (!loading && !attemptLoading) setRefresh((v) => v + 1); }}
+      >Refresh read</Button>
     </header>
     {error && <p role="alert" className="text-sm text-destructive">{error}. Retained data may be stale.</p>}
     <dl className="divide-y divide-border">
@@ -193,6 +237,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
       {attempt && Object.keys(attempt.attempt.inputs).length === 0 && <p className="text-sm text-muted-foreground">No declared inputs.</p>}
     </div>}
     {tab === "output" && (attempt ? <AttemptEvidence inspection={attempt} /> : <p className="text-sm text-muted-foreground">No selected attempt evidence.</p>)}
+    {tab === "output" && attempt && <ActualConsumers key={attempt.attempt.id} jobId={jobId} runId={runId} stepId={stepId} inspection={attempt} />}
     {tab === "output" && <div className="space-y-2">
       <h4 className="text-sm font-medium">Declared consumers</h4>
       <p className="text-xs text-muted-foreground">These are pinned input bindings. A consumer's state alone does not prove it received the selected historical attempt's output.</p>
@@ -210,6 +255,7 @@ function SelectedRecipeStepInspector({ jobId, runId, stepId, initialAttemptId }:
       {(!attempt || attempt.attempt.executions.length === 0) && <p className="text-sm text-muted-foreground">No agent sessions recorded. Command, human and block coordination do not create fictional sessions.</p>}
     </div>}
     {attemptLoading && <p role="status" className="text-xs text-muted-foreground">Refreshing selected attempt...</p>}
+    {attempt && step.currentAttemptId === attempt.attempt.id && step.state === "needs_decision" && attempt.gate && !attempt.gate.resolution && <RecipeGateDecision key={attempt.attempt.id} jobId={jobId} runId={runId} step={step} inspection={attempt} />}
     {attemptId && <RecipeAttemptMessage jobId={jobId} runId={runId} stepId={stepId} attemptId={attemptId} />}
     {attemptError && <div role="alert" className="space-y-2"><p className="text-sm text-destructive">{attemptError}. Retained evidence may be stale.</p><Button size="sm" variant="outline" onClick={() => setRefresh((v) => v + 1)}>Retry evidence read</Button></div>}
   </section>;

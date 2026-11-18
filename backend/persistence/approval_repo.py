@@ -26,6 +26,8 @@ from backend.persistence.repository import BaseRepository
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from backend.models.api_schemas import JobPendingDecisionPage
+
 log = structlog.get_logger()
 
 
@@ -91,6 +93,7 @@ class ApprovalRepository(BaseRepository):
             return bool(pending)
         if not pending:
             return False
+
         target = await self._session.scalar(
             select(RecipeAttemptRow.id)
             .join(RecipeStepInstanceRow, RecipeStepInstanceRow.id == RecipeAttemptRow.step_instance_id)
@@ -109,6 +112,59 @@ class ApprovalRepository(BaseRepository):
             if owner is None or owner == attempt_id:
                 return True
         return False
+
+    async def pending_decisions(self, job_id: str, *, after: str = "", limit: int = 20) -> JobPendingDecisionPage:
+        from backend.models.api_schemas import ApprovalResponse, JobPendingDecision, JobPendingDecisionPage
+
+        if not 1 <= limit <= 100:
+            raise ValueError("Pending decision page size must be between 1 and 100.")
+        rows = list(
+            await self._session.scalars(
+                select(ApprovalRow)
+                .where(
+                    ApprovalRow.job_id == job_id,
+                    ApprovalRow.resolution.is_(None),
+                    ApprovalRow.id > after,
+                )
+                .order_by(ApprovalRow.id)
+                .limit(limit + 1)
+            )
+        )
+        items = []
+        for row in rows[:limit]:
+            approval = self._to_domain(row)
+            attempt_id = await self._attempt_owner(approval)
+            step = (
+                await self._session.scalar(
+                    select(RecipeStepInstanceRow).where(
+                        RecipeStepInstanceRow.current_attempt_id == attempt_id,
+                    )
+                )
+                if attempt_id is not None
+                else None
+            )
+            human_gate = (
+                await self._session.scalar(
+                    select(RecipeGateBindingRow.attempt_id).where(
+                        RecipeGateBindingRow.approval_id == row.id,
+                    )
+                )
+                if attempt_id is not None
+                else None
+            )
+            items.append(
+                JobPendingDecision(
+                    approval=ApprovalResponse.model_validate(approval, from_attributes=True),
+                    recipe_run_id=step.run_id if step else None,
+                    step_instance_id=step.id if step else None,
+                    attempt_id=attempt_id,
+                    human_gate=human_gate is not None,
+                )
+            )
+        return JobPendingDecisionPage(
+            items=items,
+            next_cursor=rows[limit - 1].id if len(rows) > limit else None,
+        )
 
     async def _attempt_owner(self, approval: Approval) -> str | None:
         gate = await self._session.scalar(
