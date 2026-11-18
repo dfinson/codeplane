@@ -38,14 +38,6 @@ dependencies = [
     "cryptography>=46.0,<47",
     "cloudflare>=5.1.0",
     "sh-guard>=0.1.10",
-    # Agent-trace intelligence substrate — deterministic/CPU-only pipeline that
-    # CodePlane's hand-rolled ingestion/classification/structuring/governance/
-    # observability plumbing is being migrated onto (see P0–P7 migration roadmap).
-    # PyPI is the primary distribution (code-only wheel); it pulls the real
-    # traceforge-title-model ONNX weights transitively. A git+ install is avoided
-    # on purpose — it force-checks-out the LFS monorepo and trips a missing LFS
-    # object on the remote (tracked as an upstream defect).
-    "traceforge-toolkit>=0.1.5,<0.2",
     "psutil>=7.2.2",
     "agent-governance-toolkit-core[mcp]==5.0.0",
     "tree-sitter==0.25.2",
@@ -64,6 +56,11 @@ all = [
     "codeplane[push]",
     "codeplane[telemetry]",
     "codeplane[tokenizer]",
+]
+legacy-traceforge = [
+    # Explicit opt-in for version-1 native checkpoints and historical re-enrichment.
+    # Fresh native ingestion and the default application do not require TF/NLP.
+    "traceforge-toolkit>=0.1.5,<0.2",
 ]
 
 [project.scripts]

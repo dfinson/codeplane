@@ -437,9 +437,12 @@ async def reenrich_job(
     backfilled.  Idempotent — a marker event prevents double processing
     unless ``force=true``.
     """
-    from backend.services.events.reenrich import reenrich_job_events
+    from backend.services.events.reenrich import LegacyEnrichmentUnavailableError, reenrich_job_events
 
-    updated = await reenrich_job_events(job_id, session_factory, force=force)
+    try:
+        updated = await reenrich_job_events(job_id, session_factory, force=force)
+    except LegacyEnrichmentUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"job_id": job_id, "updated_events": updated}
 
 

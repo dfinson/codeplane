@@ -21,12 +21,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
-from traceforge.enricher import Enricher as TFEnricher
 
 from backend.models.events import EventKind, EventMetadata, SessionEvent, new_event
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from traceforge.enricher import Enricher
 
     from backend.persistence.event_repo import EventRepository
 
@@ -41,6 +41,22 @@ _job_locks: dict[str, asyncio.Lock] = {}
 
 # Batch size for paginated event loading.
 _BATCH_SIZE = 500
+
+
+class LegacyEnrichmentUnavailableError(RuntimeError):
+    """Historical re-enrichment was requested without its optional implementation."""
+
+
+def _make_legacy_enricher(*, flush_on_session_end: bool) -> Enricher:
+    try:
+        from traceforge.enricher import Enricher
+    except ModuleNotFoundError as exc:
+        if exc.name != "traceforge":
+            raise
+        raise LegacyEnrichmentUnavailableError(
+            "Historical re-enrichment requires the codeplane[legacy-traceforge] extra"
+        ) from exc
+    return Enricher(flush_on_session_end=flush_on_session_end)
 
 
 def _canonical_metadata(metadata: EventMetadata | None) -> str | None:
@@ -218,15 +234,17 @@ async def _reenrich_locked(
             log.info("reenrich_already_complete", job_id=job_id)
             return 0
 
+        from backend.compat.traceforge_bridge import LegacyEnrichment
+
+        # Check optional readiness before deleting a prior marker or writing history.
+        enricher = LegacyEnrichment(_make_legacy_enricher(flush_on_session_end=True))
+
         # If force, delete existing marker(s) first — clean slate
         if markers and force:
             for m in markers:
                 await repo.delete_event(m.id)
 
         # Re-enrich through a fresh TF Enricher in batches
-        from backend.compat.traceforge_bridge import LegacyEnrichment
-
-        enricher = LegacyEnrichment(TFEnricher(flush_on_session_end=True))
         updated = 0
         failed = 0
         offset = 0

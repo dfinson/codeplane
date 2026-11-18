@@ -1,9 +1,10 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
-    "python_full_version < '3.15'",
+    "python_full_version == '3.14.*'",
+    "python_full_version < '3.14'",
 ]
 
 [[package]]
@@ -531,7 +532,6 @@ dependencies = [
     { name = "sh-guard" },
     { name = "sqlalchemy" },
     { name = "structlog" },
-    { name = "traceforge-toolkit" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
     { name = "tree-sitter-markdown" },
@@ -549,6 +549,9 @@ all = [
     { name = "pywebpush" },
     { name = "qrcode" },
     { name = "tiktoken" },
+]
+legacy-traceforge = [
+    { name = "traceforge-toolkit" },
 ]
 push = [
     { name = "py-vapid" },
@@ -619,14 +622,14 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
     { name = "structlog", specifier = ">=24.0,<26" },
     { name = "tiktoken", marker = "extra == 'tokenizer'", specifier = ">=0.12.0,<1" },
-    { name = "traceforge-toolkit", specifier = ">=0.1.5,<0.2" },
+    { name = "traceforge-toolkit", marker = "extra == 'legacy-traceforge'", specifier = ">=0.1.5,<0.2" },
     { name = "tree-sitter", specifier = "==0.25.2" },
     { name = "tree-sitter-bash", specifier = "==0.25.1" },
     { name = "tree-sitter-markdown", specifier = "==0.5.1" },
     { name = "tree-sitter-powershell", specifier = "==0.26.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32,<1" },
 ]
-provides-extras = ["voice", "push", "telemetry", "tokenizer", "all"]
+provides-extras = ["voice", "push", "telemetry", "tokenizer", "all", "legacy-traceforge"]
 
 [package.metadata.requires-dev]
 dev = [
