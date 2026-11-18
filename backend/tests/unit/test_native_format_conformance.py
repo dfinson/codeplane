@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sys
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,6 +23,7 @@ from backend.services.ingest.history_registration import HistoryRegistration
 from backend.services.ingest.mapping import NATIVE_FORMATS, NativeMappingDecoder, resolve_mapping_path
 from backend.services.ingest.record_service import ObservationRecords
 from backend.tests.unit.test_approval_service import session_factory as session_factory
+from backend.tests.unit.test_native_mapping import _assert_standalone_native_imports
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "native_formats"
 MAPPINGS = Path(__file__).parents[2] / "compat" / "traceformats" / "mappings"
@@ -69,8 +69,7 @@ def _decode(name, records, **options):
 
 def test_fixture_matrix_is_exact_and_core_remains_tf_nlp_free():
     assert set(SHAPES) == NATIVE_FORMATS
-    for package in ("traceforge", "onnxruntime", "transformers", "torch"):
-        assert not any(module == package or module.startswith(f"{package}.") for module in sys.modules)
+    _assert_standalone_native_imports()
 
 
 @pytest.mark.parametrize("name", SHAPES)
