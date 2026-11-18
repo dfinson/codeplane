@@ -1291,13 +1291,15 @@ class TestAbortSession:
 
     @pytest.mark.asyncio
     async def test_abort_handles_exception(self, adapter: ClaudeAdapter) -> None:
-        client = MagicMock()
+        client = _FakeClaudeSDKClient()
         client.interrupt = AsyncMock(side_effect=RuntimeError("fail"))
         client.disconnect = AsyncMock()
         adapter._clients["sess-1"] = client
 
         await adapter.abort_session("sess-1")
 
+        client.interrupt.assert_awaited_once()
+        client.disconnect.assert_not_awaited()
         assert "sess-1" not in adapter._clients
 
 
