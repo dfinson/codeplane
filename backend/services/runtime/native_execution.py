@@ -32,7 +32,7 @@ from backend.services.adapters.native_gates.usage import result_usage
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from backend.models.execution_contracts import ExecutionContractPin
+    from backend.models.execution_contracts import ExecutionContractPin, ImplementationPin
     from backend.models.session_event import EventMetadata
     from backend.services.adapters.native_gates.binding import NativeCall
     from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
@@ -63,6 +63,7 @@ class NativeExecution:
     cancel_requested: bool = False
     observation_sources: list[NativeObservationOwner] = field(default_factory=list)
     observation_registrations: dict[tuple[str, str], asyncio.Task[NativeObservationOwner]] = field(default_factory=dict)
+    observation_pin: ImplementationPin | None = None
 
 
 class NativeExecutions:
@@ -413,6 +414,9 @@ class NativeExecutions:
             await host.require_governance_admission()
             if not await current():
                 raise StateConflictError("Native ownership changed before invocation")
+            source = require_installation(family).observation_source()
+            if (source[0] if source is not None else None) != execution.observation_pin:
+                raise StateConflictError("Native observation source changed after admission")
 
         async def finalize() -> None:
             errors: list[Exception] = []
@@ -449,7 +453,7 @@ class NativeExecutions:
                 returned = worker.result()
 
                 async def record_result() -> None:
-                    usage = result_usage(family, returned, identity)
+                    usage = result_usage(family, returned, identity) if execution.observation_pin is None else ()
                     if usage:
                         event = await self._repository.receipt(
                             identity,
@@ -480,9 +484,38 @@ class NativeExecutions:
                     raise StateConflictError("Native ownership changed before admission")
                 if await host._approval_service.has_blocking_approvals(job_id, attempt_id=attempt_id):
                     raise StateConflictError("Native invocation is blocked by a pending approval")
-                require_installation(family)
-                await self._repository.record(identity, pin, family, "bound", metadata)
+                installation = require_installation(family)
+                source = installation.observation_source()
+                execution.observation_pin = source[0] if source is not None else None
+                await self._repository.record(
+                    identity, pin, family, "bound", metadata, source_pin=execution.observation_pin
+                )
                 await gates.attach(target)
+            if execution.observation_pin is not None:
+                from backend.services.adapters.native_gates.observation_scope import ObservationSubscription
+
+                observation_owner = await self.open_observation(
+                    identity, format_id=family, external_session_id=identity.binding_id
+                )
+                subscription = ObservationSubscription(observation_owner)
+                gates.binding._observation = lambda record: subscription.capture(lambda: record)
+
+                async def supplied_usage(operation_id: str, result: object) -> None:
+                    await observation_owner.assert_retained()
+                    usage = result_usage(family, result, identity)
+                    if usage:
+                        event = await self._repository.receipt(
+                            identity,
+                            pin,
+                            family,
+                            metadata,
+                            operation_id=operation_id,
+                            phase="usage",
+                            payload={"usage": [amount.model_dump(mode="json") for amount in usage]},
+                        )
+                        await host._event_bus.publish(event)
+
+                gates.binding._usage = supplied_usage
             if not await current():
                 raise StateConflictError("Native ownership changed before invocation")
             if synchronous:

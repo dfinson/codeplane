@@ -94,6 +94,23 @@ class NativeBinding:
         self._work: dict[object, str] = {}
         self._work_lock = threading.Lock()
         self._work_changed = asyncio.Event()
+        self._observation: Callable[[Mapping[str, Any]], None] | None = None
+        self._usage: Callable[[str, object], Awaitable[None]] | None = None
+
+    def observe(self, record: Mapping[str, Any]) -> None:
+        if self._observation is None:
+            raise StateError("Native profile observation has no Runtime-owned source")
+        self._observation(record)
+
+    async def supplied_usage(self, operation_id: str, result: object) -> None:
+        if asyncio.get_running_loop() is not self.loop:
+            await asyncio.wrap_future(
+                asyncio.run_coroutine_threadsafe(self.supplied_usage(operation_id, result), self.loop)
+            )
+            return
+        if self._usage is None:
+            raise StateError("Native profile usage has no Runtime-owned receipt path")
+        await self._usage(operation_id, result)
 
     @property
     def active(self) -> bool:
@@ -112,11 +129,12 @@ class NativeBinding:
             return
         await self._revoked_async.wait()
 
-    def begin_work(self, call: NativeCall) -> object:
+    def begin_work(self, call: NativeCall | None) -> object:
         token = object()
         with self._work_lock:
-            self._work[token] = call.operation_id
-        call.evidence.started = True
+            self._work[token] = call.operation_id if call is not None else ""
+        if call is not None:
+            call.evidence.started = True
         return token
 
     def end_work(self, token: object) -> None:
@@ -138,6 +156,8 @@ class NativeBinding:
             await asyncio.gather(*tuple(self._permissions), return_exceptions=True)
 
     async def current(self) -> bool:
+        if asyncio.get_running_loop() is not self.loop:
+            return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(self.current(), self.loop))
         return self.active and await self._is_current() and self.active
 
     def action(self, call: NativeCall) -> GateAction:
