@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.models.events import EventKind, new_event
 from backend.models.schemas.base import CamelModel
 from backend.persistence.policy_repo import PolicyRepository
+from backend.services.action_policy.classifier import USD_CEILING_DEFAULTS
 from backend.services.events.event_bus import EventBus
 
 router = APIRouter(prefix="/settings/policy", tags=["policy"], route_class=DishkaRoute)
@@ -109,13 +110,9 @@ class PolicyImportRequest(CamelModel):
 
 
 def _effective_ceilings(overrides: dict[str, tuple[float | None, float | None]]) -> dict[str, UsdCeilingEntry]:
-    """Merge stored per-preset overrides over each profile's baked default ceiling."""
-    from backend.services.action_policy.preset_profiles import PROFILES, profile_for
-
+    """Merge stored overrides over product defaults without constructing legacy policy."""
     out: dict[str, UsdCeilingEntry] = {}
-    for preset in PROFILES:
-        profile = profile_for(preset)
-        warn, ceiling = profile.warn_usd, profile.ceiling_usd
+    for preset, (warn, ceiling) in USD_CEILING_DEFAULTS.items():
         if preset.value in overrides:
             o_warn, o_ceiling = overrides[preset.value]
             warn, ceiling = o_warn, o_ceiling

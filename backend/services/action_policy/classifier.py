@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 log = structlog.get_logger()
 
@@ -45,6 +49,16 @@ class Preset(StrEnum):
     autonomous = "autonomous"
     supervised = "supervised"
     locked = "locked"
+
+
+# Product-owned (warning, hard ceiling) USD defaults; None disables that line.
+USD_CEILING_DEFAULTS: Mapping[Preset, tuple[float | None, float | None]] = MappingProxyType(
+    {
+        Preset.autonomous: (None, None),
+        Preset.supervised: (20.0, 40.0),
+        Preset.locked: (5.0, 10.0),
+    }
+)
 
 
 class ActionKind(StrEnum):
