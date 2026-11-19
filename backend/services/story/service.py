@@ -19,10 +19,13 @@ import asyncio
 import json
 import re
 from functools import cache
+from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import httpx
 import structlog
+
+from backend.services.story.tokenizer import count_tokens
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -832,6 +835,7 @@ def _split_refs_into_chunks(
     system: str,
     *,
     max_input_tokens: int,
+    token_counts: list[int] | None = None,
 ) -> list[list[tuple[int, StoryReference]]]:
     """Split refs into chunks that each fit within the model's context window.
 
@@ -846,7 +850,11 @@ def _split_refs_into_chunks(
     fixed_prompt = _build_prompt([], ctx)
     # Add the continuation suffix size (worst-case)
     continuation_overhead = len(_CONTINUATION_SYSTEM) + 100  # format placeholders
-    fixed_tokens = _estimate_tokens(system + fixed_prompt) + _estimate_tokens(" " * continuation_overhead)
+    fixed_tokens = (
+        sum(token_counts[:2])
+        if token_counts is not None
+        else _estimate_tokens(system + fixed_prompt) + _estimate_tokens(" " * continuation_overhead)
+    )
 
     # 75% of the model's max input tokens, minus the fixed overhead
     budget = int(max_input_tokens * 0.75) - fixed_tokens
@@ -863,7 +871,7 @@ def _split_refs_into_chunks(
     for i, ref in enumerate(refs):
         # Estimate this ref's contribution using _fmt_ref-like formatting
         ref_text = _estimate_ref_text(i + 1, ref)
-        ref_tokens = _estimate_tokens(ref_text)
+        ref_tokens = token_counts[i + 2] if token_counts is not None else _estimate_tokens(ref_text)
 
         if current_chunk and (current_tokens + ref_tokens) > budget:
             # Start a new chunk
@@ -1059,6 +1067,15 @@ class StoryService:
         self._model_pricing = model_pricing
         self._git_service = git_service
         self._gen_locks: dict[str, asyncio.Lock] = {}
+        self._tokenizer_lock = asyncio.Lock()
+
+    async def _count_tokens(self, texts: list[str]) -> list[int]:
+        # A cached encoder is local. A cold installed encoder may perform unbounded
+        # network I/O, so only that preparation runs in a killable owned worker.
+        if _get_tokenizer.cache_info().currsize or find_spec("tiktoken") is None:
+            return [_estimate_tokens(text) for text in texts]
+        async with self._tokenizer_lock:
+            return await count_tokens(texts)
 
     async def get_or_generate(
         self,
@@ -1405,7 +1422,17 @@ class StoryService:
         user_prompt = _build_prompt(refs, ctx)
 
         full_prompt = f"SYSTEM:\n{system}\n\nUSER:\n{user_prompt}"
-        estimated_tokens = _estimate_tokens(full_prompt)
+        token_texts = [full_prompt]
+        if max_input_tokens is not None and len(refs) > 1:
+            token_texts.extend(
+                (
+                    system + _build_prompt([], ctx),
+                    " " * (len(_CONTINUATION_SYSTEM) + 100),
+                    *(_estimate_ref_text(i + 1, ref) for i, ref in enumerate(refs)),
+                )
+            )
+        counts = await self._count_tokens(token_texts)
+        estimated_tokens = counts[0]
 
         # If we don't know the model's limit, or it fits within 75% of the
         # context window, use a single pass.
@@ -1432,6 +1459,7 @@ class StoryService:
             ctx,
             system,
             max_input_tokens=max_input_tokens,
+            token_counts=counts[1:],
         )
 
         all_blocks: list[StoryBlock] = []
