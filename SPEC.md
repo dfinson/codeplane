@@ -121,6 +121,11 @@ launch or cancellation authority. Recipe capability requests must be a subset
 of both Job policy and actual adapter support. An unsatisfied request fails
 before side effects rather than silently reducing or broadening its grant.
 The invocation boundary must enforce the resulting grant, not rely on prompts.
+Local-workspace checks reject unsupported host path forms and lexically outside
+targets before resolving them. POSIX backslashes are not rewritten as separators.
+Symlink and Windows junction destinations are checked before traversal, while
+ordinary in-workspace links retain their physical path semantics. These prechecks
+do not grant external access or let a policy approval override capability limits.
 Recipe run/revision/step-instance/attempt correlation is additive and never
 replaces transcript `step_id` or `turn_id`.
 

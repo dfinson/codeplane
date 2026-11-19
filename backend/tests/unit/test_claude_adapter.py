@@ -530,6 +530,23 @@ class TestBuildCanUseTool:
 
 
 class TestScoutPermissions:
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX native backslashes are not path separators")
+    async def test_native_path_escape_is_denied_before_general_permission(self, adapter, tmp_path) -> None:
+        root = tmp_path / "workspace"
+        root.mkdir()
+        (root / r"a\b").mkdir()
+        (root / "a" / "b").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.write_text("outside bytes")
+        raw = r"a\b/../../outside"
+        assert (root / raw).resolve() == outside
+        adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
+        config = _make_config(workspace_path=str(root), execution_capabilities=frozenset({"read"}))
+        callback = adapter._build_can_use_tool(config, "session")
+        result = await callback("Read", {"file_path": raw}, None)
+        assert isinstance(result, _FakePermissionResultDeny)
+        adapter._evaluate_permission.assert_not_awaited()
+
     async def test_recipe_capability_cannot_be_waived_by_general_permission_allow(self, adapter, tmp_path) -> None:
         adapter._evaluate_permission = AsyncMock(return_value=PermissionDecision.allow)
         config = _make_config(workspace_path=str(tmp_path), execution_capabilities=frozenset({"read", "shell"}))
