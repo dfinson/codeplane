@@ -191,6 +191,11 @@ class AssessmentService:
                 "in the DECODED source string, not in the JSON escaping or the surrounding user message. "
                 "Use unknown when evidence is unavailable. Never invent or fill missing evidence. "
                 "Read-only actions require not_applicable reversibility; mutations cannot use not_applicable.\n"
+                "Removing or replacing required existing content is destructive even if some copy is recoverable. "
+                "For a mutation, reversibility=git requires supplied evidence for the exact target's CURRENT bytes "
+                "in a retained Git baseline, or explicit known-new-target absence. A workspace location, tracked "
+                "status or ordinary filename alone is not that evidence. Unspecified recovery stays unknown; "
+                "do not infer the absence of all backups from an untracked or uncommitted target.\n"
                 'FORMAT-ONLY EXAMPLE INPUT: {"command":"true","arguments":"","tool_definition":"","context":""}\n'
                 'FORMAT-ONLY EXAMPLE OUTPUT: {"schema_version":"cp-action-v1","mechanism":"shell",'
                 '"effect":"read_only","scope":"workspace","network":"none","reversibility":"not_applicable",'

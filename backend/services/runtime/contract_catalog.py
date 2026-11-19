@@ -59,6 +59,9 @@ def standalone_contract() -> ExecutionContract:
         "services/action_policy/assessment.py",
         "models/action_assessment.py",
         "services/action_policy/credential_filter.py",
+        "services/git/git_service.py",
+        "services/adapters/capability_guard.py",
+        "services/auth/workspace_paths.py",
         "persistence/governance_repo.py",
     )
     policy = policy.model_copy(

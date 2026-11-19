@@ -110,6 +110,8 @@ class PolicyAuthority:
         tool_call_id: str | None = None,
         retained_action: Action | None = None,
         approval_callback: Callable[[SessionEvent], None] | None = None,
+        decision_deadline: float | None = None,
+        recovery_is_current: Callable[[float], Awaitable[bool]] | None = None,
     ) -> Authorization:
         """The caller owns interception and supplies a live ownership/policy fence.
 
@@ -179,8 +181,11 @@ class PolicyAuthority:
         retained_decision: dict[str, object] | None = None
         decision = FactDecision("reject", "execution_ineligible", False)
         proceed = False
+        deadline = (
+            decision_deadline if decision_deadline is not None else asyncio.get_running_loop().time() + DECISION_SECONDS
+        )
         try:
-            async with asyncio.timeout(DECISION_SECONDS):
+            async with asyncio.timeout_at(deadline):
                 if await is_current():
                     totals = await self._ledger.job_totals(execution.job_id)
                     local = self._budget(local, totals)
@@ -314,6 +319,13 @@ class PolicyAuthority:
         if not await is_current():
             proceed = False
             decision = FactDecision("reject", "execution_ineligible", False)
+        if proceed and recovery_is_current is not None:
+            consumption_deadline = (
+                asyncio.get_running_loop().time() + DECISION_SECONDS if approval_id is not None else deadline
+            )
+            if not await recovery_is_current(consumption_deadline):
+                proceed = False
+                decision = FactDecision("reject", "execution_ineligible", False)
 
         try:
             await self._ledger.enqueue_decision(
@@ -344,6 +356,7 @@ class PolicyAuthority:
                     "approval_id": approval_id,
                     "checkpoint_ref": checkpoint_ref,
                     "assessment_reason": assessment_reason,
+                    "git_recovery": asdict(local.git_recovery) if local.git_recovery is not None else None,
                     "retained_decision": retained_decision,
                     "retained_action": asdict(retained_action) if retained_action is not None else None,
                     "budget_snapshot": None

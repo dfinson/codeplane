@@ -16,6 +16,10 @@ def test_raw_prompts_commands_results_paths_and_personal_ids_never_leave_project
             "path": "/home/private",
             "url": "https://private.test",
             "tool_call_id": "alice@example.test",
+            "git_recovery": {
+                "workspace": "/home/private/worktree",
+                "targets": [{"path": "private/source.txt", "blob": "private object identity"}],
+            },
             "success": False,
         },
         metadata=EventMetadata(run_id="personal external ID", span_id="alice-span", parent_id="alice-parent"),

@@ -49,10 +49,55 @@ def test_complete_git_workspace_mutation_preserves_preset_posture(policy, preset
             preset,
             assessment=_facts(effect="mutating", reversibility="git"),
             syntax=analyze_syntax("pwd", "bash"),
+            local_reversibility="git",
         )
     )
     assert result.action == expected
     assert result.risk_score is None and result.risk_band == "unknown"
+
+
+@pytest.mark.parametrize("local_recovery", [None, "unknown", "irreversible"])
+def test_model_git_claim_cannot_supply_missing_local_recovery(policy, local_recovery) -> None:
+    result = policy.decide(
+        PolicyInput(
+            "job",
+            Preset.autonomous,
+            assessment=_facts(effect="mutating", reversibility="git"),
+            syntax=analyze_syntax("pwd", "bash"),
+            local_reversibility=local_recovery,
+        )
+    )
+    assert result.action == "escalate"
+    if local_recovery in {None, "unknown"}:
+        assert result.reason_code == "incomplete_evidence" and result.individual_human
+
+
+def test_known_write_is_not_repaired_by_a_read_only_model_claim_even_with_git_proof(policy) -> None:
+    result = policy.decide(
+        PolicyInput(
+            "job",
+            Preset.autonomous,
+            assessment=_facts(),
+            syntax=analyze_syntax("pwd", "bash"),
+            local_effect="mutating",
+            local_reversibility="git",
+        )
+    )
+    assert result.action == "escalate" and result.reason_code == "incomplete_evidence"
+
+
+def test_positive_recovery_never_waives_independently_known_content_loss(policy) -> None:
+    result = policy.decide(
+        PolicyInput(
+            "job",
+            Preset.autonomous,
+            assessment=_facts(effect="mutating", reversibility="git"),
+            syntax=analyze_syntax("pwd", "bash"),
+            local_effect="destructive",
+            local_reversibility="git",
+        )
+    )
+    assert result.action == "deny" and result.reason_code == "hard_gate" and result.individual_human
 
 
 def test_hard_gates_and_incomplete_evidence_cannot_be_overridden_by_budget_or_trust(policy) -> None:

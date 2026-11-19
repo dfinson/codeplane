@@ -457,6 +457,7 @@ class StandaloneGovernance:
             contracts=host._execution_contracts,
             events=host._event_bus,
             checkpoint=CheckpointService(host._git_service),
+            git=host._git_service,
             job_is_current=current,
         )
 

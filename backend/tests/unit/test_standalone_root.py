@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,10 +9,12 @@ from backend.models.domain import ApprovalResolution, JobState, SessionConfig
 from backend.persistence.event_repo import EventRepository
 from backend.services.action_policy.production import StandaloneGovernance
 from backend.services.adapters.adapter_registry import AdapterRegistry
+from backend.services.adapters.agent_adapter import CompletionResult
 from backend.services.adapters.base_adapter import PermissionDecision
 from backend.services.adapters.capability_guard import invocation_permission_request
 from backend.services.auth.permission_policy import PermissionRequest
 from backend.services.events.event_bus import EventBus
+from backend.services.git.git_service import GitService
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
 from backend.tests.unit.test_approval_service import session_factory as session_factory
@@ -153,6 +156,7 @@ async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_bounda
         )
         assert decision == PermissionDecision.allow
         adapter.complete.assert_not_awaited()
+        host._git_service.recovery_witness.assert_not_called()
         assert host._governance_decider is None
         assert adapter._sessions == {}, "Policy setup must not create an SDK client or session"
         async with session_factory() as session:
@@ -168,6 +172,206 @@ async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_bounda
     finally:
         await root.close()
         await host.shutdown()
+
+
+@pytest.fixture
+async def recovery_runtime(session_factory, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    git = GitService(CPLConfig())
+    await git.run_git("init", "--initial-branch=main", cwd=workspace)
+    await git.run_git("config", "user.name", "Recovery fixture", cwd=workspace)
+    await git.run_git("config", "user.email", "recovery@example.invalid", cwd=workspace)
+    (workspace / "source.txt").write_bytes(b"retained bytes\n")
+    await git.add_all(cwd=workspace)
+    await git.commit(
+        "test: retain bytes\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>", cwd=workspace
+    )
+    events = EventBus()
+    approvals = ApprovalService(session_factory)
+    registry = AdapterRegistry(approval_service=approvals, event_bus=events, session_factory=session_factory)
+    host = RuntimeService(
+        session_factory=session_factory,
+        event_bus=events,
+        adapter_registry=registry,
+        config=CPLConfig(),
+        approval_service=approvals,
+        git_service=git,
+    )
+    root = StandaloneGovernance(host, tmp_path)
+    await root.start()
+    host._standalone_governance = root
+    try:
+        pin = await host.prepare_execution_contract("job-1", "admitted", recovery=False)
+        host._job_contract_pins["job-1"] = pin
+        yield host, root, registry.get_adapter("copilot"), approvals, git, workspace
+    finally:
+        await root.close()
+        await host.shutdown()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "clean",
+        "new",
+        "dirty",
+        "changed-bytes",
+        "changed-ref",
+        "contradictory-read",
+        "contradictory-recovery",
+        "path-mismatch",
+        "path-hint-only",
+        "opaque-write",
+    ],
+)
+async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_claim(recovery_runtime, scenario):
+    host, root, adapter, approvals, git, workspace = recovery_runtime
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace), job_preset="autonomous")
+    adapter.set_job_id("native-write", "job-1")
+    adapter.set_session_metadata("native-write", config)
+    adapter._queues["native-write"] = asyncio.Queue()
+    path = "new.txt" if scenario == "new" else "source.txt"
+    if scenario == "dirty":
+        (workspace / path).write_text("valuable uncommitted bytes\n")
+
+    async def complete(prompt, **kwargs):
+        fields = json.loads(prompt)
+        if scenario not in {"dirty", "path-mismatch", "path-hint-only", "opaque-write"}:
+            assert "Application-verified complete file target set" in fields["context"]
+        if scenario == "changed-bytes":
+            (workspace / path).write_text("different bytes during assessment\n")
+        elif scenario == "changed-ref":
+            await git.commit(
+                "test: advance ref\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+                cwd=workspace,
+                allow_empty=True,
+            )
+        values = {
+            "effect": "read_only" if scenario in {"contradictory-read", "opaque-write"} else "mutating",
+            "scope": "workspace",
+            "network": "none",
+            "reversibility": "not_applicable"
+            if scenario in {"contradictory-read", "contradictory-recovery", "opaque-write"}
+            else "git",
+        }
+        return CompletionResult(
+            text=json.dumps(
+                {
+                    "schema_version": "cp-action-v1",
+                    "mechanism": "file",
+                    **values,
+                    "capabilities": [],
+                    "structure": [],
+                    "unknowns": [],
+                    "evidence": [
+                        {"field": key, "value": value, "source": "context", "start": 0, "end": len(fields["context"])}
+                        for key, value in values.items()
+                    ],
+                }
+            ),
+            model=kwargs["model"],
+        )
+
+    adapter.complete = AsyncMock(side_effect=complete)
+    arguments = {"path": path, "old_str": "retained bytes", "new_str": "replacement"}
+    request = invocation_permission_request(str(workspace), "edit", arguments)
+    if scenario == "path-mismatch":
+        arguments = {**arguments, "path": "other.txt"}
+    elif scenario == "path-hint-only":
+        arguments = {}
+    pending = asyncio.create_task(
+        adapter._evaluate_permission(
+            "native-write",
+            "job-1",
+            request,
+            tool_name="apply_patch" if scenario == "opaque-write" else "edit",
+            tool_input=arguments,
+            tool_call_id="write-1",
+        )
+    )
+    try:
+        if scenario in {
+            "dirty",
+            "contradictory-read",
+            "contradictory-recovery",
+            "path-mismatch",
+            "path-hint-only",
+            "opaque-write",
+        }:
+            event = await asyncio.wait_for(adapter._queues["native-write"].get(), 3)
+            assert event.kind == "permission.requested"
+            (approval,) = await approvals.list_pending("job-1")
+            assert approval.requires_explicit_approval
+            assert json.loads(approval.proposed_action)["reason_code"] == "incomplete_evidence"
+            await approvals.resolve(approval.id, ApprovalResolution.rejected)
+        decision = await asyncio.wait_for(pending, 3)
+        assert decision == (PermissionDecision.allow if scenario in {"clean", "new"} else PermissionDecision.deny)
+        adapter.complete.assert_awaited_once()
+        assert adapter._sessions == {}, "The regression must not create real provider sessions"
+        token = adapter._event_metadata("native-write").execution_token
+        recorded = await root._ledger.authorized_tool("job-1", host.execution_epoch, token, "write-1")
+        assert recorded is not None
+        proof = recorded.metadata["git_recovery"]
+        if scenario in {"dirty", "path-mismatch", "path-hint-only", "opaque-write"}:
+            assert proof is None
+        else:
+            assert proof["targets"][0]["path"] == path
+            assert (proof["targets"][0]["blob"] is None) is (scenario == "new")
+        if scenario.startswith("changed-"):
+            assert recorded.decision == "reject"
+            assert recorded.metadata["reason_code"] == "execution_ineligible"
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("change", ["bytes", "ref"])
+async def test_human_approval_cannot_consume_a_changed_recovery_witness(recovery_runtime, change):
+    host, root, adapter, approvals, git, workspace = recovery_runtime
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace), job_preset="locked")
+    adapter.set_job_id("waiting-write", "job-1")
+    adapter.set_session_metadata("waiting-write", config)
+    adapter._queues["waiting-write"] = asyncio.Queue()
+    # An unavailable assessment still binds the independently captured witness.
+    adapter.complete = AsyncMock(side_effect=ValueError("controlled unavailable provider"))
+    arguments = {"path": "source.txt", "old_str": "retained", "new_str": "replacement"}
+    pending = asyncio.create_task(
+        adapter._evaluate_permission(
+            "waiting-write",
+            "job-1",
+            invocation_permission_request(str(workspace), "edit", arguments),
+            tool_name="edit",
+            tool_input=arguments,
+            tool_call_id="waiting-1",
+        )
+    )
+    try:
+        event = await asyncio.wait_for(adapter._queues["waiting-write"].get(), 3)
+        assert event.kind == "permission.requested"
+        (approval,) = await approvals.list_pending("job-1")
+        if change == "bytes":
+            (workspace / "source.txt").write_text("changed while awaiting approval\n")
+        else:
+            await git.commit(
+                "test: advance ref\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+                cwd=workspace,
+                allow_empty=True,
+            )
+        await approvals.resolve(approval.id, ApprovalResolution.approved)
+        assert await asyncio.wait_for(pending, 3) == PermissionDecision.deny
+        recorded = await root._ledger.authorized_tool(
+            "job-1",
+            host.execution_epoch,
+            adapter._event_metadata("waiting-write").execution_token,
+            "waiting-1",
+        )
+        assert recorded is not None and recorded.decision == "reject"
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
 
 
 async def test_root_cancellation_during_human_wait_cannot_release_an_old_permission(session_factory, tmp_path):

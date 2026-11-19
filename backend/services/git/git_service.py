@@ -8,12 +8,15 @@ import os
 import re
 import shutil
 import signal
+import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
 from backend.models.domain import CodePlaneError
+from backend.services.auth.workspace_paths import workspace_target
 
 if TYPE_CHECKING:
     from backend.config import CPLConfig
@@ -24,9 +27,25 @@ log = structlog.get_logger()
 class GitError(CodePlaneError):
     """Raised when a git subprocess fails."""
 
-    def __init__(self, message: str, stderr: str = "") -> None:
+    def __init__(self, message: str, stderr: str = "", *, returncode: int | None = None) -> None:
         self.stderr = stderr
+        self.returncode = returncode
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class GitRecoveryTarget:
+    path: str
+    relative_path: str
+    blob: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GitRecoveryWitness:
+    workspace: str
+    commit: str
+    targets: tuple[GitRecoveryTarget, ...]
+    reference: str = "HEAD"
 
 
 class GitService:
@@ -49,7 +68,13 @@ class GitService:
             return urlunparse(cleaned)
         return url
 
-    async def _run_git(self, *args: str, cwd: str | Path, env_overrides: dict[str, str] | None = None) -> str:
+    async def _run_git(
+        self,
+        *args: str,
+        cwd: str | Path,
+        env_overrides: dict[str, str] | None = None,
+        input_bytes: bytes | None = None,
+    ) -> str:
         """Run a git command and return stdout. Raises GitError on failure."""
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_overrides or {})}
         cwd_path = Path(cwd)
@@ -60,6 +85,7 @@ class GitService:
                 cwd=str(cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
                 env=env,
                 start_new_session=os.name == "posix",
             )
@@ -72,7 +98,9 @@ class GitService:
             raise GitError("git executable not found. Ensure Git is installed and available on PATH.") from exc
         except OSError as exc:
             raise GitError(f"git failed to start: {exc}") from exc
-        communication = asyncio.create_task(proc.communicate())
+        communication = asyncio.create_task(
+            proc.communicate(input_bytes) if input_bytes is not None else proc.communicate()
+        )
         try:
             stdout_bytes, stderr_bytes = await asyncio.shield(communication)
         except asyncio.CancelledError:
@@ -95,6 +123,7 @@ class GitService:
             raise GitError(
                 f"git {' '.join(args)} failed (exit {proc.returncode}): {stderr}",
                 stderr=stderr,
+                returncode=proc.returncode,
             )
         return stdout
 
@@ -194,6 +223,168 @@ class GitService:
     async def rev_parse(self, ref: str, *, cwd: str | Path) -> str:
         """Resolve a ref to its full commit SHA."""
         return await self._run_git("rev-parse", ref, cwd=cwd)
+
+    async def recovery_witness(
+        self,
+        *,
+        cwd: str | Path,
+        paths: tuple[str, ...],
+        deadline: float,
+        max_input_bytes: int,
+    ) -> GitRecoveryWitness | None:
+        """Prove current regular-file bytes or new-target absence without writing Git state."""
+
+        def unavailable(reason: str) -> GitRecoveryWitness | None:
+            log.warning("git_recovery_unavailable", reason=reason, target_count=len(paths))
+            return None
+
+        def file_version(value: os.stat_result) -> tuple[int, ...]:
+            return (value.st_ino, value.st_dev, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+        environment = {
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_LITERAL_PATHSPECS": "1",
+        }
+        try:
+            remaining_bytes = max_input_bytes - sum(len(path.encode("utf-8")) for path in paths)
+            if not paths or remaining_bytes < 0:
+                return unavailable("missing_or_oversized_target_set")
+            async with asyncio.timeout_at(deadline):
+                supplied_root = Path(cwd).absolute()
+                root = supplied_root.resolve(strict=True)
+                try:
+                    await self._run_git(
+                        "config",
+                        "--get-regexp",
+                        r"^(remote\..*\.promisor|extensions\.partialclone)$",
+                        cwd=root,
+                        env_overrides=environment,
+                    )
+                except GitError as exc:
+                    if exc.returncode != 1:
+                        raise
+                else:
+                    return unavailable("partial_repository")
+                head = await self._run_git(
+                    "rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment
+                )
+                targets: list[GitRecoveryTarget] = []
+                versions: list[tuple[str, Path, os.stat_result | None]] = []
+                for declared in sorted(set(paths)):
+                    lexical = Path(declared.replace("\\", "/"))
+                    if not lexical.is_absolute():
+                        lexical = supplied_root / lexical
+                    target = workspace_target(str(root), declared)
+                    relative = target.relative_to(root).as_posix()
+                    if (
+                        not lexical.is_relative_to(supplied_root)
+                        or ".git" in (part.lower() for part in target.relative_to(root).parts)
+                        or ":" in relative
+                        or not lexical.parent.is_dir()
+                    ):
+                        return unavailable("opaque_or_administrative_target")
+                    cursor = lexical
+                    while cursor != supplied_root:
+                        if cursor.is_symlink():
+                            return unavailable("symlink_target")
+                        cursor = cursor.parent
+                    owner = await self._run_git(
+                        "rev-parse", "--show-toplevel", cwd=target.parent, env_overrides=environment
+                    )
+                    if Path(owner).resolve() != root:
+                        return unavailable("different_repository")
+                    entry = await self._run_git(
+                        "ls-tree", "-z", "--full-tree", head, "--", relative, cwd=root, env_overrides=environment
+                    )
+                    try:
+                        observed = target.lstat()
+                    except FileNotFoundError:
+                        observed = None
+                    if observed is None:
+                        if entry:
+                            return unavailable("missing_previously_retained_target")
+                        try:
+                            await self._run_git(
+                                "check-ignore",
+                                "--",
+                                relative,
+                                cwd=root,
+                                env_overrides={**environment, "GIT_LITERAL_PATHSPECS": "0"},
+                            )
+                        except GitError as exc:
+                            if exc.returncode != 1:
+                                raise
+                        else:
+                            return unavailable("ignored_new_target")
+                        targets.append(GitRecoveryTarget(declared, relative, None))
+                        versions.append((declared, target, None))
+                        continue
+                    if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1 or not entry:
+                        return unavailable("current_bytes_not_retained")
+                    if observed.st_size > remaining_bytes:
+                        return unavailable("current_byte_bound_exceeded")
+                    records = entry.split("\0")
+                    if len(records) != 2 or records[1]:
+                        return unavailable("ambiguous_retained_target")
+                    description, retained_path = records[0].split("\t", 1)
+                    retained_mode, kind, blob = description.split()
+                    if retained_path != relative or kind != "blob" or retained_mode not in {"100644", "100755"}:
+                        return unavailable("nonregular_retained_target")
+                    flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_NONBLOCK", 0)
+                        | getattr(os, "O_BINARY", 0)
+                    )
+                    with os.fdopen(os.open(target, flags), "rb") as stream:
+                        opened = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                            observed.st_dev,
+                            observed.st_ino,
+                        ):
+                            return unavailable("target_changed_during_inspection")
+                        content = stream.read(remaining_bytes + 1)
+                    if len(content) > remaining_bytes:
+                        return unavailable("current_byte_bound_exceeded")
+                    remaining_bytes -= len(content)
+                    current_blob = await self._run_git(
+                        "hash-object",
+                        "--no-filters",
+                        "--stdin",
+                        cwd=root,
+                        env_overrides=environment,
+                        input_bytes=content,
+                    )
+                    after = target.lstat()
+                    if file_version(after) != file_version(opened):
+                        return unavailable("target_changed_during_inspection")
+                    if current_blob != blob:
+                        return unavailable("current_bytes_not_retained")
+                    await self._run_git("cat-file", "-e", blob, cwd=root, env_overrides=environment)
+                    targets.append(GitRecoveryTarget(declared, relative, blob))
+                    versions.append((declared, target, after))
+                if (
+                    await self._run_git("rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment)
+                    != head
+                ):
+                    return unavailable("retained_reference_changed")
+                for declared, target, before in versions:
+                    if workspace_target(str(root), declared) != target:
+                        return unavailable("target_changed_during_inspection")
+                    try:
+                        final = target.lstat()
+                    except FileNotFoundError:
+                        final = None
+                    if (None if final is None else file_version(final)) != (
+                        None if before is None else file_version(before)
+                    ):
+                        return unavailable("target_changed_during_inspection")
+                return GitRecoveryWitness(str(root), head, tuple(targets))
+        except (GitError, OSError, ValueError, TimeoutError) as exc:
+            log.warning("git_recovery_unavailable", reason=type(exc).__name__, detail=str(exc), target_count=len(paths))
+            return None
 
     async def tag(self, name: str, *, message: str = "", cwd: str | Path, force: bool = False) -> None:
         """Create an annotated git tag."""

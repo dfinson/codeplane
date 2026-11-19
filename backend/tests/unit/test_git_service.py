@@ -73,6 +73,151 @@ class TestRuntimeContract:
         assert not any(c.args[:2] == ("branch", "-D") for c in service._run_git.call_args_list)
 
 
+class TestRecoveryWitness:
+    @pytest.fixture
+    async def recovery_repo(self, git_service, tmp_path):
+        await git_service.run_git("init", "--initial-branch=main", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recovery fixture", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recovery@example.invalid", cwd=tmp_path)
+        (tmp_path / "source.txt").write_bytes(b"retained bytes\n")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit(
+            "test: retain recovery fixture\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=tmp_path,
+        )
+        return tmp_path
+
+    async def witness(self, service, root, paths):
+        from backend.services.action_policy.assessment import DECISION_SECONDS, MAX_INPUT_BYTES
+
+        return await service.recovery_witness(
+            cwd=root,
+            paths=tuple(paths),
+            deadline=asyncio.get_running_loop().time() + DECISION_SECONDS,
+            max_input_bytes=MAX_INPUT_BYTES,
+        )
+
+    async def test_retained_bytes_and_new_target_absence_are_read_only_witnesses(self, git_service, recovery_repo):
+        root = recovery_repo
+        before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+        witness = await self.witness(git_service, root, ["source.txt", "new.txt"])
+        assert witness is not None
+        assert witness.commit == await git_service.rev_parse("HEAD", cwd=root)
+        assert {target.path: target.blob is not None for target in witness.targets} == {
+            "new.txt": False,
+            "source.txt": True,
+        }
+        assert await self.witness(git_service, root, [target.path for target in witness.targets]) == witness
+        assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+    @pytest.mark.parametrize("kind", ["dirty", "staged", "untracked", "ignored-new", "directory"])
+    async def test_missing_current_byte_proof_stays_unknown(self, git_service, recovery_repo, kind):
+        root = recovery_repo
+        target = "source.txt"
+        if kind in {"dirty", "staged"}:
+            (root / target).write_text("valuable uncommitted bytes\n")
+            if kind == "staged":
+                await git_service.run_git("add", target, cwd=root)
+        elif kind == "untracked":
+            target = "untracked.txt"
+            (root / target).write_text("valuable untracked bytes\n")
+        elif kind == "ignored-new":
+            target = "ignored.txt"
+        else:
+            target = "directory"
+            (root / target).mkdir()
+        assert await self.witness(git_service, root, [target]) is None
+
+    @pytest.mark.parametrize("change", ["bytes", "ref", "new-target-created"])
+    async def test_consumption_recheck_detects_changed_bytes_ref_and_absence(self, git_service, recovery_repo, change):
+        root = recovery_repo
+        paths = ["source.txt", "new.txt"]
+        before = await self.witness(git_service, root, paths)
+        assert before is not None
+        if change == "bytes":
+            (root / "source.txt").write_text("changed during assessment\n")
+        elif change == "ref":
+            await git_service.commit(
+                "test: advance witness reference\n\n"
+                "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+                cwd=root,
+                allow_empty=True,
+            )
+        else:
+            (root / "new.txt").write_text("new valuable data appeared\n")
+        assert await self.witness(git_service, root, paths) != before
+
+    async def test_git_filters_are_never_executed_for_recovery_evidence(self, git_service, recovery_repo):
+        root = recovery_repo
+        (root / ".gitattributes").write_text("source.txt filter=forbidden\n")
+        await git_service.run_git(
+            "config",
+            "filter.forbidden.clean",
+            "touch recovery-filter-was-run",
+            cwd=root,
+        )
+        witness = await self.witness(git_service, root, ["source.txt"])
+        assert witness is not None
+        assert not (root / "recovery-filter-was-run").exists()
+
+    async def test_current_byte_work_respects_the_existing_input_bound(self, git_service, recovery_repo):
+        from backend.services.action_policy.assessment import MAX_INPUT_BYTES
+
+        (recovery_repo / "source.txt").write_bytes(b"x" * (MAX_INPUT_BYTES + 1))
+        await git_service.add_all(cwd=recovery_repo)
+        await git_service.commit(
+            "test: retain oversized fixture\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=recovery_repo,
+        )
+        assert await self.witness(git_service, recovery_repo, ["source.txt"]) is None
+
+    async def test_partial_repository_and_aliased_targets_cannot_supply_a_witness(self, git_service, recovery_repo):
+        root = recovery_repo
+        os.link(root / "source.txt", root / "alias.txt")
+        assert await self.witness(git_service, root, ["source.txt"]) is None
+        (root / "alias.txt").unlink()
+        await git_service.run_git("config", "remote.fixture.promisor", "true", cwd=root)
+        assert await self.witness(git_service, root, ["source.txt"]) is None
+
+    async def test_witness_deadline_cancels_the_owned_git_operation(self, git_service, recovery_repo, monkeypatch):
+        ended = asyncio.Event()
+
+        async def blocked(*args, **kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+
+        monkeypatch.setattr(git_service, "_run_git", blocked)
+        assert (
+            await git_service.recovery_witness(
+                cwd=recovery_repo,
+                paths=("source.txt",),
+                max_input_bytes=32768,
+                deadline=asyncio.get_running_loop().time() + 0.01,
+            )
+            is None
+        )
+        assert ended.is_set()
+
+    async def test_absence_is_rechecked_after_git_work_finishes(self, git_service, recovery_repo, monkeypatch):
+        original = git_service._run_git
+        head_reads = 0
+
+        async def changed_after_git(*args, **kwargs):
+            nonlocal head_reads
+            result = await original(*args, **kwargs)
+            if args == ("rev-parse", "--verify", "HEAD^{commit}"):
+                head_reads += 1
+                if head_reads == 2:
+                    (recovery_repo / "new.txt").write_text("valuable bytes appeared during inspection\n")
+            return result
+
+        monkeypatch.setattr(git_service, "_run_git", changed_after_git)
+        assert await self.witness(git_service, recovery_repo, ["new.txt"]) is None
+
+
 class TestIsRemoteUrl:
     def test_https_url(self) -> None:
         assert GitService.is_remote_url("https://github.com/org/repo.git") is True

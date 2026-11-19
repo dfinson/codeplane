@@ -57,6 +57,17 @@ _SHELL_TOOLS = frozenset({"bash", "powershell", "shell", "terminal", "run_in_ter
 _PURE_BASH_BUILTINS = frozenset({"pwd", "echo", "printf", "true", "false", ":"})
 
 
+def has_explicit_file_target(tool_name: str) -> bool:
+    """Only direct native file writes, not patches, batches or overloaded editors."""
+    return tool_name.lower() in _WRITE_TOOLS - {
+        "multiedit",
+        "apply_patch",
+        "todowrite",
+        "str_replace_editor",
+        "str_replace_based_edit_tool",
+    }
+
+
 def invocation_permission_request(workspace: str, tool_name: str, arguments: dict[str, Any]) -> PermissionRequest:
     """Translate actual invocation fields without trusting producer read-only hints."""
     name = tool_name.lower()

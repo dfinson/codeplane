@@ -178,8 +178,23 @@ async function finishFixtureCommands(
       approved.add(item.approval.id);
       if (expected.hardGate) hardGates.set(step!.stepPath, argv);
     }
-    if (Object.keys(commands).every((stepPath) => steps.items.some((step) =>
-      step.stepPath === stepPath && ["succeeded", "failed"].includes(step.state)))) {
+    let finished = true;
+    for (const [stepPath, expected] of Object.entries(commands)) {
+      const step = steps.items.find((candidate) => candidate.stepPath === stepPath);
+      if (!step || !["succeeded", "failed"].includes(step.state)) {
+        finished = false;
+        break;
+      }
+      if (step.state === "failed" && (expected.maxAttempts ?? 1) > 1) {
+        const inspection: RecipeStepInspection = await (await request.get(`${root}/steps/${step.id}`)).json();
+        const attempt = inspection.attempts.find((candidate) => candidate.id === step.currentAttemptId);
+        if (!attempt || attempt.number !== expected.maxAttempts || attempt.outcome !== "failed") {
+          finished = false;
+          break;
+        }
+      }
+    }
+    if (finished) {
       for (const [stepPath, expected] of Object.entries(commands)) {
         if (expected.hardGate) {
           expect(hardGates.has(stepPath), `Missing mandatory gate: ${stepPath}`).toBe(true);

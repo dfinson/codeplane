@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
-from dataclasses import replace
+import json
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,8 +15,10 @@ from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, new_event
 from backend.persistence.legacy_governance_repo import LEGACY_POLICY
 from backend.services.action_policy.agt_policy import PolicyInput
+from backend.services.action_policy.assessment import DECISION_SECONDS, MAX_INPUT_BYTES
 from backend.services.action_policy.classifier import Action, ActionKind
-from backend.services.adapters.contracts import ExecutionIdentity
+from backend.services.adapters.capability_guard import has_explicit_file_target, invocation_permission_request
+from backend.services.adapters.contracts import CapabilityDeniedError, ExecutionIdentity
 from backend.services.auth.permission_policy import is_hard_gated_command
 from backend.services.auth.workspace_paths import workspace_target
 
@@ -27,6 +31,7 @@ if TYPE_CHECKING:
     from backend.services.action_policy.classifier import RepoPolicy
     from backend.services.action_policy.session_policy import PermissionInvocation
     from backend.services.events.event_bus import EventBus
+    from backend.services.git.git_service import GitService
     from backend.services.runtime.execution_contracts import ExecutionContracts
 
 log = structlog.get_logger()
@@ -44,6 +49,7 @@ class StandalonePolicyRouter:
         contracts: ExecutionContracts,
         events: EventBus,
         checkpoint: CheckpointService,
+        git: GitService,
         job_is_current: Callable[[str, str], Awaitable[bool]],
     ) -> None:
         self.pin = pin
@@ -53,6 +59,7 @@ class StandalonePolicyRouter:
         self._contracts = contracts
         self._events = events
         self._checkpoint = checkpoint
+        self._git = git
         self._job_is_current = job_is_current
         self._closed = False
 
@@ -108,6 +115,7 @@ class StandalonePolicyRouter:
                 attempt_id=metadata.attempt_id,
             )
         request = invocation.request
+        decision_deadline = asyncio.get_running_loop().time() + DECISION_SECONDS
         paths = tuple(
             dict.fromkeys(path for path in (request.file_name, request.path, *(request.possible_paths or ())) if path)
         )
@@ -132,6 +140,67 @@ class StandalonePolicyRouter:
             and contained
             and not command
         )
+        known_write = (
+            self.pin.contract.policy.id != LEGACY_POLICY
+            and request.kind == "write"
+            and invocation.provider in {"copilot", "claude"}
+            and invocation.tool_name.lower() not in {"str_replace_editor", "str_replace_based_edit_tool"}
+            and not command
+        )
+        recovery = None
+        recovery_paths: tuple[str, ...] = ()
+        if (
+            known_write
+            and has_explicit_file_target(invocation.tool_name)
+            and contained
+            and not protected
+            and not invocation.hard_gate
+        ):
+            try:
+                if (
+                    len(invocation.arguments_json) > MAX_INPUT_BYTES
+                    or len(invocation.arguments_json.encode("utf-8")) > MAX_INPUT_BYTES
+                ):
+                    raise ValueError("Native write arguments exceed the input bound")
+                arguments = json.loads(invocation.arguments_json)
+                if not isinstance(arguments, dict):
+                    raise ValueError("Native write arguments must be an object")
+                declared = invocation_permission_request(invocation.workspace, invocation.tool_name, arguments)
+                candidates = tuple(dict.fromkeys(declared.possible_paths or ()))
+                if len(candidates) != 1 or {workspace_target(invocation.workspace, path) for path in candidates} != {
+                    workspace_target(invocation.workspace, path) for path in paths
+                }:
+                    raise ValueError("Native write target is missing, ambiguous or differs from permission paths")
+                recovery_paths = candidates
+            except (CapabilityDeniedError, OSError, ValueError, RuntimeError) as exc:
+                log.warning("permission_recovery_target_unavailable", job_id=invocation.job_id, reason=str(exc))
+            if recovery_paths:
+                recovery = await self._git.recovery_witness(
+                    cwd=invocation.workspace,
+                    paths=recovery_paths,
+                    deadline=decision_deadline,
+                    max_input_bytes=MAX_INPUT_BYTES,
+                )
+        recovery_deadline = decision_deadline
+
+        async def recovery_current(deadline: float) -> bool:
+            nonlocal recovery_deadline
+            recovery_deadline = deadline
+            if recovery is None:
+                return True
+            refreshed = await self._git.recovery_witness(
+                cwd=invocation.workspace,
+                paths=recovery_paths,
+                deadline=deadline,
+                max_input_bytes=MAX_INPUT_BYTES,
+            )
+            if refreshed != recovery:
+                log.warning(
+                    "permission_recovery_changed", job_id=invocation.job_id, tool_call_id=invocation.tool_call_id
+                )
+                return False
+            return True
+
         local = PolicyInput(
             job_id=invocation.job_id,
             preset=selected_policy.preset,
@@ -139,6 +208,9 @@ class StandalonePolicyRouter:
             hard_gate=invocation.hard_gate or bool(command) and is_hard_gated_command(command),
             protected_write=protected and request.kind != "read",
             local_scope="external" if paths and not contained else None,
+            local_effect="mutating" if known_write else None,
+            local_reversibility="git" if recovery is not None else "unknown" if known_write else None,
+            git_recovery=recovery,
         )
         if self.pin.contract.policy.id == LEGACY_POLICY and invocation.provider == "codeplane.command" and not command:
             local = replace(local, local_effect="unknown")
@@ -169,6 +241,14 @@ class StandalonePolicyRouter:
                 "context": (
                     f"Native tool: {invocation.tool_name}; permission kind: {request.kind}"
                     + (f"; producer call ID: {invocation.native_tool_call_id}" if native is not None else "")
+                    + (
+                        "; Application-verified complete file target set and current-byte recovery: "
+                        + json.dumps(asdict(recovery), sort_keys=True)
+                        + ". Each blob equals the current unfiltered file bytes in the retained commit. "
+                        "A null blob means a new, nonignored target absent in both the workspace and that commit."
+                        if recovery is not None
+                        else ""
+                    )
                 ),
             },
             dialect=invocation.dialect,
@@ -176,6 +256,8 @@ class StandalonePolicyRouter:
             approval_callback=invocation.approval_callback,
             tool_call_id=invocation.tool_call_id,
             is_current=current,
+            decision_deadline=decision_deadline,
+            recovery_is_current=recovery_current if recovery is not None else None,
             savepoint=savepoint,
             retained_action=Action(
                 kind=ActionKind.shell
@@ -216,7 +298,7 @@ class StandalonePolicyRouter:
                 metadata=metadata,
             )
         )
-        return authorized.proceed and await current()
+        return authorized.proceed and await current() and await recovery_current(recovery_deadline)
 
     async def route(self, action: object, *, cwd: str | None = None) -> None:
         raise StateConflictError("Standalone invocation requires exact execution ownership and immutable tool inputs")

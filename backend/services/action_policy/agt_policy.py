@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from backend.models.action_assessment import ActionAssessment
     from backend.services.action_policy.syntax import SyntaxFacts
+    from backend.services.git.git_service import GitRecoveryWitness
 
 log = structlog.get_logger()
 POLICY_VERSION = "cp-policy-v1"
@@ -41,6 +42,7 @@ class PolicyInput:
     local_network: Literal["none", "outbound", "unknown"] | None = None
     local_scope: Literal["workspace", "external", "mixed", "unknown"] | None = None
     local_reversibility: Literal["not_applicable", "git", "external", "irreversible", "unknown"] | None = None
+    git_recovery: GitRecoveryWitness | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +100,8 @@ def _context(request: PolicyInput) -> dict[str, bool]:
         request.local_reversibility == "external" and reversibility in {"not_applicable", "git", "unknown"}
     ):
         reversibility = request.local_reversibility
+    if effect == "mutating" and reversibility == "git" and request.local_reversibility != "git":
+        reversibility = "unknown"
     incomplete = (
         (facts is None and not request.trusted_file_read)
         or (facts is not None and not facts.complete)
