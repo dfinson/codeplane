@@ -108,6 +108,8 @@ def currency_query(query: str) -> TextClause:
               AND json_extract(j.value, '$.currency') = 'USD'
               AND json_type(j.value, '$.amount') IN ('text', 'integer', 'real')
               AND json_extract(j.value, '$.role') IN ('primary','scout','monitor','assessment','title','utility')
+              AND json_type(j.value, '$.producer') = 'text'
+              AND length(json_extract(j.value, '$.producer')) > 0
               AND json_type(j.value, '$.source') = 'text'
               AND length(json_extract(j.value, '$.source')) > 0
               AND json_valid('[' || json_extract(j.value, '$.amount') || ']')
@@ -116,6 +118,7 @@ def currency_query(query: str) -> TextClause:
             SELECT job_id, session_kind, SUM(CAST(json_extract(value, '$.amount') AS REAL)) AS usd
             FROM usage_entries
             WHERE json_type('[' || json_extract(value, '$.amount') || ']', '$[0]') IN ('real','integer')
+              AND json_array_length('[' || json_extract(value, '$.amount') || ']') = 1
               AND CAST(json_extract(value, '$.amount') AS REAL) >= 0
               AND CAST(json_extract(value, '$.amount') AS REAL) < 1e308
             GROUP BY job_id, session_kind
