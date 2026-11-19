@@ -39,7 +39,11 @@ def get_database_url(db_path: Path | None = None) -> str:
 
 
 def _set_sqlite_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:
-    """Enable WAL mode and foreign keys for every connection."""
+    """Configure each connection and install the shared, read-only usage qualifier."""
+    from backend.models.currency import event_usage_json, span_usd
+
+    dbapi_conn.create_function("codeplane_currency_usage", 4, event_usage_json, deterministic=True)
+    dbapi_conn.create_function("codeplane_span_usd", 3, span_usd, deterministic=True)
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")

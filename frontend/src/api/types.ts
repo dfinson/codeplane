@@ -360,3 +360,4 @@ export interface SuggestNamesResponse {
 
 export type JobTelemetryResponse = components["schemas"]["JobTelemetryResponse"];
 export type CurrencyValue = JobTelemetryResponse["totalCost"];
+export type RetryCostResponse = components["schemas"]["RetryCostResponse"];

@@ -6,7 +6,7 @@
  */
 
 import { request } from "./client";
-import type { AnalyticsOverviewResponse, AnalyticsToolsResponse, CurrencyValue, JobTelemetryResponse } from "./types";
+import type { AnalyticsOverviewResponse, AnalyticsToolsResponse, CurrencyValue, JobTelemetryResponse, RetryCostResponse as GeneratedRetryCostResponse } from "./types";
 
 // ---------------------------------------------------------------------------
 // Analytics Overview / Models / Tools / Repos / Jobs
@@ -291,14 +291,7 @@ export function fetchShellCommands(period = 30): Promise<ShellCommandsResponse> 
   return request(`/analytics/shell-commands?period=${period}`);
 }
 
-export interface RetryCostResponse {
-  period: number;
-  retryCostUsd: CurrencyValue;
-  retryCount: number;
-  totalSpans: number;
-  totalCostUsd: CurrencyValue;
-  retryPct: number;
-}
+export type RetryCostResponse = GeneratedRetryCostResponse;
 
 export function fetchRetryCost(period = 30): Promise<RetryCostResponse> {
   return request(`/analytics/retry-cost?period=${period}`);
@@ -361,7 +354,7 @@ export interface ScorecardResponse {
   activity: ScorecardActivity;
   budget: ScorecardBudget[];
   quotaJson: string | null;
-  costTrend: { date: string; cost: CurrencyValue; jobs: number }[];
+  costTrend: AnalyticsOverviewResponse["costTrend"];
   dailySpendLimitUsd: number;
   // Average cost per MTok + model mix
   avgCostPerMtok: CurrencyValue;

@@ -19,6 +19,21 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
 
+def _usd_evidence(amount):
+    return UsageAmount(
+        amount=amount,
+        unit="USD",
+        currency="USD",
+        verified=True,
+        producer="claude",
+        job_id="job-1",
+        execution_epoch="epoch",
+        model=None,
+        role="primary",
+        source="native",
+    ).model_dump(mode="json")
+
+
 @pytest.mark.parametrize("unit,amount", [("copilot_cost_unit", "2.31"), ("USD", "1.25"), ("USD", "0"), (None, None)])
 async def test_currency_rollups_require_explicit_source_usd_and_preserve_raw_totals(session_factory, unit, amount):
     async with session_factory() as session:
@@ -264,7 +279,7 @@ async def test_real_attribution_is_currency_qualified_only_from_known_span_sourc
             input_tokens=1,
             output_tokens=1,
             cost_usd=0 if known else 2.31,
-            attrs={"cost": 0 if known else 2.31, **({"cost_provenance": "verified_usd"} if known else {})},
+            attrs={"cost": 0 if known else 2.31, "native_usage": [_usd_evidence("0")] if known else []},
         )
         await compute_attribution(session, "job-1")
         rows = await CostAttributionRepository(session).for_job("job-1")
@@ -367,6 +382,8 @@ async def test_unqualified_evidence_cannot_mint_usd_zero(session_factory, defect
         ("1,9999", None),
         ("0,1", None),
         ("1,null", None),
+        ("1]\x00", None),
+        ("1]\x00,9999", None),
         ("0", 0.0),
         (0, 0.0),
         ("0e+4", 0.0),
@@ -450,3 +467,269 @@ async def test_currency_control_receipts_require_producer_and_source_strings(ses
         )
         expected = 0.0 if supplied == "valid" else None
         assert (await TelemetryAnalyticsRepository(session).aggregate())["total_cost_usd"] == expected
+
+
+@pytest.mark.parametrize(
+    "defect", ["duplicate", "conflict", "distinct", "empty-source", "string-verified", "nul-amount", "control-source"]
+)
+async def test_one_event_has_one_consistent_measurement_qualification(session_factory, defect):
+    from copy import deepcopy
+
+    from backend.models.currency import verified_usd
+    from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
+    from backend.services.events.telemetry_subscriber import TelemetrySubscriber
+
+    raw = UsageAmount(
+        amount="1.25",
+        unit="USD",
+        currency="USD",
+        verified=True,
+        producer="claude",
+        job_id="job-1",
+        execution_epoch="epoch",
+        model=None,
+        role="primary",
+        source="native",
+    ).model_dump(mode="json")
+    values = [raw, deepcopy(raw)]
+    expected = 1.25
+    if defect == "conflict":
+        values[1]["amount"] = "2"
+        expected = None
+    elif defect == "distinct":
+        values[1]["source"] = "different-measurement"
+        expected = 2.5
+    elif defect == "empty-source":
+        values = [{**raw, "source": ""}]
+        expected = None
+    elif defect == "string-verified":
+        values = [{**raw, "verified": "true"}]
+        expected = None
+    elif defect == "nul-amount":
+        values = [{**raw, "amount": "1]\x00,9999"}]
+        expected = None
+    elif defect == "control-source":
+        values = [{**raw, "source": "native\x00ignored"}]
+        expected = None
+    event = new_event(
+        "job-1",
+        "telemetry.usage",
+        {"native_usage": values, "input_tokens": 1, "output_tokens": 1},
+        metadata=EventMetadata(source_framework="claude", execution_epoch="epoch"),
+    )
+    pending: list[Awaitable[None]] = []
+    subscriber = TelemetrySubscriber(session_factory=session_factory, schedule_write=pending.append)
+    async with session_factory() as session:
+        await EventRepository(session).append(event)
+        await session.commit()
+    await subscriber.handle_event(event)
+    while pending:
+        await pending.pop(0)
+    async with session_factory() as session:
+        repo = TelemetrySummaryRepository(session)
+        costs = (await repo.batch_cost_usage(["job-1"])).get("job-1", [])
+        assert verified_usd(costs) == (None if expected is None else __import__("decimal").Decimal(str(expected)))
+        assert (await TelemetryAnalyticsRepository(session).aggregate())["total_cost_usd"] == expected
+        (span,) = await TelemetrySpansRepository(session).list_for_job("job-1")
+        assert span["cost_usd"] == expected
+        from backend.persistence.cost_attribution_repo import CostAttributionRepository
+        from backend.services.analytics.cost_attribution import compute_attribution
+
+        await compute_attribution(session, "job-1")
+        turn_rows = [
+            row for row in await CostAttributionRepository(session).for_job("job-1") if row["dimension"] == "turn"
+        ]
+        assert len(turn_rows) == 1 and turn_rows[0]["cost_usd"] == expected
+        # A distinct event with identical source/amount remains a distinct measurement.
+        if defect == "duplicate":
+            await EventRepository(session).append(event.model_copy(update={"id": event.id + "-second"}))
+            assert (await TelemetryAnalyticsRepository(session).aggregate())["total_cost_usd"] == 2.5
+
+
+async def test_real_utility_receipts_without_summary_rows_reach_role_views(session_factory):
+    from backend.models.execution_contracts import ExecutionContractPin
+    from backend.services.adapters.adapter_registry import AdapterRegistry
+    from backend.services.adapters.completion_context import CompletionContext
+    from backend.tests.unit.test_execution_contracts import _contract
+
+    registry = AdapterRegistry(session_factory=session_factory)
+    pin = ExecutionContractPin(job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pin"))
+    for role in ("assessment", "title", "monitor"):
+        usage = UsageAmount(
+            amount="1.25",
+            unit="USD",
+            currency="USD",
+            verified=True,
+            producer="claude",
+            job_id="job-1",
+            execution_epoch="epoch",
+            model="fixture",
+            role=role,
+            source="native",
+        )
+        await registry.record_utility_receipt(
+            role,
+            "completed",
+            CompletionContext(job_id="job-1", execution_epoch="epoch", execution_contract=pin, role=role),
+            {"usage": [usage.model_dump(mode="json")]},
+        )
+    async with session_factory() as session:
+        summary = TelemetrySummaryRepository(session)
+        assert set((row["session_kind"], row["total_cost_usd"]) for row in await summary.list_sidecars("job-1")) == {
+            ("assessment", 1.25),
+            ("title", 1.25),
+            ("monitor", 1.25),
+        }
+        fleet = await TelemetryAnalyticsRepository(session).sidecar_cost_breakdown()
+        assert set((row["session_kind"], row["total_cost_usd"]) for row in fleet) == {
+            ("assessment", 1.25),
+            ("title", 1.25),
+            ("monitor", 1.25),
+        }
+        assert (await session.execute(text("SELECT COUNT(*) FROM job_telemetry_summary"))).scalar_one() == 0
+        from backend.services.analytics.analytics_service import AnalyticsService
+
+        assert {usage.role for usage in await AnalyticsService(session).cost_usage(period_days=7)} == {
+            "assessment",
+            "title",
+            "monitor",
+        }
+        await summary.init_job("job-1", sdk="codeplane", session_kind="assessment")
+        await summary.increment("job-1", session_kind="assessment", total_cost_usd=999)
+        assert {(row["session_kind"], row["total_cost_usd"]) for row in await summary.list_sidecars("job-1")} == {
+            ("assessment", 1.25),
+            ("title", 1.25),
+            ("monitor", 1.25),
+        }
+        # Alembic column order need not match fresh ORM metadata order.
+        from backend.models.db import JobTelemetrySummaryRow
+
+        columns = ", ".join(f'"{column.name}"' for column in reversed(JobTelemetrySummaryRow.__table__.columns))
+        await session.execute(text("ALTER TABLE job_telemetry_summary RENAME TO prior_summary"))
+        await session.execute(text(f"CREATE TABLE job_telemetry_summary AS SELECT {columns} FROM prior_summary"))
+        assert {(row["session_kind"], row["total_cost_usd"]) for row in await summary.list_sidecars("job-1")} == {
+            ("assessment", 1.25),
+            ("title", 1.25),
+            ("monitor", 1.25),
+        }
+
+
+@pytest.mark.parametrize("alias", ["usage_entries", "verified_cost", "source_summary"])
+async def test_custom_currency_queries_can_reuse_internal_names(session_factory, alias):
+    from backend.services.metrics.query_executor import execute_query
+
+    async with session_factory() as session:
+        await TelemetrySummaryRepository(session).init_job("job-1", sdk="copilot")
+        await TelemetrySummaryRepository(session).increment("job-1", total_cost_usd=2.31)
+        await session.commit()
+    result = await execute_query(session_factory, f"WITH {alias} AS (SELECT 2 AS value) SELECT value FROM {alias}")
+    assert result == [{"value": 2}]
+    joined = await execute_query(
+        session_factory,
+        f"WITH {alias} AS (SELECT 2 AS value) "
+        f"SELECT value, total_cost_usd AS cost FROM {alias} JOIN job_telemetry_summary ON 1=1",
+    )
+    assert joined == [{"value": 2, "cost": None}]
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "conflict", "empty-source", "string-verified"])
+async def test_sidecar_and_scalar_helper_apply_the_same_measurement_rule(defect):
+    from decimal import Decimal
+    from unittest.mock import AsyncMock
+
+    from backend.models.currency import verified_usd
+    from backend.services.adapters.agent_adapter import CompletionResult
+    from backend.services.sidecar.session import SidecarSessionManager
+
+    raw = dict(
+        amount=Decimal("1.25"),
+        unit="USD",
+        currency="USD",
+        verified=True,
+        producer="claude",
+        job_id=None,
+        execution_epoch=None,
+        model=None,
+        role="utility",
+        source="native",
+    )
+    values = [UsageAmount(**raw), UsageAmount(**raw)]
+    if defect == "conflict":
+        values[1] = UsageAmount(**{**raw, "amount": Decimal("2")})
+    elif defect == "empty-source":
+        values = [UsageAmount(**{**raw, "source": ""})]
+    elif defect == "string-verified":
+        values = [UsageAmount.model_construct(**{**raw, "verified": "true"})]
+    expected = Decimal("1.25") if defect == "duplicate" else None
+    assert verified_usd(values) == expected
+    adapter = AsyncMock()
+    adapter.complete.return_value = CompletionResult(text="inert", usage=tuple(values))
+    manager = SidecarSessionManager(adapter, model="fixture", pool_size=0)
+    try:
+        await manager.open("job-1", "fixture").complete("inert")
+        assert manager.get_metrics()["jobs"]["job-1"]["costUsd"] == (float(expected) if expected is not None else None)
+    finally:
+        await manager.shutdown()
+
+
+async def test_mixed_known_turn_and_unknown_turn_do_not_claim_complete_attribution(session_factory):
+    from backend.persistence.cost_attribution_repo import CostAttributionRepository
+    from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
+    from backend.services.analytics.cost_attribution import compute_attribution
+
+    async with session_factory() as session:
+        await TelemetrySummaryRepository(session).init_job("job-1", sdk="codeplane")
+        spans = TelemetrySpansRepository(session)
+        for turn, cost in ((1, 1.25), (2, None)):
+            await spans.insert(
+                job_id="job-1",
+                span_type="llm",
+                name="fixture",
+                started_at=turn,
+                duration_ms=1,
+                turn_number=turn,
+                cost_usd=cost,
+                attrs={"native_usage": [_usd_evidence(str(cost))] if cost is not None else []},
+            )
+        await compute_attribution(session, "job-1")
+        assert [span["cost_usd"] for span in await spans.list_for_job("job-1")] == [1.25, None]
+        rows = await CostAttributionRepository(session).for_job("job-1")
+        assert rows and all(row["cost_usd"] is None for row in rows)
+
+
+@pytest.mark.parametrize("defect", ["empty-source", "string-verified", "conflict", "legacy-label"])
+async def test_retained_span_labels_cannot_override_invalid_source_measurements(session_factory, defect):
+    import json
+
+    from backend.persistence.cost_attribution_repo import CostAttributionRepository
+    from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
+    from backend.services.analytics.cost_attribution import compute_attribution
+
+    entries = [_usd_evidence("1.25")]
+    if defect == "empty-source":
+        entries[0]["source"] = ""
+    elif defect == "string-verified":
+        entries[0]["verified"] = "true"
+    elif defect == "conflict":
+        entries.append(_usd_evidence("2"))
+    else:
+        entries = []
+    async with session_factory() as session:
+        await TelemetrySummaryRepository(session).init_job("job-1", sdk="claude")
+        spans = TelemetrySpansRepository(session)
+        await spans.insert(
+            job_id="job-1",
+            span_type="llm",
+            name="fixture",
+            started_at=0,
+            duration_ms=1,
+            turn_number=1,
+            cost_usd=1.25,
+            attrs={"cost_provenance": "verified_usd", "cost": 1.25, "native_usage": entries},
+        )
+        before = (await session.execute(text("SELECT cost_usd,attrs_json FROM job_telemetry_spans"))).one()
+        assert (await spans.list_for_job("job-1"))[0]["cost_usd"] is None
+        await compute_attribution(session, "job-1")
+        assert all(row["cost_usd"] is None for row in await CostAttributionRepository(session).for_job("job-1"))
+        after = (await session.execute(text("SELECT cost_usd,attrs_json FROM job_telemetry_spans"))).one()
+        assert after == before and json.loads(after[1])["cost"] == 1.25

@@ -9,9 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from backend.models.currency import verified_usd
+from backend.models.currency import event_usage, verified_usd
 from backend.models.events import EventKind
-from backend.models.usage import UsageAmount
 from backend.services.events.observation import has_source_grouping, observed_operation_id
 
 if TYPE_CHECKING:
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from backend.models.session_event import SessionEvent
+    from backend.models.usage import UsageAmount
     from backend.services.analytics.model_pricing import ModelPricingService
     from backend.services.events.event_bus import EventBus
 
@@ -116,7 +116,7 @@ class TelemetrySubscriber:
             if phase:
                 self.set_execution_phase(job_id, str(phase))
         elif kind == EventKind.telemetry_usage:
-            self._record_usage(job_id, event.payload, sdk, epoch=metadata.execution_epoch)
+            self._record_usage(job_id, event.payload, sdk, metadata=metadata.model_dump(mode="json"))
         elif kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             self._record_completed_tool(job_id, event, sdk)
         elif kind == EventKind.message_user:
@@ -154,7 +154,7 @@ class TelemetrySubscriber:
         """Return the current per-job turn counter."""
         return self._turn_counters.get(job_id, 0)
 
-    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str, *, epoch: str | None = None) -> None:
+    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str, *, metadata: dict[str, Any]) -> None:
         from backend.services.analytics import telemetry as tel
 
         input_tokens = int(payload.get("input_tokens") or 0)
@@ -166,9 +166,14 @@ class TelemetrySubscriber:
         is_subagent = bool(payload.get("is_subagent", False))
         advance_turn = bool(payload.get("advance_turn", True))
         num_turns = int(payload.get("num_turns") or 1)
-        usage = [UsageAmount.model_validate(raw) for raw in payload.get("native_usage", [])]
-        if any(item.job_id != job_id or item.execution_epoch != epoch or item.producer != sdk for item in usage):
-            raise ValueError("Telemetry usage does not match its producer and execution source")
+        usage = list(
+            event_usage(
+                "telemetry.usage",
+                job_id,
+                payload,
+                metadata,
+            )
+        )
         roles = {item.role for item in usage}
         if len(roles) > 1:
             raise ValueError("One telemetry invocation cannot combine different accounting roles")
