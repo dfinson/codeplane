@@ -58,6 +58,7 @@ from backend.models.schemas.tracker_operations import (
     TrackerTargetKind as TrackerTargetKind,
 )
 from backend.models.session_event import EventMetadata  # noqa: TC001 - Pydantic resolves annotations at runtime.
+from backend.models.usage import UsageAmount  # noqa: TC001 - Pydantic resolves annotations at runtime.
 
 if TYPE_CHECKING:
     from backend.models.domain import Job
@@ -309,6 +310,8 @@ class JobResponse(CamelModel):
     observation_only: bool = False
     mode: JobMode = JobMode.standard
     total_cost_usd: float | None = None
+    cost_usage: list[UsageAmount] | None = None
+    """Source-typed cost totals. The legacy total_cost_usd field alone proves no currency."""
     total_tokens: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None

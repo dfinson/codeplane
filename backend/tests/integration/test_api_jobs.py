@@ -86,6 +86,100 @@ def _create_body(**overrides: object) -> dict[str, object]:
     return base
 
 
+class TestJobCostProvenance:
+    @pytest.mark.parametrize(
+        "kind", ["copilot", "verified-usd", "legacy", "observation", "forged-usd", "foreign-owner"]
+    )
+    async def test_source_units_reach_job_detail_and_list_without_rewriting_legacy_totals(
+        self, client, session_factory, seed_job, kind
+    ):
+        from backend.models.events import new_event
+        from backend.models.session_event import EventMetadata
+        from backend.models.usage import UsageAmount
+        from backend.persistence.event_repo import EventRepository
+        from backend.persistence.job_repo import JobRepository
+        from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+        from backend.services.events.sse_manager import SSEConnection, SSEManager
+
+        job_id = await seed_job(state="completed")
+        currency = kind in {"verified-usd", "observation", "forged-usd", "foreign-owner"}
+        producer = "claude" if currency else "copilot"
+        async with session_factory() as session:
+            summaries = TelemetrySummaryRepository(session)
+            await summaries.init_job(job_id, sdk="codeplane")
+            await summaries.increment(
+                job_id, total_cost_usd=2.31, input_tokens=67464, output_tokens=985, cache_read_tokens=48229
+            )
+            events = EventRepository(session)
+            for index in range(7):
+                usage = UsageAmount(
+                    amount="0.33",
+                    unit="USD" if currency else "copilot_cost_unit",
+                    producer=producer,
+                    model="fixture",
+                    job_id=job_id,
+                    execution_epoch="epoch",
+                    role="primary",
+                    source="native-usage",
+                    verified=currency,
+                    currency="USD" if currency else None,
+                )
+                source_usage = usage.model_dump(mode="json")
+                if kind == "forged-usd":
+                    source_usage["verified"] = False
+                elif kind == "foreign-owner":
+                    source_usage["job_id"] = "another-job"
+                event = new_event(
+                    job_id,
+                    "telemetry.usage",
+                    {
+                        "cost_usd": 0.33,
+                        **({"native_usage": [source_usage]} if kind != "legacy" else {}),
+                    },
+                    event_id=f"{job_id}-usage-{index}",
+                    timestamp=datetime(2020, 1, 1, tzinfo=UTC),
+                    metadata=EventMetadata(
+                        source_framework=producer,
+                        execution_epoch="epoch",
+                        integration_binding_id="observer" if kind == "observation" else None,
+                        namespace=("observation-source",) if kind == "observation" else (),
+                    ),
+                )
+                await events.append(event)
+                await events.append(event)
+            await session.commit()
+            before = await events.list_all_events_by_job(job_id)
+        detail = await client.get(f"/api/jobs/{job_id}")
+        listing = await client.get("/api/jobs")
+        assert detail.status_code == listing.status_code == 200
+        listed = next(item for item in listing.json()["items"] if item["id"] == job_id)
+        async with session_factory() as session:
+            sse = SSEManager()
+            connection = SSEConnection(job_id)
+            await sse.replay_events(
+                connection, EventRepository(session), JobRepository(session), last_event_id=0, session=session
+            )
+            frame = connection.queue.get_nowait()
+            import json
+
+            snapshot = json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for body in (detail.json(), listed, snapshot["jobs"][0]):
+            assert body["totalCostUsd"] == 2.31 and body["totalTokens"] == 116678
+            if kind in {"legacy", "observation", "forged-usd", "foreign-owner"}:
+                assert body["costUsage"] == []
+            else:
+                (cost,) = body["costUsage"]
+                assert cost["amount"] == "2.31" and cost["producer"] == producer
+                assert cost["unit"] == ("USD" if currency else "copilot_cost_unit")
+                assert cost["verified"] is currency and cost["currency"] == ("USD" if currency else None)
+                assert cost["role"] == "primary" and cost["source"] == "native-usage"
+        async with session_factory() as session:
+            assert await EventRepository(session).list_all_events_by_job(job_id) == before
+            assert (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id]))[job_id][
+                "total_cost_usd"
+            ] == 2.31
+
+
 class TestRuntimeContract:
     async def test_cancel_routes_delivery_before_state_change(self):
         from backend.api.jobs import cancel_job

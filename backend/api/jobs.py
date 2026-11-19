@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from backend.models.domain import Job
+    from backend.models.usage import UsageAmount
 
 from backend.models.domain import JobMode, JobSpec, JobState, Preset
 
@@ -101,6 +102,7 @@ def job_to_response(
     total_tokens: float | int | None = None,
     input_tokens: float | int | None = None,
     output_tokens: float | int | None = None,
+    cost_usage: list[UsageAmount] | None = None,
 ) -> JobResponse:
     """Map a domain Job to a JobResponse."""
     overrides: dict[str, Any] = {}
@@ -115,6 +117,8 @@ def job_to_response(
         overrides["input_tokens"] = int(input_tokens)
     if output_tokens is not None:
         overrides["output_tokens"] = int(output_tokens)
+    if cost_usage is not None:
+        overrides["cost_usage"] = cost_usage
     return JobResponse.from_domain(job, **overrides)
 
 
@@ -270,6 +274,7 @@ async def list_jobs(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     cost_by_job = await TelemetrySummaryRepository(session).batch_cost_tokens(job_ids)
+    usage_by_job = await TelemetrySummaryRepository(session).batch_cost_usage(job_ids)
 
     items = []
     for j in jobs:
@@ -282,6 +287,7 @@ async def list_jobs(
                 total_tokens=ct.get("total_tokens"),
                 input_tokens=ct.get("input_tokens"),
                 output_tokens=ct.get("output_tokens"),
+                cost_usage=usage_by_job.get(j.id, []),
             )
         )
     return JobListResponse(items=items, cursor=next_cursor, has_more=has_more)
@@ -300,6 +306,7 @@ async def get_job(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     ct = (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id])).get(job_id, {})
+    usage = (await TelemetrySummaryRepository(session).batch_cost_usage([job_id])).get(job_id, [])
 
     return job_to_response(
         job,
@@ -308,6 +315,7 @@ async def get_job(
         total_tokens=ct.get("total_tokens"),
         input_tokens=ct.get("input_tokens"),
         output_tokens=ct.get("output_tokens"),
+        cost_usage=usage,
     )
 
 

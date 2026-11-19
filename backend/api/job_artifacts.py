@@ -501,6 +501,7 @@ async def get_job_snapshot(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     ct = (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id])).get(job_id, {})
+    usage = (await TelemetrySummaryRepository(session).batch_cost_usage([job_id])).get(job_id, [])
 
     return await assemble_snapshot(
         job=job,
@@ -517,6 +518,7 @@ async def get_job_snapshot(
             total_tokens=ct.get("total_tokens"),
             input_tokens=ct.get("input_tokens"),
             output_tokens=ct.get("output_tokens"),
+            cost_usage=usage,
         ),
         filter_transcript_deltas=True,
         detect_plan_generations=True,

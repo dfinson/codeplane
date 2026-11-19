@@ -4,6 +4,8 @@ import { MemoryRouter } from "react-router-dom";
 import { useStore } from "../../store";
 import type { JobSummary } from "../../store";
 import { JobCard } from "../JobCard";
+import { MetadataChipStrip } from "../MetadataChipStrip";
+import type { UsageAmount } from "../../api/types";
 
 function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
   return {
@@ -41,6 +43,71 @@ beforeEach(() => {
 });
 
 describe("JobCard", () => {
+  it.each(["card", "header"])("does not label unqualified historical cost as USD in the %s", (component) => {
+    const job = makeJob({ totalCostUsd: 2.31, totalTokens: 116678, sdk: "codeplane" });
+    const { container } = render(<MemoryRouter>
+      {component === "card" ? <JobCard job={job} /> : <MetadataChipStrip job={job} hasMergeConflict={false} />}
+    </MemoryRouter>);
+    expect(container.textContent).not.toContain("$2.31");
+    expect(screen.getByText("2.31 legacy units (unverified) · 117k tok")).toBeInTheDocument();
+  });
+
+  it.each(["card", "header"])("retains native units and verified USD without conversion in the %s", (component) => {
+    const native: UsageAmount = {
+      amount: "2.31", unit: "copilot_cost_unit", producer: "copilot", role: "primary",
+      verified: false, currency: null, model: "fixture", job_id: "job-1", execution_epoch: "epoch",
+      source: "assistant.usage",
+    };
+    const usd: UsageAmount = {
+      ...native, amount: "0.12", unit: "USD", producer: "claude", verified: true, currency: "USD",
+    };
+    const job = makeJob({ totalCostUsd: 2.43, totalTokens: 116678, sdk: "codeplane", costUsage: [native, usd] });
+    const { container } = render(<MemoryRouter>
+      {component === "card" ? <JobCard job={job} /> : <MetadataChipStrip job={job} hasMergeConflict={false} />}
+    </MemoryRouter>);
+    expect(screen.getByText("2.31 Copilot cost units + $0.12 USD · 117k tok")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("$2.43");
+    expect(container.textContent).not.toContain("$2.31");
+    if (component === "header") {
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "View cost breakdown" }));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Legacy aggregate (unit unverified)2.43");
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Native units are not dollars");
+      expect(screen.getByRole("tooltip")).not.toHaveTextContent("$2.43");
+    }
+  });
+
+  it("preserves verified zero USD and does not infer a currency from the provider name", () => {
+    const usd: UsageAmount = {
+      amount: "0", unit: "USD", producer: "claude", role: "primary",
+      verified: true, currency: "USD", model: null, job_id: "job-1", execution_epoch: "epoch",
+      source: "native-response",
+    };
+    const { rerender } = render(<MemoryRouter>
+      <MetadataChipStrip job={makeJob({ totalCostUsd: 0, costUsage: [usd] })} hasMergeConflict={false} />
+    </MemoryRouter>);
+    expect(screen.getByText("$0.00 USD")).toBeInTheDocument();
+    rerender(<MemoryRouter>
+      <MetadataChipStrip job={makeJob({ totalCostUsd: 2.31, sdk: "claude", costUsage: [] })} hasMergeConflict={false} />
+    </MemoryRouter>);
+    expect(screen.getByText("2.31 legacy units (unverified)")).toBeInTheDocument();
+    expect(screen.queryByText("$2.31")).not.toBeInTheDocument();
+  });
+
+  it.each(["card", "header"])("shows the captured Copilot cost unit without any dollars in the %s", (component) => {
+    const job = makeJob({
+      sdk: "codeplane", totalCostUsd: 2.31, totalTokens: 116678,
+      costUsage: [{
+        amount: "2.31", unit: "copilot_cost_unit", verified: false, currency: null, producer: "copilot",
+        model: null, job_id: "job-1", execution_epoch: "epoch", role: "primary", source: "native-response",
+      }],
+    });
+    const { container } = render(<MemoryRouter>
+      {component === "card" ? <JobCard job={job} /> : <MetadataChipStrip job={job} hasMergeConflict={false} />}
+    </MemoryRouter>);
+    expect(screen.getByText("2.31 Copilot cost units · 117k tok")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("$");
+  });
+
   it("renders nullable observation history without a fictional running agent or branch", () => {
     render(<MemoryRouter><JobCard job={makeJob({
       repo: null, baseRef: null, worktreePath: null, branch: null,

@@ -314,14 +314,17 @@ class SSEManager:
             job_ids = [j.id for j in fetched_jobs]
             progress_by_job = await event_repo.list_latest_progress_previews(job_ids)
             cost_by_job: dict[str, dict[str, float | int]] = {}
+            usage_by_job = {}
             if session is not None:
                 cost_by_job = await TelemetrySummaryRepository(session).batch_cost_tokens(job_ids)
+                usage_by_job = await TelemetrySummaryRepository(session).batch_cost_usage(job_ids)
 
             job_responses = [
                 JobResponse.from_domain(
                     j,
                     progress_headline=progress_by_job.get(j.id, (None, None))[0],
                     progress_summary=progress_by_job.get(j.id, (None, None))[1],
+                    cost_usage=usage_by_job.get(j.id, []),
                     **{k: v for k, v in cost_by_job.get(j.id, {}).items()},
                 )
                 for j in fetched_jobs
