@@ -5421,6 +5421,8 @@ export interface components {
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
             totalCostUsd?: number | null;
+            /** Costusage */
+            costUsage?: components["schemas"]["UsageAmount"][] | null;
             /** Totaltokens */
             totalTokens?: number | null;
             /** Inputtokens */
@@ -7436,6 +7438,8 @@ export interface components {
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
             totalCostUsd?: number | null;
+            /** Costusage */
+            costUsage?: components["schemas"]["UsageAmount"][] | null;
             /** Totaltokens */
             totalTokens?: number | null;
             /** Inputtokens */
@@ -10079,6 +10083,38 @@ export interface components {
             ceilings: {
                 [key: string]: components["schemas"]["UsdCeilingEntry"];
             };
+        };
+        /** UsageAmount */
+        UsageAmount: {
+            /** Amount */
+            amount: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "premium_requests" | "copilot_cost_unit" | "USD";
+            /** Producer */
+            producer: string;
+            /** Model */
+            model: string | null;
+            /** Job Id */
+            job_id: string | null;
+            /** Execution Epoch */
+            execution_epoch: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "primary" | "scout" | "monitor" | "assessment" | "title" | "utility";
+            /** Source */
+            source: string;
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Currency */
+            currency?: "USD" | null;
         };
         /**
          * UsdCeilingEntry

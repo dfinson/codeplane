@@ -7,6 +7,7 @@
 import type { components } from "./schema";
 
 export type Job = components["schemas"]["JobResponse"];
+export type UsageAmount = components["schemas"]["UsageAmount"];
 export type JobState = Job["state"];
 export type CreateJobRequest = components["schemas"]["CreateJobRequest"];
 export type CreateJobResponse = components["schemas"]["CreateJobResponse"];

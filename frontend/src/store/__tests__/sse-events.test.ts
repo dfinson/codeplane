@@ -25,6 +25,7 @@ import {
 import type { DiffFileModel, TrackerOperationResponse } from "../../api/types";
 import { normalizeTFEvent } from "../sseNormalize";
 import { toolOutputKey } from "../../lib/transcriptIdentity";
+import { jobCostLabel } from "../../lib/jobCost";
 import type {
   AppState,
   ActivityTimelineState,
@@ -58,6 +59,23 @@ function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     ...overrides,
   };
 }
+
+it("does not apply stale USD provenance to a new unqualified telemetry total", () => {
+  const job = makeJob({
+    totalCostUsd: 1,
+    costUsage: [{
+      amount: "1", unit: "USD", currency: "USD", verified: true, producer: "claude", model: null,
+      job_id: "job-1", execution_epoch: "epoch", role: "primary", source: "native-response",
+    }],
+  });
+  useStore.setState({ jobs: { "job-1": job } });
+  expect(jobCostLabel(job)).toBe("$1.00 USD");
+  useStore.getState().dispatchSSEEvent("telemetry.updated", { jobId: "job-1", totalCostUsd: 1, totalTokens: 10 });
+  expect(jobCostLabel(useStore.getState().jobs["job-1"]!)).toBe("$1.00 USD");
+  useStore.getState().dispatchSSEEvent("telemetry.updated", { jobId: "job-1", totalCostUsd: 2.31 });
+  expect(useStore.getState().jobs["job-1"]?.costUsage).toBeNull();
+  expect(jobCostLabel(useStore.getState().jobs["job-1"]!)).toBe("2.31 legacy units (unverified)");
+});
 
 it("records a failed tool without terminating the Job or removing a sibling call", () => {
   useStore.setState({ jobs: { "job-1": makeJob() }, transcript: {}, streamingToolOutput: {} });

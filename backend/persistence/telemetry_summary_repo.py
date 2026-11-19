@@ -7,18 +7,79 @@ always up-to-date.  No timers, no flush intervals.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import text
+import structlog
+from pydantic import ValidationError
+from sqlalchemy import select, text
 
+from backend.models.db import EventRow
+from backend.models.usage import UsageAmount
+from backend.persistence.event_repo import EventRepository
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
     from backend.models.domain import TelemetrySummaryRow
 
+log = structlog.get_logger()
+
 
 class TelemetrySummaryRepository(BaseRepository):
     """Event-driven upserts into ``job_telemetry_summary``."""
+
+    async def batch_cost_usage(self, job_ids: list[str]) -> dict[str, list[UsageAmount]]:
+        """Read source-typed primary cost evidence without relabeling historical totals."""
+        if not job_ids:
+            return {}
+        rows = await self._session.stream_scalars(
+            select(EventRow)
+            .where(
+                EventRow.job_id.in_(job_ids),
+                EventRow.kind.in_(("telemetry.usage", "execution.native.usage")),
+            )
+            .order_by(EventRow.id)
+            .execution_options(yield_per=100)
+        )
+        totals: dict[str, dict[str, UsageAmount]] = {}
+        async for row in rows:
+            event = EventRepository._to_domain(row)
+            metadata = event.metadata
+            if metadata.integration_binding_id and (metadata.namespace or ())[:1] == ("observation-source",):
+                continue
+            if event.kind == "telemetry.usage":
+                if metadata.source_framework not in {"copilot", "claude"}:
+                    continue
+                entries = event.payload.get("native_usage", [])
+            else:
+                if metadata.source_framework != "codeplane" or metadata.namespace != ("control", "native-execution"):
+                    continue
+                entries = event.payload.get("usage", [])
+            if not isinstance(entries, list):
+                log.warning("job_cost_usage_invalid", event_id=event.id, reason="expected_usage_list")
+                continue
+            for entry in entries:
+                try:
+                    usage = UsageAmount.model_validate(entry)
+                except ValidationError:
+                    log.warning("job_cost_usage_invalid", event_id=event.id, reason="invalid_source_usage")
+                    continue
+                if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or usage.role != "primary":
+                    continue
+                if (
+                    usage.job_id != event.session_id
+                    or usage.execution_epoch != metadata.execution_epoch
+                    or (event.kind == "telemetry.usage" and usage.producer != metadata.source_framework)
+                ):
+                    log.warning("job_cost_usage_invalid", event_id=event.id, reason="source_identity_mismatch")
+                    continue
+                key = usage.model_dump_json(exclude={"amount"})
+                by_source = totals.setdefault(event.session_id, {})
+                previous = by_source.get(key)
+                by_source[key] = usage.model_copy(
+                    update={"amount": (previous.amount if previous is not None else Decimal(0)) + usage.amount}
+                )
+        return {job_id: list(entries.values()) for job_id, entries in totals.items()}
 
     async def init_job(
         self,

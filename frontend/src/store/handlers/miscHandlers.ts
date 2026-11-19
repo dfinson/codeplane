@@ -163,7 +163,11 @@ export function handleTelemetryUpdated(state: AppState, payload: Record<string, 
       ...state.jobs,
       [jobId]: {
         ...existingJob,
-        ...(payload.totalCostUsd !== undefined ? { totalCostUsd: payload.totalCostUsd as number } : {}),
+        // A legacy aggregate update cannot re-certify the previously loaded typed totals.
+        ...(payload.totalCostUsd !== undefined ? {
+          totalCostUsd: payload.totalCostUsd as number,
+          ...(payload.totalCostUsd !== existingJob.totalCostUsd ? { costUsage: null } : {}),
+        } : {}),
         ...(payload.totalTokens !== undefined ? { totalTokens: payload.totalTokens as number } : {}),
         ...(payload.inputTokens !== undefined ? { inputTokens: payload.inputTokens as number } : {}),
         ...(payload.outputTokens !== undefined ? { outputTokens: payload.outputTokens as number } : {}),

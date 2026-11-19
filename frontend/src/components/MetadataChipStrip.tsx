@@ -6,6 +6,7 @@ import type { JobSummary } from "../store";
 import { Tooltip } from "./ui/tooltip";
 import { cn, isActiveSetupStep, setupStepLabel } from "../lib/utils";
 import { pathBasename } from "../lib/paths";
+import { jobCostLabel, jobCostWithTokens } from "../lib/jobCost";
 
 interface MetadataChipStripProps {
   job: JobSummary;
@@ -56,8 +57,7 @@ function CostChip({ job, onCostClick }: { job: JobSummary; onCostClick?: () => v
     };
   }, [showTooltip, close]);
 
-  const costUsd = job.totalCostUsd!;
-  const label = formatCostChip(costUsd, job.totalTokens);
+  const label = jobCostWithTokens(job);
 
   return (
     <span
@@ -90,9 +90,15 @@ function CostChip({ job, onCostClick }: { job: JobSummary; onCostClick?: () => v
         >
           <div className="space-y-1">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">API cost</span>
-              <span className="font-medium">{formatUsd(costUsd)}</span>
+              <span className="text-muted-foreground">Reported usage</span>
+              <span className="font-medium">{jobCostLabel(job)}</span>
             </div>
+            {!!job.costUsage?.length && job.totalCostUsd != null && (
+              <div className="flex justify-between gap-2">
+                <span className="text-muted-foreground">Legacy aggregate (unit unverified)</span>
+                <span>{job.totalCostUsd}</span>
+              </div>
+            )}
             {job.inputTokens != null && job.inputTokens > 0 && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Input tokens</span>
@@ -119,7 +125,8 @@ function CostChip({ job, onCostClick }: { job: JobSummary; onCostClick?: () => v
             )}
           </div>
           <p className="mt-2 text-[10px] text-muted-foreground/70 leading-tight">
-            Raw API cost — may not reflect your actual bill (cached tokens, batching, and provider discounts apply).
+            Native units are not dollars. USD is shown only with verified currency provenance.
+            Historical aggregates have unverified units and are not converted.
           </p>
           {onCostClick && (
             <p className="mt-1 text-[10px] text-primary/70">Click for full breakdown →</p>
@@ -158,7 +165,7 @@ export function MetadataChipStrip({ job, hasMergeConflict, className, onCostClic
         </Tooltip>
       )}
       {/* Cost / token chip */}
-      {(job.totalCostUsd != null && job.totalCostUsd > 0) && (
+      {jobCostLabel(job) != null && (
         <CostChip job={job} onCostClick={onCostClick} />
       )}
       {/* Status chips */}
@@ -200,23 +207,6 @@ function timeAgo(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
-}
-
-function formatCostChip(costUsd: number, tokens?: number | null): string {
-  const cost = formatUsd(costUsd);
-  if (tokens == null || tokens === 0) return cost;
-  return `${cost} · ${formatTokensCompact(tokens)} tok`;
-}
-
-function formatUsd(costUsd: number): string {
-  if (costUsd < 0.01) return `$${costUsd.toFixed(4)}`;
-  return `$${costUsd.toFixed(2)}`;
-}
-
-function formatTokensCompact(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}k`;
-  return `${tokens}`;
 }
 
 function formatTokens(tokens: number): string {
