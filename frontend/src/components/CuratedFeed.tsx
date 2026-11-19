@@ -373,7 +373,7 @@ function InlineBatchApprovalCard({ batch }: { batch: BatchApproval }) {
     try {
       await resolveBatch(batch.jobId, batch.batchId, "approved");
       await trustJob(batch.jobId);
-      toast.success("Session trusted — future actions will auto-approve");
+      toast.success("Routine actions trusted for 24 hours. Security gates still require approval.");
     } catch (err) {
       toast.error("Failed to trust session");
       console.error("Failed to trust session:", err);
@@ -412,7 +412,11 @@ function InlineBatchApprovalCard({ batch }: { batch: BatchApproval }) {
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50">
               {batch.resolution === "approved"
                 ? <><CheckCircle2 size={12} className="text-emerald-400/60" /> Approved</>
-                : <><XCircleIcon size={12} className="text-red-400/60" /> Rejected</>
+                : batch.resolution === "partial"
+                  ? <>Partially approved</>
+                  : batch.resolution === "canceled"
+                    ? <>Batch closed. Individual decisions are retained.</>
+                    : <><XCircleIcon size={12} className="text-red-400/60" /> Rejected</>
               }
             </div>
           ) : (

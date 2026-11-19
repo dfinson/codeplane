@@ -593,22 +593,53 @@ async def test_stale_approval_creation_is_retired_without_publishing_to_replacem
 
 
 async def test_permission_invocation_keeps_original_scope_across_policy_wait_and_replacement(session_factory):
+    from backend.services.action_policy.agt_policy import FactDecision
+    from backend.services.action_policy.assessment import ActionBinding
+    from backend.services.action_policy.authority import Authorization
+    from backend.services.action_policy.standalone_router import StandalonePolicyRouter
     from backend.services.adapters.base_adapter import PermissionDecision
 
     events = EventBus()
     observed = []
+    classified = []
+
+    async def record(event):
+        if event.kind == EventKind.action_classified:
+            classified.append(event)
+
+    events.subscribe(record)
     adapter, _, config = _scoped_permission_adapter(session_factory, event_bus=events)
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def delayed(invocation):
-        observed.append(invocation)
+    async def delayed(**kwargs):
         entered.set()
         await release.wait()
-        return True
+        return Authorization(
+            True,
+            FactDecision("allow", "known_read", False),
+            "decision",
+            ActionBinding.create("job-1", "epoch", {}, fields=kwargs["fields"]),
+        )
 
-    adapter._policy_router["job-1"] = SimpleNamespace(
-        execution_epoch="epoch", authorize_permission=AsyncMock(side_effect=delayed)
+    router = StandalonePolicyRouter(
+        pin=SimpleNamespace(job_id="job-1"),
+        execution_epoch="epoch",
+        policy=RepoPolicy(),
+        authority=SimpleNamespace(authorize=AsyncMock(side_effect=delayed)),
+        contracts=SimpleNamespace(require_available=MagicMock(), bind_handle=AsyncMock()),
+        events=events,
+        checkpoint=MagicMock(),
+        git=MagicMock(),
+        job_is_current=AsyncMock(return_value=True),
     )
+    authorize = router.authorize_permission
+
+    async def capture(invocation):
+        observed.append(invocation)
+        return await authorize(invocation)
+
+    router.authorize_permission = capture
+    adapter._policy_router["job-1"] = router
     pending = asyncio.create_task(
         adapter._evaluate_permission(
             "same-session",
@@ -636,6 +667,13 @@ async def test_permission_invocation_keeps_original_scope_across_policy_wait_and
         assert event.metadata.recipe_run_id == "recipe-run"
         assert event.metadata.attempt_id == "attempt"
         assert event.metadata.run_id == "same-session"
+        (emitted,) = classified
+        assert emitted.metadata == event.metadata
+        assert emitted.metadata.execution_token == "original-token"
+        assert emitted.metadata.recipe_run_id == "recipe-run"
+        assert emitted.metadata.step_instance_id == "step-instance"
+        assert emitted.metadata.attempt_id == "attempt"
+        assert emitted.metadata.run_id == "same-session"
     finally:
         release.set()
         pending.cancel()

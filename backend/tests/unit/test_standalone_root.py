@@ -212,6 +212,113 @@ async def recovery_runtime(session_factory, tmp_path):
         await host.shutdown()
 
 
+async def test_persisted_spend_controls_reload_into_actual_root_and_bound_monitor(recovery_runtime, session_factory):
+    from backend.models.events import new_event
+    from backend.persistence.policy_repo import PolicyRepository
+    from backend.services.adapters.completion_context import current_completion_context
+    from backend.tests.unit.test_policy_authority import _verified_spend
+
+    host, root, adapter, _, _, workspace = recovery_runtime
+    async with session_factory() as session:
+        await PolicyRepository(session).set_usd_ceilings({"supervised": {"warn_usd": 0, "ceiling_usd": None}})
+        await session.commit()
+    await _verified_spend(root._ledger)
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace))
+    adapter.set_job_id("controlled-session", "job-1")
+    adapter.set_session_metadata("controlled-session", config)
+    classified = []
+    contexts = []
+
+    async def record(event):
+        if event.kind == EventKind.action_classified:
+            classified.append(event)
+
+    async def monitor_complete(*args, **kwargs):
+        contexts.append(current_completion_context())
+        return CompletionResult(text="approve", model=host._config.runtime.utility_model)
+
+    host._event_bus.subscribe(record)
+    adapter.complete = AsyncMock(side_effect=monitor_complete)
+
+    async def read():
+        return await adapter._evaluate_permission(
+            "controlled-session",
+            "job-1",
+            invocation_permission_request(str(workspace), "view", {"path": "source.txt"}),
+            tool_name="view",
+            tool_input={"path": "source.txt"},
+            tool_call_id="read",
+        )
+
+    assert await read() == PermissionDecision.allow
+    assert classified[-1].payload["reasonCode"] == "cp_usd_ceiling_warn"
+    assert classified[-1].payload["checkpoint_ref"]
+    adapter.complete.assert_not_awaited()
+    async with session_factory() as session:
+        await PolicyRepository(session).set_usd_ceilings({"supervised": {"warn_usd": None, "ceiling_usd": 0}})
+        await session.commit()
+    await host._on_policy_settings_changed(new_event("", EventKind.policy_settings_changed, {}))
+    assert await read() == PermissionDecision.allow
+    assert classified[-1].payload["reasonCode"] == "cp_usd_ceiling"
+    adapter.complete.assert_awaited_once()
+    assert contexts[0].role == "monitor"
+    assert contexts[0].job_id == "job-1"
+    assert contexts[0].execution_epoch == host.execution_epoch
+    assert contexts[0].execution_contract == host._job_contract_pins["job-1"]
+
+
+async def test_routine_batch_preserves_runtime_waiting_state_and_durable_resolution(recovery_runtime, session_factory):
+    from backend.persistence.policy_repo import PolicyRepository
+    from backend.tests.unit.test_policy_authority import _verified_spend
+
+    host, root, adapter, approvals, _, workspace = recovery_runtime
+    async with session_factory() as session:
+        await PolicyRepository(session).set_usd_ceilings({"locked": {"warn_usd": None, "ceiling_usd": 0}})
+        await session.commit()
+    await _verified_spend(root._ledger)
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace), job_preset="locked")
+    adapter.set_job_id("batch-session", "job-1")
+    adapter.set_session_metadata("batch-session", config)
+    adapter._queues["batch-session"] = asyncio.Queue()
+    pending = asyncio.create_task(
+        adapter._evaluate_permission(
+            "batch-session",
+            "job-1",
+            invocation_permission_request(str(workspace), "view", {"path": "source.txt"}),
+            tool_name="view",
+            tool_input={"path": "source.txt"},
+            tool_call_id="read",
+        )
+    )
+    waiting = asyncio.Event()
+
+    async def observe(event):
+        if event.kind == EventKind.approval_requested:
+            waiting.set()
+
+    host._event_bus.subscribe(observe)
+    handler = None
+    try:
+        event = await asyncio.wait_for(adapter._queues["batch-session"].get(), 2)
+        assert event.kind == EventKind.approval_requested
+        handler = asyncio.create_task(host._handle_approval_request("job-1", event, "Rejected fixture"))
+        await asyncio.wait_for(waiting.wait(), 2)
+        assert (await host._get_job("job-1")).state == JobState.waiting_for_approval
+        (batch,) = host._policy_batchers["job-1"].get_pending_batches("job-1")
+        assert await host.resolve_policy_batch("job-1", batch.id, "approved")
+        assert await asyncio.wait_for(handler, 2) == ApprovalResolution.approved
+        assert await asyncio.wait_for(pending, 2) == PermissionDecision.allow
+        assert not await approvals.list_pending("job-1")
+        assert (await host._get_job("job-1")).state == JobState.running
+    finally:
+        pending.cancel()
+        if handler is not None:
+            handler.cancel()
+        await asyncio.gather(pending, *([handler] if handler is not None else []), return_exceptions=True)
+
+
 @pytest.mark.parametrize(
     "scenario",
     [

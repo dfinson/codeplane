@@ -2180,10 +2180,7 @@ export interface paths {
         };
         /** Get Usd Ceilings */
         get: operations["get_usd_ceilings_api_settings_policy_usd_ceilings_get"];
-        /**
-         * Update Usd Ceilings
-         * @deprecated
-         */
+        /** Update Usd Ceilings */
         put: operations["update_usd_ceilings_api_settings_policy_usd_ceilings_put"];
         post?: never;
         delete?: never;
@@ -6660,15 +6657,10 @@ export interface components {
         };
         /**
          * Preset
-         * @description Action policy preset — selects the ``traceforge.governance`` profile the
-         *     router enforces (see ``action_policy/preset_profiles.py``).
+         * @description Application-owned posture for the standalone action policy.
          *
-         *     autonomous — Generous budget; protected-path writes escalate; no USD ceiling.
-         *                  Escalations handled by the monitor sidecar.
-         *     supervised — Moderate budget and USD ceiling; cost pressure and protected-path
-         *                  writes escalate; monitor handles escalations.
-         *     locked     — Tight budget and USD ceiling; protected-path writes denied; hard
-         *                  tool-call ceiling; monitor disabled — escalations go to the human.
+         *     Hard gates and incomplete evidence remain explicit human decisions.
+         *     Currency thresholds use verified USD only.
          * @enum {string}
          */
         Preset: "autonomous" | "supervised" | "locked";
@@ -10319,7 +10311,7 @@ export interface components {
         };
         /**
          * UsdCeilingEntry
-         * @description A per-preset USD ceiling: warn line and hard ceiling (either may be null).
+         * @description Soft verified-USD warning and escalation lines; null disables a line.
          */
         UsdCeilingEntry: {
             /** Warnusd */
@@ -10329,7 +10321,7 @@ export interface components {
         };
         /**
          * UsdCeilingsResponse
-         * @description Fixed standalone thresholds, applied only to verified USD.
+         * @description Configured standalone thresholds, applied only to verified USD.
          */
         UsdCeilingsResponse: {
             /** Ceilings */

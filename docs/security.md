@@ -98,7 +98,7 @@ CodePlane's standalone AGT policy combines strict assessment with local constrai
 
 **USD thresholds** apply only to verified USD. Native cost units, historical estimates and missing currency are not silently converted to dollars.
 
-**Settings → Policy** selects presets and displays fixed standalone thresholds. Retired TF overrides and blanket grants cannot waive the final policy.
+**Settings → Policy** selects presets, approval batching and verified-USD warning/escalation overrides. Zero is an active threshold and null disables a line. Spend guards are soft, not security hard gates. Routine approval grants last 24 hours within the same Job, policy configuration and reason. Hard gates and incomplete evidence always require individual approval and cannot be waived.
 
 ### Authorization Model
 

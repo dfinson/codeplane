@@ -1358,6 +1358,7 @@ class RuntimeService:
             policy_repo = PolicyRepository(session)
             db_config = await policy_repo.get_config()
             mcp_configs_list = await policy_repo.list_mcp_configs()
+            usd_ceilings = await policy_repo.get_usd_ceilings()
 
         # Build MCP config lookup: name → server config dict
         mcp_configs = {c["name"]: c for c in mcp_configs_list}
@@ -1369,6 +1370,7 @@ class RuntimeService:
             preset=Preset(effective_preset),
             batch_window_seconds=db_config["batch_window_seconds"],
             mcp_configs=mcp_configs,
+            usd_ceilings=usd_ceilings,
         )
 
         pin = self._recipe_contract_pins.get(job_id) or self._job_contract_pins.get(job_id)
@@ -1408,6 +1410,7 @@ class RuntimeService:
                 repo = PolicyRepository(session)
                 db_config = await repo.get_config()
                 mcp_configs_list = await repo.list_mcp_configs()
+                usd_ceilings = await repo.get_usd_ceilings()
 
                 # Look up per-job presets
                 job_repo = JobRepository(session)
@@ -1430,8 +1433,10 @@ class RuntimeService:
                     preset=Preset(effective_preset),
                     batch_window_seconds=db_config["batch_window_seconds"],
                     mcp_configs=mcp_configs,
+                    usd_ceilings=usd_ceilings,
                 )
                 self._repo_policies[job_id] = new_policy
+                self._policy_routers[job_id].update_policy(new_policy)
 
                 # Update batcher window if changed
                 batcher = self._policy_batchers.get(job_id)
@@ -3135,9 +3140,10 @@ class RuntimeService:
         return bool(resolved)
 
     async def trust_job_policy(self, job_id: str) -> bool:
-        """Historical TF grants cannot waive the final runtime's per-action policy."""
-        log.info("legacy_blanket_trust_unavailable", job_id=job_id)
-        return False
+        router = self._policy_routers.get(job_id)
+        if router is None:
+            return False
+        return bool(await router.trust_job())
 
     async def _resume_orphaned(self, job_id: str, message: str) -> bool:
         """Auto-resume a job that has no live agent session."""

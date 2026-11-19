@@ -15,6 +15,7 @@ from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, new_event
 from backend.services.action_policy.agt_policy import PolicyInput
 from backend.services.action_policy.assessment import DECISION_SECONDS, MAX_INPUT_BYTES
+from backend.services.action_policy.classifier import Action, ActionKind
 from backend.services.adapters.capability_guard import has_explicit_file_target, invocation_permission_request
 from backend.services.adapters.contracts import CapabilityDeniedError, ExecutionIdentity
 from backend.services.auth.permission_policy import is_hard_gated_command
@@ -25,8 +26,10 @@ if TYPE_CHECKING:
 
     from backend.models.execution_contracts import ExecutionContractPin
     from backend.services.action_policy.authority import PolicyAuthority
+    from backend.services.action_policy.batcher import ApprovalBatcher
     from backend.services.action_policy.checkpoint_service import CheckpointService
-    from backend.services.action_policy.classifier import RepoPolicy
+    from backend.services.action_policy.classifier import Classification, RepoPolicy
+    from backend.services.action_policy.monitor import MonitorVerdict
     from backend.services.action_policy.session_policy import PermissionInvocation
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
@@ -49,6 +52,8 @@ class StandalonePolicyRouter:
         checkpoint: CheckpointService,
         git: GitService,
         job_is_current: Callable[[str, str], Awaitable[bool]],
+        batcher: ApprovalBatcher | None = None,
+        monitor: Callable[[Action, Classification], Awaitable[tuple[MonitorVerdict, str]]] | None = None,
     ) -> None:
         self.pin = pin
         self.execution_epoch = execution_epoch
@@ -60,9 +65,34 @@ class StandalonePolicyRouter:
         self._git = git
         self._job_is_current = job_is_current
         self._closed = False
+        self._batcher = batcher
+        self._monitor = monitor
 
     def update_policy(self, policy: RepoPolicy) -> None:
         self._policy = policy
+        if self._batcher is not None:
+            self._batcher.set_batch_window(policy.batch_window_seconds)
+
+    async def trust_job(self) -> bool:
+        selected = self._policy
+        if self._closed or not await self._job_is_current(self.pin.job_id, "codeplane.command"):
+            return False
+        await self._authority.trust_job(self.pin, selected, self.execution_epoch)
+        if self._closed or self._policy is not selected:
+            return False
+        if self._batcher is not None:
+            from backend.services.action_policy.batcher import BatchResolution
+
+            for batch in self._batcher.get_pending_batches(self.pin.job_id):
+                self._batcher.resolve_batch(batch.id, BatchResolution.approved)
+                await self._events.publish(
+                    new_event(
+                        self.pin.job_id,
+                        EventKind.batch_approval_resolved,
+                        {"batch_id": batch.id, "resolution": "approved"},
+                    )
+                )
+        return True
 
     async def authorize_permission(self, invocation: PermissionInvocation) -> bool:
         metadata = invocation.metadata
@@ -256,6 +286,19 @@ class StandalonePolicyRouter:
             decision_deadline=decision_deadline,
             recovery_is_current=recovery_current if recovery is not None else None,
             savepoint=savepoint,
+            settings=selected_policy,
+            action=Action(
+                kind=ActionKind.shell if command else ActionKind.file if paths else ActionKind.sdk_tool,
+                command=command or None,
+                path=paths[0] if paths else None,
+                tool_name=invocation.tool_name,
+                job_id=invocation.job_id,
+                workspace_path=invocation.workspace,
+                arguments_json=invocation.arguments_json,
+                tool_definition=invocation.tool_definition,
+            ),
+            batcher=self._batcher,
+            monitor=self._monitor if selected_policy.preset != "locked" else None,
         )
         await self._events.publish(
             new_event(
@@ -285,3 +328,6 @@ class StandalonePolicyRouter:
         if job_id == self.pin.job_id:
             self._closed = True
             self._checkpoint.cleanup_job(job_id)
+            if self._batcher is not None:
+                self._batcher.cleanup_job(job_id)
+            self._monitor = None

@@ -1,8 +1,9 @@
-"""Application settings and retained historical configuration data."""
+"""Application-owned policy settings, including verified-USD overrides."""
 
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -32,32 +33,35 @@ class PolicyRepository(BaseRepository):
         updates = {k: v for k, v in kwargs.items() if k in allowed}
         if not updates:
             return await self.get_config()
+        if "preset" in updates and updates["preset"] not in {"autonomous", "supervised", "locked"}:
+            raise ValueError("Unknown policy preset")
+        if "batch_window_seconds" in updates:
+            value = updates["batch_window_seconds"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.5 <= value <= 30:
+                raise ValueError("Approval batch window must be between 0.5 and 30 seconds")
+        await self._ensure_config()
         await self._session.execute(update(PolicyConfigRow).where(PolicyConfigRow.id == 1).values(**updates))
         return await self.get_config()
+
+    async def _ensure_config(self) -> None:
+        if await self._session.get(PolicyConfigRow, 1) is None:
+            self._session.add(PolicyConfigRow(id=1))
+            await self._session.flush()
 
     # --- Per-preset USD ceilings (native cost-ceiling overlay) ---
 
     async def get_usd_ceilings(self) -> dict[str, tuple[float | None, float | None]]:
         """Return ``{preset: (warn_usd, ceiling_usd)}`` operator overrides.
 
-        Empty when unset — the governance decider then applies each profile's baked
-        default ceiling. Malformed JSON degrades to empty rather than raising.
+        Empty when unset. Explicit zero and null override the preset defaults.
+        Invalid persisted settings fail visibly rather than changing enforcement.
         """
         result = await self._session.execute(select(PolicyConfigRow).where(PolicyConfigRow.id == 1))
         row = result.scalar_one_or_none()
         if row is None or not row.usd_ceilings_json:
             return {}
-        try:
-            raw = json.loads(row.usd_ceilings_json)
-        except (ValueError, TypeError):
-            return {}
-        out: dict[str, tuple[float | None, float | None]] = {}
-        if isinstance(raw, dict):
-            for preset, pair in raw.items():
-                warn = _opt_float(pair.get("warn_usd")) if isinstance(pair, dict) else None
-                ceiling = _opt_float(pair.get("ceiling_usd")) if isinstance(pair, dict) else None
-                out[str(preset)] = (warn, ceiling)
-        return out
+        raw = _validate_ceilings(json.loads(row.usd_ceilings_json))
+        return {name: (pair["warn_usd"], pair["ceiling_usd"]) for name, pair in raw.items()}
 
     async def set_usd_ceilings(self, ceilings: dict[str, dict[str, float | None]]) -> dict[str, Any]:
         """Persist per-preset USD ceiling overrides on the singleton config row.
@@ -65,7 +69,9 @@ class PolicyRepository(BaseRepository):
         ``ceilings`` maps a preset name to ``{"warn_usd": .., "ceiling_usd": ..}``;
         either value may be ``None`` (no line). Returns the stored mapping.
         """
-        payload = json.dumps(ceilings) if ceilings else None
+        ceilings = _validate_ceilings(ceilings)
+        payload = json.dumps(ceilings, allow_nan=False) if ceilings else None
+        await self._ensure_config()
         await self._session.execute(
             update(PolicyConfigRow).where(PolicyConfigRow.id == 1).values(usd_ceilings_json=payload)
         )
@@ -130,29 +136,37 @@ class PolicyRepository(BaseRepository):
 
     async def import_all(self, data: dict[str, Any]) -> None:
         config = data.get("config") or {}
-        current = await self.get_config()
-        if "batch_window_seconds" in config and config["batch_window_seconds"] != current["batch_window_seconds"]:
-            raise ValueError("Retired approval-batch settings are read-only in the final runtime")
-        historical = data.get("usd_ceilings") or {}
-        if historical and json.dumps(historical, sort_keys=True, allow_nan=False) != json.dumps(
-            await self.get_usd_ceilings(), sort_keys=True, allow_nan=False
-        ):
-            raise ValueError("Retired spend overrides are read-only in the final runtime")
-        if "preset" in config:
-            await self.update_config(preset=config["preset"])
+        ceilings = _validate_ceilings(data.get("usd_ceilings") or {})
+        await self.update_config(**config)
+        await self.set_usd_ceilings(ceilings)
         for srv in data.get("mcp_servers", []):
             values = dict(srv)
             name = values.pop("name")
             await self.upsert_mcp_config(name, **values)
 
 
-def _opt_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return None
+def _validate_ceilings(raw: Any) -> dict[str, dict[str, float | None]]:
+    if not isinstance(raw, dict):
+        raise ValueError("USD overrides require a per-preset mapping")
+    result = {}
+    for preset, pair in raw.items():
+        if preset not in {"autonomous", "supervised", "locked"}:
+            raise ValueError("Unknown USD policy preset")
+        # Version-2 exports used pairs, while the settings endpoint uses named fields.
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            pair = dict(zip(("warn_usd", "ceiling_usd"), pair, strict=True))
+        if not isinstance(pair, dict) or set(pair) - {"warn_usd", "ceiling_usd"}:
+            raise ValueError("USD overrides require warning and ceiling fields")
+        parsed: dict[str, float | None] = {}
+        for key in ("warn_usd", "ceiling_usd"):
+            value = pair.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0
+            ):
+                raise ValueError("USD thresholds must be non-negative finite numbers or null")
+            parsed[key] = None if value is None else float(value)
+        result[preset] = parsed
+    return result
 
 
 def _mcp_row_to_dict(row: MCPServerConfigRow) -> dict[str, Any]:

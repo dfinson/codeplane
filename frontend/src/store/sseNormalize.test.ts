@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
 import { deepSnakeToCamel, normalizeTFEvent, deriveJobStateFrame, type TFSessionEvent } from "./sseNormalize";
+import { handleApprovalRequested, handleBatchApprovalRequested } from "./handlers/approvalHandlers";
+import { useStore } from "./index";
+
+it("shows a batched permission once and retains an unavailable risk score", () => {
+  const state = useStore.getState();
+  const approval = normalizeTFEvent({
+    id: "request", kind: "permission.requested", session_id: "job",
+    payload: { approval_id: "approval", batch_managed: true }, metadata: null,
+  });
+  expect(handleApprovalRequested(state, approval)).toBeNull();
+  const batch = normalizeTFEvent({
+    id: "batch-request", kind: "permission.batch.requested", session_id: "job", metadata: null,
+    payload: { batch_id: "batch", actions: [{
+      id: "action", kind: "file", recommendedAction: "escalate", reasonCode: "cp_usd_ceiling",
+      reason: "cp_usd_ceiling", riskScore: null, riskBand: "unknown", description: "view: source.py",
+    }] },
+  });
+  expect(handleBatchApprovalRequested(state, batch)?.batchApprovals?.batch?.actions[0]?.riskScore).toBeNull();
+});
 
 it("preserves authoritative attempt model scope from canonical metadata", () => {
   const result = normalizeTFEvent({

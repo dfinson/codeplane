@@ -10,6 +10,32 @@ from backend.models.usage import UsageAmount
 from backend.persistence.governance_repo import GovernanceLedger
 
 
+async def test_reason_grants_preserve_job_policy_scope_and_24_hour_expiry_across_restart(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    path = tmp_path / "governance.db"
+    ledger = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    await ledger.initialize()
+    await ledger.grant_reasons("job", "policy", frozenset({"cp_usd_ceiling"}), epoch="epoch", source_id="human")
+    await ledger.close()
+    restored = GovernanceLedger(path, application_database=tmp_path / "data.db")
+    try:
+        assert await restored.active_reason_grants("job", "policy") == {"cp_usd_ceiling"}
+        assert not await restored.active_reason_grants("other-job", "policy")
+        assert not await restored.active_reason_grants("job", "changed-policy")
+        with restored._connect() as connection:
+            row = connection.execute("SELECT created_at,expires_at FROM cp_reason_grants").fetchone()
+            assert datetime.fromisoformat(row["expires_at"]) - datetime.fromisoformat(row["created_at"]) == timedelta(
+                hours=24
+            )
+            connection.execute(
+                "UPDATE cp_reason_grants SET expires_at=?", ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(),)
+            )
+        assert not await restored.active_reason_grants("job", "policy")
+    finally:
+        await restored.close()
+
+
 async def test_executed_failure_accrues_once_but_rejection_never_does(tmp_path) -> None:
     ledger = GovernanceLedger(tmp_path / "governance.db", application_database=tmp_path / "data.db")
     await ledger.initialize()

@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -174,6 +174,12 @@ class GovernanceLedger:
                     action_digest TEXT NOT NULL, decision TEXT NOT NULL, metadata_json TEXT NOT NULL,
                     delivered INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS cp_reason_grants (
+                    job_id TEXT NOT NULL, policy_scope TEXT NOT NULL, reason_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                    execution_epoch TEXT NOT NULL, source_id TEXT NOT NULL,
+                    PRIMARY KEY(job_id, policy_scope, reason_code)
+                );
                 CREATE TABLE IF NOT EXISTS cp_audit_head (
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                     segment INTEGER NOT NULL, key_id TEXT NOT NULL, content_hash TEXT NOT NULL
@@ -190,6 +196,55 @@ class GovernanceLedger:
                 );
                 INSERT OR IGNORE INTO cp_admission_control VALUES(1,0,0,'');
             """)
+
+    async def active_reason_grants(self, job_id: str, policy_scope: str) -> frozenset[str]:
+        def read() -> frozenset[str]:
+            with self._connect(read_only=True) as connection:
+                rows = connection.execute(
+                    "SELECT reason_code,expires_at FROM cp_reason_grants WHERE job_id=? AND policy_scope=?",
+                    (job_id, policy_scope),
+                )
+                now = datetime.now(UTC)
+                return frozenset(row["reason_code"] for row in rows if datetime.fromisoformat(row["expires_at"]) > now)
+
+        return await self._io(read)
+
+    async def grant_reasons(
+        self, job_id: str, policy_scope: str, reasons: frozenset[str], *, epoch: str, source_id: str
+    ) -> None:
+        if not all((job_id, policy_scope, epoch, source_id)) or not reasons or len(reasons) > 32:
+            raise ValueError("A reason grant requires an exact Job, policy scope and issuing source")
+
+        def write() -> None:
+            now = datetime.now(UTC)
+            with self._connect() as connection:
+                connection.executemany(
+                    """INSERT INTO cp_reason_grants VALUES(?,?,?,?,?,?,?)
+                       ON CONFLICT(job_id,policy_scope,reason_code) DO UPDATE SET
+                       created_at=excluded.created_at,expires_at=excluded.expires_at,
+                       execution_epoch=excluded.execution_epoch,source_id=excluded.source_id""",
+                    [
+                        (
+                            job_id,
+                            policy_scope,
+                            reason,
+                            now.isoformat(),
+                            (now + timedelta(hours=24)).isoformat(),
+                            epoch,
+                            source_id,
+                        )
+                        for reason in sorted(reasons)
+                    ],
+                )
+
+        await self._io(write)
+
+    async def revoke_reason_grants(self, job_id: str, source_id: str) -> None:
+        def write() -> None:
+            with self._connect() as connection:
+                connection.execute("DELETE FROM cp_reason_grants WHERE job_id=? AND source_id=?", (job_id, source_id))
+
+        await self._io(write)
 
     async def admission_state(self) -> GovernanceAdmission:
         return await self._io(self._admission_state)

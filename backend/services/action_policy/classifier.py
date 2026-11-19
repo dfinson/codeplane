@@ -51,12 +51,24 @@ class Preset(StrEnum):
     locked = "locked"
 
 
-# Product-owned (warning, hard ceiling) USD defaults; None disables that line.
+# Product-owned soft warning/escalation USD defaults; None disables that line.
 USD_CEILING_DEFAULTS: Mapping[Preset, tuple[float | None, float | None]] = MappingProxyType(
     {
         Preset.autonomous: (None, None),
         Preset.supervised: (20.0, 40.0),
         Preset.locked: (5.0, 10.0),
+    }
+)
+
+WAIVABLE_REASON_CODES = frozenset(
+    {
+        "budget_pressure",
+        "external_mutation",
+        "git_mutation_supervised",
+        "git_mutation_locked",
+        "readonly_shell_locked",
+        "cp_usd_ceiling",
+        "cp_usd_ceiling_warn",
     }
 )
 
@@ -88,6 +100,8 @@ class Action:
     # Context
     job_id: str | None = None
     workspace_path: str | None = None
+    arguments_json: str = ""
+    tool_definition: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +110,7 @@ class Classification:
 
     recommended_action: RecommendedAction
     reason_code: str
-    risk_score: int
+    risk_score: int | None
     risk_band: str
     effect: str | None
     mechanism: str
@@ -105,14 +119,9 @@ class Classification:
 
 @dataclass
 class RepoPolicy:
-    """In-memory policy loaded from DB at job start.
-
-    Wholesale adoption slimmed this to the two settings CodePlane still owns: the
-    ``preset`` (which selects a TraceForge governance profile) and the approval
-    ``batch_window_seconds``. The retired path/action/cost rule tables and the
-    MCP reversibility hints are gone — governance classifies natively.
-    """
+    """Application-owned settings captured by each permission invocation."""
 
     preset: Preset = Preset.supervised
     batch_window_seconds: float = 5.0
     mcp_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    usd_ceilings: dict[str, tuple[float | None, float | None]] = field(default_factory=dict)

@@ -150,7 +150,7 @@ export interface BatchAction {
   command: string | null;
   recommendedAction: RecommendedAction;
   reasonCode: string;
-  riskScore: number;
+  riskScore: number | null;
   riskBand: string;
   effect: string | null;
   reason: string;

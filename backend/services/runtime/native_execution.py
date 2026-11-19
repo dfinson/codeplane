@@ -241,11 +241,14 @@ class NativeExecutions:
                 if pin.contract.policy.id != POLICY_VERSION:
                     raise StateConflictError("Native execution requires a cp-policy-v1 admission authority")
                 async with host._session_factory() as session:
-                    stored_policy = await PolicyRepository(session).get_config()
+                    repository = PolicyRepository(session)
+                    stored_policy = await repository.get_config()
+                    usd_ceilings = await repository.get_usd_ceilings()
                 policy = RepoPolicy(
                     preset=Preset(job.preset or "supervised"),
                     batch_window_seconds=stored_policy["batch_window_seconds"],
                     mcp_configs={},
+                    usd_ceilings=usd_ceilings,
                 )
                 host._policy_routers[job_id] = host._standalone_governance.for_job(pin, policy)
                 host._repo_policies[job_id] = policy

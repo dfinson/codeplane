@@ -498,10 +498,14 @@ requires the qualified CP policy. The final package never discovers or loads a
 retained TF distribution, even if one is independently installed. Selected or
 preserved missing implementations never silently fall back.
 
-The final policy settings surface keeps preset and MCP configuration.
-Legacy batching and spend overrides remain preserved historical data, not active
-settings or policy waivers. The final API refuses edits to those retired controls,
-and displays the unchanged standalone verified-USD thresholds. Historical
+The final policy settings surface keeps preset, approval batching, configured
+verified-USD warning/escalation overrides, and MCP configuration. Zero and null
+overrides remain meaningful. Spend guards are soft and elevate-only, independent
+of mandatory security gates and incomplete-evidence routes. Eligible routine
+escalations use the application-owned monitor, then human approval batching.
+Full human approval can issue a 24-hour Job-, policy- and reason-scoped grant;
+partial approval releases only selected actions and never creates that grant.
+Historical TF grants are not silently reinterpreted as standalone grants. Historical
 re-enrichment uses the bounded application-owned tool-pairing implementation to
 fill structural duration/display metadata only. It preserves raw records, risk,
 titles, identities and legacy markers and does not invoke a model.
@@ -3936,7 +3940,7 @@ Hard-gated commands return `ask` from the permission policy. The agent system pr
 
 ### 18.3 Action Policy Presets
 
-CodePlane delegates the permission decision to **`traceforge.governance`**. Three presets control posture; each preset *selects a governance profile* — a recommendation-rules file, a count/effect budget, protected-path and cost-pressure primitives, and CodePlane's per-preset USD spend ceiling — rather than mapping actions to a fixed tier. The profiles live in `action_policy/preset_profiles.py`.
+CodePlane selects policy rules through the pinned **Agent Governance Toolkit** implementation and enforces them through its application-owned authority. Three presets retain distinct count/effect budgets, protected-path checks and configured verified-USD warning/escalation lines. Missing evidence and mandatory security gates cannot be waived by routine grants or the monitor.
 
 | Preset | Governance profile |
 |------|----------|
@@ -3946,7 +3950,7 @@ CodePlane delegates the permission decision to **`traceforge.governance`**. Thre
 
 #### Recommendation → enforcement
 
-For each action the governance substrate returns a `RecommendedAction` plus a risk score/band and a reason code. The router maps the recommendation to a concrete outcome:
+For each action the authority returns an action and reason code. Unavailable risk scores remain null, not an invented zero. The router maps the recommendation to a concrete outcome:
 
 | RecommendedAction | Enforcement |
 |------|----------|
@@ -3956,7 +3960,7 @@ For each action the governance substrate returns a `RecommendedAction` plus a ri
 | `ESCALATE` | LLM monitor (if enabled and not security-critical) → human approval gate |
 | `DENY` | Human approval gate (the monitor is skipped — a `DENY` always reaches a human) |
 
-A `None` recommendation (no rule fired, risk below every threshold) is an implicit `ALLOW`; any internal error fails **closed** to `ESCALATE`.
+Missing or unrecognized policy results fail closed to an individual human decision.
 
 #### Hard-Gated Commands
 
@@ -3973,7 +3977,7 @@ Default: `supervised`
 
 ### 18.4 Delegation to the Agent Runtime
 
-The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's action policy router then evaluates the request through `traceforge.governance` and enforces the resulting `RecommendedAction`.
+The underlying agent SDK (Copilot SDK, Claude Code, etc.) decides **which** actions surface a permission request. CodePlane's bound session policy evaluates each request through the pinned authority and enforces its resulting action.
 
 CodePlane's role is to:
 
@@ -4003,7 +4007,7 @@ The adapter normalizes whichever fields the SDK provides into this common shape.
 1. SDK raises a permission request (e.g., Copilot SDK calls `on_permission_request`)
 2. The action policy router evaluates the request:
    - **Hard-gated commands (§18.2):** pre-checked before governance — always route to the operator regardless of preset
-   - **Governance decision:** `traceforge.governance` returns a `RecommendedAction` (plus risk score/band and reason code) from the active preset's profile
+   - **Governance decision:** the pinned authority applies the active preset, local constraints, verified usage and scoped grants without erasing mandatory or incomplete-evidence gates
 3. Based on the recommendation:
    - **`ALLOW`:** action proceeds immediately
    - **`WARN` / `TRANSFORM`:** a git savepoint is taken, the action proceeds, and the operator is notified
@@ -4028,7 +4032,7 @@ The SDK's `on_permission_request` callback is **async** — it blocks the SDK at
 
 #### Trust Grant
 
-Operators can issue a **trust grant** via `POST /api/jobs/{job_id}/approvals/trust`. Trust is applied inside governance as a time-boxed (24h), reason-code-scoped grant: a later matching recommendation comes back `ALLOW` until the grant expires. Security-critical verdicts (§18.2 / hard gates) are never waived by a trust grant.
+Operators can issue a **trust grant** via `POST /api/jobs/{job_id}/approvals/trust`. Application-owned grants are time-boxed (24h) and scoped to the Job, exact policy implementation/configuration and reason code. Full human batch approval grants its eligible reasons; partial approval releases only selected action IDs and grants nothing. Security-critical verdicts, incomplete evidence and unavailable policy results are never waived. USD warning and escalation remain soft, verified-currency-only controls, with zero and null overrides preserved.
 
 ### 18.7 Approval Timeout
 

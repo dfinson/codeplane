@@ -1,4 +1,4 @@
-"""Standalone preset and MCP settings, with preserved read-only transition data."""
+"""Application-owned policy, approval batching, spend and MCP settings."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -44,18 +44,18 @@ class UpdatePresetRequest(CamelModel):
 
 class UpdateConfigRequest(CamelModel):
     preset: str | None = Field(default=None, pattern=_PRESET_PATTERN)
-    batch_window_seconds: float | None = None
+    batch_window_seconds: float | None = Field(default=None, ge=0.5, le=30, allow_inf_nan=False)
 
 
 class UsdCeilingEntry(CamelModel):
-    """A per-preset USD ceiling: warn line and hard ceiling (either may be null)."""
+    """Soft verified-USD warning and escalation lines; null disables a line."""
 
-    warn_usd: float | None = None
-    ceiling_usd: float | None = None
+    warn_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    ceiling_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class UsdCeilingsResponse(CamelModel):
-    """Fixed standalone thresholds, applied only to verified USD."""
+    """Configured standalone thresholds, applied only to verified USD."""
 
     ceilings: dict[str, UsdCeilingEntry] = Field(default_factory=dict)
 
@@ -99,10 +99,12 @@ class PolicyImportRequest(CamelModel):
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _effective_ceilings() -> dict[str, UsdCeilingEntry]:
-    """Report the unchanged standalone policy thresholds, not retired TF overrides."""
+def _effective_ceilings(
+    overrides: dict[str, tuple[float | None, float | None]],
+) -> dict[str, UsdCeilingEntry]:
     out: dict[str, UsdCeilingEntry] = {}
     for preset, (warn, ceiling) in USD_CEILING_DEFAULTS.items():
+        warn, ceiling = overrides.get(preset.value, (warn, ceiling))
         out[preset.value] = UsdCeilingEntry(warn_usd=warn, ceiling_usd=ceiling)
     return out
 
@@ -119,7 +121,7 @@ async def get_policy(sf: FromDishka[async_sessionmaker[AsyncSession]]) -> FullPo
         config = await repo.get_config()
         return FullPolicyResponse(
             config=PolicyConfigResponse(**config),
-            usd_ceilings=_effective_ceilings(),
+            usd_ceilings=_effective_ceilings(await repo.get_usd_ceilings()),
             mcp_servers=[MCPServerResponse(**r) for r in await repo.list_mcp_configs()],
         )
 
@@ -144,11 +146,6 @@ async def update_config(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
     event_bus: FromDishka[EventBus],
 ) -> PolicyConfigResponse:
-    if body.batch_window_seconds is not None:
-        raise HTTPException(
-            status_code=410,
-            detail="Legacy approval batching is retired. The final runtime uses bound per-action decisions.",
-        )
     async with sf() as session:
         repo = PolicyRepository(session)
         updates = body.model_dump(exclude_none=True)
@@ -159,7 +156,7 @@ async def update_config(
 
 
 # ---------------------------------------------------------------------------
-# Current standalone thresholds; historical overrides remain in exported data.
+# Verified-USD warning and escalation overrides.
 # ---------------------------------------------------------------------------
 
 
@@ -167,19 +164,26 @@ async def update_config(
 async def get_usd_ceilings(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
 ) -> UsdCeilingsResponse:
-    return UsdCeilingsResponse(ceilings=_effective_ceilings())
+    async with sf() as session:
+        return UsdCeilingsResponse(ceilings=_effective_ceilings(await PolicyRepository(session).get_usd_ceilings()))
 
 
-@router.put("/usd-ceilings", response_model=UsdCeilingsResponse, deprecated=True)
+@router.put("/usd-ceilings", response_model=UsdCeilingsResponse)
 async def update_usd_ceilings(
     body: UpdateUsdCeilingsRequest,
     sf: FromDishka[async_sessionmaker[AsyncSession]],
     event_bus: FromDishka[EventBus],
 ) -> UsdCeilingsResponse:
-    raise HTTPException(
-        status_code=410,
-        detail="TF spend overrides are retained historical data, not active standalone policy configuration.",
-    )
+    async with sf() as session:
+        repo = PolicyRepository(session)
+        try:
+            await repo.set_usd_ceilings({name: entry.model_dump() for name, entry in body.ceilings.items()})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result = _effective_ceilings(await repo.get_usd_ceilings())
+        await session.commit()
+    await _notify_policy_changed(event_bus)
+    return UsdCeilingsResponse(ceilings=result)
 
 
 # ---------------------------------------------------------------------------

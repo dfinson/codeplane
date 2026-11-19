@@ -130,11 +130,11 @@ class TestPolicyUsdDefaults:
         [
             {"supervised": {"warnUsd": 0.0, "ceilingUsd": None}},
             {"locked": {"warnUsd": None, "ceilingUsd": 0.0}},
-            {"autonomous": {"warnUsd": 2.5, "ceilingUsd": 7.5}, "unknown": {"warnUsd": 1.0, "ceilingUsd": 2.0}},
+            {"autonomous": {"warnUsd": 2.5, "ceilingUsd": 7.5}},
             {"supervised": {}},
         ],
     )
-    async def test_retired_overrides_are_preserved_but_cannot_replace_active_thresholds(
+    async def test_overrides_replace_active_thresholds_and_round_trip(
         self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], overrides
     ):
         from backend.models.db import PolicyConfigRow
@@ -147,14 +147,23 @@ class TestPolicyUsdDefaults:
             await session.commit()
         baseline = (await client.get("/api/settings/policy/usd-ceilings")).json()["ceilings"]
         response = await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": overrides})
-        assert response.status_code == 410
-        assert baseline["supervised"] == {"warnUsd": 20.0, "ceilingUsd": 40.0}
-        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": baseline}
-        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == baseline
+        assert response.status_code == 200
+        assert baseline["supervised"] == {"warnUsd": 0.0, "ceilingUsd": None}
+        effective = response.json()["ceilings"]
+        for preset, entry in overrides.items():
+            assert effective[preset] == {"warnUsd": entry.get("warnUsd"), "ceilingUsd": entry.get("ceilingUsd")}
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": effective}
+        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == effective
+        exported = (await client.get("/api/settings/policy/export")).json()
+        assert (await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": {}})).status_code == 200
+        assert (await client.post("/api/settings/policy/import", json=exported)).status_code == 200
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": effective}
         async with session_factory() as session:
-            assert await PolicyRepository(session).get_usd_ceilings() == {"supervised": (0.0, None)}
+            assert await PolicyRepository(session).get_usd_ceilings() == {
+                name: (entry.get("warnUsd"), entry.get("ceilingUsd")) for name, entry in overrides.items()
+            }
 
-    async def test_retired_batch_update_cannot_partially_change_the_preset(
+    async def test_batch_and_preset_updates_remain_active(
         self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
     ):
         from backend.models.db import PolicyConfigRow
@@ -162,9 +171,12 @@ class TestPolicyUsdDefaults:
         async with session_factory() as session:
             session.add(PolicyConfigRow(id=1))
             await session.commit()
-        refused = await client.put("/api/settings/policy/config", json={"preset": "locked", "batchWindowSeconds": 10})
-        assert refused.status_code == 410
-        assert (await client.get("/api/settings/policy")).json()["config"]["preset"] == "supervised"
+        changed = await client.put("/api/settings/policy/config", json={"preset": "locked", "batchWindowSeconds": 10})
+        assert changed.status_code == 200
+        assert (await client.get("/api/settings/policy")).json()["config"] == {
+            "preset": "locked",
+            "batchWindowSeconds": 10,
+        }
         changed = await client.put("/api/settings/policy/preset", json={"preset": "locked"})
         assert changed.status_code == 200 and changed.json()["preset"] == "locked"
 

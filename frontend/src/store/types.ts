@@ -55,7 +55,7 @@ export interface BatchApprovalAction {
   recommendedAction: RecommendedAction;
   reasonCode: string;
   reason: string;
-  riskScore: number;
+  riskScore: number | null;
   riskBand: string;
   effect: string | null;
   checkpointRef: string | null;

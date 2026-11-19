@@ -29,7 +29,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
-    from backend.services.action_policy.classifier import RepoPolicy
+    from backend.services.action_policy.classifier import Action, Classification, RepoPolicy
+    from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
     from backend.services.runtime.service import RuntimeService
 
 log = structlog.get_logger()
@@ -331,9 +332,13 @@ class StandaloneGovernance:
             log.error("governance_accounting_failed", event_id=event.id, job_id=event.session_id, exc_info=True)
 
     def for_job(self, pin: ExecutionContractPin, policy: RepoPolicy) -> StandalonePolicyRouter:
+        from backend.persistence.trail_repo import TrailNodeRepository
+        from backend.services.action_policy.batcher import ApprovalBatcher
         from backend.services.action_policy.checkpoint_service import CheckpointService
+        from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
         from backend.services.adapters.agent_adapter import UtilityCompletionError
         from backend.services.adapters.integration_policy import IntegrationPolicy
+        from backend.services.completers.lightweight_completer import LightweightCompleter
 
         host = self._host
         if host._execution_contracts is None or host._approval_service is None or host._git_service is None:
@@ -346,6 +351,28 @@ class StandaloneGovernance:
             provider = host._adapter_registry.get_completion_provider(host._config.runtime.utility_sdk)
         except UtilityCompletionError as exc:
             log.warning("policy_assessment_provider_unavailable", job_id=pin.job_id, reason=str(exc))
+
+        batcher = ApprovalBatcher(host._event_bus, policy.batch_window_seconds)
+        host._policy_batchers[pin.job_id] = batcher
+        monitor_session: MonitorSession | None = None
+
+        async def monitor(action: Action, classification: Classification) -> tuple[MonitorVerdict, str]:
+            nonlocal monitor_session
+            if provider is None or not action.workspace_path:
+                return MonitorVerdict.escalate, "Monitor provider or workspace is unavailable"
+            if monitor_session is None:
+                job = await host._get_job(pin.job_id)
+                if job is None:
+                    return MonitorVerdict.escalate, "Originating Job is unavailable"
+                monitor_session = MonitorSession(
+                    job_id=pin.job_id,
+                    job_prompt=job.prompt,
+                    worktree=action.workspace_path,
+                    repo=job.repo,
+                    completer=LightweightCompleter(provider, model=host._config.runtime.utility_model),
+                    trail_repo=TrailNodeRepository(host._session_factory),
+                )
+            return await monitor_session.evaluate(action, classification)
 
         async def current(job_id: str, provider: str) -> bool:
             job = await host._get_job(job_id)
@@ -380,6 +407,8 @@ class StandaloneGovernance:
             checkpoint=CheckpointService(host._git_service),
             git=host._git_service,
             job_is_current=current,
+            batcher=batcher,
+            monitor=monitor,
         )
 
     async def close(self) -> None:

@@ -54,15 +54,22 @@ def standalone_contract() -> ExecutionContract:
         POLICY_VERSION,
         "services/action_policy/agt_policy.py",
         "services/action_policy/authority.py",
+        "services/action_policy/production.py",
         "services/action_policy/standalone_router.py",
         "services/action_policy/session_policy.py",
         "services/action_policy/assessment.py",
+        "services/action_policy/classifier.py",
+        "services/action_policy/batcher.py",
+        "services/action_policy/monitor.py",
+        "services/action_policy/project_context.py",
+        "services/completers/lightweight_completer.py",
         "models/action_assessment.py",
         "services/action_policy/credential_filter.py",
         "services/git/git_service.py",
         "services/adapters/capability_guard.py",
         "services/auth/workspace_paths.py",
         "persistence/governance_repo.py",
+        "persistence/policy_repo.py",
     )
     policy = policy.model_copy(
         update={

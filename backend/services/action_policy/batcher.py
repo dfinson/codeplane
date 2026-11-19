@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 if TYPE_CHECKING:
+    from backend.models.session_event import EventMetadata
     from backend.services.action_policy.classifier import Action, Classification
     from backend.services.events.event_bus import EventBus
 
@@ -32,6 +33,8 @@ class GateAction:
     action: Action
     classification: Classification
     checkpoint_ref: str
+    metadata: EventMetadata | None = None
+    approval_id: str | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -84,13 +87,19 @@ class ApprovalBatcher:
         action: Action,
         classification: Classification,
         checkpoint_ref: str,
+        *,
+        action_id: str | None = None,
+        metadata: EventMetadata | None = None,
+        approval_id: str | None = None,
     ) -> BatchResult:
         """Submit a gate action and block until the operator resolves the batch."""
         gate_action = GateAction(
-            id=uuid.uuid4().hex,
+            id=action_id or uuid.uuid4().hex,
             action=action,
             classification=classification,
             checkpoint_ref=checkpoint_ref,
+            metadata=metadata,
+            approval_id=approval_id,
         )
 
         batch = self._get_or_create_batch(job_id)
@@ -101,15 +110,27 @@ class ApprovalBatcher:
             batch._future = loop.create_future()
             self._pending_futures[batch.id] = batch._future
 
-        # Emit immediately for the first action — the agent SDK is blocking
-        # so no additional actions can arrive during the window anyway.
-        # Only use the timer when a batch already has actions (parallel SDKs).
-        if len(batch.actions) == 1:
-            await self._on_window_close(batch)
-        else:
-            self._reset_timer(batch)
+        try:
+            # Serial SDK callbacks cannot supply another action while waiting.
+            if len(batch.actions) == 1:
+                await self._on_window_close(batch)
+            else:
+                self._reset_timer(batch)
+            return await asyncio.shield(batch._future)
+        finally:
+            if batch.id in self._batches:
+                batch.actions.remove(gate_action)
+                if not batch.actions:
+                    self.cleanup_job(job_id)
+                    from backend.models.events import EventKind, new_event
 
-        return await batch._future
+                    await self._event_bus.publish(
+                        new_event(
+                            job_id, EventKind.batch_approval_resolved, {"batch_id": batch.id, "resolution": "canceled"}
+                        )
+                    )
+                else:
+                    await self._on_window_close(batch)
 
     def resolve_batch(
         self,
@@ -217,6 +238,8 @@ class ApprovalBatcher:
                             "effect": a.classification.effect,
                             "checkpoint_ref": a.checkpoint_ref,
                             "description": _action_description(a.action),
+                            "approval_id": a.approval_id,
+                            "metadata": a.metadata.model_dump(mode="json") if a.metadata is not None else None,
                         }
                         for a in batch.actions
                     ],

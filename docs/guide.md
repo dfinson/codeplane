@@ -169,10 +169,11 @@ The standalone policy returns a **recommended action**, surfaced as a badge:
 
 Beyond the preset, **Settings → Policy** shows current controls and thresholds:
 
-- **Verified-USD thresholds** - read-only standalone thresholds, never applied to native cost units or missing currency
+- **Approval batch window** - group concurrent routine actions needing operator review
+- **Verified-USD thresholds** - editable warning/escalation lines, never applied to native cost units or missing currency. Blank disables a line and zero takes effect immediately.
 - **MCP server configs** — per-server launch configuration for MCP tools
 
-Retired batch/spend overrides remain historical data, not editable final policy. See [transition recovery](transition-retirement.md) for old pinned executions and checkpoints.
+Full approval of a routine batch grants its reasons for 24 hours within that Job and policy configuration. Partial approval releases only selected actions and does not create a grant. Mandatory security gates and incomplete evidence still require individual approval. See [transition recovery](transition-retirement.md) for old pinned executions and checkpoints.
 
 ### Hard-Gated Commands
 
