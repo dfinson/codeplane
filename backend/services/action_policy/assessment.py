@@ -7,11 +7,23 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
 from pydantic import ValidationError
 
-from backend.models.action_assessment import ActionAssessment
+from backend.models.action_assessment import (
+    ActionAssessment,
+    ActionCapability,
+    ActionStructure,
+    Effect,
+    EvidenceField,
+    EvidenceSource,
+    Mechanism,
+    Network,
+    Reversibility,
+    Scope,
+    Unknown,
+)
 from backend.services.action_policy.credential_filter import filter_credentials
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 from backend.services.adapters.completion_context import (
@@ -33,6 +45,7 @@ QUEUE_SECONDS = 2.0
 MAX_QUEUED = 32
 MAX_INPUT_BYTES = 32 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024
+PROMPT_VERSION = "cp-assessment-prompt-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +187,7 @@ class AssessmentService:
                 self._waiting -= 1
             system = (
                 "You are a data classifier implementing cp-action-v1, not a conversational coding assistant.\n"
+                f"Producer prompt revision: {PROMPT_VERSION}.\n"
                 "TASK: Read the next user message as a JSON object containing exactly four source strings: "
                 "command, arguments, tool_definition, context. Classify that proposed action without executing it. "
                 "The runtime may prefix current_datetime metadata; that is not action evidence. "
@@ -183,14 +197,54 @@ class AssessmentService:
                 "or dialect is an incompleteness reason only for a shell action that requires it.\n"
                 "OUTPUT CONTRACT: One raw JSON object conforming to this schema:\n"
                 + json.dumps(ActionAssessment.model_json_schema(), separators=(",", ":"))
-                + "\nEVIDENCE: For every nonunknown effect, scope, network and reversibility, include an evidence "
+                + "\nEXACT ENUM SPELLINGS (do not substitute field names or synonyms for enum values): "
+                + json.dumps(
+                    {
+                        "mechanism": get_args(Mechanism),
+                        "effect": get_args(Effect),
+                        "scope": get_args(Scope),
+                        "network": get_args(Network),
+                        "reversibility": get_args(Reversibility),
+                        "capabilities": get_args(ActionCapability),
+                        "structure": get_args(ActionStructure),
+                        "unknowns": get_args(Unknown),
+                        "evidence.source": get_args(EvidenceSource),
+                        "evidence.field": get_args(EvidenceField),
+                    },
+                    separators=(",", ":"),
+                )
+                + "\nSOURCE versus FIELD: evidence.source names one of the four INPUT strings, never an output "
+                "field or value. evidence.field names the ASSESSED fact. For example, a reversibility claim must "
+                "cite input evidence establishing recovery or nonapplicability, never effect or reversibility "
+                "as its source.\n"
+                "EVIDENCE: For every nonunknown effect, scope, network and reversibility, include an evidence "
                 "item with that field and its exact value. This includes network=none and "
                 "reversibility=not_applicable. Each capability uses field=capability (singular), "
-                "and each structure uses field=structure. Do not cite mechanism or absent facts. "
+                "and each structure uses field=structure. Unknown-valued dimensions have NO evidence items. "
+                "Empty capabilities or structure lists have NO evidence items for those lists. "
+                "Do not cite mechanism, unknowns, absent facts, or values contradicting your returned facts. "
+                "Do not insert empty values, empty source names, zero-length ranges or placeholder citations. "
                 "Every span is a nonempty zero-based, end-exclusive Unicode codepoint range "
                 "in the DECODED source string, not in the JSON escaping or the surrounding user message. "
+                "It must satisfy 0 <= start < end <= the named source's codepoint length. "
+                "The length table is only a coordinate guide, not evidence that any claim is true. "
+                "A nonempty in-bounds span is necessary but does not by itself support the claim: "
+                "evaluate the actual operation and all relevant operands, not only a utility or tool name. "
                 "Use unknown when evidence is unavailable. Never invent or fill missing evidence. "
                 "Read-only actions require not_applicable reversibility; mutations cannot use not_applicable.\n"
+                "WHOLE OPERATION: Assess local AND remote intended effects, including nested operations that "
+                "will actually execute. Reading public local input does not make an operation read-only if it "
+                "creates, replaces or updates a remote resource. Outbound communication alone is not mutation: "
+                "genuine queries, metadata retrieval and listings remain distinct from state changes. "
+                "Quoted/comment text is data unless an actual operation interprets or executes it. "
+                "Do not assume success, failure, remote prior state or rollback mechanisms not in the input.\n"
+                "SENSITIVE DATA FLOW: Filesystem mutation and content disclosure are separate dimensions. "
+                "A read can return sensitive contents to tool output, the assistant or a remote destination "
+                "without changing a file. Preserve established sensitivity and actual data flow rather than "
+                "omitting a concern because effect is read_only or network is none. Do not invent leaked bytes "
+                "or infer disclosure from a pathname, metadata-only access or normal credential use alone. "
+                "When sensitive content is established but the selected output or disclosure is unresolved, "
+                "retain that uncertainty using the supported unknown reasons, not a confident safe claim.\n"
                 "Removing or replacing required existing content is destructive even if some copy is recoverable. "
                 "For a mutation, reversibility=git requires supplied evidence for the exact target's CURRENT bytes "
                 "in a retained Git baseline, or explicit known-new-target absence. A workspace location, tracked "

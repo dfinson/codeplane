@@ -413,6 +413,18 @@ unchanged. Prose outside the fence, multiple objects or fences, malformed JSON,
 duplicate keys and nonobject output are rejected. Local schema, identity and
 evidence validation remains unchanged; no keys, values, unknowns or spans are
 repaired, and provider-side formatting never grants permission.
+Producer prompt `cp-assessment-prompt-v2` makes the unchanged wire contract
+explicit: input source labels are distinct from assessed field labels, enum
+spellings come from the schema types, and unknown dimensions or empty fact lists
+must have no evidence items. Nonempty decoded-codepoint bounds are necessary,
+not proof that a citation supports its claim. Instructions cover the whole local
+and remote operation and distinguish sensitive output from filesystem mutation,
+normal credential use and content-free reads. This is producer guidance, not
+output repair or independent semantic proof. The actual native file-write and
+recovery constraints remain bound local facts. Arbitrary shell effects and
+target sensitivity/output extent have no universal attested producer here;
+unknowns cannot be filled from command names, protected-write configuration or
+fixture-specific answers.
 Managed SDK policy approvals travel through the owning adapter's event stream
 so Runtime records its waiting state before publishing the request. That live
 waiting state remains eligible for the exact approval's final ownership check.

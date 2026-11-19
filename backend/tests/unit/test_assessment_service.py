@@ -3,9 +3,11 @@ import json
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
+import pytest
+
 from backend.models.action_assessment import ActionAssessment
 from backend.models.usage import UsageAmount
-from backend.services.action_policy.assessment import ActionBinding, AssessmentService
+from backend.services.action_policy.assessment import PROMPT_VERSION, ActionBinding, AssessmentService
 from backend.services.adapters.agent_adapter import CompletionResult
 from backend.services.adapters.completion_context import CompletionContext, current_completion_context
 
@@ -74,6 +76,15 @@ async def test_single_text_only_attempt_binds_sources_and_rechecks_epoch() -> No
     prompt = provider.complete.call_args.args[0]
     assert json.loads(prompt) == fields
     system = provider.complete.call_args.kwargs["system_message"]
+    assert f"Producer prompt revision: {PROMPT_VERSION}." in system
+    vocabulary = json.loads(system.split("EXACT ENUM SPELLINGS", 1)[1].split(": ", 1)[1].splitlines()[0])
+    assert vocabulary["evidence.source"] == ["command", "arguments", "tool_definition", "context"]
+    assert vocabulary["evidence.field"] == ["effect", "scope", "network", "reversibility", "capability", "structure"]
+    assert "Unknown-valued dimensions have NO evidence items" in system
+    assert "Empty capabilities or structure lists have NO evidence items" in system
+    assert "0 <= start < end <=" in system
+    assert "Assess local AND remote intended effects" in system
+    assert "Filesystem mutation and content disclosure are separate dimensions" in system
     lengths = system.split("Source codepoint lengths: ", 1)[1].splitlines()[0]
     assert json.loads(lengths) == {"command": 3, "arguments": 0, "tool_definition": 0, "context": 2}
     example_fields = json.loads(system.split("FORMAT-ONLY EXAMPLE INPUT: ", 1)[1].splitlines()[0])
@@ -102,6 +113,47 @@ async def test_markdown_and_conflicting_prose_remain_invalid_assessments() -> No
         assert result.reason == "assessment_invalid_output" and result.assessment is None
         assert result.completion is completion
         provider.complete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("unknown_citation", [False, True])
+async def test_unknown_dimensions_need_no_citations_and_rejected_bytes_are_not_repaired(unknown_citation) -> None:
+    fields = {
+        "command": "",
+        "arguments": '{"document":"unavailable"}',
+        "tool_definition": "Inspect an unresolved document",
+        "context": "The target and its contents have not been established.",
+    }
+    payload = {
+        "schema_version": "cp-action-v1",
+        "mechanism": "sdk",
+        "effect": "unknown",
+        "scope": "unknown",
+        "network": "unknown",
+        "reversibility": "unknown",
+        "capabilities": [],
+        "structure": [],
+        "unknowns": ["ambiguous_target"],
+        "evidence": (
+            [{"field": "effect", "value": "unknown", "source": "context", "start": 0, "end": 10}]
+            if unknown_citation
+            else []
+        ),
+    }
+    raw = json.dumps(payload)
+    completion = CompletionResult(text=raw, raw_text=raw, model="approved-model")
+    provider = AsyncMock()
+    provider.complete.return_value = completion
+    result = await AssessmentService().assess(
+        _binding(fields=fields),
+        fields,
+        provider=provider,
+        model="approved-model",
+        is_current=AsyncMock(return_value=True),
+    )
+    assert result.reason == ("assessment_invalid_output" if unknown_citation else "incomplete_evidence")
+    assert result.completion is completion and completion.text == completion.raw_text == raw
+    assert (result.assessment is None) is unknown_citation
+    provider.complete.assert_awaited_once()
 
 
 async def test_changed_or_redacted_input_never_calls_model() -> None:
