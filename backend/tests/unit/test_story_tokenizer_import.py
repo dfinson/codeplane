@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import psutil
 import pytest
 import uvicorn
 from fastapi import FastAPI
@@ -21,6 +22,12 @@ from sqlalchemy import update
 
 from backend.models.db import JobRow, TrailNodeRow
 from backend.tests.unit.test_approval_service import session_factory as session_factory
+
+
+def _assert_worker_exited(pid: int) -> None:
+    # Windows may retain a terminated PID while its handles are still open.
+    with contextlib.suppress(psutil.NoSuchProcess):
+        psutil.Process(pid).wait(timeout=0)
 
 
 @pytest.fixture
@@ -136,8 +143,7 @@ async def test_populated_story_drain_does_not_stall_http_or_shutdown(session_fac
         assert not release.exists(), "Shutdown must reap blocked loading without waiting for its completion"
         pid = int(started.read_text())
         assert pid != os.getpid()
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        _assert_worker_exited(pid)
         assert completer.called == 0
     finally:
         finished.set()
@@ -184,8 +190,7 @@ async def test_story_tokenizer_deadline_is_explicit_and_reaps_worker(
     assert len(processes) == 1 and processes[0].returncode is not None
     if block_before_import:
         assert not started.exists()
-    with pytest.raises(ProcessLookupError):
-        os.kill(processes[0].pid, 0)
+    _assert_worker_exited(processes[0].pid)
 
 
 async def test_loader_error_remains_explicit_without_estimated_story(blocked_tokenizer):
@@ -202,8 +207,7 @@ async def test_loader_error_remains_explicit_without_estimated_story(blocked_tok
     assert not story._gen_locks and not story._tokenizer_lock.locked()
     session.commit.assert_not_called()
     completer.complete.assert_not_called()
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(started.read_text()), 0)
+    _assert_worker_exited(int(started.read_text()))
 
 
 async def test_overlapping_story_counts_keep_one_owned_worker_through_repeated_cancellation(
@@ -233,8 +237,7 @@ async def test_overlapping_story_counts_keep_one_owned_worker_through_repeated_c
         with pytest.raises(asyncio.CancelledError):
             await second
         assert spawn.call_count == 1 and not release.exists() and not story._tokenizer_lock.locked()
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        _assert_worker_exited(pid)
     finally:
         release.touch()
         first.cancel()
