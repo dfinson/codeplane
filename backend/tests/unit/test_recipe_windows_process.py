@@ -57,6 +57,50 @@ def test_bootstrap_enrolls_itself_before_dispatch_and_fails_closed(kernel, monke
     dispatch.assert_not_called()
 
 
+def test_owned_bootstrap_inherits_stdin_only_when_explicitly_requested(kernel, monkeypatch):
+    owner = windows_process.WindowsCommandJob()
+    dispatch = MagicMock(return_value=0)
+    monkeypatch.setattr(subprocess, "call", dispatch)
+    try:
+        argv = owner.launch_argv(["python.exe", "-m", "owned.worker"], inherit_stdin=True)
+        assert argv[-5:] == [owner.name, "--inherit-stdin", "python.exe", "-m", "owned.worker"]
+        assert windows_process._run_enrolled(argv[4:]) == 0
+        kernel.AssignProcessToJobObject.assert_called_once_with(101, -1)
+        dispatch.assert_called_once_with(["python.exe", "-m", "owned.worker"], stdin=None)
+    finally:
+        owner.close()
+
+
+async def test_story_worker_checks_owned_windows_descendants_after_launcher_exit(kernel, monkeypatch):
+    from backend.services.story import tokenizer
+
+    active = iter([1, 0])
+    order = []
+
+    def terminate(*_args):
+        order.append("terminate owned tree")
+        return True
+
+    def accounting(_handle, _kind, pointer, _size, _returned):
+        info = ctypes.cast(pointer, ctypes.POINTER(windows_process._Accounting)).contents
+        info.ActiveProcesses = next(active)
+        order.append(f"active={info.ActiveProcesses}")
+        return True
+
+    kernel.TerminateJobObject.side_effect = terminate
+    kernel.QueryInformationJobObject.side_effect = accounting
+    process = MagicMock(returncode=0)
+    process.communicate = AsyncMock(return_value=(b"[3]", b""))
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr(tokenizer, "sys", SimpleNamespace(platform="win32", executable=sys.executable))
+    monkeypatch.setattr(tokenizer.asyncio, "create_subprocess_exec", spawn)
+    assert await tokenizer.count_tokens(["abc"]) == [3]
+    assert "--inherit-stdin" in spawn.call_args.args
+    assert order == ["terminate owned tree", "active=1", "active=0"]
+    process.kill.assert_not_called()
+    kernel.CloseHandle.assert_called_once_with(101)
+
+
 async def test_exited_leader_still_terminates_and_checks_its_owned_job(kernel, monkeypatch):
     monkeypatch.setattr(command_runner, "os", SimpleNamespace(name="nt"))
     active_counts = iter([1, 0])

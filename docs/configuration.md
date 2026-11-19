@@ -170,7 +170,9 @@ five-second deadline. Cached encodings retain exact tokenization. Loader errors
 and deadlines fail story preparation explicitly, without substituting estimates
 or caching a generated story. Core HTTP processing stays responsive, and
 shutdown kills and reaps an outstanding tokenizer process before closing story
-storage. No global tokenizer cache or network settings are changed.
+storage. On Windows, the existing Job Object owner contains the launcher and
+its actual Python worker before entry, then confirms zero active descendants
+before release. No global tokenizer cache or network settings are changed.
 
 ## Optional metadata-only telemetry export
 

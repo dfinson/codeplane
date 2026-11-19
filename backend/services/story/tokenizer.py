@@ -15,11 +15,16 @@ class StoryTokenizerError(RuntimeError):
 
 
 async def count_tokens(texts: list[str]) -> list[int]:
+    argv = [sys.executable, "-m", "backend.services.story.tokenizer"]
+    windows_job = None
+    if sys.platform == "win32":
+        from backend.services.recipe.windows_process import WindowsCommandJob
+
+        windows_job = WindowsCommandJob()
+        argv = windows_job.launch_argv(argv, inherit_stdin=True)
     spawning = asyncio.create_task(
         asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "backend.services.story.tokenizer",
+            *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -54,15 +59,27 @@ async def count_tokens(texts: list[str]) -> list[int]:
     finally:
 
         async def reap() -> None:
-            owned = await spawning
-            if owned.returncode is None:
-                # The worker may exit between the returncode check and kill.
-                with contextlib.suppress(ProcessLookupError):
-                    owned.kill()
-            if communication is not None:
-                await communication
-            else:
-                await owned.communicate()
+            try:
+                owned = await spawning
+                if owned.returncode is None:
+                    # The worker may exit between the returncode check and kill.
+                    with contextlib.suppress(ProcessLookupError):
+                        owned.kill()
+                if windows_job is not None:
+                    # Fence the enrollment bootstrap before terminating the Job.
+                    # Venv launchers can exit while the real Python worker survives.
+                    while owned.returncode is None:
+                        await asyncio.sleep(0.01)
+                    windows_job.terminate()
+                    while windows_job.active_processes():
+                        await asyncio.sleep(0.01)
+                if communication is not None:
+                    await communication
+                else:
+                    await owned.communicate()
+            finally:
+                if windows_job is not None:
+                    windows_job.close()
 
         cleanup = asyncio.create_task(reap())
         interrupted = False

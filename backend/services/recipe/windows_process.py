@@ -120,12 +120,13 @@ class WindowsCommandJob:
             self.close()
             raise
 
-    def launch_argv(self, argv: list[str]) -> list[str]:
+    def launch_argv(self, argv: list[str], *, inherit_stdin: bool = False) -> list[str]:
         # Isolated Python starts no site/custom startup code before self-enrollment.
         # A Windows venv launcher adds another process and its own descendant
         # lifetime. Use the base interpreter for this stdlib-only bootstrap.
         interpreter = getattr(sys, "_base_executable", sys.executable)
-        return [interpreter, "-I", "-S", str(Path(__file__).resolve()), self.name, *argv]
+        options = ["--inherit-stdin"] if inherit_stdin else []
+        return [interpreter, "-I", "-S", str(Path(__file__).resolve()), self.name, *options, *argv]
 
     def terminate(self) -> None:
         _require(self._kernel.TerminateJobObject(self._handle, 1), "TerminateJobObject")
@@ -148,12 +149,16 @@ class WindowsCommandJob:
 def _run_enrolled(argv: list[str]) -> int:
     if len(argv) < 2:
         raise OSError("Command bootstrap requires an ownership name and executable.")
+    inherit_stdin = argv[1] == "--inherit-stdin"
+    command = argv[2:] if inherit_stdin else argv[1:]
+    if not command:
+        raise OSError("Command bootstrap requires an executable.")
     kernel = _kernel32()
     job = kernel.OpenJobObjectW(0x0001, False, argv[0])  # JOB_OBJECT_ASSIGN_PROCESS
     _require(job, "OpenJobObjectW")
     try:
         _require(kernel.AssignProcessToJobObject(job, kernel.GetCurrentProcess()), "AssignProcessToJobObject")
-        return subprocess.call(argv[1:], stdin=subprocess.DEVNULL)
+        return subprocess.call(command, stdin=None if inherit_stdin else subprocess.DEVNULL)
     finally:
         _require(kernel.CloseHandle(job), "CloseHandle")
 
