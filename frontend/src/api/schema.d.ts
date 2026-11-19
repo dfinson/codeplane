@@ -3683,11 +3683,8 @@ export interface components {
             action: string;
             /** Purpose */
             purpose: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Callcount
              * @default 0
@@ -3719,11 +3716,8 @@ export interface components {
              * @default
              */
             phase: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -3796,6 +3790,13 @@ export interface components {
         };
         /** AnalyticsOverviewResponse */
         AnalyticsOverviewResponse: {
+            /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
             /** Period */
             period: number;
             /**
@@ -3833,11 +3834,8 @@ export interface components {
              * @default 0
              */
             running: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -3893,16 +3891,10 @@ export interface components {
              * @default []
              */
             costTrend: components["schemas"]["CostTrendEntry"][];
-            /**
-             * Totalsubagentcostusd
-             * @default 0
-             */
-            totalSubagentCostUsd: number;
-            /**
-             * Totalretrycostusd
-             * @default 0
-             */
-            totalRetryCostUsd: number;
+            /** Totalsubagentcostusd */
+            totalSubagentCostUsd?: number | null;
+            /** Totalretrycostusd */
+            totalRetryCostUsd?: number | null;
             /**
              * Totalretrycount
              * @default 0
@@ -4247,11 +4239,8 @@ export interface components {
              * @default
              */
             bucket: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -4291,11 +4280,8 @@ export interface components {
         CostTrendEntry: {
             /** Date */
             date: string;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Jobs
              * @default 0
@@ -4810,26 +4796,14 @@ export interface components {
         ExecutionPhase: "environment_setup" | "agent_reasoning" | "verification" | "finalization" | "post_completion";
         /** ExecutiveSummaryResponse */
         ExecutiveSummaryResponse: {
-            /**
-             * Buildingusd
-             * @default 0
-             */
-            buildingUsd: number;
-            /**
-             * Thinkingusd
-             * @default 0
-             */
-            thinkingUsd: number;
-            /**
-             * Wastedusd
-             * @default 0
-             */
-            wastedUsd: number;
-            /**
-             * Totalusd
-             * @default 0
-             */
-            totalUsd: number;
+            /** Buildingusd */
+            buildingUsd?: number | null;
+            /** Thinkingusd */
+            thinkingUsd?: number | null;
+            /** Wastedusd */
+            wastedUsd?: number | null;
+            /** Totalusd */
+            totalUsd?: number | null;
             /**
              * Buildingpct
              * @default 0
@@ -4845,14 +4819,7 @@ export interface components {
              * @default 0
              */
             wastedPct: number;
-            /**
-             * @default {
-             *       "retryUsd": 0,
-             *       "failedJobsUsd": 0,
-             *       "compactionUsd": 0,
-             *       "rereadsUsd": 0
-             *     }
-             */
+            /** @default {} */
             wasteBreakdown: components["schemas"]["WasteBreakdown"];
             /**
              * Perioddays
@@ -4997,21 +4964,12 @@ export interface components {
              * @default
              */
             filePath: string;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
-            /**
-             * Totalreadcost
-             * @default 0
-             */
-            totalReadCost: number;
-            /**
-             * Totalwritecost
-             * @default 0
-             */
-            totalWriteCost: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Totalreadcost */
+            totalReadCost?: number | null;
+            /** Totalwritecost */
+            totalWriteCost?: number | null;
             /**
              * Totalturns
              * @default 0
@@ -5348,11 +5306,8 @@ export interface components {
         };
         /** JobContextJob */
         JobContextJob: {
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Durationms
              * @default 0
@@ -5383,26 +5338,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
         };
         /** JobContextRepoAvg */
         JobContextRepoAvg: {
@@ -5411,11 +5354,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcost
-             * @default 0
-             */
-            avgCost: number;
+            /** Avgcost */
+            avgCost?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -5649,6 +5589,15 @@ export interface components {
         /** JobTelemetryResponse */
         JobTelemetryResponse: {
             /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
+            /** Legacycostunverified */
+            legacyCostUnverified?: number | null;
+            /**
              * Available
              * @default false
              */
@@ -5703,11 +5652,8 @@ export interface components {
              * @default 0
              */
             cacheWriteTokens: number;
-            /**
-             * Totalcost
-             * @default 0
-             */
-            totalCost: number;
+            /** Totalcost */
+            totalCost?: number | null;
             /**
              * Contextwindowsize
              * @default 0
@@ -5800,10 +5746,6 @@ export interface components {
             /**
              * @default {
              *       "totalTurns": 0,
-             *       "peakTurnCostUsd": 0,
-             *       "avgTurnCostUsd": 0,
-             *       "costFirstHalfUsd": 0,
-             *       "costSecondHalfUsd": 0,
              *       "turnCurve": []
              *     }
              */
@@ -6055,21 +5997,15 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcost
-             * @default 0
-             */
-            avgCost: number;
+            /** Avgcost */
+            avgCost?: number | null;
             /**
              * Avgdurationms
              * @default 0
              */
             avgDurationMs: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Premiumrequests
              * @default 0
@@ -6112,51 +6048,30 @@ export interface components {
              * @default 0
              */
             cacheHitRate: number;
-            /**
-             * Costperjob
-             * @default 0
-             */
-            costPerJob: number;
-            /**
-             * Costperminute
-             * @default 0
-             */
-            costPerMinute: number;
-            /**
-             * Costperturn
-             * @default 0
-             */
-            costPerTurn: number;
-            /**
-             * Costpertoolcall
-             * @default 0
-             */
-            costPerToolCall: number;
-            /**
-             * Costperdiffline
-             * @default 0
-             */
-            costPerDiffLine: number;
+            /** Costperjob */
+            costPerJob?: number | null;
+            /** Costperminute */
+            costPerMinute?: number | null;
+            /** Costperturn */
+            costPerTurn?: number | null;
+            /** Costpertoolcall */
+            costPerToolCall?: number | null;
+            /** Costperdiffline */
+            costPerDiffLine?: number | null;
         };
         /** ModelCostMixEntry */
         ModelCostMixEntry: {
             /** Model */
             model: string;
-            /**
-             * Costpermtok
-             * @default 0
-             */
-            costPerMtok: number;
+            /** Costpermtok */
+            costPerMtok?: number | null;
             /**
              * Totaltokens
              * @default 0
              */
             totalTokens: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Pctoftokens
              * @default 0
@@ -6285,11 +6200,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -6347,11 +6259,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalwasteusd
-             * @default 0
-             */
-            totalWasteUsd: number;
+            /** Totalwasteusd */
+            totalWasteUsd?: number | null;
             /** Firstseenat */
             firstSeenAt?: string | null;
             /** Lastseenat */
@@ -6464,11 +6373,8 @@ export interface components {
              * @default
              */
             resolution: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -6497,11 +6403,8 @@ export interface components {
              * @default 30
              */
             periodDays: number;
-            /**
-             * Totalwasteusd
-             * @default 0
-             */
-            totalWasteUsd: number;
+            /** Totalwasteusd */
+            totalWasteUsd?: number | null;
         };
         /** PhaseSegment */
         PhaseSegment: {
@@ -7956,11 +7859,8 @@ export interface components {
          * @description Aggregated cost for a repo over a time period.
          */
         RepoCostSummary: {
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaljobs
              * @default 0
@@ -8040,11 +7940,8 @@ export interface components {
              * @default 0
              */
             failed: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -8095,7 +7992,6 @@ export interface components {
             activeJobCount: number;
             /**
              * @default {
-             *       "totalCostUsd": 0,
              *       "totalJobs": 0,
              *       "totalTokens": 0
              *     }
@@ -8207,11 +8103,8 @@ export interface components {
         RetryCostResponse: {
             /** Period */
             period: number;
-            /**
-             * Retrycostusd
-             * @default 0
-             */
-            retryCostUsd: number;
+            /** Retrycostusd */
+            retryCostUsd?: number | null;
             /**
              * Retrycount
              * @default 0
@@ -8222,16 +8115,10 @@ export interface components {
              * @default 0
              */
             totalSpans: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
-            /**
-             * Retrypct
-             * @default 0
-             */
-            retryPct: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Retrypct */
+            retryPct?: number | null;
         };
         /** RetryTrackerOperationRequest */
         RetryTrackerOperationRequest: {
@@ -8418,11 +8305,8 @@ export interface components {
         ScorecardBudget: {
             /** Sdk */
             sdk: string;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Premiumrequests
              * @default 0
@@ -8433,11 +8317,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcostperjob
-             * @default 0
-             */
-            avgCostPerJob: number;
+            /** Avgcostperjob */
+            avgCostPerJob?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -8446,6 +8327,13 @@ export interface components {
         };
         /** ScorecardResponse */
         ScorecardResponse: {
+            /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
             /**
              * Period
              * @default 0
@@ -8457,11 +8345,8 @@ export interface components {
              * @default []
              */
             budget: components["schemas"]["ScorecardBudget"][];
-            /**
-             * Avgcostpermtok
-             * @default 0
-             */
-            avgCostPerMtok: number;
+            /** Avgcostpermtok */
+            avgCostPerMtok?: number | null;
             /**
              * Modelcostmix
              * @default []
@@ -8484,16 +8369,10 @@ export interface components {
              * @default 0
              */
             monthlyBudgetUsd: number;
-            /**
-             * Monthspendusd
-             * @default 0
-             */
-            monthSpendUsd: number;
-            /**
-             * Projectedmonthendusd
-             * @default 0
-             */
-            projectedMonthEndUsd: number;
+            /** Monthspendusd */
+            monthSpendUsd?: number | null;
+            /** Projectedmonthendusd */
+            projectedMonthEndUsd?: number | null;
             /**
              * Dayselapsed
              * @default 0
@@ -8504,31 +8383,21 @@ export interface components {
              * @default 0
              */
             daysInMonth: number;
-            /**
-             * Dailyavgusd
-             * @default 0
-             */
-            dailyAvgUsd: number;
-            /**
-             * Pctmonthlybudgetused
-             * @default 0
-             */
-            pctMonthlyBudgetUsed: number;
-            /**
-             * Costperdiffline
-             * @default 0
-             */
-            costPerDiffLine: number;
+            /** Dailyavgusd */
+            dailyAvgUsd?: number | null;
+            /** Pctmonthlybudgetused */
+            pctMonthlyBudgetUsed?: number | null;
+            /** Costperdiffline */
+            costPerDiffLine?: number | null;
             /**
              * Totaldifflines
              * @default 0
              */
             totalDiffLines: number;
-            /**
-             * Compactioncostusd
-             * @default 0
-             */
-            compactionCostUsd: number;
+            /** Compactioncostusd */
+            compactionCostUsd?: number | null;
+            /** Estimatedcompactioncostusd */
+            estimatedCompactionCostUsd?: number | null;
             /**
              * Compactiontokens
              * @default 0
@@ -8593,11 +8462,8 @@ export interface components {
              * @default 0
              */
             outputTokens: number;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Entries
              * @default []
@@ -8669,11 +8535,8 @@ export interface components {
              * @default 0
              */
             callCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -8712,11 +8575,8 @@ export interface components {
              * @default 0
              */
             sessionCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -8764,7 +8624,7 @@ export interface components {
             /** Outputtokens */
             outputTokens: number;
             /** Costusd */
-            costUsd: number;
+            costUsd: number | null;
         };
         /** SidecarSessionMetricsResponse */
         SidecarSessionMetricsResponse: {
@@ -8794,11 +8654,8 @@ export interface components {
              * @default 0
              */
             outputTokens: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Llmcallcount
              * @default 0
@@ -9084,11 +8941,8 @@ export interface components {
              * @default unknown
              */
             bucket: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -9304,11 +9158,8 @@ export interface components {
              * @default 0
              */
             cacheWriteTokens: number;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Durationms
              * @default 0
@@ -9442,26 +9293,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
             /**
              * Turncurve
              * @default []
@@ -10107,26 +9946,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
             /**
              * Turncurve
              * @default []
@@ -10385,26 +10212,18 @@ export interface components {
         };
         /** WasteBreakdown */
         WasteBreakdown: {
-            /**
-             * Retryusd
-             * @default 0
-             */
-            retryUsd: number;
-            /**
-             * Failedjobsusd
-             * @default 0
-             */
-            failedJobsUsd: number;
-            /**
-             * Compactionusd
-             * @default 0
-             */
-            compactionUsd: number;
-            /**
-             * Rereadsusd
-             * @default 0
-             */
-            rereadsUsd: number;
+            /** Estimatedcompactionusd */
+            estimatedCompactionUsd?: number | null;
+            /** Estimatedrereadsusd */
+            estimatedRereadsUsd?: number | null;
+            /** Retryusd */
+            retryUsd?: number | null;
+            /** Failedjobsusd */
+            failedJobsUsd?: number | null;
+            /** Compactionusd */
+            compactionUsd?: number | null;
+            /** Rereadsusd */
+            rereadsUsd?: number | null;
         };
         /** WorkspaceEntry */
         WorkspaceEntry: {
@@ -10444,21 +10263,12 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
-            /**
-             * Avgcostusd
-             * @default 0
-             */
-            avgCostUsd: number;
-            /**
-             * Pctoftotal
-             * @default 0
-             */
-            pctOfTotal: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Avgcostusd */
+            avgCostUsd?: number | null;
+            /** Pctoftotal */
+            pctOfTotal?: number | null;
         };
         /** YieldResponse */
         YieldResponse: {
@@ -10469,16 +10279,10 @@ export interface components {
              * @default []
              */
             categories: components["schemas"]["YieldCategoryRow"][];
-            /**
-             * Costpermergeusd
-             * @default 0
-             */
-            costPerMergeUsd: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Costpermergeusd */
+            costPerMergeUsd?: number | null;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaljobs
              * @default 0
