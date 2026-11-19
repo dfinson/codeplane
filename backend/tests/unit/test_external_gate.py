@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -47,7 +48,12 @@ class GateProvider(Provider):
 
 @pytest.fixture
 async def gate_server(composed_runtime):
-    host = composed_runtime[0]
+    async with serving_gate(composed_runtime[0]) as url:
+        yield url
+
+
+@asynccontextmanager
+async def serving_gate(host):
     app = FastAPI()
     _configure_middleware(app, dev=False, tunnel_origin=None, password="qualification-only", remote=True)
     app.include_router(router, prefix="/api")
@@ -70,10 +76,15 @@ async def gate_server(composed_runtime):
     try:
         yield f"http://127.0.0.1:{port}"
     finally:
-        server.should_exit = True
-        await asyncio.wait_for(task, 10)
-        listener.close()
-        await container.close()
+        try:
+            await host.external_gates.close()
+        finally:
+            server.should_exit = True
+            try:
+                await asyncio.wait_for(task, 10)
+            finally:
+                listener.close()
+                await container.close()
 
 
 def action(request_id="request", value="local"):
@@ -249,6 +260,71 @@ async def test_real_stdin_relay_waits_then_allows_exact_action(composed_runtime,
     await approvals.resolve(event.payload["approval_id"], ApprovalResolution.approved)
     assert await asyncio.wait_for(owner, 10)
     assert len(local_flowise[1]) == 1
+
+
+async def test_server_teardown_retires_pending_stdin_without_touching_ordinary_approvals(
+    composed_runtime, local_flowise, monkeypatch
+):
+    host, approvals, _, create = composed_runtime
+    requested: asyncio.Queue[SessionEvent] = asyncio.Queue()
+    polling = asyncio.Event()
+    process = None
+    original_wait = host.external_gates.wait
+
+    async def observe_wait(*args, **kwargs):
+        polling.set()
+        return await original_wait(*args, **kwargs)
+
+    monkeypatch.setattr(host.external_gates, "wait", observe_wait)
+
+    async def capture(event):
+        if event.kind == "permission.requested" and event.metadata.correlation_id:
+            await requested.put(event)
+
+    host._event_bus.subscribe(capture)
+    async with serving_gate(host) as url:
+
+        async def scenario(job, issued):
+            nonlocal process
+            process = await asyncio.create_subprocess_exec(
+                str(Path(sys.executable).with_name("cpl")),
+                "gate",
+                "--stdin",
+                "--format",
+                "json",
+                "--url",
+                url,
+                "--source",
+                issued.source_id,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, "CPL_GATE_TOKEN": issued.credential},
+            )
+            stdout, stderr = await process.communicate(
+                json.dumps(
+                    {
+                        "request_id": "stdin-server-close",
+                        "tool_name": "external.local",
+                        "tool_input": {"value": "local"},
+                        "session_id": "native-hook-session",
+                    }
+                ).encode()
+            )
+            assert process.returncode == 0, stderr.decode()
+            assert json.loads(stdout)["decision"] == "deny"
+            return False
+
+        _, owner = await run_owner(composed_runtime, local_flowise, scenario, auto_external=False)
+        event = await asyncio.wait_for(requested.get(), 10)
+        ordinary_job = await create("ordinary-job")
+        ordinary = await approvals.create_request(ordinary_job.id, "Unrelated operator decision", "not-json")
+        await asyncio.wait_for(polling.wait(), 5)
+        assert process is not None and process.returncode is None and not owner.done()
+    assert await asyncio.wait_for(owner, 10) is False
+    assert process.returncode == 0 and not local_flowise[1]
+    assert (await approvals.get(event.payload["approval_id"])).resolution == ApprovalResolution.rejected
+    assert (await approvals.get(ordinary.id)).resolution is None
 
 
 async def test_gate_credentials_do_not_grant_operator_or_sibling_authority(
