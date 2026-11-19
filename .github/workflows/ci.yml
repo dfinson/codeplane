@@ -173,7 +173,7 @@ jobs:
       - name: Install default-core dependencies
         shell: pwsh
         run: |
-          uv sync --no-default-groups
+          uv sync --locked --no-default-groups
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Capture verified public wheels for the installed Windows core
         timeout-minutes: 8
