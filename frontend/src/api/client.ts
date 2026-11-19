@@ -1,3 +1,4 @@
+import type { CurrencyValue } from "./types";
 /**
  * REST API client module.
  *
@@ -330,7 +331,7 @@ export interface SidecarSessionMetrics {
     totalLatencyMs: number;
     inputTokens: number;
     outputTokens: number;
-    costUsd: number;
+    costUsd: CurrencyValue;
   }>;
 }
 
@@ -542,7 +543,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   totalTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
-  totalCost?: number;
+  totalCost?: CurrencyValue;
   contextWindowSize?: number;
   currentContextTokens?: number;
   contextUtilization?: number;
@@ -573,7 +574,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
     activity?: Array<{
       dimension: string;
       bucket: string;
-      costUsd: number;
+      costUsd: CurrencyValue;
       inputTokens: number;
       outputTokens: number;
       callCount: number;
@@ -581,7 +582,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
     phase?: Array<{
       dimension: string;
       bucket: string;
-      costUsd: number;
+      costUsd: CurrencyValue;
       inputTokens: number;
       outputTokens: number;
       callCount: number;
@@ -589,7 +590,7 @@ export function fetchJobTelemetry(jobId: string): Promise<{
     editEfficiency?: Array<{
       dimension: string;
       bucket: string;
-      costUsd: number;
+      costUsd: CurrencyValue;
       inputTokens: number;
       outputTokens: number;
       callCount: number;
@@ -597,14 +598,14 @@ export function fetchJobTelemetry(jobId: string): Promise<{
   };
   turnEconomics?: {
     totalTurns: number;
-    peakTurnCostUsd: number;
-    avgTurnCostUsd: number;
-    costFirstHalfUsd: number;
-    costSecondHalfUsd: number;
+    peakTurnCostUsd: CurrencyValue;
+    avgTurnCostUsd: CurrencyValue;
+    costFirstHalfUsd: CurrencyValue;
+    costSecondHalfUsd: CurrencyValue;
     turnCurve: Array<{
       dimension: string;
       bucket: string;
-      costUsd: number;
+      costUsd: CurrencyValue;
       inputTokens: number;
       outputTokens: number;
       callCount: number;
@@ -1213,7 +1214,7 @@ export interface RepoJobSummary {
 }
 
 export interface RepoCostSummary {
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   totalJobs: number;
   totalTokens: number;
 }

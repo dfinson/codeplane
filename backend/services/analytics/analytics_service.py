@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.models.currency import divide_known, sum_known
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
         TelemetrySummaryRow,
         ToolStatsRow,
     )
+    from backend.models.usage import UsageAmount
 
 
 class AnalyticsService:
@@ -51,6 +54,18 @@ class AnalyticsService:
         from backend.persistence.telemetry_analytics_repo import TelemetryAnalyticsRepository
 
         return await TelemetryAnalyticsRepository(self._session).aggregate(period_days=period_days)
+
+    async def cost_usage(self, *, period_days: int) -> list[UsageAmount]:
+        from sqlalchemy import text
+
+        from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+
+        ids = await self._session.scalars(
+            text("SELECT DISTINCT job_id FROM job_telemetry_summary WHERE created_at >= datetime('now', :offset)"),
+            {"offset": f"-{int(period_days)} days"},
+        )
+        by_job = await TelemetrySummaryRepository(self._session).batch_cost_usage(list(ids), all_roles=True)
+        return [usage for values in by_job.values() for usage in values]
 
     async def cost_by_day(self, *, period_days: int) -> list[CostByDayRow]:
         from backend.persistence.telemetry_analytics_repo import TelemetryAnalyticsRepository
@@ -292,6 +307,8 @@ class AnalyticsService:
         from backend.config import load_config
 
         scorecard = await self.scorecard(period_days=period_days)
+        scorecard["cost_usage"] = await self.cost_usage(period_days=period_days)
+        scorecard["estimated_cost_usd"] = (await self.aggregate(period_days=period_days)).get("estimated_cost_usd")
         cfg = load_config()
         scorecard["period"] = period_days
         scorecard["dailySpendLimitUsd"] = cfg.telemetry.daily_spend_limit_usd
@@ -305,17 +322,15 @@ class AnalyticsService:
         scorecard["days_elapsed"] = monthly["days_elapsed"]
         scorecard["days_in_month"] = monthly["days_in_month"]
         scorecard["daily_avg_usd"] = monthly["daily_avg_usd"]
-        scorecard["pct_monthly_budget_used"] = (
-            monthly["month_spend_usd"] / monthly_budget if monthly_budget > 0 else 0.0
-        )
+        scorecard["pct_monthly_budget_used"] = divide_known(monthly["month_spend_usd"], monthly_budget)
 
         # Cost-per-diff-line (Item 9)
         budget_rows = scorecard.get("budget", [])
         period_total_cost = (
-            sum(b.get("total_cost_usd", 0) or 0 for b in budget_rows) if isinstance(budget_rows, list) else 0.0
+            sum_known(b.get("total_cost_usd") for b in budget_rows) if isinstance(budget_rows, list) else None
         )
         total_lines = await self.total_diff_lines(period_days=period_days)
-        scorecard["cost_per_diff_line"] = period_total_cost / total_lines if total_lines > 0 else 0.0
+        scorecard["cost_per_diff_line"] = divide_known(period_total_cost, total_lines)
         scorecard["total_diff_lines"] = total_lines
 
         # Compaction cost estimate (Item 13)
@@ -325,16 +340,15 @@ class AnalyticsService:
         compaction_tokens = await ta_repo.sum_compacted_tokens(period_days)
         # Use fleet avg input cost if available, else conservative estimate
         avg_input_rate = 0.000003  # ~$3/1M tokens
-        scorecard["compaction_cost_usd"] = compaction_tokens * avg_input_rate
+        scorecard["compaction_cost_usd"] = None
+        scorecard["estimated_compaction_cost_usd"] = compaction_tokens * avg_input_rate
         scorecard["compaction_tokens"] = compaction_tokens
 
         # Average cost per MTok + top model mix
         model_rows = await ta_repo.cost_by_model(period_days=period_days)
         grand_total_tokens = sum(r.get("total_tokens", 0) for r in model_rows)
-        grand_total_cost = sum(r.get("total_cost_usd", 0) for r in model_rows)
-        scorecard["avg_cost_per_mtok"] = (
-            grand_total_cost / (grand_total_tokens / 1_000_000) if grand_total_tokens > 0 else 0.0
-        )
+        grand_total_cost = sum_known(r.get("total_cost_usd") for r in model_rows)
+        scorecard["avg_cost_per_mtok"] = divide_known(grand_total_cost, grand_total_tokens / 1_000_000)
         scorecard["model_cost_mix"] = [
             {
                 "model": r.get("model", ""),
@@ -429,16 +443,30 @@ class AnalyticsService:
 
         # Activity dimension has 100% coverage per job
         activity_rows = await attr_repo.by_dimension("activity", period_days=period_days, limit=50)
-        total_activity = sum(r["cost_usd"] for r in activity_rows)
+        total_activity = sum_known(r["cost_usd"] for r in activity_rows)
 
         # Waste: cost of failed/discarded jobs (already included in activity total)
         waste = await summary_repo.fleet_waste_metrics(period_days=period_days)
-        wasted = (
-            waste["failed_discarded_cost_usd"]
-            + waste["compaction_cost_estimate_usd"]
-            + waste["reread_cost_estimate_usd"]
-            + waste["total_retry_cost_usd"]
-        )
+        wasted = sum_known((waste["failed_discarded_cost_usd"], waste["total_retry_cost_usd"]))
+        if total_activity is None or wasted is None:
+            return {
+                "building_usd": None,
+                "thinking_usd": None,
+                "wasted_usd": wasted,
+                "total_usd": total_activity,
+                "building_pct": 0,
+                "thinking_pct": 0,
+                "wasted_pct": 0,
+                "waste_breakdown": {
+                    "retry_usd": waste["total_retry_cost_usd"],
+                    "failed_jobs_usd": waste["failed_discarded_cost_usd"],
+                    "compaction_usd": None,
+                    "rereads_usd": None,
+                    "estimated_compaction_usd": waste["compaction_cost_estimate_usd"],
+                    "estimated_rereads_usd": waste["reread_cost_estimate_usd"],
+                },
+                "period_days": period_days,
+            }
         # Clamp waste to not exceed total
         wasted = min(wasted, total_activity)
 
@@ -446,8 +474,8 @@ class AnalyticsService:
         building_acts = {"implementation", "verification", "git_ops"}
         thinking_acts = {"investigation", "communication", "setup", "overhead"}
 
-        raw_building = sum(r["cost_usd"] for r in activity_rows if r["bucket"] in building_acts)
-        raw_thinking = sum(r["cost_usd"] for r in activity_rows if r["bucket"] in thinking_acts)
+        raw_building = sum_known(r["cost_usd"] for r in activity_rows if r["bucket"] in building_acts) or 0
+        raw_thinking = sum_known(r["cost_usd"] for r in activity_rows if r["bucket"] in thinking_acts) or 0
         raw_total = raw_building + raw_thinking
 
         # Distribute the productive portion (total - waste) between building/thinking
@@ -472,8 +500,10 @@ class AnalyticsService:
             "waste_breakdown": {
                 "retry_usd": waste["total_retry_cost_usd"],
                 "failed_jobs_usd": waste["failed_discarded_cost_usd"],
-                "compaction_usd": waste["compaction_cost_estimate_usd"],
-                "rereads_usd": waste["reread_cost_estimate_usd"],
+                "compaction_usd": None,
+                "rereads_usd": None,
+                "estimated_compaction_usd": waste["compaction_cost_estimate_usd"],
+                "estimated_rereads_usd": waste["reread_cost_estimate_usd"],
             },
             "period_days": period_days,
         }

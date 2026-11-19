@@ -80,7 +80,8 @@ Notes:
 - span_type: 'llm_call', 'tool_call', 'turn'
 - tool_category: 'file_read', 'file_write', 'shell', 'search', 'browser', etc.
 - execution_phase: 'investigation', 'implementation', 'debugging', 'verification'
-- cost_usd may be NULL -- use COALESCE(cost_usd, 0)
+- cost_usd is a nullable verified-USD read projection. NULL is unknown, not zero.
+- attrs_json.estimated_cost_usd is an estimate only and must not enter verified USD totals.
 - Timestamps are ISO 8601 strings
 
 ### job_telemetry_summary
@@ -96,6 +97,8 @@ tool_error_count, description, job_mode, total_cost_with_sidecar_usd
 
 Notes:
 - Composite PK: (job_id, session_kind)
+- total_cost_usd is source-qualified USD; legacy_cost_unverified retains the old numeric value without currency proof.
+- estimated_cost_usd is separately labeled estimated API-equivalent cost, not verified spend.
 - Filter session_kind = 'job' for main session metrics
 - repo contains full path -- use LIKE '%/repo_name' for matching
 - status: 'completed', 'failed', 'cancelled', 'running', 'review', 'pending'
@@ -146,7 +149,7 @@ Use after the system shows you query results.
 
 ## SQL rules
 1. ONLY SELECT/WITH queries  2. Filter session_kind = 'job' unless asked about sidecars
-3. Use COALESCE(cost_usd, 0) for nullable cost columns
+3. Missing currency is unknown, never zero. Native Copilot units and estimates are not USD.
 4. Date filtering: WHERE created_at >= datetime('now', '-N days')
 5. Use ASCII operators only (>=, <=, !=) -- never Unicode
 6. Keep queries efficient with GROUP BY and LIMIT

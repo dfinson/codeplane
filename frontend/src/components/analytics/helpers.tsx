@@ -15,12 +15,7 @@ export function formatRelativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export function formatUsd(n: number): string {
-  if (n == null || isNaN(n)) return "$0.00";
-  if (n < 0.01) return `$${n.toFixed(4)}`;
-  if (n < 1) return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-}
+export { formatUsd } from "../../lib/currency";
 
 export function formatDuration(ms: number): string {
   if (ms == null || isNaN(ms)) return "0ms";
@@ -39,8 +34,8 @@ export const STATUS_COLORS: Record<string, string> = {
   running: "#3b82f6",
 };
 
-export function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]) {
-  const escape = (v: string | number) => {
+export function downloadCsv(filename: string, headers: string[], rows: (string | number | null | undefined)[][]) {
+  const escape = (v: string | number | null | undefined) => {
     const s = String(v ?? "");
     return s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r") ? `"${s.replace(/"/g, '""')}"` : s;
   };

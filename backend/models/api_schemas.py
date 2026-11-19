@@ -539,7 +539,7 @@ class RepoJobSummary(CamelModel):
 class RepoCostSummary(CamelModel):
     """Aggregated cost for a repo over a time period."""
 
-    total_cost_usd: float = 0
+    total_cost_usd: float | None = None
     total_jobs: int = 0
     total_tokens: int = 0
 
@@ -1050,7 +1050,7 @@ class SecondarySessionResponse(CamelModel):
     output: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     entries: list[SecondarySessionEntryResponse] = []
 
 

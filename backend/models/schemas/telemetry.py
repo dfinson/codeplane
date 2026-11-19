@@ -8,6 +8,7 @@ from typing import Any  # noqa: TC003
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.models.schemas.base import CamelModel
+from backend.models.usage import UsageAmount  # noqa: TC001 - Pydantic evaluates this annotation.
 
 # ---------------------------------------------------------------------------
 # Cost attribution
@@ -19,7 +20,7 @@ class CostAttributionBucket(CamelModel):
 
     dimension: str
     bucket: str
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -35,10 +36,10 @@ class TurnEconomics(CamelModel):
     """Turn economics summary for a single job."""
 
     total_turns: int = 0
-    peak_turn_cost_usd: float = 0.0
-    avg_turn_cost_usd: float = 0.0
-    cost_first_half_usd: float = 0.0
-    cost_second_half_usd: float = 0.0
+    peak_turn_cost_usd: float | None = None
+    avg_turn_cost_usd: float | None = None
+    cost_first_half_usd: float | None = None
+    cost_second_half_usd: float | None = None
 
 
 class FileAccessStats(CamelModel):
@@ -57,14 +58,14 @@ class NormalizedModelMetrics(CamelModel):
     model: str
     sdk: str
     job_count: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     total_tokens: int = 0
-    cost_per_job: float = 0.0
-    cost_per_minute: float = 0.0
-    cost_per_turn: float = 0.0
-    cost_per_tool_call: float = 0.0
-    cost_per_diff_line: float = 0.0
-    cost_per_mtok: float = 0.0
+    cost_per_job: float | None = None
+    cost_per_minute: float | None = None
+    cost_per_turn: float | None = None
+    cost_per_tool_call: float | None = None
+    cost_per_diff_line: float | None = None
+    cost_per_mtok: float | None = None
     cache_hit_rate: float = 0.0
 
 
@@ -75,10 +76,10 @@ class NormalizedModelMetrics(CamelModel):
 
 class ScorecardBudget(CamelModel):
     sdk: str
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     premium_requests: int = 0
     job_count: int = 0
-    avg_cost_per_job: float = 0.0
+    avg_cost_per_job: float | None = None
     avg_duration_ms: float = 0.0
 
 
@@ -95,46 +96,49 @@ class ScorecardActivity(CamelModel):
 
 class CostTrendPoint(CamelModel):
     date: str
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
 
 
 class CostTrendEntry(CamelModel):
     date: str
-    cost: float = 0.0
+    cost: float | None = None
     jobs: int = 0
 
 
 class ModelCostMixEntry(CamelModel):
     model: str
-    cost_per_mtok: float = 0.0
+    cost_per_mtok: float | None = None
     total_tokens: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     pct_of_tokens: float = 0.0
 
 
 class ScorecardResponse(CamelModel):
+    cost_usage: list[UsageAmount] = []
+    estimated_cost_usd: float | None = None
     period: int = 0
     activity: ScorecardActivity
     budget: list[ScorecardBudget] = []
     # Average cost per million tokens + top model mix
-    avg_cost_per_mtok: float = 0.0
+    avg_cost_per_mtok: float | None = None
     model_cost_mix: list[ModelCostMixEntry] = []
     quota_json: str | None = None
     cost_trend: list[CostTrendEntry] = []
     daily_spend_limit_usd: float = 0.0
     # Monthly budget tracking (Item 5)
     monthly_budget_usd: float = 0.0
-    month_spend_usd: float = 0.0
-    projected_month_end_usd: float = 0.0
+    month_spend_usd: float | None = None
+    projected_month_end_usd: float | None = None
     days_elapsed: int = 0
     days_in_month: int = 0
-    daily_avg_usd: float = 0.0
-    pct_monthly_budget_used: float = 0.0
+    daily_avg_usd: float | None = None
+    pct_monthly_budget_used: float | None = None
     # Cost-per-line (Item 9)
-    cost_per_diff_line: float = 0.0
+    cost_per_diff_line: float | None = None
     total_diff_lines: int = 0
     # Compaction cost (Item 13)
-    compaction_cost_usd: float = 0.0
+    compaction_cost_usd: float | None = None
+    estimated_compaction_cost_usd: float | None = None
     compaction_tokens: int = 0
 
 
@@ -142,9 +146,9 @@ class ModelComparisonRow(CamelModel):
     model: str
     sdk: str
     job_count: int = 0
-    avg_cost: float = 0.0
+    avg_cost: float | None = None
     avg_duration_ms: float = 0.0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     premium_requests: int = 0
     merged: int = 0
     pr_created: int = 0
@@ -154,11 +158,11 @@ class ModelComparisonRow(CamelModel):
     verify_job_count: int = 0
     avg_diff_lines: float = 0.0
     cache_hit_rate: float = 0.0
-    cost_per_job: float = 0.0
-    cost_per_minute: float = 0.0
-    cost_per_turn: float = 0.0
-    cost_per_tool_call: float = 0.0
-    cost_per_diff_line: float = 0.0
+    cost_per_job: float | None = None
+    cost_per_minute: float | None = None
+    cost_per_turn: float | None = None
+    cost_per_tool_call: float | None = None
+    cost_per_diff_line: float | None = None
 
 
 class ModelComparisonResponse(CamelModel):
@@ -175,16 +179,16 @@ class ModelComparisonResponse(CamelModel):
 class YieldCategoryRow(CamelModel):
     category: str
     job_count: int = 0
-    total_cost_usd: float = 0.0
-    avg_cost_usd: float = 0.0
-    pct_of_total: float = 0.0
+    total_cost_usd: float | None = None
+    avg_cost_usd: float | None = None
+    pct_of_total: float | None = None
 
 
 class YieldResponse(CamelModel):
     period: int
     categories: list[YieldCategoryRow] = []
-    cost_per_merge_usd: float = 0.0
-    total_cost_usd: float = 0.0
+    cost_per_merge_usd: float | None = None
+    total_cost_usd: float | None = None
     total_jobs: int = 0
 
 
@@ -235,7 +239,7 @@ class CacheEfficiencyResponse(CamelModel):
 
 class RepoCostBreakdown(CamelModel):
     repo: str
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     buckets: list[CostAttributionBucket] = []
 
 
@@ -293,7 +297,7 @@ class TelemetryLlmCall(CamelModel):
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    cost: float = 0
+    cost: float | None = None
     duration_ms: float = 0
     is_subagent: bool = False
     offset_sec: float = 0
@@ -310,7 +314,7 @@ class TurnAction(CamelModel):
 class TelemetryCostBucket(CamelModel):
     dimension: str = "unknown"
     bucket: str = "unknown"
-    cost_usd: float = 0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     call_count: int = 0
@@ -368,10 +372,10 @@ class TelemetryTurnLatency(CamelModel):
 
 class TelemetryTurnEconomics(CamelModel):
     total_turns: int = 0
-    peak_turn_cost_usd: float = 0
-    avg_turn_cost_usd: float = 0
-    cost_first_half_usd: float = 0
-    cost_second_half_usd: float = 0
+    peak_turn_cost_usd: float | None = None
+    avg_turn_cost_usd: float | None = None
+    cost_first_half_usd: float | None = None
+    cost_second_half_usd: float | None = None
     turn_curve: list[TelemetryCostBucket] = []
 
 
@@ -421,12 +425,15 @@ class SidecarSessionSummary(CamelModel):
     session_kind: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
-    total_cost_usd: float = 0
+    total_cost_usd: float | None = None
     llm_call_count: int = 0
     tool_call_count: int = 0
 
 
 class JobTelemetryResponse(CamelModel):
+    cost_usage: list[UsageAmount] = []
+    estimated_cost_usd: float | None = None
+    legacy_cost_unverified: float | None = None
     available: bool = False
     job_id: str = ""
     sdk: str = ""
@@ -438,7 +445,7 @@ class JobTelemetryResponse(CamelModel):
     total_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    total_cost: float = 0
+    total_cost: float | None = None
     context_window_size: int = 0
     current_context_tokens: int = 0
     context_utilization: float = 0
@@ -478,7 +485,7 @@ class SidecarCostEntry(CamelModel):
 
     session_kind: str = ""
     session_count: int = 0
-    total_cost_usd: float = 0
+    total_cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     llm_call_count: int = 0
@@ -489,7 +496,7 @@ class ModelStatsEntry(CamelModel, extra="allow"):
     model: str = ""
     sdk: str = ""
     job_count: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     total_tokens: int = 0
     avg_duration_ms: float = 0.0
     premium_requests: float = 0.0
@@ -500,7 +507,7 @@ class RepoStatsEntry(CamelModel, extra="allow"):
     job_count: int = 0
     succeeded: int = 0
     failed: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     total_tokens: int = 0
     tool_calls: int = 0
     avg_duration_ms: float = 0.0
@@ -522,14 +529,14 @@ class ToolStatsEntry(CamelModel, extra="allow"):
 class ShellCommandEntry(CamelModel, extra="allow"):
     command: str = ""
     call_count: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     avg_duration_ms: float = 0.0
     job_count: int = 0
 
 
 class CostDriverEntry(CamelModel, extra="allow"):
     bucket: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     call_count: int = 0
@@ -539,14 +546,14 @@ class CostDriverEntry(CamelModel, extra="allow"):
 class FleetCostEntry(CamelModel, extra="allow"):
     dimension: str = ""
     bucket: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     call_count: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     job_count: int = 0
-    avg_cost_per_job: float = 0.0
+    avg_cost_per_job: float | None = None
     confidence: str = ""
 
 
@@ -566,12 +573,14 @@ class ObservationEntry(CamelModel, extra="allow"):
     detail: str = ""
     evidence: dict[str, Any] = {}
     job_count: int = 0
-    total_waste_usd: float = 0.0
+    total_waste_usd: float | None = None
     first_seen_at: str | None = None
     last_seen_at: str | None = None
 
 
 class AnalyticsOverviewResponse(CamelModel):
+    cost_usage: list[UsageAmount] = []
+    estimated_cost_usd: float | None = None
     period: int
     total_jobs: int = 0
     succeeded: int = 0
@@ -580,7 +589,7 @@ class AnalyticsOverviewResponse(CamelModel):
     failed: int = 0
     cancelled: int = 0
     running: int = 0
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     total_tokens: int = 0
     avg_duration_ms: float = 0.0
     total_premium_requests: float = 0.0
@@ -594,8 +603,8 @@ class AnalyticsOverviewResponse(CamelModel):
     )
     cache_hit_rate: float = 0.0
     cost_trend: list[CostTrendEntry] = []
-    total_subagent_cost_usd: float = 0.0
-    total_retry_cost_usd: float = 0.0
+    total_subagent_cost_usd: float | None = None
+    total_retry_cost_usd: float | None = None
     total_retry_count: int = 0
 
 
@@ -668,10 +677,10 @@ class FleetFileAccessResponse(CamelModel):
 class TurnEconomicsResponse(CamelModel):
     job_id: str
     total_turns: int = 0
-    peak_turn_cost_usd: float = 0.0
-    avg_turn_cost_usd: float = 0.0
-    cost_first_half_usd: float = 0.0
-    cost_second_half_usd: float = 0.0
+    peak_turn_cost_usd: float | None = None
+    avg_turn_cost_usd: float | None = None
+    cost_first_half_usd: float | None = None
+    cost_second_half_usd: float | None = None
     turn_curve: list[TelemetryCostBucket] = []
 
 
@@ -694,11 +703,11 @@ class ShellCommandsResponse(CamelModel):
 
 class RetryCostResponse(CamelModel):
     period: int
-    retry_cost_usd: float = 0.0
+    retry_cost_usd: float | None = None
     retry_count: int = 0
     total_spans: int = 0
-    total_cost_usd: float = 0.0
-    retry_pct: float = 0.0
+    total_cost_usd: float | None = None
+    retry_pct: float | None = None
 
 
 class EditEfficiencyCategory(CamelModel):
@@ -721,22 +730,22 @@ class JobContextFlag(CamelModel):
 
 
 class JobContextJob(CamelModel):
-    cost: float = 0.0
+    cost: float | None = None
     duration_ms: float = 0.0
     diff_lines_added: int = 0
     diff_lines_removed: int = 0
     sdk: str = ""
     model: str = ""
     total_turns: int = 0
-    peak_turn_cost_usd: float = 0.0
-    avg_turn_cost_usd: float = 0.0
-    cost_first_half_usd: float = 0.0
-    cost_second_half_usd: float = 0.0
+    peak_turn_cost_usd: float | None = None
+    avg_turn_cost_usd: float | None = None
+    cost_first_half_usd: float | None = None
+    cost_second_half_usd: float | None = None
 
 
 class JobContextRepoAvg(CamelModel):
     job_count: int = 0
-    avg_cost: float = 0.0
+    avg_cost: float | None = None
     avg_duration_ms: float = 0.0
     avg_diff_lines: float = 0.0
 
@@ -780,7 +789,7 @@ class JobTelemetryReport(CamelModel):
     repo: str = ""
     status: str = ""
     resolution: str = ""
-    total_cost_usd: float = 0.0
+    total_cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -790,7 +799,7 @@ class JobTelemetryReport(CamelModel):
     tool_call_count: int = 0
     diff_lines_added: int = 0
     diff_lines_removed: int = 0
-    subagent_cost_usd: float = 0.0
+    subagent_cost_usd: float | None = None
     created_at: datetime
     completed_at: datetime | None = None
 
@@ -809,7 +818,7 @@ class SidecarSessionJobMetrics(CamelModel):
     total_latency_ms: float
     input_tokens: int
     output_tokens: int
-    cost_usd: float
+    cost_usd: float | None
 
 
 class SidecarSessionMetricsResponse(CamelModel):
@@ -824,9 +833,9 @@ class SidecarSessionMetricsResponse(CamelModel):
 
 class FileCostEntry(CamelModel):
     file_path: str = ""
-    total_cost_usd: float = 0.0
-    total_read_cost: float = 0.0
-    total_write_cost: float = 0.0
+    total_cost_usd: float | None = None
+    total_read_cost: float | None = None
+    total_write_cost: float | None = None
     total_turns: int = 0
     job_count: int = 0
 
@@ -839,7 +848,7 @@ class FileCostResponse(CamelModel):
 class OutcomeMatrixCell(CamelModel):
     activity: str = ""
     resolution: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     job_count: int = 0
@@ -848,13 +857,13 @@ class OutcomeMatrixCell(CamelModel):
 class OutcomeMatrixResponse(CamelModel):
     cells: list[OutcomeMatrixCell] = []
     period_days: int = 30
-    total_waste_usd: float = 0.0
+    total_waste_usd: float | None = None
 
 
 class ActivityPhaseCell(CamelModel):
     activity: str = ""
     phase: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     call_count: int = 0
@@ -869,7 +878,7 @@ class ActivityPhaseMatrixResponse(CamelModel):
 class ActionPurposeCell(CamelModel):
     action: str
     purpose: str
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     call_count: int = 0
 
 
@@ -879,17 +888,19 @@ class ActionPurposeMatrixResponse(CamelModel):
 
 
 class WasteBreakdown(CamelModel):
-    retry_usd: float = 0.0
-    failed_jobs_usd: float = 0.0
-    compaction_usd: float = 0.0
-    rereads_usd: float = 0.0
+    estimated_compaction_usd: float | None = None
+    estimated_rereads_usd: float | None = None
+    retry_usd: float | None = None
+    failed_jobs_usd: float | None = None
+    compaction_usd: float | None = None
+    rereads_usd: float | None = None
 
 
 class ExecutiveSummaryResponse(CamelModel):
-    building_usd: float = 0.0
-    thinking_usd: float = 0.0
-    wasted_usd: float = 0.0
-    total_usd: float = 0.0
+    building_usd: float | None = None
+    thinking_usd: float | None = None
+    wasted_usd: float | None = None
+    total_usd: float | None = None
     building_pct: float = 0.0
     thinking_pct: float = 0.0
     wasted_pct: float = 0.0

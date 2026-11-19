@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import event as sa_event
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 if TYPE_CHECKING:
@@ -210,7 +211,9 @@ async def test_spans_insert_and_list(session: AsyncSession) -> None:
     assert spans[1]["output_tokens"] == 150
     assert spans[1]["cache_read_tokens"] == 25
     assert spans[1]["cache_write_tokens"] == 10
-    assert spans[1]["cost_usd"] == pytest.approx(0.42)
+    assert spans[1]["cost_usd"] is None
+    raw = await session.scalar(text("SELECT cost_usd FROM job_telemetry_spans WHERE span_type='llm'"))
+    assert raw == pytest.approx(0.42)
 
 
 @pytest.mark.asyncio
@@ -335,4 +338,5 @@ async def test_sidecar_cost_breakdown_excludes_jobs(session: AsyncSession) -> No
     breakdown = await analytics.sidecar_cost_breakdown(period_days=30)
     assert len(breakdown) == 1
     assert breakdown[0]["session_kind"] == "preflight"
-    assert breakdown[0]["total_cost_usd"] == pytest.approx(0.10)
+    assert breakdown[0]["total_cost_usd"] is None
+    assert (await repo.get("job-1", session_kind="preflight"))["total_cost_usd"] == pytest.approx(0.10)

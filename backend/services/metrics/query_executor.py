@@ -10,7 +10,8 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from sqlalchemy import text
+
+from backend.persistence.currency_projection import currency_query
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -201,7 +202,7 @@ async def execute_query(
 
     async def _run() -> list[dict[str, Any]]:
         async with session_factory() as session:
-            result = await session.execute(text(validated))
+            result = await session.execute(currency_query(validated))
             columns = list(result.keys())
             rows = result.fetchall()
             return [dict(zip(columns, row, strict=False)) for row in rows]

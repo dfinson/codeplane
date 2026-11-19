@@ -130,7 +130,7 @@ export function JobsTable({ period }: { period: number }) {
                   </span>
                 </td>
                 <td className="text-right py-1.5 px-2">
-                  <Tooltip content="API-equivalent cost"><span className="cursor-help">{formatUsd(Number(j.total_cost_usd) || 0)}</span></Tooltip>
+                  <Tooltip content="Verified source USD; unknown is not zero"><span className="cursor-help">{formatUsd(j.total_cost_usd)}</span></Tooltip>
                 </td>
                 <td className="text-right py-1.5 px-2">{formatDuration(j.duration_ms || 0)}</td>
                 <td className="text-right py-1.5 px-2 text-muted-foreground" title={when || undefined}>{when ? formatRelativeTime(when) : "—"}</td>

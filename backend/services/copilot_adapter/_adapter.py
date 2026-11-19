@@ -553,7 +553,7 @@ class CopilotAdapter(BaseAgentAdapter):
                         "output_tokens": int(au.output_tokens or 0),
                         "cache_read_tokens": int(au.cache_read_tokens or 0),
                         "cache_write_tokens": int(au.cache_write_tokens or 0),
-                        "cost_usd": float(au.cost or 0),
+                        "copilot_cost_unit": float(au.cost) if au.cost is not None else None,
                         "duration_ms": au.duration.total_seconds() * 1000 if au.duration else 0.0,
                         "is_subagent": is_subagent,
                         "advance_turn": True,

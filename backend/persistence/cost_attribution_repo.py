@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import text
 
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -74,6 +75,7 @@ class CostAttributionRepository(BaseRepository):
         *,
         job_id: str,
         rows: list[dict[str, Any]],
+        currency_qualified: bool = False,
     ) -> None:
         """Replace all attribution rows for a job (delete + re-insert)."""
         await self.delete_for_job(job_id)
@@ -85,10 +87,10 @@ class CostAttributionRepository(BaseRepository):
                 text("""
                     INSERT INTO job_cost_attribution
                         (job_id, dimension, bucket, cost_usd, input_tokens, output_tokens,
-                         call_count, cache_read_tokens, cache_write_tokens, model, created_at)
+                         call_count, cache_read_tokens, cache_write_tokens, model, created_at, currency_qualified)
                     VALUES
                         (:job_id, :dimension, :bucket, :cost_usd, :input_tokens, :output_tokens,
-                         :call_count, :cache_read_tokens, :cache_write_tokens, :model, :now)
+                         :call_count, :cache_read_tokens, :cache_write_tokens, :model, :now, :currency_qualified)
                 """),
                 {
                     "job_id": job_id,
@@ -102,6 +104,7 @@ class CostAttributionRepository(BaseRepository):
                     "cache_write_tokens": row.get("cache_write_tokens", 0),
                     "model": row.get("model"),
                     "now": now,
+                    "currency_qualified": currency_qualified,
                 },
             )
         await self._session.flush()
@@ -109,7 +112,7 @@ class CostAttributionRepository(BaseRepository):
     async def for_job(self, job_id: str) -> list[CostAttributionRow]:
         """Fetch all attribution rows for a job."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT id, job_id, dimension, bucket, cost_usd,
                        input_tokens, output_tokens, call_count,
                        COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
@@ -132,7 +135,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[CostDimensionRow]:
         """Aggregate attribution across jobs for a given dimension."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.bucket,
                     SUM(a.cost_usd) as cost_usd,
@@ -158,7 +161,7 @@ class CostAttributionRepository(BaseRepository):
     async def fleet_summary(self, *, period_days: int = 30) -> list[FleetCostRow]:
         """Cross-job summary: top cost buckets across all dimensions."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.dimension,
                     a.bucket,
@@ -188,7 +191,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Edit efficiency aggregated per model."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.model,
                     SUM(a.call_count) AS edit_turns,
@@ -247,7 +250,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Cache hit rate aggregated by activity bucket from attribution."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.bucket,
                     SUM(a.input_tokens) AS total_input_tokens,
@@ -275,7 +278,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Activity cost broken down by repo."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     j.repo,
                     a.bucket,
@@ -303,7 +306,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Jobs where communication + reasoning cost > threshold of total."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.job_id,
                     SUM(CASE WHEN a.bucket IN ('communication', 'reasoning')
@@ -383,7 +386,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Cross-tab: cost by activity bucket × job resolution (Item 15)."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     a.bucket AS activity,
                     COALESCE(j.resolution, 'running') AS resolution,
@@ -409,7 +412,7 @@ class CostAttributionRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Aggregate activity×phase cost across all jobs (Item 16)."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     SUBSTR(a.bucket, 1, INSTR(a.bucket, ':') - 1) AS activity,
                     SUBSTR(a.bucket, INSTR(a.bucket, ':') + 1) AS phase,

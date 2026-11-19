@@ -559,6 +559,7 @@ class JobTelemetrySummaryRow(Base):
     diff_lines_removed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     agent_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     subagent_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    derived_currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
 
 class JobTelemetrySpanRow(Base):
@@ -611,6 +612,7 @@ class JobFileCostRow(Base):
     """Per-job file cost attribution (Item 14)."""
 
     __tablename__ = "job_file_cost"
+    currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id"), nullable=False)
@@ -651,6 +653,7 @@ class CostAttributionRow(Base):
     """Per-job cost breakdown by dimension (phase, tool category, turn)."""
 
     __tablename__ = "job_cost_attribution"
+    currency_qualified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id"), nullable=False)

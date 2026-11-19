@@ -33,6 +33,7 @@ from backend.models.api_schemas import (
     TelemetryTurnLatency,
     TurnAction,
 )
+from backend.models.currency import optional_float
 from backend.services.tools.tool_classifier import classify_tool, classify_tool_activity, refine_shell_category
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ class TelemetryQueryService:
         """Build the full telemetry response for *job_id*."""
         import asyncio
 
-        summary = await self._summary_repo.get(job_id)
+        summary = await self._summary_repo.get_currency(job_id)
         if summary is None:
             return JobTelemetryResponse(job_id=job_id, available=False)
 
@@ -230,7 +231,7 @@ class TelemetryQueryService:
                         output_tokens=attrs.get("output_tokens", 0),
                         cache_read_tokens=attrs.get("cache_read_tokens", 0),
                         cache_write_tokens=attrs.get("cache_write_tokens", 0),
-                        cost=attrs.get("cost", 0),
+                        cost=optional_float(span.get("cost_usd")),
                         duration_ms=float(span.get("duration_ms", 0)),
                         is_subagent=attrs.get("is_subagent", False),
                         offset_sec=float(span.get("started_at", 0)),
@@ -244,7 +245,7 @@ class TelemetryQueryService:
             bucket = TelemetryCostBucket(
                 dimension=row.get("dimension", "unknown"),
                 bucket=row.get("bucket", "unknown"),
-                cost_usd=float(row.get("cost_usd", 0)),
+                cost_usd=optional_float(row.get("cost_usd")),
                 input_tokens=int(row.get("input_tokens", 0)),
                 output_tokens=int(row.get("output_tokens", 0)),
                 call_count=int(row.get("call_count", 0)),
@@ -329,6 +330,9 @@ class TelemetryQueryService:
             }
 
         return JobTelemetryResponse(
+            cost_usage=(await self._summary_repo.batch_cost_usage([job_id], all_roles=True)).get(job_id, []),
+            estimated_cost_usd=optional_float(summary.get("estimated_cost_usd")),
+            legacy_cost_unverified=optional_float(summary.get("legacy_cost_unverified")),
             available=True,
             job_id=job_id,
             sdk=sdk,
@@ -340,7 +344,7 @@ class TelemetryQueryService:
             total_tokens=input_tok + output_tok + cache_read,
             cache_read_tokens=cache_read,
             cache_write_tokens=summary.get("cache_write_tokens", 0),
-            total_cost=float(summary.get("total_cost_usd", 0)),
+            total_cost=optional_float(summary.get("total_cost_usd")),
             context_window_size=window_size,
             current_context_tokens=current_ctx,
             context_utilization=(current_ctx / window_size) if window_size else 0,
@@ -365,10 +369,10 @@ class TelemetryQueryService:
             ),
             turn_economics=TelemetryTurnEconomics(
                 total_turns=int(summary.get("total_turns", 0)),
-                peak_turn_cost_usd=float(summary.get("peak_turn_cost_usd", 0)),
-                avg_turn_cost_usd=float(summary.get("avg_turn_cost_usd", 0)),
-                cost_first_half_usd=float(summary.get("cost_first_half_usd", 0)),
-                cost_second_half_usd=float(summary.get("cost_second_half_usd", 0)),
+                peak_turn_cost_usd=optional_float(summary.get("peak_turn_cost_usd")),
+                avg_turn_cost_usd=optional_float(summary.get("avg_turn_cost_usd")),
+                cost_first_half_usd=optional_float(summary.get("cost_first_half_usd")),
+                cost_second_half_usd=optional_float(summary.get("cost_second_half_usd")),
                 turn_curve=turn_curve,
             ),
             latency_drivers=TelemetryLatencyDrivers(
@@ -416,7 +420,7 @@ class TelemetryQueryService:
                     session_kind=str(sr.get("session_kind", "")),
                     input_tokens=int(sr.get("input_tokens", 0)),
                     output_tokens=int(sr.get("output_tokens", 0)),
-                    total_cost_usd=float(sr.get("total_cost_usd", 0)),
+                    total_cost_usd=optional_float(sr.get("total_cost_usd")),
                     llm_call_count=int(sr.get("llm_call_count", 0)),
                     tool_call_count=int(sr.get("tool_call_count", 0)),
                 )

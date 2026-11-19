@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.models.currency import optional_float, sum_known, verified_usd
 from backend.models.events import EventKind
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 from backend.services.completers.lightweight_completer import LightweightCompleter
@@ -106,7 +107,7 @@ class SidecarSession:
         self.total_latency_ms: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        self.total_cost_usd: float = 0.0
+        self.total_cost_usd: float | None = None
         self.last_call_at: float | None = None
 
     @property
@@ -122,7 +123,7 @@ class SidecarSession:
         self.total_latency_ms = 0.0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_cost_usd = None
         self.last_call_at = None
 
     async def _ensure_primed(self, prompt: str) -> str:
@@ -167,7 +168,9 @@ class SidecarSession:
             self.total_latency_ms += elapsed_ms
             self.total_input_tokens += result.input_tokens
             self.total_output_tokens += result.output_tokens
-            self.total_cost_usd += result.cost_usd
+            self.total_cost_usd = sum_known(
+                (self.total_cost_usd, optional_float(verified_usd(getattr(result, "usage", ()))))
+            )
             self.last_call_at = time.monotonic()
             return result.text or ""
         return ""
@@ -202,7 +205,7 @@ class AgenticSidecarSession:
         self.total_latency_ms: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        self.total_cost_usd: float = 0.0
+        self.total_cost_usd: float | None = None
         self.last_call_at: float | None = None
 
     @property
@@ -321,7 +324,7 @@ class SidecarSessionManager:
         self._global_latency_ms: float = 0.0
         self._global_input_tokens: int = 0
         self._global_output_tokens: int = 0
-        self._global_cost_usd: float = 0.0
+        self._global_cost_usd: float | None = None
 
     @property
     def model(self) -> str:
@@ -547,14 +550,14 @@ class SidecarSessionManager:
         total_latency = 0.0
         total_input = 0
         total_output = 0
-        total_cost = 0.0
+        total_cost: float | None = None
         for session in job_sidecars.values():
             self._accumulate_global(session)
             total_calls += session.call_count
             total_latency += session.total_latency_ms
             total_input += session.total_input_tokens
             total_output += session.total_output_tokens
-            total_cost += session.total_cost_usd
+            total_cost = sum_known((total_cost, session.total_cost_usd))
         if total_calls > 0:
             self._closed_jobs[job_id] = {
                 "callCount": total_calls,
@@ -562,7 +565,7 @@ class SidecarSessionManager:
                 "totalLatencyMs": round(total_latency, 1),
                 "inputTokens": total_input,
                 "outputTokens": total_output,
-                "costUsd": round(total_cost, 6),
+                "costUsd": round(total_cost, 6) if total_cost is not None else None,
             }
             while len(self._closed_jobs) > _CLOSED_JOBS_MAX:
                 self._closed_jobs.popitem(last=False)
@@ -574,7 +577,7 @@ class SidecarSessionManager:
         self._global_latency_ms += session.total_latency_ms
         self._global_input_tokens += session.total_input_tokens
         self._global_output_tokens += session.total_output_tokens
-        self._global_cost_usd += session.total_cost_usd
+        self._global_cost_usd = sum_known((self._global_cost_usd, session.total_cost_usd))
 
     # -- Non-job one-shot (Completable protocol) -----------------------------
 
@@ -633,7 +636,7 @@ class SidecarSessionManager:
                 "totalLatencyMs": round(jl, 1),
                 "inputTokens": sum(s.total_input_tokens for s in job_sidecars.values()),
                 "outputTokens": sum(s.total_output_tokens for s in job_sidecars.values()),
-                "costUsd": round(sum(s.total_cost_usd for s in job_sidecars.values()), 6),
+                "costUsd": sum_known(s.total_cost_usd for s in job_sidecars.values()),
             }
 
         return {

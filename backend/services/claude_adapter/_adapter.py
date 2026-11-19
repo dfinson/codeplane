@@ -499,7 +499,7 @@ class ClaudeAdapter(BaseAgentAdapter):
         """Handle the final ResultMessage — extract cost/usage and emit done."""
         job_id = self._session_to_job.get(session_id)
         result_text = getattr(message, "result", "") or ""
-        total_cost_usd = getattr(message, "total_cost_usd", 0.0) or 0.0
+        total_cost_usd = getattr(message, "total_cost_usd", None)
         usage = getattr(message, "usage", {}) or {}
         duration_ms = getattr(message, "duration_ms", 0) or 0
         is_error = getattr(message, "is_error", False)
@@ -523,7 +523,7 @@ class ClaudeAdapter(BaseAgentAdapter):
                     "output_tokens": int(output_tokens),
                     "cache_read_tokens": int(cache_read),
                     "cache_write_tokens": int(cache_write),
-                    "cost_usd": float(total_cost_usd),
+                    "cost_usd": float(total_cost_usd) if total_cost_usd is not None else None,
                     "duration_ms": float(duration_ms),
                     "is_subagent": False,
                     "advance_turn": True,
