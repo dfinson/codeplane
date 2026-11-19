@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import re
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Never, cast
 
 import structlog
 
@@ -74,6 +76,29 @@ def _sdk_excluded_tools(tools: list[str] | None) -> list[str] | None:
     if tools is not None and "*" in tools:
         return ["builtin:*", "mcp:*", "custom:*"]
     return tools
+
+
+def _structured_reply_text(text: str) -> tuple[str, bool]:
+    envelope = re.fullmatch(r"```json\r?\n(.*?)\r?\n```(?:\r?\n)?", text, flags=re.DOTALL)
+    if envelope is not None and text.count("```") != 2:
+        raise ValueError("Structured response contains multiple code fences")
+    body = envelope.group(1) if envelope is not None else text
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("Structured response contains duplicate object keys")
+            value[key] = item
+        return value
+
+    def invalid_constant(value: str) -> Never:
+        raise ValueError(f"Structured response contains a non-JSON constant: {value}")
+
+    parsed = json.loads(body, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    if not isinstance(parsed, dict):
+        raise ValueError("Structured response must contain one JSON object")
+    return body, envelope is not None
 
 
 class CopilotAdapter(BaseAgentAdapter):
@@ -1162,13 +1187,26 @@ class CopilotAdapter(BaseAgentAdapter):
             if not text.strip():
                 raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
             validate_completion_identity(model, served_model, completion)
-            return CompletionResult(
+            result = CompletionResult(
                 text=text,
                 model=served_model,
                 usage=tuple(usage),
                 input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
                 output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
             )
+            if completion.response_schema is not None:
+                result.raw_text = text
+                try:
+                    result.text, normalized = _structured_reply_text(text)
+                except ValueError as exc:
+                    raise UtilityCompletionError(
+                        "Structured completion is not one unambiguous JSON object",
+                        reason="invalid_structured_output",
+                        completion=result,
+                    ) from exc
+                if normalized:
+                    result.response_normalization = "single_json_code_fence"
+            return result
         except UtilityCompletionError:
             raise
         except TimeoutError as exc:

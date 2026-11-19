@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from backend.models.domain import AgentSDK, SDKModelMismatchError
 
@@ -32,6 +32,8 @@ class CompletionResult:
     model: str = ""
     usage: tuple[UsageAmount, ...] = ()
     usage_event_id: str | None = None
+    raw_text: str | None = None
+    response_normalization: Literal["single_json_code_fence"] | None = None
 
 
 class UtilityCompletionError(OSError):

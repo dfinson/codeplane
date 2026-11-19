@@ -6,6 +6,7 @@ All ``copilot`` SDK imports are mocked so the tests run without the SDK installe
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import uuid
 from datetime import timedelta
@@ -1767,6 +1768,150 @@ class TestTfEventEmission:
 
 
 class TestComplete:
+    @pytest.mark.parametrize("defect", [None, "extra", "span"])
+    async def test_recognized_envelope_still_uses_unchanged_assessment_validation(
+        self, adapter: CopilotAdapter, defect: str | None
+    ) -> None:
+        from backend.services.action_policy.assessment import ActionBinding, AssessmentService
+        from backend.tests.unit.test_assessment_service import FIELDS, _completion
+
+        payload = json.loads(_completion().text)
+        if defect == "extra":
+            payload["authority"] = "allow"
+        elif defect == "span":
+            payload["evidence"][0]["end"] = len(FIELDS["command"]) + 1
+        body = json.dumps(payload)
+        raw = f"```json\n{body}\n```"
+        session = _FakeCopilotSession()
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=raw))
+
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        service = AssessmentService()
+        try:
+            with (
+                patch("copilot.CopilotClient", return_value=client),
+                patch.object(
+                    session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+                ) as sent,
+            ):
+                result = await service.assess(
+                    ActionBinding.create("fixture", "epoch", {"tool": "bash"}, fields=FIELDS),
+                    FIELDS,
+                    provider=adapter,
+                    model="approved-model",
+                    is_current=AsyncMock(return_value=True),
+                )
+            assert (result.assessment is not None) is (defect is None)
+            assert result.reason == (None if defect is None else "assessment_invalid_output")
+            assert result.completion is not None
+            assert result.completion.text == body and result.completion.raw_text == raw
+            assert result.completion.response_normalization == "single_json_code_fence"
+            sent.assert_awaited_once()
+        finally:
+            await service.shutdown()
+
+    @pytest.mark.parametrize(
+        ("native_text", "expected", "normalized"),
+        [
+            (' {"title":"Inspect worker ownership"} \n', ' {"title":"Inspect worker ownership"} \n', False),
+            ('```json\n{"title":"Inspect worker ownership"}\n```', '{"title":"Inspect worker ownership"}', True),
+            (
+                '```json\r\n{"title":"Inspect worker ownership"}\r\n```\r\n',
+                '{"title":"Inspect worker ownership"}',
+                True,
+            ),
+        ],
+    )
+    async def test_structured_reply_preserves_raw_output_and_only_removes_one_exact_envelope(
+        self, adapter: CopilotAdapter, native_text: str, expected: str, normalized: bool
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(
+                _FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model", inputTokens=7))
+            )
+            message = _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=native_text))
+            session.fire_event(message)
+            return message
+
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as sent,
+            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+        ):
+            result = await adapter.complete("fixture", model="approved-model")
+        assert result.text == expected and result.raw_text == native_text
+        assert result.response_normalization == ("single_json_code_fence" if normalized else None)
+        assert result.model == "approved-model" and result.input_tokens == 7
+        sent.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "native_text",
+        [
+            'Prose\n```json\n{"value":1}\n```',
+            '```json\n{"value":1}\n```\nProse',
+            '```json\n{"value":1}\n```\n```json\n{"value":2}\n```',
+            '```json\n{"value":1} {"value":2}\n```',
+            '```json\n{"value":\n```',
+            '```json\n[{"value":1}]\n```',
+            '```json\n{"value":NaN}\n```',
+            '```json\n{"value":1,"value":2}\n```',
+            '{"value":1} {"value":2}',
+        ],
+    )
+    async def test_structured_reply_rejects_ambiguous_envelopes_without_repair(
+        self, adapter: CopilotAdapter, native_text: str
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=native_text))
+
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
+            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("fixture", model="approved-model")
+        assert failure.value.reason == "invalid_structured_output"
+        assert failure.value.completion is not None
+        assert failure.value.completion.text == failure.value.completion.raw_text == native_text
+        assert failure.value.completion.response_normalization is None
+
+    async def test_structured_reply_limit_applies_before_envelope_normalization(self, adapter: CopilotAdapter) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(
+                session,
+                "send_and_wait",
+                create=True,
+                new_callable=AsyncMock,
+                return_value=_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="```json\n{}\n```")),
+            ),
+            completion_context(CompletionContext(max_output_bytes=2, response_schema={"type": "object"})),
+            pytest.raises(agent_adapter.UtilityCompletionError) as failure,
+        ):
+            await adapter.complete("fixture")
+        assert failure.value.reason == "output_limit"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("structured", [False, True])
     async def test_response_schema_uses_a_fresh_run_not_immediate_steering(
@@ -1857,7 +2002,7 @@ class TestComplete:
         self, adapter: CopilotAdapter, excluded_tools: list[str] | None, sdk_exclusions: list[str] | None
     ) -> None:
         fake_session = _FakeCopilotSession()
-        collected_content = "Generated response"
+        collected_content = '```json\n{"plain_text":"must remain untouched"}\n```'
 
         class _FakeCompleteClient:
             async def create_session(self, **kwargs: Any) -> _FakeCopilotSession:
@@ -1884,7 +2029,8 @@ class TestComplete:
             result = await adapter.complete("test prompt", excluded_tools=excluded_tools)
 
         assert result.text is not None
-        assert collected_content in result.text
+        assert result.text == collected_content
+        assert result.raw_text is None and result.response_normalization is None
         assert client.create_session.await_args.kwargs["excluded_tools"] == sdk_exclusions
 
     @pytest.mark.asyncio

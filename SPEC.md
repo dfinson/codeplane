@@ -402,8 +402,14 @@ existing evidence schema through native per-run structured output on a fresh
 session, not immediate steering. Its classifier instructions replace the coding
 assistant's default presentation prompt; tool access remains disabled and
 permission callbacks still reject requests. Other text completion calls are unchanged.
-Local validation still rejects Markdown, surrounding prose, invalid evidence
-and out-of-bounds spans; provider-side formatting never grants permission.
+For explicitly schema-requested Copilot utility replies, the adapter may remove
+one exact whole-output `json` code fence around a single JSON object. It retains
+the original text and normalization provenance and applies the raw-byte bound
+before transforming the representation. Bare JSON and generic text callers are
+unchanged. Prose outside the fence, multiple objects or fences, malformed JSON,
+duplicate keys and nonobject output are rejected. Local schema, identity and
+evidence validation remains unchanged; no keys, values, unknowns or spans are
+repaired, and provider-side formatting never grants permission.
 Managed SDK policy approvals travel through the owning adapter's event stream
 so Runtime records its waiting state before publishing the request. That live
 waiting state remains eligible for the exact approval's final ownership check.
