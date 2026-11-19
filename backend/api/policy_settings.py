@@ -1,14 +1,4 @@
-"""Action policy settings API — preset, batch window, per-preset USD ceilings, MCP configs, export/import.
-
-Wholesale governance adoption retired the hand-rolled path/action/cost rule editors
-and the pattern-trust grant editor: the DECISION (rules, protected paths,
-count/effect budget, reason-code trust) is owned by ``traceforge.governance``. What
-CodePlane still configures here is the product surface it owns — the preset (which
-selects a TraceForge profile), the approval batch window, the per-preset USD
-ceiling overlay (enforced natively by ``JobSpendCeilingAssessor``), and the MCP
-server launch configs. The operator "trust this whole session" action lives on
-``POST /jobs/{job_id}/approvals/trust`` (a reason-code session grant), not here.
-"""
+"""Standalone preset and MCP settings, with preserved read-only transition data."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -65,7 +55,7 @@ class UsdCeilingEntry(CamelModel):
 
 
 class UsdCeilingsResponse(CamelModel):
-    """Effective per-preset ceilings (baked profile default overlaid with overrides)."""
+    """Fixed standalone thresholds, applied only to verified USD."""
 
     ceilings: dict[str, UsdCeilingEntry] = Field(default_factory=dict)
 
@@ -109,13 +99,10 @@ class PolicyImportRequest(CamelModel):
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _effective_ceilings(overrides: dict[str, tuple[float | None, float | None]]) -> dict[str, UsdCeilingEntry]:
-    """Merge stored overrides over product defaults without constructing legacy policy."""
+def _effective_ceilings() -> dict[str, UsdCeilingEntry]:
+    """Report the unchanged standalone policy thresholds, not retired TF overrides."""
     out: dict[str, UsdCeilingEntry] = {}
     for preset, (warn, ceiling) in USD_CEILING_DEFAULTS.items():
-        if preset.value in overrides:
-            o_warn, o_ceiling = overrides[preset.value]
-            warn, ceiling = o_warn, o_ceiling
         out[preset.value] = UsdCeilingEntry(warn_usd=warn, ceiling_usd=ceiling)
     return out
 
@@ -130,10 +117,9 @@ async def get_policy(sf: FromDishka[async_sessionmaker[AsyncSession]]) -> FullPo
     async with sf() as session:
         repo = PolicyRepository(session)
         config = await repo.get_config()
-        overrides = await repo.get_usd_ceilings()
         return FullPolicyResponse(
             config=PolicyConfigResponse(**config),
-            usd_ceilings=_effective_ceilings(overrides),
+            usd_ceilings=_effective_ceilings(),
             mcp_servers=[MCPServerResponse(**r) for r in await repo.list_mcp_configs()],
         )
 
@@ -158,6 +144,11 @@ async def update_config(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
     event_bus: FromDishka[EventBus],
 ) -> PolicyConfigResponse:
+    if body.batch_window_seconds is not None:
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy approval batching is retired. The final runtime uses bound per-action decisions.",
+        )
     async with sf() as session:
         repo = PolicyRepository(session)
         updates = body.model_dump(exclude_none=True)
@@ -168,7 +159,7 @@ async def update_config(
 
 
 # ---------------------------------------------------------------------------
-# Per-preset USD ceilings (native cost-ceiling overlay)
+# Current standalone thresholds; historical overrides remain in exported data.
 # ---------------------------------------------------------------------------
 
 
@@ -176,29 +167,19 @@ async def update_config(
 async def get_usd_ceilings(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
 ) -> UsdCeilingsResponse:
-    async with sf() as session:
-        repo = PolicyRepository(session)
-        overrides = await repo.get_usd_ceilings()
-    return UsdCeilingsResponse(ceilings=_effective_ceilings(overrides))
+    return UsdCeilingsResponse(ceilings=_effective_ceilings())
 
 
-@router.put("/usd-ceilings", response_model=UsdCeilingsResponse)
+@router.put("/usd-ceilings", response_model=UsdCeilingsResponse, deprecated=True)
 async def update_usd_ceilings(
     body: UpdateUsdCeilingsRequest,
     sf: FromDishka[async_sessionmaker[AsyncSession]],
     event_bus: FromDishka[EventBus],
 ) -> UsdCeilingsResponse:
-    ceilings = {
-        preset: {"warn_usd": entry.warn_usd, "ceiling_usd": entry.ceiling_usd}
-        for preset, entry in body.ceilings.items()
-    }
-    async with sf() as session:
-        repo = PolicyRepository(session)
-        await repo.set_usd_ceilings(ceilings)
-        overrides = await repo.get_usd_ceilings()
-        await session.commit()
-    await _notify_policy_changed(event_bus)
-    return UsdCeilingsResponse(ceilings=_effective_ceilings(overrides))
+    raise HTTPException(
+        status_code=410,
+        detail="TF spend overrides are retained historical data, not active standalone policy configuration.",
+    )
 
 
 # ---------------------------------------------------------------------------

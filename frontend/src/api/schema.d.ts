@@ -484,12 +484,7 @@ export interface paths {
         put?: never;
         /**
          * Reenrich Job
-         * @description Re-enrich historical events for a job through TraceForge.
-         *
-         *     Replays all persisted events through a fresh TraceForge Enricher so
-         *     that classification, visibility, tool_display and other metadata are
-         *     backfilled.  Idempotent — a marker event prevents double processing
-         *     unless ``force=true``.
+         * @description Rebuild structural display/duration metadata without changing raw history or risk.
          */
         post: operations["reenrich_job_api_jobs__job_id__reenrich_post"];
         delete?: never;
@@ -2185,7 +2180,10 @@ export interface paths {
         };
         /** Get Usd Ceilings */
         get: operations["get_usd_ceilings_api_settings_policy_usd_ceilings_get"];
-        /** Update Usd Ceilings */
+        /**
+         * Update Usd Ceilings
+         * @deprecated
+         */
         put: operations["update_usd_ceilings_api_settings_policy_usd_ceilings_put"];
         post?: never;
         delete?: never;
@@ -10331,7 +10329,7 @@ export interface components {
         };
         /**
          * UsdCeilingsResponse
-         * @description Effective per-preset ceilings (baked profile default overlaid with overrides).
+         * @description Fixed standalone thresholds, applied only to verified USD.
          */
         UsdCeilingsResponse: {
             /** Ceilings */

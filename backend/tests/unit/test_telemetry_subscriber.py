@@ -11,12 +11,12 @@ import pytest
 from sqlalchemy import event as sa_event
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from traceforge.types import EventMetadata, ToolMotivation
 
 from backend.models.api_schemas import ExecutionPhase
 from backend.models.db import Base, JobRow, ProjectRow
 from backend.models.domain import JobState
 from backend.models.events import EventKind, new_event
+from backend.models.session_event import EventMetadata, ToolMotivation
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
 from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository

@@ -1,13 +1,4 @@
-"""Action policy persistence — config (preset + batch window + USD ceilings) and MCP configs.
-
-The hand-rolled path/action/cost rule tables and the pattern-trust grant table are
-retired: the DECISION is delegated wholesale to ``traceforge.governance`` (rules,
-protected paths, count/effect budget, reason-code trust all live in the separate
-governance store). CodePlane keeps only the product settings it still owns — the
-preset (which selects a TraceForge profile), the approval batch window, the
-per-preset USD ceiling overlay (enforced natively by ``JobSpendCeilingAssessor``),
-and the MCP server launch configs.
-"""
+"""Application settings and retained historical configuration data."""
 
 from __future__ import annotations
 
@@ -138,16 +129,21 @@ class PolicyRepository(BaseRepository):
         }
 
     async def import_all(self, data: dict[str, Any]) -> None:
-        if "config" in data:
-            await self.update_config(**data["config"])
-        if "usd_ceilings" in data:
-            ceilings = {
-                str(preset): {"warn_usd": _opt_float(pair[0]), "ceiling_usd": _opt_float(pair[1])}
-                for preset, pair in dict(data["usd_ceilings"]).items()
-            }
-            await self.set_usd_ceilings(ceilings)
+        config = data.get("config") or {}
+        current = await self.get_config()
+        if "batch_window_seconds" in config and config["batch_window_seconds"] != current["batch_window_seconds"]:
+            raise ValueError("Retired approval-batch settings are read-only in the final runtime")
+        historical = data.get("usd_ceilings") or {}
+        if historical and json.dumps(historical, sort_keys=True, allow_nan=False) != json.dumps(
+            await self.get_usd_ceilings(), sort_keys=True, allow_nan=False
+        ):
+            raise ValueError("Retired spend overrides are read-only in the final runtime")
+        if "preset" in config:
+            await self.update_config(preset=config["preset"])
         for srv in data.get("mcp_servers", []):
-            await self.upsert_mcp_config(srv["name"], **srv)
+            values = dict(srv)
+            name = values.pop("name")
+            await self.upsert_mcp_config(name, **values)
 
 
 def _opt_float(value: Any) -> float | None:

@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import sqlite3
-from importlib.metadata import PackageNotFoundError
 from typing import TYPE_CHECKING
 
 import structlog
@@ -22,10 +21,9 @@ from backend.services.action_policy.agt_policy import AgtPolicy
 from backend.services.action_policy.assessment import AssessmentService
 from backend.services.action_policy.audit import AuditIntegrityError, GovernanceAudit
 from backend.services.action_policy.authority import PolicyAuthority
-from backend.services.action_policy.retained_provider import RetainedGovernance
 from backend.services.action_policy.standalone_router import StandalonePolicyRouter
 from backend.services.events.title_refinement import TitleRefinement
-from backend.services.runtime.contract_catalog import retained_governance_contract, standalone_contract
+from backend.services.runtime.contract_catalog import standalone_contract
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,8 +41,6 @@ class StandaloneGovernance:
         self._ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
         self._runtime_ownership = GovernanceRuntimeLease(directory)
         self._providers = GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
-        self._retained = RetainedGovernance(self._ledger, self._providers)
-        self._retained_available = False
         self._audit = GovernanceAudit(directory / "audit", self._ledger)
         self._assessments = AssessmentService()
         self._titles = TitleRefinement(host, self._assessments)
@@ -84,18 +80,13 @@ class StandaloneGovernance:
             log.error("governance_audit_unavailable", reason=self.audit_error, exc_info=True)
         await self._ledger._io(self._providers.initialize)
         available = {contract.id: contract}
-        try:
-            retained = await asyncio.to_thread(retained_governance_contract, contract)
-        except (PackageNotFoundError, ValueError, OSError) as exc:
-            retained = None
-            log.warning("retained_governance_unavailable", reason=str(exc))
-        if retained is not None:
-            available[retained.id] = retained
-            self._retained_available = True
-            await self.refresh_retained_policy()
         selected = await self._ledger._io(self._providers.selected, contract)
         if available.get(selected.id) != selected:
-            raise StateConflictError("Selected governance implementation is unavailable or changed")
+            raise StateConflictError(
+                "Selected governance implementation is unavailable or changed. "
+                "Use the preserved transition release 287483a7 to drain/reconcile old executions; "
+                "the final runtime cannot execute retained TraceForge pins."
+            )
 
         async def select_for_job(
             job_id: str,
@@ -108,7 +99,6 @@ class StandaloneGovernance:
                 lambda: self._providers.for_job(
                     job_id,
                     contract,
-                    legacy=retained,
                     prior=prior,
                     required_policy=required_policy,
                     persist=persist,
@@ -127,12 +117,6 @@ class StandaloneGovernance:
 
     async def admissions_paused(self) -> bool:
         return (await self._ledger.admission_state()).blocked
-
-    async def refresh_retained_policy(self) -> None:
-        if self._retained_available:
-            from backend.services.action_policy.governance import load_usd_ceilings
-
-            self._retained.set_usd_ceilings(await load_usd_ceilings(self._host._session_factory))
 
     async def _deliver(self) -> None:
         while not self._stop.is_set():
@@ -175,8 +159,7 @@ class StandaloneGovernance:
                 and event.kind
                 in {EventKind.tool_call_completed, EventKind.tool_call_failed, "execution.command.result"}
             ):
-                await self._observe_retained(event)
-                return
+                raise StateConflictError("Retained outcome requires reconciliation in transition release 287483a7")
             if event.kind in {"execution.native.tool_result", "execution.native.usage"}:
                 from backend.persistence.native_execution_repo import NativeExecutionRepository
 
@@ -347,66 +330,6 @@ class StandaloneGovernance:
             self.accounting_error = str(exc)
             log.error("governance_accounting_failed", event_id=event.id, job_id=event.session_id, exc_info=True)
 
-    async def _observe_retained(self, event: SessionEvent) -> None:
-        from backend.persistence.event_repo import EventRepository
-        from backend.services.action_policy.classifier import Action, Preset
-
-        async with self._host._session_factory() as session:
-            stored = await EventRepository(session).get(event.id)
-        if stored != event:
-            raise StateConflictError("Retained accounting requires its actual persisted canonical receipt")
-        metadata = event.metadata
-        if not metadata.execution_token or not metadata.execution_epoch:
-            raise StateConflictError("Retained receipt lacks exact execution ownership")
-        call_id: object
-        if event.kind == "execution.command.result":
-            from backend.models.schemas.recipes import RecipeCommandResult
-
-            result = RecipeCommandResult.model_validate(event.payload["result"])
-            if result.started is False:
-                return
-            if result.started is not True:
-                await self._ledger.record_uncertainty(
-                    event.session_id, metadata.execution_epoch, event.id, "command_execution_unconfirmed"
-                )
-                return
-            call_id = metadata.execution_token
-        else:
-            if event.kind == EventKind.tool_call_failed and event.payload.get("executed") is not True:
-                return
-            if metadata.source_framework not in {"copilot", "claude"}:
-                raise StateConflictError("Retained accounting source is not an owned managed provider")
-            call_id = event.payload.get("tool_call_id")
-            if not isinstance(call_id, str) or not call_id:
-                await self._ledger.record_uncertainty(
-                    event.session_id, metadata.execution_epoch, event.id, "missing_native_execution_identity"
-                )
-                return
-        authorization = await self._ledger.authorized_tool(
-            event.session_id, metadata.execution_epoch, metadata.execution_token, call_id
-        )
-        if authorization is None or authorization.decision != "allow":
-            raise StateConflictError("Retained outcome has no exact durable authorization")
-        raw_action = authorization.metadata.get("retained_action")
-        if not isinstance(raw_action, dict) or raw_action.get("job_id") != event.session_id:
-            raise StateConflictError("Retained outcome has no exact bound action")
-        action = Action(**raw_action)
-        job = await self._host._get_job(event.session_id)
-        if job is None:
-            raise StateConflictError("Retained outcome's Job no longer exists")
-        if (
-            event.kind == "execution.command.result"
-            and result.uncertain
-            or not isinstance(authorization.metadata.get("destructive"), bool)
-        ):
-            await self._ledger.record_uncertainty(
-                event.session_id, metadata.execution_epoch, event.id, "retained_execution_effect_unresolved"
-            )
-        preset = authorization.metadata.get("preset")
-        if not isinstance(preset, str):
-            raise StateConflictError("Retained authorization has no exact preset")
-        await self._retained.record(event, action, Preset(preset))
-
     def for_job(self, pin: ExecutionContractPin, policy: RepoPolicy) -> StandalonePolicyRouter:
         from backend.services.action_policy.checkpoint_service import CheckpointService
         from backend.services.adapters.agent_adapter import UtilityCompletionError
@@ -418,12 +341,11 @@ class StandaloneGovernance:
         if self.audit_error is not None or self.accounting_error is not None:
             raise StateConflictError(f"Governance requires reconciliation: {self.audit_error or self.accounting_error}")
         provider = None
-        retained = self._retained if pin.contract.policy.id == LEGACY_POLICY else None
-        if retained is None:
-            try:
-                provider = host._adapter_registry.get_completion_provider(host._config.runtime.utility_sdk)
-            except UtilityCompletionError as exc:
-                log.warning("policy_assessment_provider_unavailable", job_id=pin.job_id, reason=str(exc))
+        host._execution_contracts.require_available(pin)
+        try:
+            provider = host._adapter_registry.get_completion_provider(host._config.runtime.utility_sdk)
+        except UtilityCompletionError as exc:
+            log.warning("policy_assessment_provider_unavailable", job_id=pin.job_id, reason=str(exc))
 
         async def current(job_id: str, provider: str) -> bool:
             job = await host._get_job(job_id)
@@ -451,7 +373,6 @@ class StandaloneGovernance:
                 policy=self._policy,
                 provider=provider,
                 model=host._config.runtime.utility_model,
-                retained=retained,
                 preserve_pending_on_cancel=lambda: host._shutting_down,
             ),
             contracts=host._execution_contracts,
@@ -488,9 +409,6 @@ class StandaloneGovernance:
                         await self._delivery
                 finally:
                     try:
-                        try:
-                            await self._retained.close()
-                        finally:
-                            await self._ledger.close()
+                        await self._ledger.close()
                     finally:
                         self._runtime_ownership.close()

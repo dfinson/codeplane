@@ -35,7 +35,7 @@ Connection filters and replay cursor:
 
 ## Canonical Events
 
-Canonical runtime events are TraceForge `SessionEvent` objects. Their `kind` is
+Canonical runtime events use application-owned `SessionEvent` models. Their `kind` is
 an open dotted string and is unchanged across the event bus and persistence.
 Kinds delivered through replay or SSE retain that same envelope and dotted
 value. CodePlane's currently emitted kinds include:
@@ -63,7 +63,7 @@ data: {"id":"evt-1","session_id":"job-1","timestamp":"2026-08-05T15:00:00Z","kin
 ```
 
 The `event:` value is the unchanged dotted `SessionEvent.kind`. The `data:`
-value is the complete TraceForge envelope serialized as-is: `id`,
+value is the complete canonical envelope serialized as-is: `id`,
 `session_id`, `timestamp`, `kind`, `payload`, and `metadata`. The SSE `id:` is
 the storage cursor used for reconnection; it is not substituted into the
 canonical envelope.
@@ -88,7 +88,7 @@ data: {}
 ```
 
 It sends the same frame whenever the event queue remains idle for five seconds.
-This frame has no `id:` and is transport-only: it is not a TraceForge envelope,
+This frame has no `id:` and is transport-only: it is not a canonical envelope,
 is not persisted, and is not replayed.
 
 The underscore name `session_heartbeat` is therefore only the existing SSE

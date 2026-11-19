@@ -1,7 +1,7 @@
 """Imported CLI observation, without changing native execution/control ownership.
 
 Fresh files use the standalone decoder and version-2 acquisition checkpoints.
-Version-1 checkpoints retain their explicit optional TraceForge implementation.
+Version-1 checkpoints require reconciliation in the preserved transition release.
 Both preserve native-v1 event IDs. record_count counts physical lines (including
 blanks), decoded_event_count/tail_offset count decoder outputs, and
 emitted_event_count counts persisted source events after pairing. Storage cursors
@@ -13,23 +13,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import inspect
 import json
-import uuid
-from collections import OrderedDict
-from datetime import UTC, datetime, timedelta
-from importlib.metadata import version
+from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING, Any
 
 import structlog
-import yaml
 
 from backend import config as backend_config
 from backend.models.domain import JobState, StateConflictError
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, new_event
 from backend.services.ingest.jsonl_source import MAX_RECORD_BYTES, NativeJsonlSource
-from backend.services.ingest.mapping import DecoderState, NativeMappingDecoder, resolve_mapping_path
+from backend.services.ingest.mapping import NativeMappingDecoder, resolve_mapping_path
 from backend.services.ingest.otel_decoder import decode_json_body
 from backend.services.ingest.source_ownership import hold_native_source
 from backend.services.runtime.execution_control import ExecutionControl
@@ -75,106 +70,6 @@ class _NativeIdentity:
     def events(self, raw: dict[str, Any], ordinal: int) -> Iterator[SessionEvent]:
         for event in self.decoder.decode(raw, ordinal):
             yield event.model_copy(update={"raw_event": raw})
-
-
-class _LegacyNativeIdentity:
-    def __init__(self, framework: str, external_id: str, job_id: str, anchor: datetime) -> None:
-        try:
-            from traceforge.adapters.mapped_json import FrameworkMapping, MappedJsonAdapter
-        except ModuleNotFoundError as exc:
-            if exc.name != "traceforge":
-                raise
-            raise RuntimeError(
-                "Legacy native checkpoint requires codeplane[legacy-traceforge]; "
-                "standalone checkpoint conversion requires explicit reconciliation"
-            ) from exc
-        from traceforge.config.mappings import resolve_mapping_path
-        from traceforge.preprocessors import get_preprocessor
-
-        resolved_mapping = resolve_mapping_path(framework)
-        if resolved_mapping is None:
-            raise ValueError(f"No native event mapping for framework {framework}")
-        mapping_path = Path(resolved_mapping)
-        mapping_bytes = mapping_path.read_bytes()
-        self.mapping = FrameworkMapping.model_validate(yaml.safe_load(mapping_bytes.decode("utf-8")))
-        self.adapter = MappedJsonAdapter(self.mapping, session_id=external_id)
-        preprocessor = get_preprocessor(self.mapping.preprocessor) if self.mapping.preprocessor else None
-        source = inspect.getsourcefile(preprocessor) if preprocessor else None
-        identity = {
-            "distribution_version": version("traceforge-toolkit"),
-            "mapping_file_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
-            "preprocessor_file_sha256": hashlib.sha256(Path(source).read_bytes()).hexdigest() if source else None,
-        }
-        self.mapping_digest = hashlib.sha256(_canonical_record(identity)).hexdigest()
-        self.framework = framework
-        self.external_id = external_id
-        self.job_id = job_id
-        self.anchor = anchor.replace(tzinfo=UTC) if anchor.tzinfo is None else anchor
-        self.references: OrderedDict[str, str] = OrderedDict()
-        self.window = self.mapping.get_motivation_config().source_window
-        self.source_kinds = {kind for item in self.mapping.get_motivation_config().sources for kind in item.events}
-        self.turn = 0
-
-    def checkpoint(self) -> DecoderState:
-        """Expose retained legacy continuation state for explicit equivalence checks."""
-        return DecoderState(
-            self.adapter._latest_intent,
-            self.adapter._latest_reasoning,
-            tuple(self.references.values()),
-            self.turn,
-        )
-
-    def events(self, raw: dict[str, Any], ordinal: int) -> Iterator[SessionEvent]:
-        digest = hashlib.sha256(_canonical_record(raw)).hexdigest()
-        for index, event in enumerate(self.adapter.parse_dict(raw)):
-            identity = json.dumps(
-                ["codeplane-native-v1", self.framework, self.external_id, ordinal, index, digest],
-                separators=(",", ":"),
-            )
-            stable_id = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
-            if event.metadata.raw_kind in self.source_kinds:
-                self.references[event.id] = stable_id
-                while len(self.references) > self.window:
-                    self.references.popitem(last=False)
-            motivation = event.metadata.motivation
-            if motivation:
-                motivation = motivation.model_copy(
-                    update={"source_event_ids": tuple(self.references[item] for item in motivation.source_event_ids)}
-                )
-            metadata = event.metadata.model_copy(update={"run_id": self.external_id, "motivation": motivation})
-            payload = dict(event.payload)
-            payload["_codeplane_source"] = {
-                "contract": "codeplane-native-v1",
-                "framework": self.framework,
-                "session_id": self.external_id,
-                "record_index": ordinal,
-                "output_index": index,
-                "record_sha256": digest,
-                "vendor_event_id": raw.get("id"),
-            }
-            if not payload.get("turn_id"):
-                payload["turn_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.job_id}:native-turn:{self.turn}"))
-            if event.kind == EventKind.message_assistant:
-                self.turn += 1
-            timestamp_value: Any = raw
-            for part in (self.mapping.timestamp_field or "").split("."):
-                timestamp_value = timestamp_value.get(part) if isinstance(timestamp_value, dict) else None
-            timestamp = (
-                event.timestamp if timestamp_value is not None else self.anchor + timedelta(microseconds=ordinal)
-            )
-            from backend.models.session_event import SessionEvent
-
-            yield SessionEvent.model_validate(
-                event.model_copy(
-                    update={
-                        "id": stable_id,
-                        "session_id": self.job_id,
-                        "metadata": metadata,
-                        "payload": payload,
-                        "timestamp": timestamp,
-                    }
-                ).model_dump(mode="json")
-            )
 
 
 def _verify_source_prefix(path: Path, count: int, expected: str) -> None:
@@ -327,13 +222,16 @@ class TraceForgeIngestBase:
             if job.external_session_id != session_id or job.source != f"{self._mapping_name}_cli":
                 raise RuntimeError("Native source does not belong to this Job")
             revision = checkpoint.get("version") if checkpoint else 2
-            if revision not in (1, 2):
-                raise RuntimeError("Unsupported native checkpoint version requires reconciliation")
-            normalizer = (
-                _LegacyNativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
-                if revision == 1
-                else _NativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
-            )
+            if checkpoint:
+                from backend.services.ingest.checkpoint_conversion import conversion_evidence
+
+                conversion_evidence(checkpoint)
+            if revision != 2:
+                raise RuntimeError(
+                    "Native checkpoint requires explicit conversion/reconciliation in preserved transition "
+                    "release 287483a7; the final runtime cannot execute the old parser or reset its offset."
+                )
+            normalizer = _NativeIdentity(self._mapping_name, session_id, job_id, job.created_at)
             accepted = int(checkpoint["record_count"]) if checkpoint else 0
             if checkpoint:
                 if (

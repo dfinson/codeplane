@@ -193,11 +193,10 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
     runtime._config.runtime.copilot_only = False
     copilot, claude = CopilotAdapter(), ClaudeAdapter()
     runtime._adapter_registry.get_adapter.side_effect = lambda sdk: copilot if str(sdk) == "copilot" else claude
-    router = SimpleNamespace(route=AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None)))
+    router = SimpleNamespace(execution_epoch=runtime.execution_epoch, authorize_permission=AsyncMock(return_value=True))
     policy = RepoPolicy(preset=Preset.supervised)
     runtime._policy_routers["job-1"] = router
     runtime._repo_policies["job-1"] = policy
-    runtime._governance_decider = MagicMock()
     copilot.set_policy_router(router, policy, "job-1", "/primary")
     for provider, adapter, attempt, workspace in (
         ("copilot", copilot, "first", "/worktree-first"),
@@ -224,19 +223,19 @@ async def test_attempt_policy_reuses_job_router_across_providers_without_workspa
         observed = adapter._queues[sid].get_nowait()
         assert observed.metadata.run_id == sid
         assert observed.metadata.execution_token == context.execution_token
-        await adapter._evaluate_with_policy_router(
+        await adapter._evaluate_permission(
             sid,
             "job-1",
             PermissionRequest(kind="write", workspace_path="/untrusted", file_name="file"),
             tool_name="write",
             tool_input={"path": "file"},
         )
-        action = router.route.call_args.args[0]
-        assert action.workspace_path == workspace
-        assert router.route.call_args.kwargs["cwd"] == workspace
+        invocation = router.authorize_permission.call_args.args[0]
+        assert invocation.workspace == workspace
+        assert invocation.metadata.execution_token == context.execution_token
     assert copilot._worktree_paths["job-1"] == "/primary"
     assert "job-1" not in claude._worktree_paths
-    runtime._governance_decider.register_job.assert_not_called()
+    assert router.authorize_permission.await_count == 2
 
 
 async def test_attempt_policy_attachment_rejects_stale_tokens_and_missing_job_policy(session_factory):
@@ -251,7 +250,6 @@ async def test_attempt_policy_attachment_rejects_stale_tokens_and_missing_job_po
 
 @pytest.mark.parametrize("hard_gate", [False, True])
 async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort_waits(session_factory, hard_gate):
-    from backend.models.domain import ApprovalResolution
     from backend.services.adapters.base_adapter import PermissionDecision
 
     runtime, _, _, _ = _runtime(session_factory)
@@ -275,12 +273,11 @@ async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort
     async def pending_decision(*args, **kwargs):
         deciding.set()
         await decide.wait()
-        return ApprovalResolution.approved if hard_gate else SimpleNamespace(proceed=True, classification=None)
+        return True
 
-    if hard_gate:
-        adapter._hard_block_approval = AsyncMock(side_effect=pending_decision)
-    else:
-        adapter._policy_router["job-1"] = SimpleNamespace(route=AsyncMock(side_effect=pending_decision))
+    adapter._policy_router["job-1"] = SimpleNamespace(
+        execution_epoch=runtime.execution_epoch, authorize_permission=AsyncMock(side_effect=pending_decision)
+    )
 
     async def slow_abort():
         aborting.set()
@@ -316,7 +313,6 @@ async def test_pending_permission_cannot_outlive_cancel_fence_while_native_abort
 @pytest.mark.parametrize("hard_gate", [False, True])
 @pytest.mark.parametrize("transition", ["replacement", "pause_resume", "new_token"])
 async def test_reused_session_identity_does_not_inherit_a_pending_permission(hard_gate, transition):
-    from backend.models.domain import ApprovalResolution
     from backend.services.adapters.base_adapter import PermissionDecision
 
     adapter = CopilotAdapter()
@@ -334,12 +330,11 @@ async def test_reused_session_identity_does_not_inherit_a_pending_permission(har
     async def wait_for_decision(*args, **kwargs):
         entered.set()
         await release.wait()
-        return ApprovalResolution.approved if hard_gate else SimpleNamespace(proceed=True, classification=None)
+        return True
 
-    if hard_gate:
-        adapter._hard_block_approval = AsyncMock(side_effect=wait_for_decision)
-    else:
-        adapter._policy_router["job"] = SimpleNamespace(route=AsyncMock(side_effect=wait_for_decision))
+    adapter._policy_router["job"] = SimpleNamespace(
+        execution_epoch="epoch", authorize_permission=AsyncMock(side_effect=wait_for_decision)
+    )
     request = PermissionRequest(
         kind="shell" if hard_gate else "read",
         workspace_path="/test",
@@ -462,7 +457,7 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
         return analyze_syntax(command, dialect)
 
     monkeypatch.setattr(capability_guard, "analyze_syntax_async", pending_parser)
-    router = SimpleNamespace(route=AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None)))
+    router = SimpleNamespace(execution_epoch="epoch", authorize_permission=AsyncMock(return_value=True))
     adapter._policy_router["job"] = router
     pending = asyncio.create_task(invoke())
     try:
@@ -484,7 +479,7 @@ async def test_sdk_callback_ownership_spans_capability_parser_wait(
             )
         release.set()
         assert denied(await asyncio.wait_for(pending, timeout=2))
-        router.route.assert_not_awaited()
+        router.authorize_permission.assert_not_awaited()
         adapter._hard_block_approval.assert_not_awaited()
         assert not denied(await invoke()), "A new callback on the current execution must still proceed"
     finally:
@@ -597,37 +592,23 @@ async def test_stale_approval_creation_is_retired_without_publishing_to_replacem
         await asyncio.gather(pending, return_exceptions=True)
 
 
-async def test_classification_keeps_original_scope_across_policy_wait_and_replacement(session_factory):
-    from backend.services.action_policy.classifier import Classification, RecommendedAction
+async def test_permission_invocation_keeps_original_scope_across_policy_wait_and_replacement(session_factory):
     from backend.services.adapters.base_adapter import PermissionDecision
 
     events = EventBus()
-    observed: list[SessionEvent] = []
-
-    async def record(event):
-        observed.append(event)
-
-    events.subscribe(record)
+    observed = []
     adapter, _, config = _scoped_permission_adapter(session_factory, event_bus=events)
     entered, release = asyncio.Event(), asyncio.Event()
-    classification = Classification(
-        RecommendedAction.ALLOW,
-        "known_read",
-        0,
-        "unknown",
-        "read_only",
-        "file",
-        "Read",
-    )
 
-    async def delayed(*args, **kwargs):
+    async def delayed(invocation):
+        observed.append(invocation)
         entered.set()
         await release.wait()
-        return SimpleNamespace(
-            proceed=True, classification=classification, recommended_action=RecommendedAction.ALLOW, checkpoint_ref=None
-        )
+        return True
 
-    adapter._policy_router["job-1"] = SimpleNamespace(route=AsyncMock(side_effect=delayed))
+    adapter._policy_router["job-1"] = SimpleNamespace(
+        execution_epoch="epoch", authorize_permission=AsyncMock(side_effect=delayed)
+    )
     pending = asyncio.create_task(
         adapter._evaluate_permission(
             "same-session",
@@ -651,7 +632,6 @@ async def test_classification_keeps_original_scope_across_policy_wait_and_replac
         release.set()
         assert await asyncio.wait_for(pending, timeout=2) == PermissionDecision.deny
         (event,) = observed
-        assert event.kind == EventKind.action_classified
         assert event.metadata.execution_token == "original-token"
         assert event.metadata.recipe_run_id == "recipe-run"
         assert event.metadata.attempt_id == "attempt"

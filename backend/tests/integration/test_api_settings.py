@@ -134,24 +134,39 @@ class TestPolicyUsdDefaults:
             {"supervised": {}},
         ],
     )
-    async def test_persisted_overrides_keep_zero_null_and_unspecified_presets(
+    async def test_retired_overrides_are_preserved_but_cannot_replace_active_thresholds(
         self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], overrides
+    ):
+        from backend.models.db import PolicyConfigRow
+        from backend.persistence.policy_repo import PolicyRepository
+
+        async with session_factory() as session:
+            session.add(PolicyConfigRow(id=1))
+            await session.flush()
+            await PolicyRepository(session).set_usd_ceilings({"supervised": {"warn_usd": 0, "ceiling_usd": None}})
+            await session.commit()
+        baseline = (await client.get("/api/settings/policy/usd-ceilings")).json()["ceilings"]
+        response = await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": overrides})
+        assert response.status_code == 410
+        assert baseline["supervised"] == {"warnUsd": 20.0, "ceilingUsd": 40.0}
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": baseline}
+        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == baseline
+        async with session_factory() as session:
+            assert await PolicyRepository(session).get_usd_ceilings() == {"supervised": (0.0, None)}
+
+    async def test_retired_batch_update_cannot_partially_change_the_preset(
+        self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
     ):
         from backend.models.db import PolicyConfigRow
 
         async with session_factory() as session:
             session.add(PolicyConfigRow(id=1))
             await session.commit()
-        baseline = (await client.get("/api/settings/policy/usd-ceilings")).json()["ceilings"]
-        response = await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": overrides})
-        assert response.status_code == 200
-        expected = dict(baseline)
-        for preset, entry in overrides.items():
-            if preset in expected:
-                expected[preset] = {"warnUsd": entry.get("warnUsd"), "ceilingUsd": entry.get("ceilingUsd")}
-        assert response.json() == {"ceilings": expected}
-        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == response.json()
-        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == expected
+        refused = await client.put("/api/settings/policy/config", json={"preset": "locked", "batchWindowSeconds": 10})
+        assert refused.status_code == 410
+        assert (await client.get("/api/settings/policy")).json()["config"]["preset"] == "supervised"
+        changed = await client.put("/api/settings/policy/preset", json={"preset": "locked"})
+        assert changed.status_code == 200 and changed.json()["preset"] == "locked"
 
 
 class TestUpdateSettings:

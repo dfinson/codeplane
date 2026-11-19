@@ -132,7 +132,7 @@ Token usage with input/output/cache breakdown, estimated cost with live cost bad
 
 ## Action Policy
 
-When an agent attempts an action, CodePlane classifies it and delegates the decision to TraceForge governance, which recommends whether to allow it, proceed with a savepoint, or gate it for your approval.
+When an agent attempts an action, CodePlane combines bounded semantic assessment with authoritative local facts and evaluates its standalone AGT policy. Unknown evidence cannot become automatic permission.
 
 ### Presets
 
@@ -140,22 +140,21 @@ Every job runs under a **preset** that controls how aggressively actions are gat
 
 | Preset | Behavior |
 |--------|----------|
-| **`autonomous`** | Only non-contained actions (external calls, operations outside the worktree) require approval. Everything else proceeds immediately. |
-| **`supervised`** | Default. Contained and reversible actions proceed; anything non-contained or irreversible requires approval. |
-| **`locked`** | Even contained, reversible actions create a git checkpoint before proceeding. Non-contained or irreversible actions require approval. |
+| **`autonomous`** | Known reads and fully evidenced Git-recoverable workspace mutations may proceed. Hard gates and incomplete evidence require explicit decisions. |
+| **`supervised`** | Default. Fully evidenced Git-recoverable workspace mutations require a savepoint. External mutations and incomplete evidence are gated. |
+| **`locked`** | Known shell reads require a savepoint. Mutations require approval. Trusted contained native reads remain read-only. |
 
 Set the preset globally via **Settings → Policy**, per-job in the creation form, or via the API (`PUT /api/settings/policy/preset`).
 
 ### Recommended Actions
 
-TraceForge governance returns a **recommended action** for each classified action, surfaced as a badge:
+The standalone policy returns a **recommended action**, surfaced as a badge:
 
 | Action | Symbol | Behavior |
 |--------|--------|----------|
 | **allow** | ○ | Proceeds immediately — no interruption |
 | **warn** | ◐ | Creates a git savepoint, then proceeds (rollback available) |
-| **transform** | ◐ | Advisory change suggested; proceeds with a savepoint |
-| **escalate** | ● | Sent for review (LLM monitor, if enabled) before continuing |
+| **escalate** | ● | Sent for review before continuing |
 | **deny** | ● | Blocks execution until you approve or reject |
 
 ### Approval Actions
@@ -164,17 +163,16 @@ TraceForge governance returns a **recommended action** for each classified actio
 |--------|--------|
 | **Approve** | Allow this specific action |
 | **Reject** | Block it — the agent may try an alternative |
-| **Trust Session** | Auto-approve all remaining actions for this job |
+| **Historical session trust** | Retained for transition recovery, not a waiver in the final runtime |
 
 ### Overrides
 
-Beyond the preset, **Settings → Policy** exposes the controls CodePlane layers on top of the governance profile:
+Beyond the preset, **Settings → Policy** shows current controls and thresholds:
 
-- **Per-preset USD ceilings** — escalate oversight once a job's spend crosses a dollar threshold
-- **Approval batch window** — how long consecutive gated actions are grouped into a single prompt
+- **Verified-USD thresholds** - read-only standalone thresholds, never applied to native cost units or missing currency
 - **MCP server configs** — per-server launch configuration for MCP tools
 
-The underlying decision rules — protected paths, effect budget, and reason-code trust — are owned by the `traceforge.governance` profile selected by your preset. Changes take effect at runtime: running jobs reload policy automatically.
+Retired batch/spend overrides remain historical data, not editable final policy. See [transition recovery](transition-retirement.md) for old pinned executions and checkpoints.
 
 ### Hard-Gated Commands
 

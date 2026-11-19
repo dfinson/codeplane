@@ -318,7 +318,7 @@ async def test_job_lifecycle_history_does_not_block_first_native_observation(ses
     watcher._finalize_session.assert_awaited_once()
 
 
-async def test_legacy_checkpoint_without_extra_stays_readable_and_does_not_advance(
+async def test_legacy_checkpoint_stays_readable_and_requires_the_transition_reader(
     session_factory, tmp_path, monkeypatch
 ):
     import builtins
@@ -349,7 +349,7 @@ async def test_legacy_checkpoint_without_extra_stays_readable_and_does_not_advan
         assert await JobRepository(session).get_ingest_checkpoint("native") == checkpoint
         events = await EventRepository(session).list_after(0, job_id="native")
     assert events[0].event.payload["content"] == "Legacy retained"
-    assert "codeplane[legacy-traceforge]" in events[-1].event.payload["message"]
+    assert "transition release 287483a7" in events[-1].event.payload["message"]
     watcher._finalize_session.assert_not_called()
 
 

@@ -167,9 +167,9 @@ Share endpoints bypass CodePlane's password but not tunnel-level identity gates.
 |--------|------|-------------|
 | `GET` | `/api/settings/policy` | Get current policy config (preset, governance config, USD ceilings) |
 | `PUT` | `/api/settings/policy/preset` | Update the active preset (`autonomous`, `supervised`, `locked`) |
-| `PUT` | `/api/settings/policy/config` | Update governance config (batch window, etc.) |
+| `PUT` | `/api/settings/policy/config` | Update the preset; retired batch updates return 410 |
 | `GET` | `/api/settings/policy/usd-ceilings` | Get per-preset USD spend ceilings |
-| `PUT` | `/api/settings/policy/usd-ceilings` | Update per-preset USD spend ceilings |
+| `PUT` | `/api/settings/policy/usd-ceilings` | Retired override endpoint; returns 410 without changing stored history |
 | `GET` | `/api/settings/policy/mcp-servers` | List MCP server configs |
 | `POST` | `/api/settings/policy/mcp-servers` | Add an MCP server config |
 | `PUT` | `/api/settings/policy/mcp-servers/{name}` | Update an MCP server config |

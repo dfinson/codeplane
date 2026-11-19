@@ -13,7 +13,6 @@ import json
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -30,10 +29,6 @@ from backend.models.events import EventKind, SessionEvent, new_event
 from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
 from backend.services.adapters.agent_adapter import AgentAdapterInterface, normalize_model_name
-from backend.services.auth.permission_policy import (
-    PermissionRequest,
-    is_hard_gated_command,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Coroutine
@@ -44,7 +39,8 @@ if TYPE_CHECKING:
     from backend.models.domain import SessionConfig
     from backend.models.session_event import ToolMotivation
     from backend.services.action_policy.classifier import RepoPolicy
-    from backend.services.action_policy.router import PolicyRouter
+    from backend.services.action_policy.session_policy import SessionPolicy
+    from backend.services.auth.permission_policy import PermissionRequest
     from backend.services.events.event_bus import EventBus
     from backend.services.job.approval_service import ApprovalService
 
@@ -137,7 +133,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         motivation: ToolMotivation | None = None,
         partial: bool = False,
     ) -> None:
-        """Build a native ``traceforge.SessionEvent`` and enqueue it for *session_id*.
+        """Build a canonical application-owned event and enqueue it for *session_id*.
 
         The single event-construction point for managed adapters; ``kind`` is a
         dotted CodePlane ``EventKind`` and *payload*/*metadata* carry TF-native
@@ -497,7 +493,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
 
         When set, ``_evaluate_permission`` applies the SPEC §18.2 hard-gate
         pre-check and then routes the request through this classifier/router for
-        the ``traceforge.governance`` decision. There is no legacy fallback path.
+        the bound standalone decision. There is no legacy fallback path.
         """
         self._policy_router[job_id] = router
         self._repo_policies[job_id] = policy
@@ -519,7 +515,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         job_id: str,
         attempt_id: str,
         epoch: str,
-        router: PolicyRouter,
+        router: SessionPolicy,
         policy: RepoPolicy,
         *,
         execution_token: str,
@@ -582,8 +578,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
         Returns ``PermissionDecision.allow`` or ``PermissionDecision.deny``.
         Paused sessions deny immediately and SPEC §18.2 hard-gated commands are
         routed to the operator; every other request is decided by the action
-        policy router via ``traceforge.governance``
-        (RecommendedAction ALLOW / WARN / ESCALATE / DENY / TRANSFORM).
+        current execution-bound standalone policy router.
         """
         fence = fence if fence is not None else self._capture_permission_fence(session_id)
         if not self._permission_fence_is_current(session_id, fence):
@@ -631,125 +626,7 @@ class BaseAgentAdapter(AgentAdapterInterface):
             )
             return PermissionDecision.allow if allowed and await current() else PermissionDecision.deny
 
-        # Hard gate: SPEC §18.2 commands (git merge/pull/rebase/cherry-pick,
-        # reset --hard, force-push) always reach the operator — this pre-check
-        # runs BEFORE governance scoring so no trust grant or budget waiver can
-        # silently bypass it (binding condition §3, defence in depth).
-        shell_cmd = self._resolve_shell_command(
-            request.kind,
-            tool_name,
-            tool_input,
-            request.full_command_text,
-        )
-        if shell_cmd and is_hard_gated_command(shell_cmd):
-            resolution = await self._hard_block_approval(
-                session_id,
-                job_id,
-                shell_cmd,
-                tool_input,
-            )
-            decision = (
-                PermissionDecision.allow if resolution == ApprovalResolution.approved else PermissionDecision.deny
-            )
-
-        # --- Action policy router ---
-        elif job_id and job_id in self._policy_router:
-            decision = await self._evaluate_with_policy_router(
-                session_id,
-                job_id,
-                request,
-                tool_name=tool_name,
-                tool_input=tool_input,
-            )
-
-        else:
-            log.error(
-                "no_policy_router_for_job",
-                job_id=job_id,
-                session_id=session_id,
-                tool_name=tool_name,
-            )
-            return PermissionDecision.deny
-        if not self._permission_fence_is_current(session_id, fence):
-            return PermissionDecision.deny
-        return decision
-
-    async def _evaluate_with_policy_router(
-        self,
-        session_id: str,
-        job_id: str,
-        request: PermissionRequest,
-        *,
-        tool_name: str = "",
-        tool_input: dict[str, Any] | None = None,
-    ) -> PermissionDecision:
-        """Route a permission request through the action policy classifier/router."""
-        from backend.services.action_policy.classifier import Action, ActionKind
-
-        # Map SDK permission request kind to Action
-        shell_cmd = self._resolve_shell_command(
-            request.kind,
-            tool_name,
-            tool_input,
-            request.full_command_text,
-        )
-        kind_map = {
-            "read": ActionKind.sdk_tool,
-            "write": ActionKind.file,
-            "shell": ActionKind.shell,
-            "mcp": ActionKind.mcp_tool,
-            "url": ActionKind.sdk_tool,
-            "memory": ActionKind.sdk_tool,
-            "custom-tool": ActionKind.sdk_tool,
-        }
-        action = Action(
-            kind=kind_map.get(request.kind, ActionKind.sdk_tool),
-            path=request.file_name or request.path,
-            command=shell_cmd or None,
-            tool_name=tool_name or request.kind,
-            mcp_server=None,  # MCP tool metadata not in PermissionRequest
-            mcp_tool=tool_name if request.kind == "mcp" else None,
-            mcp_read_only=request.read_only or False,
-            job_id=job_id,
-            workspace_path=request.workspace_path,
-        )
-
-        cwd = self._worktree_paths.get(job_id)
-        metadata = self._event_metadata(session_id)
-        if metadata.attempt_id is not None:
-            cwd = self._session_workspaces.get(session_id)
-            if not cwd:
-                log.error("attempt_permission_workspace_missing", job_id=job_id, session_id=session_id)
-                return PermissionDecision.deny
-            action = dataclass_replace(action, workspace_path=cwd)
-        router = self._policy_router[job_id]
-
-        decision = await router.route(action, cwd=cwd)
-
-        # Emit action_classified event for the live timeline (TraceForge fields).
-        cls = decision.classification
-        if cls is not None and self._event_bus is not None:
-            await self._event_bus.publish(
-                new_event(
-                    session_id=job_id,
-                    timestamp=datetime.now(UTC),
-                    kind=EventKind.action_classified,
-                    metadata=metadata,
-                    payload={
-                        "recommendedAction": decision.recommended_action.value,
-                        "reasonCode": cls.reason_code,
-                        "riskScore": cls.risk_score,
-                        "riskBand": cls.risk_band,
-                        "effect": cls.effect,
-                        "tool_name": tool_name or request.kind,
-                        "path": request.file_name or request.path,
-                        "checkpoint_ref": decision.checkpoint_ref,
-                    },
-                )
-            )
-
-        if decision.proceed:
-            return PermissionDecision.allow
+        log.error("no_current_policy_router_for_job", job_id=job_id, session_id=session_id, tool_name=tool_name)
         return PermissionDecision.deny
 
     async def _hard_block_approval(

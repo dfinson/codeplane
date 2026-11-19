@@ -159,7 +159,7 @@ async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_bounda
         assert decision == PermissionDecision.allow
         adapter.complete.assert_not_awaited()
         host._git_service.recovery_witness.assert_not_called()
-        assert host._governance_decider is None
+        assert not hasattr(host, "_governance_decider")
         assert adapter._sessions == {}, "Policy setup must not create an SDK client or session"
         async with session_factory() as session:
             retained = await EventRepository(session).list_after(0, job_id="job-1")

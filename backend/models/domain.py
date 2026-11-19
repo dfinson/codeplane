@@ -229,15 +229,10 @@ def validate_state_transition(from_state: JobState | None, to_state: JobState) -
 
 
 class Preset(StrEnum):
-    """Action policy preset — selects the ``traceforge.governance`` profile the
-    router enforces (see ``action_policy/preset_profiles.py``).
+    """Application-owned posture for the standalone action policy.
 
-    autonomous — Generous budget; protected-path writes escalate; no USD ceiling.
-                 Escalations handled by the monitor sidecar.
-    supervised — Moderate budget and USD ceiling; cost pressure and protected-path
-                 writes escalate; monitor handles escalations.
-    locked     — Tight budget and USD ceiling; protected-path writes denied; hard
-                 tool-call ceiling; monitor disabled — escalations go to the human.
+    Hard gates and incomplete evidence remain explicit human decisions.
+    Currency thresholds use verified USD only.
     """
 
     autonomous = "autonomous"

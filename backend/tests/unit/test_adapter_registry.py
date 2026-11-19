@@ -132,7 +132,7 @@ class TestAdapterRegistry:
             ("copilot", "claude", "claude"),
         ],
     )
-    async def test_runtime_monitor_uses_text_binding_not_work_harness(
+    async def test_runtime_assessment_uses_text_binding_not_work_harness(
         self,
         session_factory,
         tmp_path,
@@ -140,9 +140,12 @@ class TestAdapterRegistry:
         utility_sdk,
         expected,
     ) -> None:
+        from backend.services.action_policy.assessment import ActionBinding
+        from backend.services.action_policy.production import StandaloneGovernance
         from backend.services.events.event_bus import EventBus
         from backend.services.job.approval_service import ApprovalService
         from backend.services.runtime import RuntimeService
+        from backend.tests.unit.test_assessment_service import FIELDS, _completion
 
         config = CPLConfig(
             runtime=RuntimeConfig(
@@ -152,9 +155,12 @@ class TestAdapterRegistry:
                 utility_model="claude-explicit",
             )
         )
-        registry = AdapterRegistry(config=config)
+        registry = AdapterRegistry(config=config, session_factory=session_factory)
         text_adapter = registry.get_adapter(expected)
-        text_adapter.complete = AsyncMock(return_value=CompletionResult(text="text result"))
+        completion = _completion()
+        completion.model = "claude-explicit"
+        completion.usage = tuple(item.model_copy(update={"model": "claude-explicit"}) for item in completion.usage)
+        text_adapter.complete = AsyncMock(return_value=completion)
         runtime = RuntimeService(
             session_factory=session_factory,
             event_bus=EventBus(),
@@ -163,22 +169,35 @@ class TestAdapterRegistry:
             approval_service=ApprovalService(session_factory),
             git_service=MagicMock(),
         )
-        runtime._governance_decider = MagicMock()
-        await runtime._setup_action_policy(
-            "job",
-            SessionConfig(workspace_path=str(tmp_path), prompt="", sdk=work_sdk),
-            str(tmp_path),
-            repo=str(tmp_path),
-        )
-        router = runtime._policy_routers["job"]
-        assert registry.get_adapter(work_sdk)._policy_router["job"] is router
-        assert (await router._monitor._completer.complete("context")).text == "text result"
-        text_adapter.complete.assert_awaited_once_with(
-            "context",
-            model="claude-explicit",
-            system_message=None,
-            excluded_tools=["*"],
-        )
+        root = StandaloneGovernance(runtime, tmp_path)
+        await root.start()
+        runtime._standalone_governance = root
+        try:
+            pin = await runtime.prepare_execution_contract("job-1", "admission", recovery=False)
+            runtime._job_contract_pins["job-1"] = pin
+            await runtime._setup_action_policy(
+                "job-1",
+                SessionConfig(workspace_path=str(tmp_path), prompt="", sdk=work_sdk, job_id="job-1"),
+                str(tmp_path),
+                repo=str(tmp_path),
+            )
+            router = runtime._policy_routers["job-1"]
+            assert registry.get_adapter(work_sdk)._policy_router["job-1"] is router
+            result = await router._authority._assessments.assess(
+                ActionBinding.create("job-1", runtime.execution_epoch, {}, fields=FIELDS),
+                FIELDS,
+                provider=router._authority._provider,
+                model=router._authority._model,
+                is_current=AsyncMock(return_value=True),
+                execution_contract=pin,
+            )
+            assert result.assessment is not None
+            text_adapter.complete.assert_awaited_once()
+            assert text_adapter.complete.call_args.kwargs["model"] == "claude-explicit"
+            assert text_adapter.complete.call_args.kwargs["excluded_tools"] == ["*"]
+        finally:
+            await root.close()
+            await runtime.shutdown()
 
     def test_completion_provider_resolution_does_not_create_an_execution_session(self) -> None:
         registry = AdapterRegistry()

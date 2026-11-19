@@ -16,8 +16,8 @@ from backend.models.domain import StateConflictError
 from backend.persistence.governance_ownership import GovernanceRuntimeLease
 from backend.persistence.governance_repo import GovernanceLedger
 from backend.persistence.legacy_governance_repo import LEGACY_POLICY, LegacyGovernanceRepository
-from backend.services.action_policy.classifier import Action, ActionKind, Preset
-from backend.services.action_policy.governance import GovernanceDecider
+from backend.services.action_policy.classifier import Preset
+from backend.tests.legacy_fixtures import seed_legacy_store
 from backend.tests.unit.test_approval_service import session_factory as session_factory
 
 
@@ -31,11 +31,7 @@ def populated(tmp_path):
             INSERT INTO job_telemetry_summary VALUES('legacy-job','job',1.25);
             INSERT INTO job_telemetry_summary VALUES('legacy-job','sidecar',100.0);
         """)
-    decider = GovernanceDecider(tmp_path / "governance.db", spend_reader=lambda _: 1.25)
-    decider.register_job("legacy-job", Preset.supervised)
-    action = Action(kind=ActionKind.sdk_tool, tool_name="read_file", path="/fixture/read", job_id="legacy-job")
-    decider.observe(action, tool_call_id="old-call")
-    decider.grant_trust("legacy-job", "readonly_shell_locked", 3600, reason="original operator scope")
+    decider = seed_legacy_store(tmp_path / "governance.db")
     try:
         yield tmp_path, decider
     finally:
@@ -46,7 +42,7 @@ def importer(directory):
     return LegacyGovernanceRepository(directory / "governance.db", directory / "data.db")
 
 
-def test_actual_retained_api_import_compares_provenance_and_retains_read_only_backup(populated):
+def test_captured_retained_data_import_compares_provenance_and_retains_read_only_backup(populated):
     directory, decider = populated
     original = decider._store.connection.execute("SELECT session_meta_json FROM processed_events").fetchone()[0]
     with pytest.raises(StateConflictError, match="verified import"):
@@ -182,9 +178,7 @@ def test_fresh_unimported_source_does_not_require_a_fabricated_import(tmp_path, 
         with sqlite3.connect(database):
             pass
     elif source == "empty-tf":
-        from traceforge.governance.persistence import SystemStore
-
-        original = SystemStore(database)
+        original = seed_legacy_store(database, rows=False)
         original.close()
     importer(tmp_path).require_verified()
     assert not (tmp_path / "governance-backups").exists()
@@ -211,15 +205,8 @@ async def test_actual_authority_abstains_from_unknown_usd_but_retains_execution_
                 CREATE TABLE job_telemetry_summary(job_id TEXT, session_kind TEXT, total_cost_usd REAL);
             """)
             application.execute("INSERT INTO job_telemetry_summary VALUES('job-1','job',?)", (estimate,))
-        retained = GovernanceDecider(tmp_path / "governance.db")
-        try:
-            retained.register_job("job-1", Preset.supervised)
-            retained.observe(
-                Action(kind=ActionKind.sdk_tool, tool_name="read_file", path="/fixture/read", job_id="job-1"),
-                tool_call_id="original-call",
-            )
-        finally:
-            retained.close()
+        retained = seed_legacy_store(tmp_path / "governance.db", job_id="job-1", grants=False)
+        retained.close()
         with GovernanceRuntimeLease(tmp_path, exclusive=True) as lease:
             importer(tmp_path).import_original(lease)
         requested = []
@@ -389,83 +376,3 @@ def test_lazy_operator_import_command_uses_active_home_and_refuses_a_live_runtim
     imported = CliRunner().invoke(cli, ["governance-transition", "import-legacy"])
     assert imported.exit_code == 0, imported.output
     assert json.loads(imported.output)["status"] == "imported"
-
-
-async def test_retained_preview_rehydrates_original_budget_and_scoped_grants_after_restart(populated):
-    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
-    from backend.services.action_policy.retained_provider import RetainedGovernance
-
-    directory, original = populated
-    assert original.grant_trust("legacy-job", "mutating_locked", 3600, reason="retained exact write scope")
-    with GovernanceRuntimeLease(directory, exclusive=True) as lease:
-        importer(directory).import_original(lease)
-    ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
-    await ledger.initialize()
-    retained = RetainedGovernance(
-        ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
-    )
-    try:
-        action = Action(kind=ActionKind.file, tool_name="write_file", path="code.py", job_id="legacy-job")
-        for _ in range(2):
-            decision, evidence = await retained.classify(action, Preset.locked)
-            assert decision.action == "allow"
-            assert evidence["meta"]["budget"]["total_tool_calls"] == 2
-            assert (await ledger.job_totals("legacy-job")).executed_calls == 1
-        importer(directory).require_verified()
-    finally:
-        await retained.close()
-        await ledger.close()
-
-
-@pytest.mark.parametrize("verified", [None, "0", "36", "40"])
-async def test_retained_usd_guard_uses_only_verified_currency_not_legacy_or_native_40(populated, verified):
-    from decimal import Decimal
-
-    from backend.models.usage import UsageAmount
-    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
-    from backend.services.action_policy.retained_provider import RetainedGovernance
-
-    directory, _ = populated
-    with sqlite3.connect(directory / "data.db") as app:
-        app.execute("UPDATE job_telemetry_summary SET total_cost_usd=40 WHERE session_kind='job'")
-    with GovernanceRuntimeLease(directory, exclusive=True) as lease:
-        importer(directory).import_original(lease)
-    ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
-    await ledger.initialize()
-    retained = RetainedGovernance(
-        ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
-    )
-    retained.set_usd_ceilings({Preset.supervised: (20.0, 35.0)})
-    try:
-        native = UsageAmount(
-            amount=Decimal("40"),
-            unit="copilot_cost_unit",
-            producer="copilot",
-            model="model",
-            job_id="legacy-job",
-            execution_epoch="epoch",
-            role="primary",
-            source="assistant.usage",
-        )
-        await ledger.record_usage("native-40", native)
-        if verified is not None:
-            await ledger.record_usage(
-                "verified-usd",
-                native.model_copy(
-                    update={
-                        "amount": Decimal(verified),
-                        "unit": "USD",
-                        "currency": "USD",
-                        "verified": True,
-                    }
-                ),
-            )
-        decision, evidence = await retained.classify(
-            Action(kind=ActionKind.shell, command="cat read.txt", job_id="legacy-job"), Preset.supervised
-        )
-        assert decision.action == ("escalate" if verified in {"36", "40"} else "allow")
-        assert evidence["usd_guard_status"] == ("abstained_unavailable" if verified is None else "verified_only")
-        assert (await ledger.job_totals("legacy-job")).legacy_estimated_usd == Decimal("40.0")
-    finally:
-        await retained.close()
-        await ledger.close()

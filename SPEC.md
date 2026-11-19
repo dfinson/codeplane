@@ -256,11 +256,14 @@ being passed to legacy USD rollups without typed accounting qualification.
 
 The standalone replacement is reviewed against product base
 `871fc81af41fec13de756338aab2715839357af5` (tree
-`ed0ec75798921cd0d907a3131c92f631244b2001`). TraceForge is an explicit
-`codeplane[legacy-traceforge]` compatibility extra for version-1 native checkpoints
-and historical re-enrichment, and remains installed for the legacy CI tests.
-The default dependency graph omits it; this does not establish full default-core
-qualification or retirement. Existing history is never discarded to complete migration.
+`ed0ec75798921cd0d907a3131c92f631244b2001`). The final package removes the
+TraceForge/title extra, vendor runtime imports and TF-owned lock edges.
+The tested rollback-capable transition release is preserved at
+`287483a7cd931589ce67140e915116896fa4f39a`, with its exact lock, wheel,
+source and populated transition/backup/checkpoint evidence. Legacy execution
+and old/new parser conversion remain in that release, not in the final package.
+Final package acceptance remains source-bound and separate from removal itself.
+Existing history is never discarded to complete migration.
 Migration 0079 retains producer-supplied canonical `raw_event` through SQLite
 and replay. Historical NULL remains unknown, never reconstructed, and downgrade
 refuses to erase retained raw data. Event timestamps are stored as UTC instants.
@@ -288,9 +291,9 @@ Unknown dialects, unresolved expansions, malformed syntax and resource limits
 are incomplete evidence, not a safe-command verdict. Syntax structure alone
 does not establish command semantics.
 
-Managed events now use application-owned canonical models. Executions still
-pinned to TraceForge cross an explicit serialization bridge rather than importing
-its title/model runtime through the event type. SessionConfig's optional
+Managed events use application-owned canonical models. Executions still pinned
+to unavailable implementations require explicit reconciliation using the preserved
+release; the final runtime cannot silently repin them. SessionConfig's optional
 `execution_capabilities` is enforced at provider pre-tool hooks and permission
 callbacks. `None` retains the existing unrestricted-by-recipe behavior. Shell
 capability alone does not authorize mutation or external access, and an
@@ -442,8 +445,9 @@ Its standalone ledger uses separate storage with atomic source-qualified execute
 and counters, marks missing call IDs unaccountable, and sums only verified USD.
 The metadata-only export projection excludes raw prompts, arguments, results,
 paths and rationale and keys external identities before any exporter queue.
-These components are introduced ahead of runtime cutover and full integration
-qualification; their presence is not a claim that TraceForge retirement is done.
+Source removal alone does not establish final-wheel, profile-matrix or live
+workflow acceptance. See `docs/transition-retirement.md` for the retained
+release, cutover and recovery boundaries.
 
 `cpl governance-transition import-legacy` is explicit stopped-runtime maintenance
 for an existing legacy governance database under the active CodePlane home. It
@@ -463,21 +467,24 @@ reconciliation rather than being treated as a pristine ledger.
 
 `cpl governance-transition quiesce` blocks new admissions without discarding
 in-flight outcomes or audit delivery. Its generation is required by
-`cpl governance-transition select-provider standalone|retained --generation N`.
+`cpl governance-transition select-provider standalone --generation N` in the
+final package. The preserved transition release additionally supports `retained`.
 Selection requires a drained, stopped runtime and exclusive home ownership.
 Only previously unseen Jobs take the new default. Existing Job implementation
 pins, provider ownership and policy-scoped grants remain unchanged across
 continuations and restarts. An unavailable pinned implementation requires
 reconciliation, not fallback to another provider.
 
-The retained provider uses the same working `governance.db`. Its registered
+In the preserved transition release, the retained provider uses the same working
+`governance.db`. Its registered
 canonical outcomes and exact authorizations are journaled before accounting.
 The pinned TF implementation previews each state transition before its actual
 write. Finalization checks all dimensional counters, state fields, processed
 keys and unchanged grants against that transition, while retaining immutable
 original import evidence. Unknown writers, conflicting receipts and missing
-source tables block activation. `cpl governance-transition reconcile-retained`
-is stopped-runtime maintenance that resumes only validated prepared accounting,
+source tables block activation. In that release,
+`cpl governance-transition reconcile-retained` is stopped-runtime maintenance
+that resumes only validated prepared accounting,
 including an exact reserved event-time snapshot. It never repeats the business
 action or restores an older database over newer history. New provider selection
 refuses any unresolved receipt. Retained evaluation preserves its own policy
@@ -487,9 +494,17 @@ zero. Native and historical estimated values remain preserved, not reclassified.
 Verified legacy import provenance retains the original Job's TF policy even
 before its first new-format pin. Native runnable compatibility is checked before
 persisting provider ownership, an admission pin or a start witness, and still
-requires the qualified CP policy. An unavailable optional TF distribution does
-not prevent independent standalone startup, but selected or preserved missing
-implementations never silently fall back.
+requires the qualified CP policy. The final package never discovers or loads a
+retained TF distribution, even if one is independently installed. Selected or
+preserved missing implementations never silently fall back.
+
+The final policy settings surface keeps preset and MCP configuration.
+Legacy batching and spend overrides remain preserved historical data, not active
+settings or policy waivers. The final API refuses edits to those retired controls,
+and displays the unchanged standalone verified-USD thresholds. Historical
+re-enrichment uses the bounded application-owned tool-pairing implementation to
+fill structural duration/display metadata only. It preserves raw records, risk,
+titles, identities and legacy markers and does not invoke a model.
 
 Released 0.1.5 format mappings, preprocessors and Markdown readers are retained
 under `backend/compat/traceformats` with original source hashes and the upstream
@@ -505,8 +520,9 @@ packages and bounds raw input to 1 MiB/1000 spans, nesting to 32 levels and
 watchers use the standalone decoder with the retained `codeplane-native-v1`
 identity seed and explicit version-2 acquisition checkpoints. Physical records,
 decoded outputs, emitted events and storage cursors remain separate counts.
-Version-1 checkpoints retain their optional legacy decoder; absence of that
-implementation reports readiness failure without converting or erasing history.
+Version-1 checkpoints explicitly require the preserved transition reader.
+The final runtime validates retained conversion receipts and resumes reconciled
+version-2 checkpoints without loading the old parser or resetting an offset.
 Complete format, acquisition and checkpoint-conversion qualification remain
 separate gates.
 

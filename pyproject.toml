@@ -53,11 +53,6 @@ tokenizer = ["tiktoken>=0.12.0,<1", "anthropic-tokenizer>=0.1.0,<1"]
 all = [
     "codeplane[otlp-export-grpc,otlp-export-http,otlp-ingest,push,telemetry,tokenizer,voice]",
 ]
-legacy-traceforge = [
-    # Explicit opt-in for version-1 native checkpoints and historical re-enrichment.
-    # Fresh native ingestion and the default application do not require TF/NLP.
-    "traceforge-toolkit>=0.1.5,<0.2",
-]
 otlp-ingest = [
     "opentelemetry-proto==1.45.2",
     "protobuf==7.35.0",

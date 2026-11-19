@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from traceforge.types import EventMetadata, ToolMotivation
 
 from backend.models.db import Base, JobRow, JobTelemetrySpanRow, ProjectRow, TrailNodeRow
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata, ToolMotivation
 from backend.persistence.trail_repo import TrailNodeRepository
 from backend.services.trail.models import (
     MESSAGE_SIGNAL_BUFFER_SIZE,

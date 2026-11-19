@@ -74,20 +74,20 @@ Out of the box, CodePlane is configured conservatively:
 
 ### Action Policy
 
-CodePlane's **action policy** delegates every agent action to TraceForge governance, which classifies it and recommends whether to allow it, proceed with a savepoint, or gate it for approval:
+CodePlane's standalone AGT policy combines strict assessment with local constraints. Model claims cannot invent Git recovery, erase known content loss or bypass hard gates:
 
 | Preset | Agent can | Approval required for |
 |--------|-----------|----------------------|
-| `autonomous` | All contained actions within worktree | Non-contained actions (external calls, outside worktree) |
-| `supervised` | Contained, reversible actions | Non-contained or irreversible actions |
-| `locked` | Nothing without checkpoint | Contained actions get git savepoint; all others gated |
+| `autonomous` | Known reads and evidenced Git-recoverable workspace mutations | Hard gates, external mutations and incomplete evidence |
+| `supervised` | Known reads; evidenced Git mutations with a savepoint | Hard gates, external mutations and incomplete evidence |
+| `locked` | Trusted native reads; known shell reads with a savepoint | Mutations and incomplete evidence |
 
 **Recommended actions:**
 
 | Action | Symbol | Behavior |
 |------|--------|----------|
 | allow | ○ | Action proceeds immediately |
-| warn / transform | ◐ | Git savepoint created, then proceeds |
+| warn | ◐ | Git savepoint created, then proceeds |
 | escalate | ● | Sent for review before continuing |
 | deny | ● | Blocks until operator approves |
 
@@ -96,9 +96,9 @@ CodePlane's **action policy** delegates every agent action to TraceForge governa
 
 **Protected paths**: the governance profile escalates writes to sensitive paths (e.g., `infra/`, `.github/workflows/`) regardless of preset.
 
-**USD ceilings**: per-preset dollar thresholds escalate oversight once a job's spend crosses them — e.g., gate all actions when spend exceeds $5.
+**USD thresholds** apply only to verified USD. Native cost units, historical estimates and missing currency are not silently converted to dollars.
 
-Policy rules are managed in **Settings → Policy** and take effect immediately on running jobs.
+**Settings → Policy** selects presets and displays fixed standalone thresholds. Retired TF overrides and blanket grants cannot waive the final policy.
 
 ### Authorization Model
 
@@ -246,7 +246,7 @@ expiry, not a server-enforced restart-scoped token.
 1. **Keep password enabled** for any non-localhost access
 2. **Use `supervised` or `locked` preset** for repositories you don't fully trust
 3. **Rely on protected-path escalation** — the governance profile gates writes to sensitive paths (e.g., `infra/`, `.github/workflows/`)
-4. **Set per-preset USD ceilings** in Settings → Policy to escalate oversight when spend exceeds your comfort level
+4. **Review the verified-USD thresholds** in Settings → Policy and select the appropriate preset
 5. **Don't leave CodePlane running unattended** with active agents
 6. **Review approval requests carefully** — agents can be persuasive
 7. **Use defaults on shared networks** — avoid `--host 0.0.0.0` on Wi-Fi you don't control

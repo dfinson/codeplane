@@ -245,14 +245,14 @@ class TestClaudeImportedEquivalence:
         assert completed.payload["success"] is True
         assert completed.payload["result"] == "file contents here"
 
-    async def test_reattach_skip_is_deterministic(
+    async def test_unconverted_legacy_reattach_preserves_checkpoint_without_replaying(
         self,
         claude_watcher: ClaudeSessionStateWatcher,
         event_processor: AsyncMock,
         db_session: async_sessionmaker[AsyncSession],
         tmp_path: Path,
     ) -> None:
-        """Same log + initial_skip_count ⇒ only the un-emitted tail is re-produced."""
+        """An old offset cannot be silently reinterpreted by the final parser."""
         await _insert_job(db_session, "job-re", JobSource.claude_cli, "sess-re")
         _prime(claude_watcher, "sess-re", "job-re")
 
@@ -267,19 +267,17 @@ class TestClaudeImportedEquivalence:
         )
 
         from backend.persistence.job_repo import JobRepository
-        from backend.services.ingest._base import _advance_prefix, _canonical_record, _LegacyNativeIdentity
+        from backend.services.ingest._base import _advance_prefix, _canonical_record
 
         async with db_session() as session:
             repo = JobRepository(session)
-            job = await repo.get("job-re")
-            identity = _LegacyNativeIdentity("claude", "sess-re", "job-re", job.created_at)
             await repo.update_ingest_checkpoint(
                 "job-re",
                 {
                     "version": 1,
                     "record_count": 1,
                     "external_session_id": "sess-re",
-                    "mapping_sha256": identity.mapping_digest,
+                    "mapping_sha256": "retained-parser-identity",
                     "prefix_sha256": _advance_prefix(
                         bytes(32), _canonical_record({"type": "user", "message": {"content": "first"}})
                     ).hex(),
@@ -301,11 +299,11 @@ class TestClaudeImportedEquivalence:
             if not call.kwargs.get("replay") and call.args[1].kind not in _CONTROL_PLANE_KINDS
         ]
         assert EventKind.message_user not in kinds
-        assert kinds == [EventKind.message_assistant]
+        assert EventKind.message_assistant not in kinds
         async with db_session() as session:
             retained = await JobRepository(session).get_ingest_checkpoint("job-re")
         assert retained["version"] == 1
-        assert retained["mapping_sha256"] == identity.mapping_digest
+        assert retained["mapping_sha256"] == "retained-parser-identity"
         assert "source" not in retained
 
 

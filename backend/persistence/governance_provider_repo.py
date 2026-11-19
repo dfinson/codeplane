@@ -13,10 +13,10 @@ from backend.models.domain import StateConflictError
 from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.execution_contract_repo import _identity
-from backend.persistence.legacy_governance_repo import LEGACY_POLICY, _digest, _encoded, _rows, _timestamp
+from backend.persistence.legacy_governance_repo import LEGACY_POLICY, _digest, _rows, _timestamp
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
     from pathlib import Path
 
     from backend.persistence.governance_ownership import GovernanceRuntimeLease
@@ -381,103 +381,6 @@ class GovernanceProviderRepository:
             raise StateConflictError("Retained projected counters differ from verified source state")
         return True
 
-    def prepare_forward(
-        self,
-        *,
-        receipt_id: str,
-        job_id: str,
-        source_key: str,
-        source: dict[str, Any],
-        expected: dict[str, Any],
-    ) -> bool:
-        with closing(self._connect()) as connection, connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self.verify_source(connection, source)
-            fingerprint = _digest(source["completion"])
-            prior = connection.execute(
-                "SELECT * FROM cp_retained_forward WHERE receipt_id=? OR source_key=?", (receipt_id, source_key)
-            ).fetchone()
-            if prior is not None:
-                _checked_receipt(prior)
-                if (
-                    prior["job_id"] != job_id
-                    or prior["source_key"] != source_key
-                    or prior["source_sha256"] != fingerprint
-                ):
-                    raise StateConflictError("Conflicting retained receipt identity requires reconciliation")
-                if prior["status"] != "committed":
-                    raise StateConflictError("Retained receipt was interrupted; explicit reconciliation required")
-                self.verify_forward_state(connection, _rows(connection))
-                return False
-            rows = _rows(connection)
-            if not self.verify_forward_state(connection, rows):
-                original = (
-                    connection.execute("SELECT source_digest FROM cp_legacy_import WHERE singleton=1").fetchone()
-                    if connection.execute("SELECT 1 FROM sqlite_master WHERE name='cp_legacy_import'").fetchone()
-                    else None
-                )
-                if any(rows.values()) and (original is None or original[0] != _digest(rows)):
-                    raise StateConflictError("Unregistered retained source changes require reconciliation")
-                connection.execute("INSERT INTO cp_retained_head VALUES(1,?)", (_digest(rows),))
-            if any(row["source_event_key"] == source_key for row in rows["processed_events"]):
-                raise StateConflictError("Retained source key already exists without its exact receipt")
-            before = {
-                "protected_sha256": _protected(rows, job_id, source_key),
-                "projection": _projection(rows, job_id),
-                "expected": expected,
-            }
-            connection.execute(
-                "INSERT INTO cp_retained_forward VALUES(?,?,?,?,?,?,?,NULL,'prepared')",
-                (
-                    receipt_id,
-                    job_id,
-                    fingerprint,
-                    source_key,
-                    _encoded(source),
-                    _encoded(before),
-                    _digest({"source": source, "before": before}),
-                ),
-            )
-            return True
-
-    def finish_forward(self, receipt_id: str) -> None:
-        with closing(self._connect()) as connection, connection:
-            connection.execute("BEGIN IMMEDIATE")
-            pending = connection.execute(
-                "SELECT * FROM cp_retained_forward WHERE receipt_id=?", (receipt_id,)
-            ).fetchone()
-            if pending is None:
-                raise StateConflictError("Retained write has no prepared ownership receipt")
-            if pending["status"] == "committed":
-                self.verify_forward_state(connection, _rows(connection))
-                return
-            source, before = _checked_receipt(pending)
-            after = _rows(connection)
-            job_id, key = pending["job_id"], pending["source_key"]
-            self.verify_source(connection, source)
-            actual_events = {row["source_event_key"]: row for row in after["processed_events"]}
-            if key not in actual_events or _protected(after, job_id, key) != before["protected_sha256"]:
-                raise StateConflictError("Retained source changed outside its prepared receipt")
-            event = actual_events[key]
-            meta = json.loads(event["session_meta_json"])
-            if (
-                event["session_id"] != job_id
-                or not isinstance(meta, dict)
-                or meta.get("reserved")
-                or meta.get("dead_lettered")
-            ):
-                raise StateConflictError("Retained result is reserved or has conflicting ownership")
-            projection = _projection(after, job_id)
-            if _digest(projection) != _digest(before["expected"]["projection"]):
-                raise StateConflictError("Retained state or dimensional counters differ from the prepared transition")
-            if _digest(meta.get("budget")) != _digest(before["expected"]["budget"]):
-                raise StateConflictError("Retained result budget differs from its exact state transition")
-            connection.execute(
-                "UPDATE cp_retained_forward SET after_json=?,status='committed' WHERE receipt_id=?",
-                (_encoded(projection), receipt_id),
-            )
-            connection.execute("UPDATE cp_retained_head SET rows_sha256=? WHERE singleton=1", (_digest(after),))
-
     def pending(self) -> list[dict[str, Any]]:
         with closing(self._connect()) as connection:
             return [
@@ -485,7 +388,7 @@ class GovernanceProviderRepository:
             ]
 
     def recovery_source(self, receipt_id: str) -> dict[str, Any] | None:
-        """Validate a prepared transition before repeating only retained accounting."""
+        """Read a validated prepared transition without invoking its retired writer."""
         with closing(self._connect()) as connection:
             connection.execute("BEGIN")
             pending = connection.execute(
@@ -513,7 +416,3 @@ class GovernanceProviderRepository:
                     raise StateConflictError("Retained reservation has a conflicting event-time snapshot")
                 return source
             return None
-
-    def run_forward(self, receipt_id: str, write: Callable[[], object]) -> None:
-        write()
-        self.finish_forward(receipt_id)

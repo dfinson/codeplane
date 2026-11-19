@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from backend.models.session_event import SessionEvent
     from backend.services.action_policy.classifier import RepoPolicy
-    from backend.services.action_policy.router import PolicyRouter
+    from backend.services.action_policy.session_policy import SessionPolicy
     from backend.services.adapters.agent_adapter import CompletionResult
 
 
@@ -135,7 +135,7 @@ class SessionPolicyAdapter(Protocol):
         job_id: str,
         attempt_id: str,
         epoch: str,
-        router: PolicyRouter,
+        router: SessionPolicy,
         policy: RepoPolicy,
         *,
         execution_token: str,

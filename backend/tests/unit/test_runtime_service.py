@@ -91,15 +91,9 @@ class TestRuntimeContract:
 
 
 def _make_runtime(**kwargs: Any) -> RuntimeService:
-    """Build a RuntimeService with a stub governance decider wired.
-
-    Since the P5 governance cutover, ``_setup_action_policy`` hard-requires a
-    governance decider (wired via ``set_governance()`` at startup). These
-    runtime-lifecycle tests don't exercise the TraceForge decision path, so a
-    stub decider + subscriber satisfy the mandatory guard.
-    """
+    """Isolate lifecycle tests from policy setup, which has real-root tests."""
     service = RuntimeService(**kwargs)
-    service.set_governance(MagicMock(), MagicMock())  # type: ignore[arg-type]
+    service._setup_action_policy = AsyncMock()  # type: ignore[method-assign]
     return service
 
 
@@ -375,6 +369,9 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
     }[sdk]
     runtime._git_service = MagicMock()
     runtime.set_preflight_curator(PreflightCurator(utility, model="utility-model"))
+    router = SimpleNamespace(execution_epoch="fixture-epoch", authorize_permission=AsyncMock(return_value=True))
+    runtime._standalone_governance = SimpleNamespace(for_job=lambda pin, policy: router)
+    runtime._job_contract_pins[job.id] = MagicMock()
     await RuntimeService._setup_action_policy(
         runtime,
         job.id,
@@ -383,7 +380,8 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
         job_preset="locked",
     )
     router = runtime._policy_routers[job.id]
-    router.route = AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None))
+    utility.set_job_id("scout", job.id)
+    utility.set_session_metadata("scout", SessionConfig(workspace_path=job.worktree_path, prompt="", job_id=job.id))
     result = await utility._evaluate_permission(
         "scout",
         job.id,
@@ -391,7 +389,7 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
         tool_name="view",
     )
     assert result == PermissionDecision.allow
-    router.route.assert_awaited_once()
+    router.authorize_permission.assert_awaited_once()
     assert primary._policy_router[job.id] is utility._policy_router[job.id]
 
 

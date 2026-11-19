@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,10 +13,8 @@ import structlog
 
 from backend.models.domain import StateConflictError
 from backend.models.events import EventKind, new_event
-from backend.persistence.legacy_governance_repo import LEGACY_POLICY
 from backend.services.action_policy.agt_policy import PolicyInput
 from backend.services.action_policy.assessment import DECISION_SECONDS, MAX_INPUT_BYTES
-from backend.services.action_policy.classifier import Action, ActionKind
 from backend.services.adapters.capability_guard import has_explicit_file_target, invocation_permission_request
 from backend.services.adapters.contracts import CapabilityDeniedError, ExecutionIdentity
 from backend.services.auth.permission_policy import is_hard_gated_command
@@ -143,8 +141,7 @@ class StandalonePolicyRouter:
             and not command
         )
         known_write = (
-            self.pin.contract.policy.id != LEGACY_POLICY
-            and request.kind == "write"
+            request.kind == "write"
             and invocation.provider in {"copilot", "claude"}
             and invocation.tool_name.lower() not in {"str_replace_editor", "str_replace_based_edit_tool"}
             and not command
@@ -214,8 +211,6 @@ class StandalonePolicyRouter:
             local_reversibility="git" if recovery is not None else "unknown" if known_write else None,
             git_recovery=recovery,
         )
-        if self.pin.contract.policy.id == LEGACY_POLICY and invocation.provider == "codeplane.command" and not command:
-            local = replace(local, local_effect="unknown")
 
         async def savepoint() -> str | None:
             if not await current():
@@ -261,25 +256,6 @@ class StandalonePolicyRouter:
             decision_deadline=decision_deadline,
             recovery_is_current=recovery_current if recovery is not None else None,
             savepoint=savepoint,
-            retained_action=Action(
-                kind=ActionKind.shell
-                if command
-                else ActionKind.file
-                if request.kind == "write"
-                else ActionKind.mcp_tool
-                if request.kind == "mcp"
-                else ActionKind.sdk_tool,
-                job_id=invocation.job_id,
-                path=request.file_name or request.path,
-                command=command or None,
-                tool_name=invocation.tool_name or request.kind,
-                mcp_tool=invocation.tool_name if request.kind == "mcp" else None,
-                mcp_read_only=request.read_only is True,
-                workspace_path=invocation.workspace,
-                outside_worktree=bool(paths) and not contained,
-            )
-            if self.pin.contract.policy.id == LEGACY_POLICY
-            else None,
         )
         await self._events.publish(
             new_event(

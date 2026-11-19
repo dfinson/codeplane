@@ -938,19 +938,21 @@ def quiesce_governance_command() -> None:
 
 
 @governance_transition_commands.command("select-provider")
-@click.argument("provider", type=click.Choice(["standalone", "retained"]))
+@click.argument("provider", type=click.Choice(["standalone"]))
 @click.option("--generation", type=click.IntRange(min=0), required=True, help="Generation returned by quiesce.")
 def select_governance_provider_command(provider: str, generation: int) -> None:
-    """Select only unseen Jobs' provider after draining and stopping the runtime."""
+    """Activate the final standalone implementation without repinning existing Jobs.
+
+    Legacy execution/recovery remains in preserved transition release 287483a7.
+    """
     import json
     import sqlite3
-    from importlib.metadata import PackageNotFoundError
 
     from backend import config as backend_config
     from backend.models.domain import CodePlaneError
     from backend.persistence.governance_ownership import GovernanceRuntimeLease
     from backend.persistence.governance_provider_repo import GovernanceProviderRepository
-    from backend.services.runtime.contract_catalog import retained_governance_contract, standalone_contract
+    from backend.services.runtime.contract_catalog import standalone_contract
 
     directory = backend_config.get_codeplane_dir()
     try:
@@ -958,64 +960,28 @@ def select_governance_provider_command(provider: str, generation: int) -> None:
         with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
             standalone = standalone_contract()
             available = {standalone.id: standalone}
-            try:
-                retained = retained_governance_contract(standalone)
-            except (PackageNotFoundError, ValueError, OSError):
-                if provider == "retained":
-                    raise
-            else:
-                available[retained.id] = retained
-            target = available["cp-retained-governance-v1"] if provider == "retained" else standalone
             repository = GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
             repository.initialize()
             result = repository.select_new_jobs(
                 ownership,
-                target=target,
+                target=standalone,
                 default=standalone,
                 available=available,
                 expected_generation=generation,
             )
-    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError, PackageNotFoundError) as exc:
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(json.dumps(result, sort_keys=True))
 
 
 @governance_transition_commands.command("reconcile-retained")
 def reconcile_retained_governance_command() -> None:
-    """Reconcile journaled retained outcomes without repeating business actions."""
-    import asyncio
-    import json
-    import sqlite3
-
-    from backend import config as backend_config
-    from backend.models.domain import CodePlaneError
-    from backend.persistence.governance_ownership import GovernanceRuntimeLease
-    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
-    from backend.persistence.governance_repo import GovernanceLedger
-    from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
-    from backend.services.action_policy.retained_provider import RetainedGovernance
-
-    directory = backend_config.get_codeplane_dir()
-
-    async def reconcile(ownership: GovernanceRuntimeLease) -> int:
-        ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
-        retained = RetainedGovernance(
-            ledger, GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
-        )
-        try:
-            return await retained.reconcile(ownership)
-        finally:
-            await retained.close()
-            await ledger.close()
-
-    try:
-        _require_governance_stopped(directory)
-        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
-            count = asyncio.run(reconcile(ownership))
-            LegacyGovernanceRepository(directory / "governance.db", directory / "data.db").require_verified()
-    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(json.dumps({"reconciled_receipts": count}, sort_keys=True))
+    """Explain where explicit legacy recovery remains available."""
+    raise click.ClickException(
+        "Retained outcome recovery requires preserved transition release 287483a7. "
+        "Stop the final runtime and reconcile each old Job using its original pin; "
+        "do not restore an older application database or install TF into this final package."
+    )
 
 
 # ---------------------------------------------------------------------------

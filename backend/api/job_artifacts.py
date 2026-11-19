@@ -430,19 +430,10 @@ async def reenrich_job(
     session_factory: FromDishka[async_sessionmaker[AsyncSession]],
     force: bool = Query(default=False),
 ) -> dict[str, Any]:
-    """Re-enrich historical events for a job through TraceForge.
+    """Rebuild structural display/duration metadata without changing raw history or risk."""
+    from backend.services.events.reenrich import reenrich_job_events
 
-    Replays all persisted events through a fresh TraceForge Enricher so
-    that classification, visibility, tool_display and other metadata are
-    backfilled.  Idempotent — a marker event prevents double processing
-    unless ``force=true``.
-    """
-    from backend.services.events.reenrich import LegacyEnrichmentUnavailableError, reenrich_job_events
-
-    try:
-        updated = await reenrich_job_events(job_id, session_factory, force=force)
-    except LegacyEnrichmentUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    updated = await reenrich_job_events(job_id, session_factory, force=force)
     return {"job_id": job_id, "updated_events": updated}
 
 

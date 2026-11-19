@@ -253,14 +253,28 @@ def _make_config(**overrides: Any) -> SessionConfig:
 
 
 def _install_auto_approve_router(adapter: Any, job_id: str = "job-1") -> None:
-    """Install a mock policy router that auto-approves everything."""
-    from backend.services.adapters.base_adapter import PermissionDecision
+    """Stub ordinary policy decisions while exercising real explicit hard-gate handling."""
+    from backend.models.domain import ApprovalResolution
+    from backend.services.auth.permission_policy import is_hard_gated_command
 
-    mock_router = MagicMock()
+    async def authorize(invocation):
+        command = invocation.request.full_command_text or ""
+        if command and is_hard_gated_command(command):
+            return (
+                await adapter._hard_block_approval(
+                    invocation.session_id, invocation.job_id, command, json.loads(invocation.arguments_json)
+                )
+                == ApprovalResolution.approved
+            )
+        return True
+
+    mock_router = SimpleNamespace(execution_epoch="fixture", authorize_permission=AsyncMock(side_effect=authorize))
     adapter._policy_router[job_id] = mock_router
     adapter._repo_policies[job_id] = MagicMock()
     adapter._worktree_paths[job_id] = "/tmp/workspace"
-    adapter._evaluate_with_policy_router = AsyncMock(return_value=PermissionDecision.allow)
+    for session_id, owner in adapter._session_to_job.items():
+        if owner == job_id:
+            adapter.set_session_metadata(session_id, _make_config(job_id=job_id))
 
 
 # ---------------------------------------------------------------------------
@@ -2292,6 +2306,7 @@ class TestHandlePermissionRequestGitResetHard:
         adapter = CopilotAdapter(approval_service=approval_service)
         # Register session→job so job_id is not None inside the handler
         adapter.set_job_id(self._SESSION_ID, "job-1")
+        _install_auto_approve_router(adapter, "job-1")
         return adapter, approval_service
 
     def _make_request(self, cmd: str) -> _FakePermissionRequest:

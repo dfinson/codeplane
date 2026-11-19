@@ -99,13 +99,11 @@ if TYPE_CHECKING:
     from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin, LegacyStartIntent
     from backend.models.schemas.recipes import RecipeRunResponse, RecipeSelection
     from backend.services.action_policy.classifier import RepoPolicy
-    from backend.services.action_policy.governance import GovernanceDecider
     from backend.services.action_policy.production import StandaloneGovernance
     from backend.services.adapters.contracts import ExecutionIdentity
     from backend.services.adapters.native_gates.controls import NativeInput
     from backend.services.adapters.native_gates.observation_scope import NativeObservationOwner
     from backend.services.events.event_processor import EventProcessor
-    from backend.services.events.governance_subscriber import GovernanceSubscriber
     from backend.services.events.ingest_service import IngestService
     from backend.services.events.telemetry_subscriber import TelemetrySubscriber
     from backend.services.recipe.executor import RecipeExecutor
@@ -330,12 +328,7 @@ class RuntimeService:
         # Telemetry bus-subscriber — wired late; runtime only clears its per-job
         # state at true job end (after retries/verify).
         self._telemetry_subscriber: TelemetrySubscriber | None = None
-        # Governance substrate — the process-wide decider (one durable store + the
-        # three preset pipelines) and its accrual bus-subscriber, both wired late
-        # from the composition root so the store path / spend reader are injectable.
-        self._governance_decider: GovernanceDecider | None = None
         self._standalone_governance: StandaloneGovernance | None = None
-        self._governance_subscriber: GovernanceSubscriber | None = None
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._recipe_controllers: dict[str, RecipeExecutor] = {}
         self._recipe_runner_slots = asyncio.Semaphore(config.runtime.max_concurrent_jobs)
@@ -412,18 +405,6 @@ class RuntimeService:
         (after retries + verify), which the bus-level terminal events can't pinpoint.
         """
         self._telemetry_subscriber = subscriber
-
-    def set_governance(self, decider: GovernanceDecider, subscriber: GovernanceSubscriber) -> None:
-        """Wire the process-wide governance decider + accrual subscriber (late binding).
-
-        The decider owns the durable governance store and the three preset
-        pipelines; ``_setup_action_policy`` registers each job's preset on it and
-        injects it into that job's :class:`PolicyRouter`. The subscriber is already
-        attached to the event bus by the composition root; the runtime only needs a
-        handle to clear per-job state at true job end.
-        """
-        self._governance_decider = decider
-        self._governance_subscriber = subscriber
 
     def set_terminal_service(self, svc: TerminalService) -> None:
         """Wire the TerminalService for job terminals."""
@@ -1368,14 +1349,10 @@ class RuntimeService:
         and the job will fail.  There is no legacy fallback path.
         """
         from backend.persistence.policy_repo import PolicyRepository
-        from backend.services.action_policy.batcher import ApprovalBatcher
-        from backend.services.action_policy.checkpoint_service import CheckpointService
         from backend.services.action_policy.classifier import Preset, RepoPolicy
-        from backend.services.action_policy.monitor import MonitorSession
-        from backend.services.action_policy.router import PolicyRouter
 
-        if self._governance_decider is None and self._standalone_governance is None:
-            raise RuntimeError("governance decider not wired — set_governance() must run at startup")
+        if self._standalone_governance is None:
+            raise RuntimeError("Standalone governance must be wired before action policy setup")
 
         async with self._session_factory() as session:
             policy_repo = PolicyRepository(session)
@@ -1388,88 +1365,22 @@ class RuntimeService:
         # Per-job preset overrides the global policy config preset
         effective_preset = job_preset
 
-        # Build in-memory policy object. The retired path/action/cost rule tables
-        # are gone — governance classifies natively; CodePlane keeps only the
-        # preset (which selects the TraceForge profile) + batch window + MCP hints.
         policy = RepoPolicy(
             preset=Preset(effective_preset),
             batch_window_seconds=db_config["batch_window_seconds"],
             mcp_configs=mcp_configs,
         )
 
-        if self._standalone_governance is not None:
-            pin = self._recipe_contract_pins.get(job_id) or self._job_contract_pins.get(job_id)
-            if pin is None:
-                raise StateConflictError("Standalone policy requires the exact durable admission contract")
-            standalone = self._standalone_governance.for_job(pin, policy)
-            adapter = self._resolve_adapter(config.sdk)
-            adapter.set_policy_router(standalone, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
-            if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
-                self._preflight_curator.adapter.set_policy_router(  # type: ignore[attr-defined]
-                    standalone,
-                    policy,
-                    job_id,
-                    worktree_path or "",
-                )
-            self._policy_routers[job_id] = standalone
-            self._repo_policies[job_id] = policy
-            return
-
-        # Create router components
-        if self._git_service is None:
-            return
-        checkpoint_svc = CheckpointService(self._git_service)
-        batcher = ApprovalBatcher(
-            event_bus=self._event_bus,
-            batch_window_seconds=db_config["batch_window_seconds"],
-        )
-
-        # Bind this job to its preset so the shared decider's decision (read) and
-        # accrual (write) paths select the right preset pipeline.
-        assert self._governance_decider is not None
-        self._governance_decider.register_job(job_id, Preset(effective_preset))
-
-        # Create monitor for non-locked presets
-        monitor: MonitorSession | None = None
-        if effective_preset != "locked" and worktree_path:
-            from backend.persistence.trail_repo import TrailNodeRepository
-
-            trail_repo = TrailNodeRepository(self._session_factory)
-            from backend.services.adapters.agent_adapter import UtilityCompletionError
-            from backend.services.completers.lightweight_completer import LightweightCompleter
-
-            try:
-                provider = self._adapter_registry.get_completion_provider(
-                    self._config.runtime.utility_sdk,
-                )
-            except (IntegrationDisabledError, UtilityCompletionError) as exc:
-                log.warning("policy_utility_provider_unavailable", job_id=job_id, reason=str(exc))
-            else:
-                completer = LightweightCompleter(provider, model=self._config.runtime.utility_model)
-                monitor = MonitorSession(
-                    job_id=job_id,
-                    job_prompt=job_prompt,
-                    worktree=worktree_path,
-                    repo=repo,
-                    completer=completer,
-                    trail_repo=trail_repo,
-                )
-
-        router = PolicyRouter(
-            checkpoint_service=checkpoint_svc,
-            governance=self._governance_decider,
-            batcher=batcher,
-            monitor=monitor,
-        )
-
-        # Wire into adapter
+        pin = self._recipe_contract_pins.get(job_id) or self._job_contract_pins.get(job_id)
+        if pin is None:
+            raise StateConflictError("Standalone policy requires the exact durable admission contract")
+        router = self._standalone_governance.for_job(pin, policy)
         adapter = self._resolve_adapter(config.sdk)
         adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
             self._preflight_curator.adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         self._policy_routers[job_id] = router
         self._repo_policies[job_id] = policy
-        self._policy_batchers[job_id] = batcher
 
         log.info(
             "action_policy_configured",
@@ -1482,8 +1393,6 @@ class RuntimeService:
         if event.kind != EventKind.policy_settings_changed:
             return
 
-        if self._standalone_governance is not None:
-            await self._standalone_governance.refresh_retained_policy()
         job_ids = list(self._policy_routers.keys())
         if not job_ids:
             return
@@ -1510,17 +1419,6 @@ class RuntimeService:
 
             mcp_configs = {c["name"]: c for c in mcp_configs_list}
 
-            # Global governance settings (USD ceilings / budget config) may have
-            # changed → refresh the per-preset ceilings then rebuild the pipelines
-            # once, atomically, over the same durable store. A concurrent
-            # decide/observe never sees a half-built set (the swap is a single
-            # locked rebind).
-            if self._governance_decider is not None:
-                from backend.services.action_policy.governance import load_usd_ceilings
-
-                self._governance_decider.set_usd_ceilings(await load_usd_ceilings(self._session_factory))
-                self._governance_decider.rebuild()
-
             for job_id in job_ids:
                 if job_id not in self._policy_routers:
                     continue  # job finished between iteration start and now
@@ -1534,17 +1432,6 @@ class RuntimeService:
                     mcp_configs=mcp_configs,
                 )
                 self._repo_policies[job_id] = new_policy
-
-                # Re-bind the job's preset on the shared decider (it may have
-                # changed), so subsequent decisions select the right pipeline.
-                if self._governance_decider is not None:
-                    self._governance_decider.register_job(job_id, Preset(effective_preset))
-
-                # Disable/enable monitor based on preset change
-                router = self._policy_routers[job_id]
-                if effective_preset == "locked" and router._monitor is not None:
-                    log.info("monitor_disabled_preset_locked", job_id=job_id)
-                    router._monitor = None
 
                 # Update batcher window if changed
                 batcher = self._policy_batchers.get(job_id)
@@ -1584,8 +1471,6 @@ class RuntimeService:
             self._event_processor.cleanup(job_id)
         if self._telemetry_subscriber is not None:
             self._telemetry_subscriber.cleanup(job_id)
-        if self._governance_subscriber is not None:
-            self._governance_subscriber.cleanup(job_id)
         self._tasks.pop(job_id, None)
         async with self._execution_control.hold(job_id):
             self._agent_sessions.pop(job_id, None)
@@ -1602,11 +1487,6 @@ class RuntimeService:
         self._repo_policies.pop(job_id, None)
         if router is not None:
             router.cleanup_job(job_id)
-        # Unbind the job from the shared governance decider so a finished job's
-        # preset no longer resolves. Accrued durable state is TTL-boxed and
-        # session-keyed, so it need not be revoked here.
-        if self._governance_decider is not None:
-            self._governance_decider.unregister_job(job_id)
         self._policy_batchers.pop(job_id, None)
         # Clean up adapter-side policy state (survives session cleanup for retries)
         for adapter in self._adapter_registry._adapters.values():
@@ -3255,28 +3135,9 @@ class RuntimeService:
         return bool(resolved)
 
     async def trust_job_policy(self, job_id: str) -> bool:
-        """Create a blanket trust grant for a job so all future actions auto-approve.
-
-        Also resolves any currently pending batch for the job.
-        Returns True if the trust grant was created (job is governed).
-        """
-        from backend.services.action_policy.batcher import BatchResolution
-
-        if self._governance_decider is None or not self._governance_decider.is_registered(job_id):
-            return False
-
-        # Blanket session trust: waive every NON-security-critical gate for a long
-        # TTL. Security-critical §18.2 gates are never waived (enforced inside the
-        # decider), so a "trust this session" action can't bypass a hard gate.
-        self._governance_decider.grant_session_trust(job_id, ttl_seconds=86_400.0, reason="operator trusted session")
-
-        # Also resolve any pending batch so the currently-blocked action proceeds
-        batcher = self._policy_batchers.get(job_id)
-        if batcher:
-            for batch in batcher.get_pending_batches(job_id):
-                batcher.resolve_batch(batch.id, BatchResolution.approved)
-
-        return True
+        """Historical TF grants cannot waive the final runtime's per-action policy."""
+        log.info("legacy_blanket_trust_unavailable", job_id=job_id)
+        return False
 
     async def _resume_orphaned(self, job_id: str, message: str) -> bool:
         """Auto-resume a job that has no live agent session."""

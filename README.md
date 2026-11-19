@@ -46,7 +46,7 @@ Keep using `claude` or `copilot` in your terminal exactly as you do now. CodePla
 - Start a task, walk away. Approve risky actions from your phone
 - Remote access via Dev Tunnels or Cloudflare — supervise from anywhere
 - Live transcripts, plan progress, and running cost as the agent works
-- Action policy engine with cost-aware escalation, batch approval, session trust grants, and protected-path escalation
+- Standalone action policy with bound per-action approvals, verified-USD thresholds, recovery witnesses and protected-path gates
 
 ### Review as a Story
 
@@ -66,7 +66,7 @@ Other tools give you a dashboard for one agent session. CodePlane builds a **nor
 
 - **Provenance data layer** — every session (managed or mirrored) normalized into a local SQLite database with precomputed cost per span, per file, per phase. Query it with `sqlite3` or point a notebook at it
 - **Sidecar intelligence** — parallel LLM sessions that observe and intervene in real time: stall recovery, plan inference, enrichment, custom sidecars in plain English
-- **Action policy engine** — cost-aware tiers, batch approval, trust grants with TTL, protected paths, cost ceilings — above the SDK’s binary allow/deny
+- **Action policy engine** - bounded evidence, protected-path gates, verified-USD thresholds and exact per-action decisions above the SDK's binary allow/deny
 - **MCP server** — CodePlane *exposes itself as* an MCP server. External agents can delegate coding tasks and monitor them programmatically
 
 ## Quick Start
