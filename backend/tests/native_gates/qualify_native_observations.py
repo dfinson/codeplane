@@ -332,8 +332,15 @@ async def test_disable_fences_all_executions_before_draining_any_source(first_fa
         assert not retiring.done()
         release_close.set()
         if first_failure:
-            with pytest.raises(ExceptionGroup, match="observation"):
+            with pytest.raises(ExceptionGroup, match="Disabled integrations require reconciliation") as rejected:
                 await retiring
+            assert len(rejected.value.exceptions) == 1
+            observation = rejected.value.exceptions[0]
+            assert isinstance(observation, ExceptionGroup)
+            assert "observation" in observation.message
+            assert len(observation.exceptions) == 1
+            assert isinstance(observation.exceptions[0], OSError)
+            assert str(observation.exceptions[0]) == "First source retirement failed"
         else:
             await retiring
     finally:
