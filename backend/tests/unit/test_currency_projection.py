@@ -359,3 +359,94 @@ async def test_unqualified_evidence_cannot_mint_usd_zero(session_factory, defect
             )
         )
         assert (await TelemetryAnalyticsRepository(session).aggregate())["total_cost_usd"] is None
+
+
+@pytest.mark.parametrize(
+    ("amount", "expected"),
+    [
+        ("1,9999", None),
+        ("0,1", None),
+        ("1,null", None),
+        ("0", 0.0),
+        (0, 0.0),
+        ("0e+4", 0.0),
+        ("1.25e2", 125.0),
+        ("2.5E-3", 0.0025),
+        (" 1e1 ", 10.0),
+    ],
+)
+async def test_currency_view_accepts_only_one_numeric_amount(session_factory, amount, expected):
+    from pydantic import ValidationError
+
+    value = UsageAmount(
+        amount="0",
+        unit="USD",
+        currency="USD",
+        verified=True,
+        producer="claude",
+        job_id="job-1",
+        execution_epoch="epoch",
+        model=None,
+        role="primary",
+        source="native",
+    ).model_dump(mode="json")
+    value["amount"] = amount
+    if expected is None:
+        with pytest.raises(ValidationError, match="decimal_parsing"):
+            UsageAmount.model_validate(value)
+    else:
+        assert float(UsageAmount.model_validate(value).amount) == expected
+
+    async with session_factory() as session:
+        await TelemetrySummaryRepository(session).init_job("job-1", sdk="claude")
+        await EventRepository(session).append(
+            new_event(
+                "job-1",
+                "telemetry.usage",
+                {"native_usage": [value]},
+                metadata=EventMetadata(source_framework="claude", execution_epoch="epoch"),
+            )
+        )
+        before = (await session.execute(text("SELECT payload FROM events ORDER BY id"))).scalars().all()
+        repository = TelemetryAnalyticsRepository(session)
+        assert (await repository.aggregate())["total_cost_usd"] == expected
+        assert (await repository.cost_by_day())[0]["cost"] == expected
+        assert (await session.execute(text("SELECT payload FROM events ORDER BY id"))).scalars().all() == before
+
+
+@pytest.mark.parametrize("kind", ["execution.native.usage", "utility.completion.completed"])
+@pytest.mark.parametrize("field", ["producer", "source"])
+@pytest.mark.parametrize("supplied", [None, 42, False, "", "missing", "valid"])
+async def test_currency_control_receipts_require_producer_and_source_strings(session_factory, kind, field, supplied):
+    value = UsageAmount(
+        amount="0",
+        unit="USD",
+        currency="USD",
+        verified=True,
+        producer="claude",
+        job_id="job-1",
+        execution_epoch="epoch",
+        model=None,
+        role="primary",
+        source="native",
+    ).model_dump(mode="json")
+    if supplied == "missing":
+        value.pop(field)
+    elif supplied != "valid":
+        value[field] = supplied
+    async with session_factory() as session:
+        await TelemetrySummaryRepository(session).init_job("job-1", sdk="codeplane")
+        await EventRepository(session).append(
+            new_event(
+                "job-1",
+                kind,
+                {"usage": [value]},
+                metadata=EventMetadata(
+                    source_framework="codeplane",
+                    execution_epoch="epoch",
+                    namespace=("control", "native-execution" if kind == "execution.native.usage" else "utility"),
+                ),
+            )
+        )
+        expected = 0.0 if supplied == "valid" else None
+        assert (await TelemetryAnalyticsRepository(session).aggregate())["total_cost_usd"] == expected
