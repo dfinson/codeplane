@@ -18,6 +18,13 @@ beforeEach(() => {
 });
 
 describe("ArtifactViewer", () => {
+  it("does not show a collection spinner or success claim for observation-only history", async () => {
+    vi.mocked(fetchArtifacts).mockResolvedValue({ items: [], collectionStatus: "not_applicable" });
+    render(<ArtifactViewer jobId="observation" />);
+    expect(await screen.findByText("This is observation history, not an executed workspace session.")).toBeInTheDocument();
+    expect(screen.queryByText("Collecting artifacts…")).not.toBeInTheDocument();
+  });
+
   it("surfaces durable collection failures when no artifacts were produced", async () => {
     vi.mocked(fetchArtifacts).mockResolvedValue({
       items: [],

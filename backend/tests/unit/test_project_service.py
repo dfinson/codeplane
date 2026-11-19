@@ -237,7 +237,7 @@ class TestProjectServiceSummaryAll:
         self, mock_repo: AsyncMock, config: CPLConfig
     ) -> None:
         mock_repo.list.return_value = [_make_project("proj-1", "Idle", ["/repo/a"])]
-        mock_repo.job_counts_by_repo.return_value = {}
+        mock_repo.job_counts_by_project.return_value = {}
         service = ProjectService(mock_repo, config)
 
         summaries = await service.summary_all()
@@ -251,28 +251,21 @@ class TestProjectServiceSummaryAll:
         assert summary.last_activity_at is None
 
     @pytest.mark.asyncio
-    async def test_buckets_counts_across_a_projects_repos(self, mock_repo: AsyncMock, config: CPLConfig) -> None:
+    async def test_counts_are_returned_for_the_persisted_project(self, mock_repo: AsyncMock, config: CPLConfig) -> None:
         from datetime import UTC, datetime
 
-        from backend.persistence.project_repo import RepoJobCounts
+        from backend.persistence.project_repo import ProjectJobCounts
 
-        older = datetime(2026, 1, 1, tzinfo=UTC)
         newer = datetime(2026, 2, 1, tzinfo=UTC)
 
-        counts_a = RepoJobCounts()
+        counts_a = ProjectJobCounts()
         counts_a.active = 2
         counts_a.awaiting = 1
-        counts_a.failed = 0
-        counts_a.last_activity = older
-
-        counts_b = RepoJobCounts()
-        counts_b.active = 0
-        counts_b.awaiting = 0
-        counts_b.failed = 3
-        counts_b.last_activity = newer
+        counts_a.failed = 3
+        counts_a.last_activity = newer
 
         mock_repo.list.return_value = [_make_project("proj-1", "Multi", ["/repo/a", "/repo/b"])]
-        mock_repo.job_counts_by_repo.return_value = {"/repo/a": counts_a, "/repo/b": counts_b}
+        mock_repo.job_counts_by_project.return_value = {"proj-1": counts_a}
         service = ProjectService(mock_repo, config)
 
         summaries = await service.summary_all()
@@ -291,12 +284,9 @@ class TestProjectServiceSummaryAll:
             _make_project("proj-2", "B", ["/repo/b"]),
             _make_project("proj-3", "C", ["/repo/c"]),
         ]
-        mock_repo.job_counts_by_repo.return_value = {}
+        mock_repo.job_counts_by_project.return_value = {}
         service = ProjectService(mock_repo, config)
 
         await service.summary_all()
 
-        # Exactly one aggregate query across all Projects' repos, never N.
-        mock_repo.job_counts_by_repo.assert_awaited_once()
-        called_repo_paths = mock_repo.job_counts_by_repo.call_args[0][0]
-        assert sorted(called_repo_paths) == ["/repo/a", "/repo/b", "/repo/c"]
+        mock_repo.job_counts_by_project.assert_awaited_once_with(["proj-1", "proj-2", "proj-3"])

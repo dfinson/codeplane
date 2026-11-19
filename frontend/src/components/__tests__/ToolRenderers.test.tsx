@@ -44,6 +44,23 @@ function mkEntry(overrides: Partial<TranscriptEntry>): TranscriptEntry {
   };
 }
 
+it("renders the failed wire outcome even without a false success field", () => {
+  const { container } = render(<ToolStep entry={mkEntry({
+    kind: "tool.call.failed", toolIssue: "Permission denied", success: undefined,
+  })} isActive />);
+  expect(screen.getByText("Permission denied")).toBeInTheDocument();
+  expect(container.querySelector(".bg-blue-400")).toBeNull();
+});
+
+it("shows an unresolved imported start without a running indicator or invented result", () => {
+  const { container } = render(<ToolStep entry={mkEntry({
+    kind: "tool.call.started", pairingStatus: "unresolved", pairingReason: "missing_completion",
+    result: undefined, success: undefined,
+  })} isActive />);
+  expect(screen.getByText("Outcome unrecorded")).toBeInTheDocument();
+  expect(container.querySelector(".bg-blue-400")).toBeNull();
+});
+
 // ---------------------------------------------------------------------------
 // hasStructuredRenderer
 // ---------------------------------------------------------------------------

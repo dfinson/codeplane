@@ -159,7 +159,72 @@ Both providers are supported on Linux, macOS, native Windows, and WSL.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OTEL_EXPORTER_ENDPOINT` | OTLP endpoint for exporting metrics/traces | — (local only) |
+| `OTEL_EXPORTER_ENDPOINT` | Legacy value. Does not enable network export or bypass the explicit export binding below. | Local only |
+
+## Optional story tokenization
+
+Story generation loads `tiktoken` only when needed. A missing package uses the
+logged character estimate. With the package installed, uncached story token
+counting runs in one owned, short-lived process per Story service, with a
+five-second deadline. Cached encodings retain exact tokenization. Loader errors
+and deadlines fail story preparation explicitly, without substituting estimates
+or caching a generated story. Core HTTP processing stays responsive, and
+shutdown kills and reaps an outstanding tokenizer process before closing story
+storage. On Windows, the existing Job Object owner contains the launcher and
+its actual Python worker before entry, then confirms zero active descendants
+before release. No global tokenizer cache or network settings are changed.
+
+## Optional metadata-only telemetry export
+
+Local history, approvals, governance and telemetry work without exporter extras.
+Network export is disabled by default. Install only the required extra:
+`codeplane[otlp-export-http]` for HTTP/protobuf traces, or
+`codeplane[otlp-export-grpc]` for separately configured gRPC traces/metrics.
+These extras qualify OpenTelemetry SDK/exporter 1.45.2. Inbound binary OTLP uses
+the independent `codeplane[otlp-ingest]` extra.
+
+Configure the binding in the existing CodePlane configuration, then restart:
+
+```yaml
+export:
+  enabled: true
+  protocol: http/protobuf
+  endpoint: https://collector.example.com/v1/traces
+  credential_id: your-destination-scoped-credential-id
+  approved_models: []
+  metrics_endpoint: ""
+  metrics_credential_id: null
+```
+
+For gRPC traces, set `protocol: grpc` and an explicit `http://host:port` or
+`https://host:port` endpoint without a signal path. Metrics require a separately
+declared gRPC `metrics_endpoint` and, if needed, `metrics_credential_id`.
+A trace-only destination is never assumed to accept metrics.
+
+Create a transport credential through the existing authenticated
+`POST /api/settings/credentials` API with `provider: "otlp"`, the exact collector
+`baseUrl`, and `exportProtocol: "http/protobuf"` or `"grpc"`. Its write-only `pat`
+field contains a JSON object of destination authentication headers, for example
+`{"Authorization":"Bearer <collector-token>"}`. The existing credential store
+encrypts this value. Never put headers or secrets in the YAML endpoint.
+Credentials are bound to their endpoint and protocol, cannot attach to tracker
+links, and cannot be deleted while referenced by the loaded export binding.
+Omit `credential_id` only when the collector does not require authentication.
+
+Only allowlisted metadata from committed canonical events enters export.
+Source identifiers are locally keyed, model IDs require explicit approval, and
+missing role or unverified monetary provenance is withheld rather than guessed.
+Prompts, commands, results, paths, arbitrary attributes and source records remain
+local. Legacy SDK measurements without the required provenance stay local.
+The existing local OTel provider/readers are not replaced.
+
+The bounded SDK queue contains at most 2,048 sanitized spans, in batches of 128
+with a five-second cadence. Requests have a five-second total timeout.
+Transient failures use 1/2/4/8-second backoff within a 30-second delivery window.
+Authentication/configuration errors disable only export. Overflow, withholding
+and exhausted retries are visible through authenticated
+`GET /api/integrations/export-health`. Shutdown permits two seconds to flush.
+Export retries never retry agent work, and there is no durable export spool.
 
 ## MCP Server Discovery
 

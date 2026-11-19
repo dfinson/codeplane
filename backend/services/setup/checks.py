@@ -519,6 +519,11 @@ def verify_requirements(
     # --- Agent CLIs ---
     agent_results: list[CheckResult] = []
     for sdk_id in ("copilot", "claude"):
+        from backend.config import load_config
+        from backend.services.adapters.integration_policy import IntegrationPolicy
+
+        if not IntegrationPolicy(load_config()).enabled(sdk_id):
+            continue
         agent_results.append(_build_agent_check_result(sdk_id))
     results.extend(agent_results)
 

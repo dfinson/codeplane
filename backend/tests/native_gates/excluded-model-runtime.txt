@@ -1,0 +1,2 @@
+# CrewAI's unused Chroma default embedding dependency. No embedding/model calls.
+onnxruntime

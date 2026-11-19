@@ -6,6 +6,8 @@ agent session completes, before the job transitions to review state.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import nullcontext
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -24,6 +26,31 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+async def recover_interrupted_verification(host: RuntimeService, job_id: str) -> None:
+    from backend.persistence.event_repo import EventRepository
+
+    async with host._session_factory() as session:
+        events = await EventRepository(session).list_all_by_job(
+            job_id, [EventKind.verification_started, EventKind.verification_result]
+        )
+    pending = {}
+    for event in events:
+        payload = event.payload
+        key = (payload["session_number"], payload["phase"], payload["attempt"])
+        if event.kind == EventKind.verification_started:
+            pending[key] = payload
+        else:
+            pending.pop(key, None)
+    for payload in pending.values():
+        result_payload = dict(payload)
+        result_payload.update(
+            status="interrupted",
+            completed_at=datetime.now(UTC).isoformat(),
+            error="Server restarted before this verification turn recorded a result",
+        )
+        await host._event_bus.publish(new_event(job_id, EventKind.verification_result, result_payload))
+
+
 async def run_followup_turn(
     host: RuntimeService,
     job_id: str,
@@ -33,6 +60,9 @@ async def run_followup_turn(
     worktree_path: str | None,
     base_ref: str | None,
     session_number: int = 1,
+    *,
+    phase: str | None = None,
+    attempt: int = 1,
 ) -> tuple[str | None, str | None]:
     """Run a single follow-up agent turn (verify or self-review).
 
@@ -53,6 +83,24 @@ async def run_followup_turn(
 
     error_reason: str | None = None
     new_session_id: str | None = None
+    started_at = datetime.now(UTC)
+    status = "completed"
+    if phase is not None:
+        await host._event_bus.publish(
+            new_event(
+                job_id,
+                EventKind.verification_started,
+                {
+                    "phase": phase,
+                    "attempt": attempt,
+                    "session_number": session_number,
+                    "started_at": started_at.isoformat(),
+                },
+            )
+        )
+    control = getattr(host, "_execution_control", None)
+    async with control.hold(job_id) if control is not None else nullcontext():
+        host._agent_sessions[job_id] = followup_session
 
     try:
         async for event in followup_session.execute(followup_config, host._resolve_adapter(base_config.sdk)):
@@ -87,9 +135,35 @@ async def run_followup_turn(
                 await host._event_processor.process_event(job_id, event, worktree_path, base_ref)
             else:
                 await host._event_bus.publish(event)
+    except asyncio.CancelledError:
+        status = "interrupted"
+        error_reason = "Verification interrupted before completion"
+        await followup_session.abort()
+        raise
     except Exception:
         log.warning("followup_turn_failed", job_id=job_id, exc_info=True)
         error_reason = "Follow-up turn execution error"
+    finally:
+        async with control.hold(job_id) if control is not None else nullcontext():
+            if host._agent_sessions.get(job_id) is followup_session:
+                host._agent_sessions.pop(job_id, None)
+        if phase is not None:
+            await host._event_bus.publish(
+                new_event(
+                    job_id,
+                    EventKind.verification_result,
+                    {
+                        "phase": phase,
+                        "attempt": attempt,
+                        "session_number": session_number,
+                        "status": status if status == "interrupted" else ("failed" if error_reason else "completed"),
+                        "sdk_session_id": new_session_id,
+                        "started_at": started_at.isoformat(),
+                        "completed_at": datetime.now(UTC).isoformat(),
+                        "error": error_reason,
+                    },
+                )
+            )
 
     return new_session_id, error_reason
 
@@ -153,6 +227,8 @@ async def run_verify_review(
                 worktree_path,
                 base_ref,
                 session_number=session_number,
+                phase="verify",
+                attempt=turn,
             )
             if new_sid:
                 current_session_id = new_sid
@@ -172,6 +248,7 @@ async def run_verify_review(
             worktree_path,
             base_ref,
             session_number=session_number,
+            phase="self_review",
         )
         if new_sid:
             current_session_id = new_sid

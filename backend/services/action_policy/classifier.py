@@ -1,35 +1,76 @@
-"""Action model + governance-derived classification result.
-
-Input channels: file operations, SDK tools, MCP tools, shell commands.
-
-The DECISION (what to do about an action) is delegated **wholesale** to
-``traceforge.governance`` via :mod:`backend.services.action_policy.governance`.
-This module only defines CodePlane's action model, the preset enum, and the
-reshaped :class:`Classification` that surfaces TraceForge's native decision
-(:class:`~traceforge.governance.RecommendedAction` + risk + reason code) to the
-enforcement layer (router), the audit trail, and the UI. The retired
-hand-rolled tier resolution / explicit-rule matching / cost promotion lived here
-and have been deleted, not translated.
-"""
+"""Application-owned action and decision contracts, including legacy wire values."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 if TYPE_CHECKING:
-    from traceforge.governance import RecommendedAction
+    from collections.abc import Mapping
 
 log = structlog.get_logger()
+
+
+class RecommendedAction(StrEnum):
+    ALLOW = "allow"
+    WARN = "warn"
+    ESCALATE = "escalate"
+    DENY = "deny"
+    TRANSFORM = "transform"
+
+
+SECURITY_CRITICAL_REASON_CODES = frozenset(
+    {
+        "destructive_action",
+        "raw_block_device_write",
+        "filesystem_format",
+        "persistence_mechanism_write",
+        "fork_bomb_pattern",
+        "credential_exposure",
+        "piped_network_exec",
+        "protected_path",
+        "risk_score_critical",
+    }
+)
+
+
+def is_security_critical(reason_code: str | None) -> bool:
+    """Preserve non-waivable legacy reasons at both trust and monitor boundaries."""
+    if not reason_code:
+        return False
+    return reason_code in SECURITY_CRITICAL_REASON_CODES or reason_code.startswith("internal_error")
 
 
 class Preset(StrEnum):
     autonomous = "autonomous"
     supervised = "supervised"
     locked = "locked"
+
+
+# Product-owned soft warning/escalation USD defaults; None disables that line.
+USD_CEILING_DEFAULTS: Mapping[Preset, tuple[float | None, float | None]] = MappingProxyType(
+    {
+        Preset.autonomous: (None, None),
+        Preset.supervised: (20.0, 40.0),
+        Preset.locked: (5.0, 10.0),
+    }
+)
+
+WAIVABLE_REASON_CODES = frozenset(
+    {
+        "budget_pressure",
+        "external_mutation",
+        "git_mutation_supervised",
+        "git_mutation_locked",
+        "readonly_shell_locked",
+        "cp_usd_ceiling",
+        "cp_usd_ceiling_warn",
+    }
+)
 
 
 class ActionKind(StrEnum):
@@ -59,22 +100,17 @@ class Action:
     # Context
     job_id: str | None = None
     workspace_path: str | None = None
+    arguments_json: str = ""
+    tool_definition: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class Classification:
-    """Governance decision for an action, surfaced from TraceForge's ``SessionMeta``.
-
-    ``recommended_action`` is TraceForge's native verdict; the enforcement layer
-    acts on it directly (no CodePlane tier vocabulary). ``risk_score`` /
-    ``risk_band`` come from the Assessor, ``effect`` / ``mechanism`` from the
-    classifier, and ``reason_code`` from the matched rule (or ``"allow"`` when no
-    rule fired and risk was below every threshold — an implicit allow).
-    """
+    """Normalized decision, retaining the legacy bridge's measured risk fields."""
 
     recommended_action: RecommendedAction
     reason_code: str
-    risk_score: int
+    risk_score: int | None
     risk_band: str
     effect: str | None
     mechanism: str
@@ -83,14 +119,9 @@ class Classification:
 
 @dataclass
 class RepoPolicy:
-    """In-memory policy loaded from DB at job start.
-
-    Wholesale adoption slimmed this to the two settings CodePlane still owns: the
-    ``preset`` (which selects a TraceForge governance profile) and the approval
-    ``batch_window_seconds``. The retired path/action/cost rule tables and the
-    MCP reversibility hints are gone — governance classifies natively.
-    """
+    """Application-owned settings captured by each permission invocation."""
 
     preset: Preset = Preset.supervised
     batch_window_seconds: float = 5.0
     mcp_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    usd_ceilings: dict[str, tuple[float | None, float | None]] = field(default_factory=dict)

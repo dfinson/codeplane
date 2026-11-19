@@ -21,6 +21,7 @@ import rehypeRaw from "rehype-raw";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-async-light";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { fetchArtifacts, downloadArtifactUrl, fetchArtifactText } from "../api/client";
+import type { ArtifactListResponse } from "../api/types";
 import { Spinner } from "./ui/spinner";
 import { Tooltip } from "./ui/tooltip";
 import { useStore } from "../store";
@@ -40,7 +41,7 @@ interface Artifact {
   createdAt: string;
 }
 
-type CollectionStatus = "pending" | "collecting" | "completed" | "failed";
+type CollectionStatus = ArtifactListResponse["collectionStatus"];
 
 /** Display key — the actual group a given artifact is rendered under.
  *  This may differ from the raw `type` (e.g. legacy `document`-typed
@@ -608,7 +609,11 @@ export default function ArtifactViewer({ jobId, onCountChange }: Props) {
         {collectionError ? (
           <p className="text-xs text-destructive mt-2 break-words">{collectionError}</p>
         ) : (
-          <p className="text-xs text-muted-foreground mt-1">Artifacts are finalized when the session ends.</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {collectionStatus === "not_applicable"
+              ? "This is observation history, not an executed workspace session."
+              : "Artifacts are finalized when the session ends."}
+          </p>
         )}
       </div>
     );

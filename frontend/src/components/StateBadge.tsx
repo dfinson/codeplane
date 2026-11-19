@@ -9,6 +9,7 @@ const STATE_CONFIG: Record<string, { bg: string; text: string; label: string; Ic
   preparing: { bg: "bg-violet-900/30", text: "text-violet-400", label: "Preparing", Icon: Loader2, tip: "" },
   queued: { bg: "bg-yellow-900/30", text: "text-yellow-400", label: "Queued", Icon: Clock, tip: "Waiting in line to start" },
   running: { bg: "bg-blue-900/30", text: "text-blue-400", label: "Running", Icon: Loader2, tip: "Agent is actively working" },
+  observing: { bg: "bg-muted", text: "text-muted-foreground", label: "Observation", Icon: Eye, tip: "External history; no managed execution or workspace" },
   waiting_for_approval: { bg: "bg-orange-900/30", text: "text-orange-400", label: "Approval", Icon: ShieldQuestion, tip: "Agent paused — waiting for your approval to continue" },
   review: { bg: "bg-cyan-900/30", text: "text-cyan-400", label: "In Review", Icon: Eye, tip: "Agent finished — changes are ready for your review" },
   completed: { bg: "bg-green-900/30", text: "text-green-400", label: "Completed", Icon: CheckCircle2, tip: "Job finished and changes have been resolved" },

@@ -114,9 +114,9 @@ const MODEL_COMPARISON = {
 const TOOLS = {
   period: 7,
   tools: [
-    { name: "edit_file", count: 156, avgDurationMs: 45, totalDurationMs: 7020, failureCount: 3, p50DurationMs: 40, p95DurationMs: 80, p99DurationMs: 120 },
-    { name: "read_file", count: 312, avgDurationMs: 22, totalDurationMs: 6864, failureCount: 0, p50DurationMs: 18, p95DurationMs: 55, p99DurationMs: 90 },
-    { name: "run_in_terminal", count: 89, avgDurationMs: 3500, totalDurationMs: 311500, failureCount: 12, p50DurationMs: 2800, p95DurationMs: 8000, p99DurationMs: 12000 },
+    { name: "edit_file", count: 156, avgDurationMs: 45, totalDurationMs: 7020, failureCount: 3, unknownCount: 0, p50DurationMs: 40, p95DurationMs: 80, p99DurationMs: 120 },
+    { name: "read_file", count: 312, avgDurationMs: 22, totalDurationMs: 6864, failureCount: 0, unknownCount: 0, p50DurationMs: 18, p95DurationMs: 55, p99DurationMs: 90 },
+    { name: "run_in_terminal", count: 89, avgDurationMs: 3500, totalDurationMs: 311500, failureCount: 12, unknownCount: 0, p50DurationMs: 2800, p95DurationMs: 8000, p99DurationMs: 12000 },
   ],
 };
 
@@ -297,6 +297,15 @@ test.describe("Analytics — Tool Health", () => {
     await expect(
       page.getByText(/edit_file|read_file|run_in_terminal/i).first(),
     ).toBeVisible({ timeout: 5_000 });
+    for (const [name, count, rate] of [
+      ["edit_file", "156", "98%"],
+      ["read_file", "312", "100%"],
+      ["run_in_terminal", "89", "87%"],
+    ] as const) {
+      const row = page.getByRole("row").filter({ has: page.getByText(name, { exact: true }) });
+      await expect(row.getByRole("cell").nth(1)).toHaveText(count);
+      await expect(row.getByRole("cell").nth(3)).toHaveText(rate);
+    }
   });
 });
 

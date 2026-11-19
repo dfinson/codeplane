@@ -259,6 +259,7 @@ def _neutralize_fatal_termination_signals() -> None:
     help="Remote access provider (requires --remote)",
 )
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
+@click.option("--access-only", is_flag=True, help="Require Cloudflare Access JWT instead of a password")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--tunnel-name", default=None, help="Dev Tunnel name (default: random, reused across restarts)")
 @click.option(
@@ -280,6 +281,7 @@ def up(
     remote: bool,
     provider: str,
     password: str | None,
+    access_only: bool,
     no_password: bool,
     tunnel_name: str | None,
     tunnel_ownership: str | None,
@@ -376,6 +378,37 @@ def up(
 
     remote_provider = RemoteProvider(provider) if remote else RemoteProvider.local
 
+    if access_only and (
+        not remote
+        or remote_provider is not RemoteProvider.cloudflare
+        or not cf_access_team
+        or not cf_access_aud
+        or password is not None
+        or _env("CPL_PASSWORD")
+    ):
+        click.secho(
+            "ERROR: --access-only requires --remote --provider cloudflare, CPL_CF_ACCESS_TEAM and "
+            "CPL_CF_ACCESS_AUD, and conflicts with an explicit password (including CPL_PASSWORD).",
+            fg="red",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    from backend.services.auth import cf_access
+
+    cf_access.reset()
+    if cf_access_team and cf_access_aud:
+        try:
+            cf_access.configure(team=cf_access_team, aud=cf_access_aud, eager=False)
+        except cf_access.CfAccessConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+    elif cf_access_team or cf_access_aud:
+        click.secho(
+            "WARNING: Both CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD are required for Access JWT verification.",
+            fg="yellow",
+            err=True,
+        )
+
     # Password logic: block unsafe combos before checking provider availability
     if remote and no_password:
         click.secho(
@@ -409,13 +442,13 @@ def up(
         # Literal --password value has no durable reference to replay.
         password_source = SecretSource.unreplayable()
 
-    if not effective_password and not no_password:
+    if not effective_password and not no_password and not access_only:
         env_pw = _env("CPL_PASSWORD")
         if env_pw:
             effective_password = env_pw
             password_source = SecretSource.resolvable("environment", "CPL_PASSWORD")
 
-    if not effective_password and not no_password and remote:
+    if not effective_password and not no_password and remote and not access_only:
         from backend.services.auth.middleware import generate_password
 
         effective_password = generate_password()
@@ -453,7 +486,7 @@ def up(
     run_migrations()
 
     # Auto-generate password when binding to all interfaces without one set
-    if host == "0.0.0.0" and not effective_password:  # noqa: S104
+    if host == "0.0.0.0" and not effective_password and not access_only:  # noqa: S104
         from backend.services.auth.middleware import generate_password as _gen_pw
 
         effective_password = _gen_pw()
@@ -501,37 +534,10 @@ def up(
         elif remote_provider is RemoteProvider.cloudflare:
             tunnel_credential_source = SecretSource.resolvable("environment", "CPL_CLOUDFLARE_TUNNEL_TOKEN")
 
-        if remote_provider is RemoteProvider.cloudflare and tunnel_origin:  # noqa: SIM102
-            # Cloudflare Access check deferred to lifespan — requires the backend
-            # to be listening first since the probe goes through the tunnel.
-            # Disable password auth preemptively (Access will be verified once live).
-            if effective_password:
-                log.info(
-                    "cloudflare_access_expected",
-                    msg="Disabling local password auth — Cloudflare Access will be verified after startup",
-                )
-                effective_password = None
-                password_source = SecretSource.not_required()
-
-    # --- Cloudflare Access JWT verification ---
-    # When CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD are set, CodePlane will
-    # verify the Cf-Access-Jwt-Assertion header on every request.  JWKS keys
-    # are fetched lazily on the first verification request so that transient
-    # DNS failures at startup don't prevent the server from starting.
-    if cf_access_team and cf_access_aud:
-        from backend.services.auth.cf_access import configure as configure_cf_access
-
-        configure_cf_access(team=cf_access_team, aud=cf_access_aud, eager=False)
-    elif cf_access_team or cf_access_aud:
-        click.secho(
-            "WARNING: Both CPL_CF_ACCESS_TEAM and CPL_CF_ACCESS_AUD must be set to "
-            "enable Cloudflare Access JWT verification.  The Cf-Access-Jwt-Assertion "
-            "header will be ignored.",
-            fg="yellow",
-            err=True,
-        )
-
-    app = create_app(dev=dev, tunnel_origin=tunnel_origin, password=effective_password)
+    auth_mode = "access_only" if access_only else ("password" if effective_password else "local")
+    app = create_app(
+        dev=dev, tunnel_origin=tunnel_origin, password=effective_password, remote=remote, access_only=access_only
+    )
 
     # Stash banner info so lifespan can print it after services are ready.
     # Also stash the dashboard so lifespan can subscribe it to the EventBus
@@ -556,7 +562,7 @@ def up(
         host=host,
         port=port,
         log_level="warning" if dashboard else "info",
-        timeout_graceful_shutdown=5,
+        timeout_graceful_shutdown=45,
     )
 
     def _publish_active_launch_profile() -> None:
@@ -623,6 +629,7 @@ def up(
             tunnel_origin=resolved_tunnel_origin,
             tunnel_origin_reusable=resolved_tunnel_origin_reusable,
             password_source=password_source,
+            auth_mode=auth_mode,
             tunnel_credential_source=tunnel_credential_source,
             started_pid=pid,
             started_process_time=created_time,
@@ -776,6 +783,48 @@ def version() -> None:
     click.echo(f"cpl {__version__}")
 
 
+@cli.command("convert-native-checkpoint")
+@click.option("--job-id", required=True, help="Existing native CLI Job to convert.")
+@click.option("--source", "source_path", required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--rollback", is_flag=True, help="Restore the original reader only if no progress/history changed.")
+def convert_native_checkpoint_command(job_id: str, source_path: Path, rollback: bool) -> None:
+    """Explicit native v1/v2 transition. Stop observation first; never rewinds new outcomes.
+
+    Requires the retained legacy parser. Does not convert at startup or perform
+    whole-provider rollback.
+
+    Any event-history change, including diagnostics or title events, blocks
+    rollback. Final history/source checks hold the database writer transaction;
+    use quiescent maintenance periods for large conversions.
+    """
+    import asyncio
+    import json
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.database import create_engine, create_session_factory
+    from backend.services.ingest.checkpoint_conversion import convert_native_checkpoint
+
+    database = backend_config.get_codeplane_dir() / "data.db"
+    if not database.is_file():
+        raise click.ClickException("No existing CodePlane database exists under the active home")
+
+    async def execute() -> dict[str, Any]:
+        engine = create_engine(database)
+        try:
+            return await convert_native_checkpoint(
+                create_session_factory(engine), job_id=job_id, source_path=source_path, rollback=rollback
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(execute())
+    except (CodePlaneError, OSError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Server host")
 @click.option("--port", "-p", default=8080, type=int, help="Server port")
@@ -803,6 +852,136 @@ def doctor(as_json: bool) -> None:
     ok = diagnose_configuration(as_json=as_json)
     if not ok:
         raise SystemExit(1)
+
+
+@cli.group("governance-transition")
+def governance_transition_commands() -> None:
+    """Explicit stopped-runtime governance maintenance, never database restoration."""
+
+
+def _require_governance_stopped(directory: Path) -> None:
+    import json
+
+    from backend.services.dev_restart.launch_profile import LaunchProfile, LaunchProfileInvalidError
+    from backend.services.dev_restart.restart_protocol import is_identity_alive
+
+    profile_path = directory / "run.json"
+    if profile_path.exists():
+        try:
+            profile = LaunchProfile.from_dict(json.loads(profile_path.read_text()))
+        except (ValueError, LaunchProfileInvalidError) as exc:
+            raise click.ClickException("Runtime identity requires reconciliation before maintenance") from exc
+        if is_identity_alive(profile.started_pid, profile.started_process_time):
+            raise click.ClickException("Stop the recorded runtime before governance maintenance")
+
+
+@governance_transition_commands.command("import-legacy")
+def import_legacy_governance_command() -> None:
+    """Back up and compare retained counters, processed keys and policy-scoped grants.
+
+    Does not select a provider, restore an older application database or complete
+    provider rollback. Stop the runtime before this maintenance operation.
+    """
+    import json
+    import sqlite3
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.legacy_governance_repo import LegacyGovernanceRepository
+
+    directory = backend_config.get_codeplane_dir()
+    try:
+        _require_governance_stopped(directory)
+        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
+            result = LegacyGovernanceRepository(directory / "governance.db", directory / "data.db").import_original(
+                ownership
+            )
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("quiesce")
+def quiesce_governance_command() -> None:
+    """Block new admissions while preserving existing outcome and audit writes."""
+    import asyncio
+    import json
+    import sqlite3
+    from dataclasses import asdict
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.governance_repo import GovernanceLedger
+
+    directory = backend_config.get_codeplane_dir()
+
+    async def quiesce() -> dict[str, object]:
+        ledger = GovernanceLedger(directory / "governance.db", application_database=directory / "data.db")
+        try:
+            state = await ledger.admission_state()
+            return asdict(
+                await ledger.set_admission_control(
+                    expected_generation=state.generation, blocked=True, reason="Operator requested provider transition"
+                )
+            )
+        finally:
+            await ledger.close()
+
+    try:
+        with GovernanceRuntimeLease(directory):
+            result = asyncio.run(quiesce())
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("select-provider")
+@click.argument("provider", type=click.Choice(["standalone"]))
+@click.option("--generation", type=click.IntRange(min=0), required=True, help="Generation returned by quiesce.")
+def select_governance_provider_command(provider: str, generation: int) -> None:
+    """Activate the final standalone implementation without repinning existing Jobs.
+
+    Legacy execution/recovery remains in preserved transition release 287483a7.
+    """
+    import json
+    import sqlite3
+
+    from backend import config as backend_config
+    from backend.models.domain import CodePlaneError
+    from backend.persistence.governance_ownership import GovernanceRuntimeLease
+    from backend.persistence.governance_provider_repo import GovernanceProviderRepository
+    from backend.services.runtime.contract_catalog import standalone_contract
+
+    directory = backend_config.get_codeplane_dir()
+    try:
+        _require_governance_stopped(directory)
+        with GovernanceRuntimeLease(directory, exclusive=True) as ownership:
+            standalone = standalone_contract()
+            available = {standalone.id: standalone}
+            repository = GovernanceProviderRepository(directory / "governance.db", directory / "data.db")
+            repository.initialize()
+            result = repository.select_new_jobs(
+                ownership,
+                target=standalone,
+                default=standalone,
+                available=available,
+                expected_generation=generation,
+            )
+    except (CodePlaneError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(result, sort_keys=True))
+
+
+@governance_transition_commands.command("reconcile-retained")
+def reconcile_retained_governance_command() -> None:
+    """Explain where explicit legacy recovery remains available."""
+    raise click.ClickException(
+        "Retained outcome recovery requires preserved transition release 287483a7. "
+        "Stop the final runtime and reconcile each old Job using its original pin; "
+        "do not restore an older application database or install TF into this final package."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1202,6 +1381,7 @@ def down(host: str | None, port: int | None, force: bool) -> None:
     help="Remote access provider (requires --remote)",
 )
 @click.option("--password", default=None, help="Set auth password (auto-generated with --remote)")
+@click.option("--access-only", is_flag=True, help="Require Cloudflare Access JWT instead of a password")
 @click.option("--no-password", is_flag=True, help="Disable password auth (not allowed with --remote)")
 @click.option("--tunnel-name", default=None, help="Dev Tunnel name (default: random, reused across restarts)")
 @click.option("--skip-preflight", is_flag=True, help="Skip preflight checks")
@@ -1213,6 +1393,7 @@ def restart(
     remote: bool,
     provider: str,
     password: str | None,
+    access_only: bool,
     no_password: bool,
     tunnel_name: str | None,
     skip_preflight: bool,
@@ -1270,6 +1451,8 @@ def restart(
             args.extend(["--provider", provider])
     if password:
         args.extend(["--password", password])
+    if access_only:
+        args.append("--access-only")
     if no_password:
         args.append("--no-password")
     if tunnel_name:
@@ -1286,6 +1469,10 @@ def restart(
 # ---------------------------------------------------------------------------
 # ``cpl hook`` — Claude CLI hook bridge (stdin → HTTP POST)
 # ---------------------------------------------------------------------------
+
+from backend.services.external_gate_cli import gate as _external_gate_command  # noqa: E402
+
+cli.add_command(_external_gate_command)
 
 
 @cli.command()
@@ -1304,6 +1491,10 @@ def hook(port: int | None) -> None:
     import urllib.request
 
     config = load_config()
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    if not IntegrationPolicy(config).enabled("claude"):
+        raise click.ClickException("Claude hook is disabled by runtime.copilot_only")
     target_port = port or config.server.port
 
     raw = sys.stdin.read()

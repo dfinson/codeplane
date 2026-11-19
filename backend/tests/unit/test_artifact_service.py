@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
+import subprocess
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -54,6 +59,67 @@ def artifact_service(mock_repo: AsyncMock) -> ArtifactService:
     return ArtifactService(mock_repo)
 
 
+class TestImmutableFile:
+    async def test_collision_never_removes_an_existing_artifact(self, artifact_service, tmp_path, monkeypatch):
+        store = tmp_path / "store"
+        identity = uuid.UUID(int=1)
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.uuid.uuid4", lambda: identity)
+        destination = store / "job" / f"art-{identity.hex}-stdout.txt"
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"retained evidence")
+        source = tmp_path / "new.stdout"
+        source.write_bytes(b"replacement")
+        with pytest.raises(FileExistsError):
+            await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert destination.read_bytes() == b"retained evidence"
+
+    async def test_retains_independent_content_revisions(self, artifact_service, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "backend.services.artifacts.artifact_service.get_artifacts_base", lambda: tmp_path / "store"
+        )
+        source = tmp_path / "command.stdout"
+        first_content = b"first output\n" * 10_000
+        source.write_bytes(first_content)
+        first, first_hash = await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        source.write_bytes(b"next output")
+        second, second_hash = await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert first.id != second.id
+        assert first_hash == hashlib.sha256(first_content).hexdigest()
+        assert first_hash != second_hash
+        assert first.size_bytes == len(first_content)
+        assert Path(first.disk_path).read_bytes() == first_content
+        assert Path(second.disk_path).read_bytes() == b"next output"
+
+    async def test_canceling_copy_removes_partial_file_before_return(
+        self, artifact_service, mock_repo, tmp_path, monkeypatch
+    ):
+        store = tmp_path / "store"
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        source = tmp_path / "command.stdout"
+        source.write_bytes(b"x" * (256 * 1024))
+        task = asyncio.create_task(artifact_service.store_immutable_file("job", "stdout.txt", source))
+        await asyncio.sleep(0)
+        assert list((store / "job").iterdir())
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+        assert not list((store / "job").iterdir())
+        mock_repo.create.assert_not_awaited()
+        assert source.stat().st_size == 256 * 1024
+
+    async def test_metadata_failure_removes_unpublished_copy(self, artifact_service, mock_repo, tmp_path, monkeypatch):
+        store = tmp_path / "store"
+        monkeypatch.setattr("backend.services.artifacts.artifact_service.get_artifacts_base", lambda: store)
+        source = tmp_path / "command.stdout"
+        source.write_bytes(b"actual output")
+        mock_repo.create.side_effect = RuntimeError("metadata unavailable")
+        with pytest.raises(RuntimeError, match="metadata unavailable"):
+            await artifact_service.store_immutable_file("job", "stdout.txt", source)
+        assert not list((store / "job").iterdir())
+
+
 class TestStoreDiffSnapshot:
     @pytest.mark.asyncio
     async def test_stores_diff_snapshot_to_disk(
@@ -61,8 +127,8 @@ class TestStoreDiffSnapshot:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             diff_file = DiffFileModel(
                 path="test.py",
@@ -82,7 +148,7 @@ class TestStoreDiffSnapshot:
             assert isinstance(content, list)
             assert len(content) == 1
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
 
 class TestCollectFromWorkspace:
@@ -90,8 +156,8 @@ class TestCollectFromWorkspace:
     async def test_collects_artifacts_from_workspace(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             # Create a .codeplane/artifacts/ directory with a file
             artifacts_dir = tmp_path / ".codeplane" / "artifacts"
@@ -103,32 +169,36 @@ class TestCollectFromWorkspace:
             assert result[0].name == "report.json"
             assert result[0].type == ArtifactType.custom
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
-    async def test_skips_symlinks(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+    async def test_skips_symlinks(
+        self, artifact_service: ArtifactService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             artifacts_dir = tmp_path / ".codeplane" / "artifacts"
             artifacts_dir.mkdir(parents=True)
-            target = tmp_path / "secret.txt"
-            target.write_text("secret")
-            (artifacts_dir / "link.txt").symlink_to(target)
+            link = artifacts_dir / "link.txt"
+            link.write_text("secret")
+            assert link.is_file()
+            original_is_symlink = Path.is_symlink
+            monkeypatch.setattr(Path, "is_symlink", lambda path: path == link or original_is_symlink(path))
 
             result = await artifact_service.collect_from_workspace("job-1", str(tmp_path))
             assert len(result) == 0
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_skips_large_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             artifacts_dir = tmp_path / ".codeplane" / "artifacts"
             artifacts_dir.mkdir(parents=True)
@@ -139,7 +209,7 @@ class TestCollectFromWorkspace:
             result = await artifact_service.collect_from_workspace("job-1", str(tmp_path))
             assert len(result) == 0
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_no_artifacts_dir_returns_empty(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
@@ -152,8 +222,8 @@ class TestCollectFromSessionStorage:
     async def test_collects_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             session_dir.mkdir(parents=True)
@@ -169,14 +239,14 @@ class TestCollectFromSessionStorage:
             assert all(a.type == ArtifactType.document for a in result)
             assert all(a.mime_type == "text/markdown" for a in result)
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_ignores_non_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             session_dir.mkdir(parents=True)
@@ -190,15 +260,15 @@ class TestCollectFromSessionStorage:
             assert len(result) == 1
             assert result[0].name == "plan.md"
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_ignores_other_subdirectory_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         """checkpoints/ and other subdirs (except files/) must be skipped."""
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             (session_dir / "checkpoints").mkdir(parents=True)
@@ -211,15 +281,15 @@ class TestCollectFromSessionStorage:
             assert len(result) == 1
             assert result[0].name == "plan.md"
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_collects_files_subdir_md_files(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         """files/ subdirectory is explicitly scanned; names are prefixed with 'files/'."""
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             files_dir = session_dir / "files"
@@ -233,18 +303,18 @@ class TestCollectFromSessionStorage:
             )
             assert len(result) == 3
             names = {a.name for a in result}
-            assert names == {"plan.md", "files/dummy.md", "files/notes.md"}
+            assert names == {"plan.md", str(Path("files") / "dummy.md"), str(Path("files") / "notes.md")}
             assert all(a.type == ArtifactType.document for a in result)
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_files_subdir_name_collision(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
         """Same filename in top-level and files/ produces two distinct artifacts."""
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             files_dir = session_dir / "files"
@@ -257,29 +327,33 @@ class TestCollectFromSessionStorage:
             )
             assert len(result) == 2
             names = {a.name for a in result}
-            assert names == {"plan.md", "files/plan.md"}
+            assert names == {"plan.md", str(Path("files") / "plan.md")}
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
-    async def test_skips_symlinks(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
+    async def test_skips_symlinks(
+        self, artifact_service: ArtifactService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig_base = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig_base = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-abc"
             session_dir.mkdir(parents=True)
-            target = tmp_path / "secret.md"
-            target.write_text("# Secret")
-            (session_dir / "link.md").symlink_to(target)
+            link = session_dir / "link.md"
+            link.write_text("# Secret")
+            assert link.is_file()
+            original_is_symlink = Path.is_symlink
+            monkeypatch.setattr(Path, "is_symlink", lambda path: path == link or original_is_symlink(path))
 
             result = await artifact_service.collect_from_session_storage(
                 "job-1", "sess-abc", config_dir=tmp_path / ".copilot"
             )
             assert result == []
         finally:
-            mod._ARTIFACTS_BASE = orig_base
+            mod.get_artifacts_base = orig_base
 
     @pytest.mark.asyncio
     async def test_missing_session_dir_returns_empty(self, artifact_service: ArtifactService, tmp_path: Path) -> None:
@@ -341,15 +415,15 @@ class TestStoreTelemetryReportUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             result = await artifact_service.store_telemetry_report("job-1", {"tokens": 100}, slug="my-job")
             assert result.type == ArtifactType.telemetry_report
             mock_repo.create.assert_called_once()
             mock_repo.update_size_bytes.assert_not_called()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
     @pytest.mark.asyncio
     async def test_upserts_on_second_call(
@@ -357,8 +431,8 @@ class TestStoreTelemetryReportUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             # Create the file that the existing artifact points to
             disk_file = tmp_path / "art-existing-telemetry.json"
@@ -382,7 +456,7 @@ class TestStoreTelemetryReportUpsert:
             assert json.loads(disk_file.read_text())["tokens"] == 200
             assert result.id == "art-existing"
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
 
 class TestStoreLogArtifactUpsert:
@@ -392,8 +466,8 @@ class TestStoreLogArtifactUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             events = [{"session_number": 1, "seq": 0, "level": "info", "message": "hello", "timestamp": "t1"}]
             result = await artifact_service.store_log_artifact("job-1", events, slug="my-job")
@@ -402,7 +476,7 @@ class TestStoreLogArtifactUpsert:
             mock_repo.create.assert_called_once()
             mock_repo.update_size_bytes.assert_not_called()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
     @pytest.mark.asyncio
     async def test_upserts_on_second_call(
@@ -410,8 +484,8 @@ class TestStoreLogArtifactUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             disk_file = tmp_path / "art-existing-agent.log"
             disk_file.write_text("old log content")
@@ -434,7 +508,7 @@ class TestStoreLogArtifactUpsert:
             assert "session 2 started" in disk_file.read_text()
             assert result.id == "art-log"
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
 
 class TestStoreAgentPlanUpsert:
@@ -444,8 +518,8 @@ class TestStoreAgentPlanUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             steps = [{"step": "run tests", "status": "done"}]
             result = await artifact_service.store_agent_plan("job-1", steps, slug="my-job")
@@ -453,7 +527,7 @@ class TestStoreAgentPlanUpsert:
             assert result.type == ArtifactType.agent_plan
             mock_repo.create.assert_called_once()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
     @pytest.mark.asyncio
     async def test_upserts_on_second_call(
@@ -461,8 +535,8 @@ class TestStoreAgentPlanUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             disk_file = tmp_path / "art-existing-plan.json"
             disk_file.write_text('{"steps": []}')
@@ -485,7 +559,7 @@ class TestStoreAgentPlanUpsert:
             assert result is not None
             assert result.id == "art-plan"
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
 
 class TestStoreApprovalHistoryUpsert:
@@ -495,8 +569,8 @@ class TestStoreApprovalHistoryUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             approvals = [
                 {
@@ -513,7 +587,7 @@ class TestStoreApprovalHistoryUpsert:
             assert result.type == ArtifactType.approval_history
             mock_repo.create.assert_called_once()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
     @pytest.mark.asyncio
     async def test_upserts_on_second_call(
@@ -521,8 +595,8 @@ class TestStoreApprovalHistoryUpsert:
     ) -> None:
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path
         try:
             disk_file = tmp_path / "art-existing-approvals.json"
             disk_file.write_text('{"approvals": []}')
@@ -554,7 +628,7 @@ class TestStoreApprovalHistoryUpsert:
             assert result is not None
             assert result.id == "art-approvals"
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
 
 class TestCollectFromSessionStorageUpsert:
@@ -565,8 +639,8 @@ class TestCollectFromSessionStorageUpsert:
         """Second session with updated plan.md should overwrite the existing artifact, not create a new one."""
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             # Simulate existing plan.md artifact from session 1
             existing_disk = tmp_path / "store" / "plan-v1.md"
@@ -598,7 +672,7 @@ class TestCollectFromSessionStorageUpsert:
             # Disk content should now be session 2's version
             assert "Plan v2" in existing_disk.read_text()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
 
     @pytest.mark.asyncio
     async def test_creates_new_document_when_no_existing(
@@ -607,8 +681,8 @@ class TestCollectFromSessionStorageUpsert:
         """First session: no existing artifacts, so new ones are created."""
         import backend.services.artifacts.artifact_service as mod
 
-        orig = mod._ARTIFACTS_BASE
-        mod._ARTIFACTS_BASE = tmp_path / "store"
+        orig = mod.get_artifacts_base
+        mod.get_artifacts_base = lambda: tmp_path / "store"
         try:
             session_dir = tmp_path / ".copilot" / "session-state" / "sess-new"
             session_dir.mkdir(parents=True)
@@ -623,4 +697,315 @@ class TestCollectFromSessionStorageUpsert:
             mock_repo.create.assert_called_once()
             mock_repo.update_size_bytes.assert_not_called()
         finally:
-            mod._ARTIFACTS_BASE = orig
+            mod.get_artifacts_base = orig
+
+
+_HOME_PRODUCERS = (
+    "diff",
+    "workspace",
+    "session_document",
+    "summary",
+    "session_log",
+    "agent_log",
+    "telemetry",
+    "plan",
+    "approvals",
+)
+_HOME_UPSERTS = ("workspace", "session_document", "session_log", "agent_log", "telemetry", "plan", "approvals")
+
+
+def _link_home_directory(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        # Junctions exercise canonical escape checks without elevated symlink privileges.
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+@pytest.fixture
+def artifact_homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    import backend.config as config
+    import backend.services.artifacts.artifact_service as mod
+
+    home = tmp_path / "home"
+    active = tmp_path / "configured" / "artifacts"
+    legacy = home / ".codeplane" / "artifacts"
+    legacy.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("CODEPLANE_HOME", str(active.parent))
+    monkeypatch.delenv("COPILOT_HOME", raising=False)
+    monkeypatch.setattr(config, "_codeplane_dir", None)
+    # The unmodified module captured Path.home at import time. Red runs must
+    # write only to this owned legacy stand-in, never the user's real home.
+    monkeypatch.setattr(mod, "_ARTIFACTS_BASE", legacy, raising=False)
+    return {"home": home, "active": active, "legacy": legacy}
+
+
+async def _produce_home_artifact(
+    service: ArtifactService, producer: str, inputs: Path, *, job_id: str = "job-1", revision: int = 2
+) -> Artifact:
+    if producer == "diff":
+        return await service.store_diff_snapshot(job_id, [])
+    if producer == "summary":
+        return await service.store_session_summary(job_id, revision, '{"summary": "updated"}')
+    if producer == "workspace":
+        source = inputs / ".codeplane" / "artifacts"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "report.json").write_text(f'{{"revision": {revision}}}', encoding="utf-8")
+        return (await service.collect_from_workspace(job_id, str(inputs)))[0]
+    if producer == "session_document":
+        source = inputs / "session-state" / "sdk-1"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "note.md").write_text(f"# Updated note {revision} — café", encoding="utf-8")
+        return (await service.collect_from_session_storage(job_id, "sdk-1", config_dir=inputs))[0]
+    if producer == "session_log":
+        return await service.upsert_session_log(
+            job_id,
+            {"session_number": revision, "original_task": "new task", "changed_files": [f"file-{revision}.py"]},
+            slug="safe-name",
+        )
+    if producer == "agent_log":
+        return await service.store_log_artifact(job_id, [{"message": f"updated {revision} — café"}], slug="safe-name")
+    if producer == "telemetry":
+        return await service.store_telemetry_report(job_id, {"tokens": revision}, slug="safe-name")
+    if producer == "plan":
+        result = await service.store_agent_plan(job_id, [{"step": f"updated {revision}"}], slug="safe-name")
+    elif producer == "approvals":
+        result = await service.store_approval_history(job_id, [{"id": f"approval-{revision}"}], slug="safe-name")
+    else:
+        raise AssertionError(f"Unknown producer: {producer}")
+    assert result is not None
+    return result
+
+
+def _existing_home_artifact(producer: str, root: Path) -> Artifact:
+    kind, name = {
+        "workspace": (ArtifactType.custom, "report.json"),
+        "session_document": (ArtifactType.document, "note.md"),
+        "session_log": (ArtifactType.session_log, "job-session-log.json"),
+        "agent_log": (ArtifactType.agent_log, "job-agent.log"),
+        "telemetry": (ArtifactType.telemetry_report, "job-telemetry.json"),
+        "plan": (ArtifactType.agent_plan, "job-plan.json"),
+        "approvals": (ArtifactType.approval_history, "job-approvals.json"),
+    }[producer]
+    path = root / "job-1" / f"art-existing-{name}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "original_task": "original task",
+                "sessions": [{"session_number": 1, "changed_files": ["first.py"], "transcript_turns": ["first turn"]}],
+                "all_changed_files": ["first.py"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return _make_artifact(artifact_id="art-existing", job_id="job-1", name=name, art_type=kind, disk_path=str(path))
+
+
+class TestArtifactHomeIsolation:
+    @pytest.mark.parametrize("producer", _HOME_PRODUCERS)
+    @pytest.mark.parametrize("configured", [True, False], ids=["configured", "default"])
+    async def test_all_new_producers_use_selected_home(
+        self, producer, configured, artifact_homes, artifact_service, tmp_path, monkeypatch
+    ):
+        if not configured:
+            monkeypatch.delenv("CODEPLANE_HOME")
+        expected = artifact_homes["active" if configured else "legacy"]
+        artifact = await _produce_home_artifact(artifact_service, producer, tmp_path / "inputs")
+        path = Path(artifact.disk_path)
+        assert path.resolve().is_relative_to(expected.resolve())
+        assert path.parent.name == "job-1"
+        assert path.name.startswith(f"{artifact.id}-")
+        assert artifact.size_bytes == path.stat().st_size
+        if configured:
+            assert list(artifact_homes["legacy"].rglob("*")) == []
+
+    @pytest.mark.parametrize("producer", _HOME_UPSERTS)
+    @pytest.mark.parametrize("configured", [True, False], ids=["configured", "default"])
+    async def test_in_root_updates_keep_id_and_path(
+        self, producer, configured, artifact_homes, artifact_service, mock_repo, tmp_path, monkeypatch
+    ):
+        if not configured:
+            monkeypatch.delenv("CODEPLANE_HOME")
+        root = artifact_homes["active" if configured else "legacy"]
+        existing = _existing_home_artifact(producer, root)
+        old_path = existing.disk_path
+        before = Path(old_path).read_bytes()
+        mock_repo.list_for_job.return_value = [existing]
+        result = await _produce_home_artifact(artifact_service, producer, tmp_path / "inputs")
+        assert result.id == "art-existing"
+        assert Path(result.disk_path) == Path(old_path)
+        assert Path(old_path).read_bytes() != before
+        assert result.size_bytes == Path(old_path).stat().st_size
+        mock_repo.create.assert_not_awaited()
+
+    @pytest.mark.parametrize("producer", _HOME_UPSERTS)
+    async def test_explicit_legacy_upsert_writes_new_content_without_touching_original(
+        self, producer, artifact_homes, artifact_service, mock_repo, tmp_path
+    ):
+        existing = _existing_home_artifact(producer, artifact_homes["legacy"])
+        original = Path(existing.disk_path)
+        before = original.read_bytes()
+        mock_repo.list_for_job.return_value = [existing]
+        result = await _produce_home_artifact(artifact_service, producer, tmp_path / "inputs")
+        assert original.read_bytes() == before, "Explicit update must leave the legacy original untouched"
+        assert result.id == "art-existing"
+        assert Path(result.disk_path).resolve().is_relative_to(artifact_homes["active"].resolve())
+        assert Path(result.disk_path).read_bytes() != before
+        assert result.size_bytes == Path(result.disk_path).stat().st_size
+        mock_repo.create.assert_not_awaited()
+        if producer == "session_log":
+            content = json.loads(Path(result.disk_path).read_text(encoding="utf-8"))
+            assert [s["session_number"] for s in content["sessions"]] == [1, 2]
+            assert content["sessions"][0]["transcript_turns"] == ["first turn"]
+            assert content["original_task"] == "original task"
+            assert content["all_changed_files"] == ["file-2.py", "first.py"]
+
+    @pytest.mark.parametrize("producer", _HOME_UPSERTS)
+    @pytest.mark.parametrize("bad_path", ["arbitrary", "traversal", "symlink", "wrong_job", "wrong_artifact"])
+    async def test_rejects_out_of_policy_existing_paths_before_any_write(
+        self, producer, bad_path, artifact_homes, artifact_service, mock_repo, tmp_path
+    ):
+        existing = _existing_home_artifact(producer, artifact_homes["legacy"])
+        outside = tmp_path / "outside" / Path(existing.disk_path).name
+        outside.parent.mkdir()
+        outside.write_bytes(Path(existing.disk_path).read_bytes())
+        if bad_path == "arbitrary":
+            existing.disk_path = str(outside)
+        elif bad_path == "traversal":
+            existing.disk_path = str(artifact_homes["legacy"] / ".." / ".." / ".." / "outside" / outside.name)
+        elif bad_path == "symlink":
+            link = Path(existing.disk_path)
+            link.unlink()
+            link.parent.rmdir()
+            _link_home_directory(link.parent, outside.parent)
+        elif bad_path == "wrong_job":
+            existing.job_id = "other-job"
+        else:
+            existing.id = "art-other"
+        mock_repo.list_for_job.return_value = [existing]
+        before = outside.read_bytes()
+        with pytest.raises(ValueError):
+            await _produce_home_artifact(artifact_service, producer, tmp_path / "inputs")
+        assert outside.read_bytes() == before
+        assert not artifact_homes["active"].exists()
+        mock_repo.create.assert_not_awaited()
+        mock_repo.update_size_bytes.assert_not_awaited()
+
+    @pytest.mark.parametrize("producer", _HOME_PRODUCERS)
+    @pytest.mark.parametrize(
+        "bad_job", ["../escape", "absolute", "symlink"] + ([r"..\escape"] if os.name == "nt" else [])
+    )
+    async def test_new_destinations_reject_job_traversal_and_symlink_escape(
+        self, producer, bad_job, artifact_homes, artifact_service, mock_repo, tmp_path
+    ):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        job_id = bad_job
+        if bad_job == "absolute":
+            job_id = str(outside)
+        elif bad_job == "symlink":
+            artifact_homes["active"].mkdir(parents=True)
+            _link_home_directory(artifact_homes["active"] / "job-link", outside)
+            # Also keep old-product red runs wholly inside owned test storage.
+            _link_home_directory(artifact_homes["legacy"] / "job-link", outside)
+            job_id = "job-link"
+        with pytest.raises(ValueError):
+            await _produce_home_artifact(artifact_service, producer, tmp_path / "inputs", job_id=job_id)
+        assert list(outside.iterdir()) == []
+        mock_repo.create.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "filename", ["report.json"] + (["report:detail.json", r"report\detail.json"] if os.name != "nt" else [])
+    )
+    async def test_workspace_preserves_valid_host_basenames(self, filename, artifact_homes, artifact_service, tmp_path):
+        source = tmp_path / "workspace" / ".codeplane" / "artifacts"
+        source.mkdir(parents=True)
+        (source / filename).write_text('{"valid": true}', encoding="utf-8")
+        artifacts = await artifact_service.collect_from_workspace("job-1", str(tmp_path / "workspace"))
+        assert len(artifacts) == 1
+        artifact = artifacts[0]
+        assert artifact.name == filename
+        path = Path(artifact.disk_path)
+        assert path.name == f"{artifact.id}-{filename}"
+        assert path.resolve().is_relative_to(artifact_homes["active"].resolve())
+        assert path.read_text(encoding="utf-8") == '{"valid": true}'
+
+    async def test_artifacts_root_symlink_cannot_escape_configured_home(
+        self, artifact_homes, artifact_service, tmp_path
+    ):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        artifact_homes["active"].parent.mkdir(parents=True)
+        _link_home_directory(artifact_homes["active"], outside)
+        with pytest.raises(ValueError):
+            await artifact_service.store_diff_snapshot("job-1", [])
+        assert list(outside.iterdir()) == []
+
+    @pytest.mark.parametrize("selection", ["explicit", "environment", "default"])
+    async def test_session_note_source_precedence(
+        self, selection, artifact_homes, artifact_service, tmp_path, monkeypatch
+    ):
+        roots = {
+            "explicit": tmp_path / "explicit-copilot",
+            "environment": tmp_path / "environment-copilot",
+            "default": artifact_homes["home"] / ".copilot",
+        }
+        for key, root in roots.items():
+            folder = root / "session-state" / "sdk-1"
+            (folder / "files").mkdir(parents=True)
+            (folder / "note.md").write_text(key, encoding="utf-8")
+            (folder / "files" / "note.md").write_text(f"{key} nested", encoding="utf-8")
+        if selection != "default":
+            monkeypatch.setenv("COPILOT_HOME", str(roots["environment"]))
+        result = await artifact_service.collect_from_session_storage(
+            "job-1", "sdk-1", config_dir=roots["explicit"] if selection == "explicit" else None
+        )
+        assert len(result) == 2
+        assert {Path(a.disk_path).read_text(encoding="utf-8") for a in result} == {selection, f"{selection} nested"}
+
+    async def test_listing_legacy_metadata_never_rehomes_files(self, artifact_homes, artifact_service, mock_repo):
+        existing = _existing_home_artifact("telemetry", artifact_homes["legacy"])
+        before = Path(existing.disk_path).read_bytes()
+        mock_repo.list_for_job.return_value = [existing]
+        assert await artifact_service.list_for_job("job-1") == [existing]
+        assert Path(existing.disk_path).read_bytes() == before
+        assert not artifact_homes["active"].exists()
+        mock_repo.update_size_bytes.assert_not_awaited()
+
+    async def test_session_log_merges_only_bounded_historical_snapshots(
+        self, artifact_homes, artifact_service, mock_repo
+    ):
+        existing = _existing_home_artifact("session_log", artifact_homes["legacy"])
+        existing.type = ArtifactType.session_snapshot
+        path = Path(existing.disk_path)
+        path.write_text('{"session_number": 1, "changed_files": ["old.py"], "original_task": "old"}')
+        before = path.read_bytes()
+        mock_repo.list_for_job.return_value = [existing]
+        result = await artifact_service.upsert_session_log("job-1", {"session_number": 2})
+        assert Path(result.disk_path).resolve().is_relative_to(artifact_homes["active"].resolve())
+        assert path.read_bytes() == before
+        content = json.loads(Path(result.disk_path).read_text())
+        assert [s["session_number"] for s in content["sessions"]] == [1, 2]
+        assert content["all_changed_files"] == ["old.py"]
+        assert content["original_task"] == "old"
+
+    async def test_session_log_rejects_unbounded_snapshot_before_reading(
+        self, artifact_homes, artifact_service, mock_repo, tmp_path, monkeypatch
+    ):
+        existing = _existing_home_artifact("session_log", tmp_path / "arbitrary")
+        existing.type = ArtifactType.session_snapshot
+        mock_repo.list_for_job.return_value = [existing]
+        original_read = Path.read_text
+        reads = []
+
+        def record_read(path, *args, **kwargs):
+            reads.append(path)
+            return original_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", record_read)
+        with pytest.raises(ValueError):
+            await artifact_service.upsert_session_log("job-1", {"session_number": 2})
+        assert Path(existing.disk_path) not in reads
+        mock_repo.create.assert_not_awaited()

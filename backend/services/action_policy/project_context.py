@@ -1,8 +1,7 @@
 """Project context — cached project metadata for the action policy monitor.
 
-Built lazily on first gate-tier action.  Reads manifest files (package.json,
-pyproject.toml, etc.).  Cached for the job lifetime; invalidated when the trail
-shows the agent modified a manifest file.
+Current context may be built lazily, but only an explicit pre-execution capture
+can establish an initial structural-approval baseline.
 """
 
 from __future__ import annotations
@@ -71,6 +70,7 @@ class ProjectContext:
         self._initial_dependencies: frozenset[str] | None = None
         self._initial_hosts: frozenset[str] | None = None
         self._initial_services: frozenset[str] | None = None
+        self._initial_workspace: tuple[str, int, int] | None = None
 
     @property
     def built(self) -> bool:
@@ -100,12 +100,6 @@ class ProjectContext:
 
         self._built = True
 
-        # Freeze the initial snapshot on first build only
-        if self._initial_dependencies is None:
-            self._initial_dependencies = frozenset(self.dependencies)
-            self._initial_hosts = frozenset(self.configured_hosts)
-            self._initial_services = frozenset(self.services)
-
         log.info(
             "project_context_built",
             dependencies=len(self.dependencies),
@@ -114,13 +108,38 @@ class ProjectContext:
             has_narrative=bool(self.narrative),
         )
 
+    async def capture_initial(self) -> None:
+        """Called only by pre-execution setup, never by lazy monitor evaluation."""
+        if self._initial_workspace is not None:
+            return
+        root = Path(self.worktree).resolve(strict=True)
+        before = root.stat()
+        await self.build()
+        after = root.stat()
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise RuntimeError("Monitor workspace changed during baseline capture")
+        self._initial_dependencies = frozenset(self.dependencies)
+        self._initial_hosts = frozenset(self.configured_hosts)
+        self._initial_services = frozenset(self.services)
+        self._initial_workspace = (str(root), after.st_dev, after.st_ino)
+
+    def matches_initial_workspace(self, workspace: str) -> bool:
+        if self._initial_workspace is None:
+            return False
+        try:
+            root = Path(workspace).resolve(strict=True)
+            current = root.stat()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return (str(root), current.st_dev, current.st_ino) == self._initial_workspace
+
     def has_dependency(self, name: str) -> bool:
         """Check if a dependency name (case-insensitive) is in the project."""
         return name.lower() in self.dependencies
 
     def has_initial_dependency(self, name: str) -> bool:
         """Check against the pre-agent snapshot only (safe for auto-approval)."""
-        if self._initial_dependencies is None:
+        if self._initial_dependencies is None or not self.matches_initial_workspace(self.worktree):
             return False
         return name.lower() in self._initial_dependencies
 
@@ -130,13 +149,15 @@ class ProjectContext:
 
     def has_initial_host(self, host: str) -> bool:
         """Check against the pre-agent snapshot only (safe for auto-approval)."""
-        if self._initial_hosts is None:
+        if self._initial_hosts is None or not self.matches_initial_workspace(self.worktree):
             return False
         return host.lower() in self._initial_hosts
 
     @property
     def initial_services(self) -> frozenset[str]:
         """Return pre-agent service names (safe for auto-approval)."""
+        if not self.matches_initial_workspace(self.worktree):
+            return frozenset()
         return self._initial_services or frozenset()
 
     def invalidate(self) -> None:

@@ -95,14 +95,15 @@ class TestNarratorCompleter:
         )
 
     @pytest.mark.asyncio()
-    async def test_complete_returns_empty_on_none(self):
-        from backend.services.adapters.agent_adapter import CompletionResult
+    async def test_complete_reports_empty_response(self):
+        from backend.services.adapters.agent_adapter import CompletionResult, UtilityCompletionError
 
         adapter = AsyncMock()
         adapter.complete.return_value = CompletionResult(text=None, input_tokens=10, output_tokens=0, model="test")
         completer = NarratorCompleter(adapter, model="test")
-        result = await completer.complete("prompt")
-        assert result == ""
+        with pytest.raises(UtilityCompletionError, match="Narration returned no text") as failure:
+            await completer.complete("prompt")
+        assert failure.value.reason == "empty_response"
 
     @pytest.mark.asyncio()
     async def test_close_is_noop(self):

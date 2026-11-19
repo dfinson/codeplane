@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // Mock API client
@@ -15,6 +15,9 @@ vi.mock("../../api/client", () => ({
   suggestNames: vi.fn(),
   fetchModelComparison: vi.fn().mockResolvedValue({ models: [] }),
   warmUtilitySession: vi.fn().mockResolvedValue(undefined),
+  fetchRecipes: vi.fn(),
+  fetchRecipeRevisions: vi.fn(),
+  resolveDefaultRecipe: vi.fn(),
 }));
 
 // Mock sonner toast
@@ -66,9 +69,29 @@ import {
   fetchSettings,
   fetchPolicySettings,
   suggestNames,
+  fetchRecipes,
+  fetchRecipeRevisions,
+  resolveDefaultRecipe,
 } from "../../api/client";
+import type { RecipeRevision } from "../../api/types";
 import { JobCreationScreen } from "../JobCreationScreen";
 import { useStore, _resetSdkInitForTesting } from "../../store";
+
+const defaultRevision: RecipeRevision = {
+  id: "configured-standard", definitionId: "configured", revision: 1,
+  definition: {
+    name: "Configured implementation", kind: "recipe", description: "",
+    entrySteps: ["implement"],
+    parameters: { request: { type: "string", description: "", required: true } },
+    steps: [{
+      id: "implement", title: "Implement", instructions: "Follow the exact request.",
+      runner: { kind: "agent", maxTurns: 1, session: "new" },
+      outputs: { result: { type: "string", description: "" } },
+      routes: { succeeded: { terminal: "succeeded" }, failed: { terminal: "failed" } },
+    }],
+  },
+  blocks: {}, checksum: "a".repeat(64), publishedAt: "2026-11-16T09:00:00Z",
+};
 
 async function renderScreen(route = "/jobs/new") {
   // Simulate App.tsx calling initSdksAndModels on mount, so the store is
@@ -87,9 +110,11 @@ async function renderScreen(route = "/jobs/new") {
   });
 }
 
-function selectRepository() {
-  fireEvent.change(screen.getByTestId("combo-Repository"), {
-    target: { value: "/repos/my-app" },
+async function selectRepository() {
+  await act(async () => {
+    fireEvent.change(screen.getByTestId("combo-Repository"), {
+      target: { value: "/repos/my-app" },
+    });
   });
 }
 
@@ -101,6 +126,9 @@ vi.mock("react-router-dom", async () => {
 
 beforeEach(() => {
   vi.mocked(createJob).mockReset();
+  vi.mocked(fetchRecipes).mockReset().mockResolvedValue({ items: [], nextCursor: null, highWater: 0 });
+  vi.mocked(fetchRecipeRevisions).mockReset().mockResolvedValue({ items: [], nextCursor: null, highWater: 0 });
+  vi.mocked(resolveDefaultRecipe).mockReset().mockResolvedValue(defaultRevision);
   vi.mocked(fetchProjects).mockResolvedValue({ items: [{ id: "p1", name: "My Project", repoPaths: ["/repos/my-app"] }] } as any);
   vi.mocked(fetchModels).mockResolvedValue([
     { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
@@ -199,20 +227,20 @@ describe("JobCreationScreen", () => {
 
   it("renders Create Job button", async () => {
     await renderScreen();
-    selectRepository();
+    await selectRepository();
     expect(screen.getByText("Create Job")).toBeInTheDocument();
   });
 
   it("renders permission mode buttons", async () => {
     await renderScreen();
-    selectRepository();
+    await selectRepository();
     expect(screen.getByText("Autonomous")).toBeInTheDocument();
     expect(screen.getByText("Supervised")).toBeInTheDocument();
   });
 
   it("renders model selection in the main form", async () => {
     await renderScreen();
-    selectRepository();
+    await selectRepository();
     expect(screen.getByText("Model")).toBeInTheDocument();
     expect(screen.queryByText("Advanced options")).toBeInTheDocument();
   });
@@ -220,7 +248,7 @@ describe("JobCreationScreen", () => {
   it("submits a job", async () => {
     vi.mocked(createJob).mockResolvedValueOnce({ id: "j-new" } as any);
     await renderScreen();
-    selectRepository();
+    await selectRepository();
 
     const textarea = screen.getByTestId("prompt-input");
     fireEvent.change(textarea, { target: { value: "Fix the bug" } });
@@ -228,15 +256,67 @@ describe("JobCreationScreen", () => {
     fireEvent.click(screen.getByText("Create Job"));
 
     await waitFor(() => {
-      expect(createJob).toHaveBeenCalled();
+      expect(createJob).toHaveBeenCalledWith(expect.objectContaining({
+        recipe: { revisionId: "configured-standard", parameters: {} },
+      }));
     });
+  });
+
+  it("keeps typed custom inputs and the exact selected published revision", async () => {
+    const custom: RecipeRevision = {
+      ...defaultRevision, id: "custom-7", definitionId: "custom", revision: 7,
+      definition: { ...defaultRevision.definition, name: "Typed recipe", parameters: {
+        count: { type: "integer", description: "Number of checks", required: true },
+      } },
+    };
+    vi.mocked(fetchRecipes).mockResolvedValue({
+      items: [{ id: "custom", version: 8, definition: custom.definition, createdAt: custom.publishedAt, updatedAt: custom.publishedAt }],
+      nextCursor: null, highWater: 1,
+    });
+    vi.mocked(fetchRecipeRevisions).mockResolvedValue({ items: [custom], nextCursor: null, highWater: 1 });
+    vi.mocked(createJob).mockResolvedValueOnce({ id: "custom-job" } as any);
+    await renderScreen();
+    await selectRepository();
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Run typed work" } });
+    fireEvent.change(screen.getByLabelText("Launch recipe definition"), { target: { value: "custom" } });
+    await screen.findByRole("option", { name: /Revision 7/ });
+    fireEvent.change(screen.getByLabelText("Launch recipe revision"), { target: { value: "custom-7" } });
+    expect(screen.getByRole("button", { name: "Create Job" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Recipe input count"), { target: { value: '"3"' } });
+    expect(screen.getByRole("button", { name: "Create Job" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Recipe input count"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Job" }));
+    await waitFor(() => expect(createJob).toHaveBeenCalledWith(expect.objectContaining({
+      recipe: { revisionId: "custom-7", parameters: { count: 3 } },
+    })));
+  });
+
+  it("does not replace the latest mode's pin with a delayed Plan First resolution", async () => {
+    let finishPlan: (value: RecipeRevision) => void = () => { throw new Error("No pending resolution"); };
+    vi.mocked(resolveDefaultRecipe).mockImplementation((planFirst) => planFirst
+      ? new Promise((resolve) => { finishPlan = resolve; })
+      : Promise.resolve(defaultRevision));
+    await renderScreen();
+    await selectRepository();
+    fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Implement" } });
+    fireEvent.click(screen.getByText("Plan First", { selector: "button" }));
+    expect(screen.getByRole("button", { name: "Create Job" })).toBeDisabled();
+    fireEvent.click(screen.getByText("Standard", { selector: "button" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create Job" })).toBeEnabled());
+    await act(async () => { finishPlan({ ...defaultRevision, id: "old-plan", definition: { ...defaultRevision.definition, name: "Old plan" } }); });
+    expect(screen.queryByText(/Old plan/)).not.toBeInTheDocument();
+    vi.mocked(createJob).mockResolvedValueOnce({ id: "current-mode-job" } as any);
+    fireEvent.click(screen.getByRole("button", { name: "Create Job" }));
+    await waitFor(() => expect(createJob).toHaveBeenCalledWith(expect.objectContaining({
+      recipe: { revisionId: "configured-standard", parameters: {} },
+    })));
   });
 
   it("uses the configured preset by default", async () => {
     vi.mocked(createJob).mockResolvedValueOnce({ id: "j-auto" } as any);
 
     await renderScreen();
-    selectRepository();
+    await selectRepository();
 
     fireEvent.change(screen.getByTestId("prompt-input"), { target: { value: "Ship it" } });
     fireEvent.click(screen.getByText("Create Job"));
@@ -252,7 +332,7 @@ describe("JobCreationScreen", () => {
     vi.mocked(createJob).mockResolvedValueOnce({ id: "j-model" } as any);
 
     await renderScreen();
-    selectRepository();
+    await selectRepository();
 
     expect(screen.getByTestId("combo-Model")).toHaveValue("gpt-5.4");
 

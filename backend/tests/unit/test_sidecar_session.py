@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections import namedtuple
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -62,6 +63,128 @@ class _FakeSidecarConfig:
 # ===================================================================
 
 
+class TestUtilityModelContract:
+    async def test_text_provider_does_not_need_execution_methods(self) -> None:
+        execution_adapter = _mock_adapter("wrong provider")
+        provider = SimpleNamespace(
+            complete=AsyncMock(
+                return_value=_CompletionResult(text="selected provider", input_tokens=1, output_tokens=1, cost_usd=0),
+            )
+        )
+        manager = SidecarSessionManager(
+            execution_adapter,
+            model="utility-model",
+            completion_provider=provider,
+            pool_size=0,
+        )
+        assert await manager.complete("Request", system_prompt="Text only") == "selected provider"
+        assert await manager.open("job", "named").complete("Another request") == "selected provider"
+        assert provider.complete.await_count == 2
+        execution_adapter.complete.assert_not_awaited()
+        execution_adapter.create_session.assert_not_called()
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["pooled", "custom", "ephemeral", "named", "warm"])
+    async def test_configured_model_reaches_every_wrapper(self, path: str) -> None:
+        adapter = _mock_adapter("response")
+        manager = SidecarSessionManager(adapter, model="configured-utility")
+        if path == "pooled":
+            await manager.complete("prompt")
+        elif path == "custom":
+            await manager.complete("prompt", system_prompt="Discussion only")
+        elif path == "ephemeral":
+            await manager.make_ephemeral().complete("prompt")
+        elif path == "named":
+            await manager.open("job-model", "utility").complete("prompt")
+        else:
+            await manager.open("job-model", "utility", token=manager.warm()).complete("prompt")
+        assert adapter.complete.call_args.kwargs["model"] == "configured-utility"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("override", ["explicit-model", "  unavailable/override  "])
+    async def test_explicit_model_wins_without_changing_pooled_default(self, override: str) -> None:
+        adapter = _mock_adapter("response")
+        manager = SidecarSessionManager(adapter, model="configured-utility")
+        await manager.make_ephemeral(model=override).complete("custom")
+        assert adapter.complete.call_args.kwargs["model"] == override
+        await manager.complete("generic")
+        assert adapter.complete.call_args.kwargs["model"] == "configured-utility"
+        assert manager.model == "configured-utility"
+
+    @pytest.mark.asyncio
+    async def test_explicit_unavailable_model_reaches_sdk_and_failure_is_not_replaced(self, monkeypatch) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.copilot_adapter import CopilotAdapter
+
+        configured = "gpt-5-mini"
+        provider_error = ValueError(f"Configured model {configured!r} is unavailable in this Copilot catalog")
+        client = MagicMock()
+        client.create_session = AsyncMock(side_effect=provider_error)
+        client.stop = AsyncMock()
+        client.force_stop = AsyncMock()
+        monkeypatch.setattr("backend.services.copilot_adapter._adapter.create_copilot_client", lambda: client)
+        adapter = CopilotAdapter()
+        manager = SidecarSessionManager(adapter, model=configured)
+        with pytest.raises(UtilityCompletionError) as failure:
+            await manager.complete("Return a context brief")
+        assert client.create_session.await_count == 1
+        assert client.create_session.call_args.kwargs["model"] == configured
+        assert failure.value.__cause__ is provider_error
+        assert manager.model == configured
+        assert not adapter._clients
+
+
+class TestRuntimeContract:
+    @pytest.mark.asyncio
+    async def test_custom_context_is_system_only_and_not_pooled(self) -> None:
+        adapter = _mock_adapter("discussion")
+        manager = _make_manager(adapter, pool_size=1)
+        manager._fill_pool()
+        generic = manager._pool[0]
+        original_complete = adapter.complete
+
+        async def complete(prompt, **kwargs):
+            manager._pool.clear()
+            return await original_complete(prompt, **kwargs)
+
+        adapter.complete = complete
+        error = None
+        try:
+            result = await manager.complete("user: hello", system_prompt="Discussion only")
+        except TypeError as exc:
+            error = exc
+            result = None
+        assert error is None, "Manager must accept a per-call system_prompt"
+        assert result == "discussion"
+        call = original_complete.call_args
+        assert call.args == ("user: hello",)
+        assert call.kwargs["system_message"] == "Discussion only"
+        assert call.kwargs["excluded_tools"] == ["*"]
+        assert not manager._pool, "A custom wrapper cannot refill the generic pool"
+        adapter.complete = original_complete
+        await manager.complete("title please")
+        assert original_complete.call_args.kwargs["system_message"] == _DEFAULT_SYSTEM_PROMPT
+        assert generic._system_prompt == _DEFAULT_SYSTEM_PROMPT
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure", [OSError("provider unavailable"), RuntimeError("provider failed"), TimeoutError()]
+    )
+    async def test_provider_failure_propagates_as_typed_error(self, failure: Exception) -> None:
+        adapter = _mock_adapter()
+        adapter.complete.side_effect = failure
+        manager = _make_manager(adapter)
+        error = None
+        try:
+            await manager.complete("title please")
+        except Exception as exc:
+            error = exc
+        assert error is not None, "An empty string is not a successful provider response"
+        assert type(error).__name__ == "UtilityCompletionError"
+        assert manager.get_metrics()["global"]["totalCalls"] == 0
+
+
 class TestSidecarSession:
     @pytest.mark.asyncio
     async def test_first_call_prepends_system_prompt(self) -> None:
@@ -88,9 +211,10 @@ class TestSidecarSession:
         adapter = _mock_adapter()
         session = SidecarSession(adapter, system_prompt="Custom prompt.")
         await session.complete("hello")
-        call_args = adapter.complete.call_args[0][0]
-        assert "Custom prompt." in call_args
-        assert _DEFAULT_SYSTEM_PROMPT not in call_args
+        call = adapter.complete.call_args
+        assert call.args == ("hello",)
+        assert call.kwargs["system_message"] == "Custom prompt."
+        assert call.kwargs["excluded_tools"] == ["*"]
 
     @pytest.mark.asyncio
     async def test_metrics_updated(self) -> None:
@@ -100,7 +224,7 @@ class TestSidecarSession:
         assert session.call_count == 1
         assert session.total_input_tokens == 10
         assert session.total_output_tokens == 5
-        assert session.total_cost_usd == 0.001
+        assert session.total_cost_usd is None  # The legacy mock supplies no typed currency evidence.
         assert session.last_call_at is not None
         assert session.total_latency_ms >= 0
 
@@ -149,7 +273,7 @@ class TestSidecarSession:
         assert session.total_latency_ms == 0.0
         assert session.total_input_tokens == 0
         assert session.total_output_tokens == 0
-        assert session.total_cost_usd == 0.0
+        assert session.total_cost_usd is None
         assert session.last_call_at is None
 
 

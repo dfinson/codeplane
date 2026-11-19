@@ -1,0 +1,37 @@
+# Derived from traceforge-toolkit 0.1.5. MIT license: backend/compat/traceforge.LICENSE.
+"""OpenHands preprocessor — compound action/observation discriminator."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from backend.compat.traceformats.preprocessors.registry import register_preprocessor
+
+
+@register_preprocessor("openhands")
+def preprocess_openhands(obj: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize OpenHands compound discriminator (legacy or SDK events).
+
+    OpenHands 0.x used an ``action``/``observation`` compound discriminator.
+    OpenHands 1.x SDK persistence uses ``kind`` plus ``source``/``tool_name``.
+    Synthesize the YAML ``_event_type`` discriminator for both formats while
+    preserving the native nested payload for dot-path extraction.
+    """
+    kind = obj.get("kind")
+    if kind in {"SystemPromptEvent", "ActionEvent", "ObservationEvent", "MessageEvent"}:
+        normalized = dict(obj)
+        if kind in {"ActionEvent", "ObservationEvent"}:
+            normalized["_event_type"] = f"{kind}.{obj.get('tool_name', 'unknown')}"
+        elif kind == "MessageEvent":
+            normalized["_event_type"] = f"MessageEvent.{obj.get('source', 'unknown')}"
+        else:
+            normalized["_event_type"] = kind
+        return [normalized]
+
+    if "action" in obj:
+        return [{**obj, "_event_type": obj["action"]}]
+    elif "observation" in obj:
+        normalized = dict(obj)
+        normalized["_event_type"] = f"observation.{normalized['observation']}"
+        return [normalized]
+    return [obj]

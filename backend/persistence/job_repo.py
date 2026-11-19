@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 
 from backend.models.db import DiffSnapshotRow, JobRow
-from backend.models.domain import GitMergeOutcome, Job, JobMode, JobNotFoundError, JobState, Preset, Resolution
+from backend.models.domain import (
+    GitMergeOutcome,
+    Job,
+    JobMode,
+    JobNotFoundError,
+    JobState,
+    Preset,
+    Resolution,
+    StateConflictError,
+)
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
     import builtins
     from datetime import datetime
+
+    from backend.models.execution_contracts import ExecutionAdmission
 
 
 def _safe_job_state(raw: str) -> JobState:
@@ -26,8 +38,44 @@ def _safe_job_state(raw: str) -> JobState:
         return JobState.queued
 
 
+@dataclass(frozen=True)
+class IngestCheckpointState:
+    job: Job
+    encoded_checkpoint: str | None
+
+    @property
+    def checkpoint(self) -> dict[str, Any] | None:
+        import json
+
+        return json.loads(self.encoded_checkpoint) if self.encoded_checkpoint is not None else None
+
+
 class JobRepository(BaseRepository):
     """Database access for job records."""
+
+    async def declare_initial_legacy_admission(self, job_id: str) -> ExecutionAdmission:
+        """Join the caller's new-Job transaction without owning its commit."""
+        import uuid
+
+        from backend.models.execution_contracts import ExecutionAdmission, LegacyStartIntent
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+
+        job = await self.get(job_id)
+        if job is None:
+            raise JobNotFoundError(f"Job {job_id!r} is missing from its admission transaction")
+        admission = ExecutionAdmission(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            origin="creation",
+            start_intent=LegacyStartIntent(
+                instruction=job.prompt,
+                dispatch_prompt=job.prompt,
+                target_session_number=job.session_count,
+            )
+            if job.state in {JobState.preparing, JobState.queued}
+            else None,
+        )
+        return await ExecutionAdmissionRepository(self._session).declare_legacy(admission, expected_current=None)
 
     async def _update_row(self, job_id: str, **updates: Any) -> None:
         """Fetch a job row by ID and apply field updates with optimistic locking.
@@ -48,6 +96,52 @@ class JobRepository(BaseRepository):
     async def list_ids(self) -> set[str]:
         result = await self._session.execute(select(JobRow.id))
         return set(result.scalars().all())
+
+    async def get_ingest_checkpoint(self, job_id: str) -> dict[str, Any] | None:
+        import json
+
+        result = await self._session.execute(select(JobRow.ingest_checkpoint).where(JobRow.id == job_id))
+        value = result.scalar_one_or_none()
+        return json.loads(value) if value else None
+
+    async def update_ingest_checkpoint(self, job_id: str, checkpoint: dict[str, Any], emitted: int) -> None:
+        import json
+
+        await self._update_row(job_id, ingest_checkpoint=json.dumps(checkpoint, sort_keys=True), tail_offset=emitted)
+
+    async def get_ingest_state(self, job_id: str) -> IngestCheckpointState:
+        result = await self._session.execute(
+            select(JobRow).where(JobRow.id == job_id).execution_options(populate_existing=True)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise JobNotFoundError(f"Native Job {job_id!r} no longer exists")
+        return IngestCheckpointState(self._to_domain(row), row.ingest_checkpoint)
+
+    async def compare_and_set_ingest_checkpoint(
+        self, expected: IngestCheckpointState, checkpoint: dict[str, Any], decoded: int
+    ) -> IngestCheckpointState:
+        """Join the caller's transaction; never overwrite another source or cursor."""
+        import json
+
+        encoded = json.dumps(checkpoint, sort_keys=True, allow_nan=False)
+        result = await self._session.execute(
+            update(JobRow)
+            .where(
+                JobRow.id == expected.job.id,
+                JobRow.source == expected.job.source,
+                JobRow.external_session_id == expected.job.external_session_id,
+                JobRow.created_at == expected.job.created_at,
+                JobRow.ingest_checkpoint == expected.encoded_checkpoint,
+                JobRow.tail_offset == expected.job.tail_offset,
+            )
+            .values(ingest_checkpoint=encoded, tail_offset=decoded, version=JobRow.version + 1)
+            .returning(JobRow.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.scalar_one_or_none() is None:
+            raise StateConflictError("Native checkpoint or source ownership changed concurrently")
+        return IngestCheckpointState(replace(expected.job, tail_offset=decoded), encoded)
 
     @staticmethod
     def _to_domain(row: JobRow) -> Job:
@@ -88,6 +182,8 @@ class JobRepository(BaseRepository):
             parent_job_id=row.parent_job_id,
             source=row.source or "managed",
             external_session_id=row.external_session_id,
+            integration_binding_id=row.integration_binding_id,
+            observation_only=row.observation_only,
             tail_offset=row.tail_offset or 0,
             mode=JobMode(row.mode) if row.mode else JobMode.standard,
             artifact_collection_status=row.artifact_collection_status or "pending",
@@ -134,6 +230,8 @@ class JobRepository(BaseRepository):
             parent_job_id=job.parent_job_id,
             source=job.source,
             external_session_id=job.external_session_id,
+            integration_binding_id=job.integration_binding_id,
+            observation_only=job.observation_only,
             tail_offset=job.tail_offset,
             mode=job.mode,
             artifact_collection_status=job.artifact_collection_status,
@@ -157,6 +255,8 @@ class JobRepository(BaseRepository):
         row = result.scalar_one_or_none()
         if row is None:
             raise JobNotFoundError(f"Job {job_id!r} not found")
+        if row.observation_only:
+            return None
         if row.state not in {
             JobState.review.value,
             JobState.completed.value,
@@ -202,6 +302,7 @@ class JobRepository(BaseRepository):
         """Return terminal jobs without a completed current-session collection."""
         stmt = (
             select(JobRow.id)
+            .where(JobRow.observation_only.is_(False))
             .where(
                 JobRow.state.in_(
                     [
@@ -391,6 +492,24 @@ class JobRepository(BaseRepository):
     async def update_worktree(self, job_id: str, worktree_path: str, branch: str) -> None:
         """Update the worktree path and branch after workspace setup."""
         await self._update_row(job_id, worktree_path=worktree_path, branch=branch)
+
+    async def finish_workspace_setup(self, job_id: str, worktree_path: str, branch: str, updated_at: datetime) -> bool:
+        from sqlalchemy import update
+
+        result = await self._session.execute(
+            update(JobRow)
+            .where(JobRow.id == job_id, JobRow.state == JobState.preparing)
+            .values(
+                worktree_path=worktree_path,
+                branch=branch,
+                state=JobState.queued,
+                updated_at=updated_at,
+                version=JobRow.version + 1,
+            )
+            .returning(JobRow.id)
+        )
+        await self._session.flush()
+        return result.scalar_one_or_none() is not None
 
     async def update_failure_reason(self, job_id: str, reason: str) -> None:
         """Set the failure reason on a job row."""

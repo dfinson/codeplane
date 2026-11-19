@@ -6,11 +6,17 @@ always up-to-date.  No timers, no flush intervals.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
+from backend.models.currency import event_usage_json
+from backend.models.db import EventRow
+from backend.models.usage import UsageAmount
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -19,6 +25,37 @@ if TYPE_CHECKING:
 
 class TelemetrySummaryRepository(BaseRepository):
     """Event-driven upserts into ``job_telemetry_summary``."""
+
+    async def batch_cost_usage(self, job_ids: list[str], *, all_roles: bool = False) -> dict[str, list[UsageAmount]]:
+        """Read source-typed primary cost evidence without relabeling historical totals."""
+        if not job_ids:
+            return {}
+        rows = await self._session.stream(
+            select(EventRow.job_id, EventRow.event_id, EventRow.kind, EventRow.payload, EventRow.event_metadata)
+            .where(
+                EventRow.job_id.in_(job_ids),
+                EventRow.kind.in_(("telemetry.usage", "execution.native.usage", "utility.completion.completed")),
+            )
+            .order_by(EventRow.id)
+            .execution_options(yield_per=100)
+        )
+        totals: dict[str, dict[str, UsageAmount]] = {}
+        async for row in rows:
+            assert row.job_id is not None  # The query selects only the supplied Job identities.
+            qualified = event_usage_json(row.kind, row.job_id, row.payload, row.event_metadata)
+            for entry in json.loads(qualified):
+                usage = UsageAmount.model_validate(entry)
+                if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or (
+                    not all_roles and usage.role != "primary"
+                ):
+                    continue
+                key = usage.model_dump_json(exclude={"amount"})
+                by_source = totals.setdefault(row.job_id, {})
+                previous = by_source.get(key)
+                by_source[key] = usage.model_copy(
+                    update={"amount": (previous.amount if previous is not None else Decimal(0)) + usage.amount}
+                )
+        return {job_id: list(entries.values()) for job_id, entries in totals.items()}
 
     async def init_job(
         self,
@@ -118,6 +155,8 @@ class TelemetrySummaryRepository(BaseRepository):
                     total_cost_usd        = total_cost_usd + :total_cost_usd,
                     premium_requests      = premium_requests + :premium_requests,
                     llm_call_count        = llm_call_count + :llm_call_count,
+                    derived_currency_qualified = CASE WHEN :llm_call_count > 0
+                        THEN 0 ELSE derived_currency_qualified END,
                     total_llm_duration_ms = total_llm_duration_ms + :total_llm_duration_ms,
                     tool_call_count       = tool_call_count + :tool_call_count,
                     tool_failure_count    = tool_failure_count + :tool_failure_count,
@@ -262,6 +301,7 @@ class TelemetrySummaryRepository(BaseRepository):
         cost_second_half_usd: float = 0.0,
         diff_lines_added: int = 0,
         diff_lines_removed: int = 0,
+        derived_currency_qualified: bool = False,
     ) -> None:
         """Set computed turn economics stats (called by post-job attribution)."""
         now = datetime.now(UTC).isoformat()
@@ -276,6 +316,7 @@ class TelemetrySummaryRepository(BaseRepository):
                     cost_second_half_usd= :cost_second_half_usd,
                     diff_lines_added    = :diff_lines_added,
                     diff_lines_removed  = :diff_lines_removed,
+                    derived_currency_qualified = :derived_currency_qualified,
                     updated_at          = :now
                 WHERE job_id = :job_id AND session_kind = 'job'
             """),
@@ -289,6 +330,7 @@ class TelemetrySummaryRepository(BaseRepository):
                 "cost_second_half_usd": cost_second_half_usd,
                 "diff_lines_added": diff_lines_added,
                 "diff_lines_removed": diff_lines_removed,
+                "derived_currency_qualified": derived_currency_qualified,
                 "now": now,
             },
         )
@@ -309,7 +351,7 @@ class TelemetrySummaryRepository(BaseRepository):
     async def list_sidecars(self, job_id: str) -> list[TelemetrySummaryRow]:
         """Return all non-job session_kind rows for a job."""
         result = await self._session.execute(
-            text(
+            currency_query(
                 "SELECT session_kind, input_tokens, output_tokens, total_cost_usd, "
                 "llm_call_count, tool_call_count "
                 "FROM job_telemetry_summary "
@@ -318,6 +360,14 @@ class TelemetrySummaryRepository(BaseRepository):
             {"job_id": job_id},
         )
         return [cast("TelemetrySummaryRow", dict(r)) for r in result.mappings().all()]
+
+    async def get_currency(self, job_id: str) -> TelemetrySummaryRow | None:
+        result = await self._session.execute(
+            currency_query("SELECT * FROM job_telemetry_summary WHERE job_id = :job_id AND session_kind = 'job'"),
+            {"job_id": job_id},
+        )
+        row = result.mappings().first()
+        return cast("TelemetrySummaryRow", dict(row)) if row is not None else None
 
     async def batch_cost_tokens(self, job_ids: list[str]) -> dict[str, dict[str, float | int]]:
         """Return {job_id: {total_cost_usd, total_tokens}} for a batch of jobs.

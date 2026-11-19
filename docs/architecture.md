@@ -88,16 +88,16 @@ The trail feeds the narrative review, cost attribution, and post-hoc debugging o
 
 ### Action Policy Engine
 
-When an agent tries to perform an action, CodePlane’s **action policy engine** delegates the decision to `traceforge.governance`, which returns a recommended action:
+When an agent tries to perform an action, CodePlane's standalone policy combines bounded assessment, local constraints and exact execution ownership before AGT rule selection:
 
 | Recommended action | Behavior |
 |------|----------|
 | **Allow** | Proceed — record only |
-| **Warn** / **Transform** | Create a Git savepoint, then proceed |
-| **Escalate** | Send for review (LLM monitor, if enabled) before continuing |
+| **Warn** | Create a Git savepoint, then proceed |
+| **Escalate** | Send for review before continuing |
 | **Deny** | Block until operator approves |
 
-The governance profile is selected by the active preset. Hard-gated commands (e.g. `git reset --hard`) always require approval regardless of preset. On top of the profile, the engine adds cost-aware escalation, batch approval (consecutive gated actions become one prompt), session trust grants with TTL, protected-path escalation, and per-preset USD spend ceilings.
+The active preset selects fixed rule posture. Hard gates require explicit approval. Automatic Git mutation requires a current-byte or new-target-absence witness, rechecked before consumption. Historical TF policy and checkpoint recovery belong to the preserved transition release, not an optional final-runtime dependency.
 
 ### Authentication
 

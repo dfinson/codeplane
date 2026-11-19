@@ -36,6 +36,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
+from backend.models.events import is_admission_receipt
+from backend.services.events.observation import is_observation_history
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -645,6 +648,8 @@ class SidecarDispatcher:
 
     async def handle_event(self, event: SessionEvent) -> None:
         """EventBus subscriber.  Evaluate event/regex/content/file conditions."""
+        if is_observation_history(event) or is_admission_receipt(event):
+            return
         for job_id, state in list(self._jobs.items()):
             # Only update activity for events belonging to this job (or global events)
             if not event.session_id or event.session_id == job_id:

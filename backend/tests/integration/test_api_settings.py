@@ -92,6 +92,95 @@ class TestGetSettings:
         assert data["selfReviewPrompt"] == DEFAULT_SELF_REVIEW_PROMPT
 
 
+class TestPolicyUsdDefaults:
+    @pytest.fixture(autouse=True)
+    def policy_routes_without_legacy_imports(self, app: FastAPI, monkeypatch: pytest.MonkeyPatch):
+        import builtins
+
+        from backend.api.policy_settings import router
+
+        original_import = builtins.__import__
+
+        def no_legacy(name, *args, **kwargs):
+            if name == "traceforge" or name.startswith("traceforge."):
+                raise ModuleNotFoundError("The default settings API must not import TF", name="traceforge")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_legacy)
+        app.include_router(router, prefix="/api")
+
+    async def test_policy_and_ceiling_responses_keep_existing_defaults_without_tf(self, client: AsyncClient):
+        expected = {
+            "autonomous": {"warnUsd": None, "ceilingUsd": None},
+            "supervised": {"warnUsd": 20.0, "ceilingUsd": 40.0},
+            "locked": {"warnUsd": 5.0, "ceilingUsd": 10.0},
+        }
+        policy = await client.get("/api/settings/policy")
+        ceilings = await client.get("/api/settings/policy/usd-ceilings")
+        assert policy.status_code == ceilings.status_code == 200
+        assert policy.json() == {
+            "config": {"preset": "supervised", "batchWindowSeconds": 5.0},
+            "usdCeilings": expected,
+            "mcpServers": [],
+        }
+        assert ceilings.json() == {"ceilings": expected}
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"supervised": {"warnUsd": 0.0, "ceilingUsd": None}},
+            {"locked": {"warnUsd": None, "ceilingUsd": 0.0}},
+            {"autonomous": {"warnUsd": 2.5, "ceilingUsd": 7.5}},
+            {"supervised": {}},
+        ],
+    )
+    async def test_overrides_replace_active_thresholds_and_round_trip(
+        self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession], overrides
+    ):
+        from backend.models.db import PolicyConfigRow
+        from backend.persistence.policy_repo import PolicyRepository
+
+        async with session_factory() as session:
+            session.add(PolicyConfigRow(id=1))
+            await session.flush()
+            await PolicyRepository(session).set_usd_ceilings({"supervised": {"warn_usd": 0, "ceiling_usd": None}})
+            await session.commit()
+        baseline = (await client.get("/api/settings/policy/usd-ceilings")).json()["ceilings"]
+        response = await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": overrides})
+        assert response.status_code == 200
+        assert baseline["supervised"] == {"warnUsd": 0.0, "ceilingUsd": None}
+        effective = response.json()["ceilings"]
+        for preset, entry in overrides.items():
+            assert effective[preset] == {"warnUsd": entry.get("warnUsd"), "ceilingUsd": entry.get("ceilingUsd")}
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": effective}
+        assert (await client.get("/api/settings/policy")).json()["usdCeilings"] == effective
+        exported = (await client.get("/api/settings/policy/export")).json()
+        assert (await client.put("/api/settings/policy/usd-ceilings", json={"ceilings": {}})).status_code == 200
+        assert (await client.post("/api/settings/policy/import", json=exported)).status_code == 200
+        assert (await client.get("/api/settings/policy/usd-ceilings")).json() == {"ceilings": effective}
+        async with session_factory() as session:
+            assert await PolicyRepository(session).get_usd_ceilings() == {
+                name: (entry.get("warnUsd"), entry.get("ceilingUsd")) for name, entry in overrides.items()
+            }
+
+    async def test_batch_and_preset_updates_remain_active(
+        self, client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+    ):
+        from backend.models.db import PolicyConfigRow
+
+        async with session_factory() as session:
+            session.add(PolicyConfigRow(id=1))
+            await session.commit()
+        changed = await client.put("/api/settings/policy/config", json={"preset": "locked", "batchWindowSeconds": 10})
+        assert changed.status_code == 200
+        assert (await client.get("/api/settings/policy")).json()["config"] == {
+            "preset": "locked",
+            "batchWindowSeconds": 10,
+        }
+        changed = await client.put("/api/settings/policy/preset", json={"preset": "locked"})
+        assert changed.status_code == 200 and changed.json()["preset"] == "locked"
+
+
 class TestUpdateSettings:
     """PUT /api/settings"""
 
@@ -594,10 +683,19 @@ class TestListSDKs:
     """GET /api/sdks"""
 
     @pytest.mark.asyncio
-    async def test_returns_available_sdks(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("copilot_only", [True, False])
+    async def test_returns_available_sdks(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, copilot_only: bool
+    ) -> None:
+        from backend.config import CPLConfig, RuntimeConfig
         from backend.services.setup.checks import AgentAuthStatus, AgentCLIStatus
 
+        config = CPLConfig(runtime=RuntimeConfig(default_sdk="claude", copilot_only=copilot_only))
+        monkeypatch.setattr("backend.api.settings.load_config", lambda: config)
+        checked = []
+
         def _mock_check(sdk_id: str) -> AgentCLIStatus:
+            checked.append(sdk_id)
             return AgentCLIStatus(
                 sdk_id=sdk_id,
                 name=sdk_id,
@@ -622,11 +720,25 @@ class TestListSDKs:
         resp = await client.get("/api/sdks")
         assert resp.status_code == 200
         data = resp.json()
-        assert "default" in data
+        assert data["default"] == ("copilot" if copilot_only else "claude")
+        assert config.runtime.default_sdk == "claude"
         assert "sdks" in data
         assert len(data["sdks"]) >= 1
         sdk_ids = {s["id"] for s in data["sdks"]}
         assert "copilot" in sdk_ids
         for sdk in data["sdks"]:
-            assert sdk["enabled"] is True
-            assert sdk["status"] == "ready"
+            disabled = copilot_only and sdk["id"] == "claude"
+            assert sdk["enabled"] is not disabled
+            assert sdk["status"] == ("disabled_by_policy" if disabled else "ready")
+        assert ("claude" in checked) is not copilot_only
+
+    @pytest.mark.asyncio
+    async def test_copilot_keeps_models_from_other_providers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from backend.api.jobs import list_models
+        from backend.config import CPLConfig
+        from backend.di import CachedModelsBySdk
+
+        monkeypatch.setattr("backend.config.load_config", CPLConfig)
+        catalog = CachedModelsBySdk({"copilot": [{"id": "claude-haiku-4.5", "name": "Claude Haiku 4.5"}]})
+        response = await list_models(catalog, sdk="copilot")
+        assert [model.id for model in response.items] == ["claude-haiku-4.5"]

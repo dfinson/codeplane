@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from sqlalchemy import text
 
+from backend.models.currency import divide_known, optional_float, sum_known
 from backend.models.domain import (
     AggregateStats,
     CostByDayRow,
@@ -18,6 +19,7 @@ from backend.models.domain import (
     ModelComparisonRow,
     TelemetrySummaryRow,
 )
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 
@@ -36,7 +38,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def get(self, job_id: str) -> TelemetrySummaryRow | None:
         """Load summary row as a plain dict.  Returns None if not found."""
         result = await self._session.execute(
-            text("SELECT * FROM job_telemetry_summary WHERE job_id = :job_id AND session_kind = 'job'"),
+            currency_query("SELECT * FROM job_telemetry_summary WHERE job_id = :job_id AND session_kind = 'job'"),
             {"job_id": job_id},
         )
         row = result.mappings().first()
@@ -81,7 +83,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
         direction = "DESC" if desc else "ASC"
 
         result = await self._session.execute(
-            text(
+            currency_query(
                 f"SELECT * FROM job_telemetry_summary{where} "  # noqa: S608
                 f"ORDER BY {sort_col} {direction} LIMIT :limit OFFSET :offset"
             ),
@@ -92,26 +94,33 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def aggregate(self, *, period_days: int = 7) -> AggregateStats:
         """Return aggregate stats for the analytics overview."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     COUNT(*) as total_jobs,
-                    SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) as review,
-                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END) as succeeded,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-                    SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
-                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
-                    COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
+                    COALESCE(SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END), 0) as review,
+                    COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed,
+                    COALESCE(SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END), 0) as succeeded,
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed,
+                    COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled,
+                    COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running,
+                    SUM(total_cost_usd) as total_cost_usd,
+                    SUM(estimated_cost_usd) as estimated_cost_usd,
                     COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
                     COALESCE(SUM(premium_requests), 0) as total_premium_requests,
                     COALESCE(SUM(tool_call_count), 0) as total_tool_calls,
                     COALESCE(SUM(tool_failure_count), 0) as total_tool_failures,
+                    COALESCE(SUM((
+                        SELECT COUNT(*) FROM job_telemetry_spans AS observed
+                        WHERE observed.job_id = job_telemetry_summary.job_id
+                          AND observed.session_kind = 'job' AND observed.span_type = 'tool'
+                          AND COALESCE(json_type(observed.attrs_json, '$.success'), 'null') = 'null'
+                    )), 0) as total_tool_unknown,
                     COALESCE(SUM(agent_error_count), 0) as total_agent_errors,
                     COALESCE(SUM(cache_read_tokens), 0) as total_cache_read,
                     COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-                    COALESCE(SUM(subagent_cost_usd), 0) as total_subagent_cost_usd,
-                    COALESCE(SUM(retry_cost_usd), 0) as total_retry_cost_usd,
+                    SUM(subagent_cost_usd) as total_subagent_cost_usd,
+                    SUM(retry_cost_usd) as total_retry_cost_usd,
                     COALESCE(SUM(retry_count), 0) as total_retry_count
                 FROM job_telemetry_summary
                 WHERE created_at >= datetime('now', '-{int(period_days)} days')
@@ -127,10 +136,10 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def cost_by_day(self, *, period_days: int = 7) -> list[CostByDayRow]:
         """Return daily cost breakdown."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     date(created_at) as date,
-                    COALESCE(SUM(total_cost_usd), 0) as cost,
+                    SUM(total_cost_usd) as cost,
                     COUNT(*) as jobs
                 FROM job_telemetry_summary
                 WHERE created_at >= datetime('now', '-{int(period_days)} days')
@@ -144,13 +153,13 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def cost_by_repo(self, *, period_days: int = 7) -> list[CostByRepoRow]:
         """Return per-repo cost / job count / token breakdown."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     repo,
                     COUNT(*) as job_count,
                     SUM(CASE WHEN status IN ('review', 'completed') THEN 1 ELSE 0 END) as succeeded,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-                    COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
+                    SUM(total_cost_usd) as total_cost_usd,
                     COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
                     COALESCE(SUM(tool_call_count), 0) as tool_calls,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
@@ -167,12 +176,12 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def cost_by_model(self, *, period_days: int = 7) -> list[CostByModelRow]:
         """Return per-model cost / job count / token breakdown with normalized metrics."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     model,
                     sdk,
                     COUNT(*) as job_count,
-                    COALESCE(SUM(total_cost_usd), 0) as total_cost_usd,
+                    SUM(total_cost_usd) as total_cost_usd,
                     COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
                     COALESCE(SUM(input_tokens), 0) as input_tokens,
                     COALESCE(SUM(output_tokens), 0) as output_tokens,
@@ -184,23 +193,23 @@ class TelemetryAnalyticsRepository(BaseRepository):
                     COALESCE(SUM(diff_lines_added + diff_lines_removed), 0) as total_diff_lines,
                     -- Normalized metrics
                     CASE WHEN COUNT(*) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / COUNT(*)
-                        ELSE 0 END as cost_per_job,
+                        THEN SUM(total_cost_usd) / COUNT(*)
+                        ELSE NULL END as cost_per_job,
                     CASE WHEN SUM(duration_ms) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / (SUM(duration_ms) / 60000.0)
-                        ELSE 0 END as cost_per_minute,
+                        THEN SUM(total_cost_usd) / (SUM(duration_ms) / 60000.0)
+                        ELSE NULL END as cost_per_minute,
                     CASE WHEN SUM(total_turns) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(total_turns)
-                        ELSE 0 END as cost_per_turn,
+                        THEN SUM(total_cost_usd) / SUM(total_turns)
+                        ELSE NULL END as cost_per_turn,
                     CASE WHEN SUM(tool_call_count) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(tool_call_count)
-                        ELSE 0 END as cost_per_tool_call,
+                        THEN SUM(total_cost_usd) / SUM(tool_call_count)
+                        ELSE NULL END as cost_per_tool_call,
                     CASE WHEN SUM(diff_lines_added + diff_lines_removed) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / SUM(diff_lines_added + diff_lines_removed)
-                        ELSE 0 END as cost_per_diff_line,
+                        THEN SUM(total_cost_usd) / SUM(diff_lines_added + diff_lines_removed)
+                        ELSE NULL END as cost_per_diff_line,
                     CASE WHEN SUM(input_tokens + output_tokens) > 0
-                        THEN COALESCE(SUM(total_cost_usd), 0) / (SUM(input_tokens + output_tokens) / 1000000.0)
-                        ELSE 0 END as cost_per_mtok,
+                        THEN SUM(total_cost_usd) / (SUM(input_tokens + output_tokens) / 1000000.0)
+                        ELSE NULL END as cost_per_mtok,
                     CASE WHEN SUM(total_cost_usd) > 0
                         THEN COALESCE(SUM(cache_read_tokens), 0) * 1.0 / NULLIF(SUM(input_tokens), 0)
                         ELSE 0 END as cache_hit_rate
@@ -241,13 +250,13 @@ class TelemetryAnalyticsRepository(BaseRepository):
         activity_row = dict(activity.mappings().first() or {})
 
         budget = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     t.sdk,
-                    COALESCE(SUM(t.total_cost_usd), 0) as total_cost_usd,
+                    SUM(t.total_cost_usd) as total_cost_usd,
                     COALESCE(SUM(t.premium_requests), 0) as premium_requests,
                     COUNT(*) as job_count,
-                    COALESCE(AVG(t.total_cost_usd), 0) as avg_cost_per_job,
+                    AVG(t.total_cost_usd) as avg_cost_per_job,
                     COALESCE(AVG(t.duration_ms), 0) as avg_duration_ms
                 FROM job_telemetry_summary t
                 WHERE t.created_at >= datetime('now', '-{int(period_days)} days')
@@ -290,14 +299,14 @@ class TelemetryAnalyticsRepository(BaseRepository):
             params["repo"] = repo
 
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     t.model,
                     t.sdk,
                     COUNT(*) as job_count,
-                    COALESCE(AVG(t.total_cost_usd), 0) as avg_cost,
+                    AVG(t.total_cost_usd) as avg_cost,
                     COALESCE(AVG(t.duration_ms), 0) as avg_duration_ms,
-                    COALESCE(SUM(t.total_cost_usd), 0) as total_cost_usd,
+                    SUM(t.total_cost_usd) as total_cost_usd,
                     COALESCE(SUM(t.premium_requests), 0) as premium_requests,
                     SUM(CASE WHEN j.resolution = 'merged' THEN 1 ELSE 0 END) as merged,
                     SUM(CASE WHEN j.resolution = 'pr_created' THEN 1 ELSE 0 END) as pr_created,
@@ -310,20 +319,20 @@ class TelemetryAnalyticsRepository(BaseRepository):
                         THEN COALESCE(SUM(t.cache_read_tokens), 0) * 1.0 / SUM(t.input_tokens)
                         ELSE 0 END as cache_hit_rate,
                     CASE WHEN COUNT(*) > 0
-                        THEN COALESCE(SUM(t.total_cost_usd), 0) / COUNT(*)
-                        ELSE 0 END as cost_per_job,
+                        THEN SUM(t.total_cost_usd) / COUNT(*)
+                        ELSE NULL END as cost_per_job,
                     CASE WHEN SUM(t.duration_ms) > 0
-                        THEN COALESCE(SUM(t.total_cost_usd), 0) / (SUM(t.duration_ms) / 60000.0)
-                        ELSE 0 END as cost_per_minute,
+                        THEN SUM(t.total_cost_usd) / (SUM(t.duration_ms) / 60000.0)
+                        ELSE NULL END as cost_per_minute,
                     CASE WHEN SUM(t.total_turns) > 0
-                        THEN COALESCE(SUM(t.total_cost_usd), 0) / SUM(t.total_turns)
-                        ELSE 0 END as cost_per_turn,
+                        THEN SUM(t.total_cost_usd) / SUM(t.total_turns)
+                        ELSE NULL END as cost_per_turn,
                     CASE WHEN SUM(t.tool_call_count) > 0
-                        THEN COALESCE(SUM(t.total_cost_usd), 0) / SUM(t.tool_call_count)
-                        ELSE 0 END as cost_per_tool_call,
+                        THEN SUM(t.total_cost_usd) / SUM(t.tool_call_count)
+                        ELSE NULL END as cost_per_tool_call,
                     CASE WHEN SUM(t.diff_lines_added + t.diff_lines_removed) > 0
-                        THEN COALESCE(SUM(t.total_cost_usd), 0) / SUM(t.diff_lines_added + t.diff_lines_removed)
-                        ELSE 0 END as cost_per_diff_line
+                        THEN SUM(t.total_cost_usd) / SUM(t.diff_lines_added + t.diff_lines_removed)
+                        ELSE NULL END as cost_per_diff_line
                 FROM job_telemetry_summary t
                 JOIN jobs j ON j.id = t.job_id
                 WHERE t.created_at >= datetime('now', '-{int(period_days)} days')
@@ -345,10 +354,10 @@ class TelemetryAnalyticsRepository(BaseRepository):
 
         repo = job_row.get("repo", "")
         repo_avg = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     COUNT(*) as job_count,
-                    COALESCE(AVG(total_cost_usd), 0) as avg_cost,
+                    AVG(total_cost_usd) as avg_cost,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
                     COALESCE(AVG(diff_lines_added + diff_lines_removed), 0) as avg_diff_lines
                 FROM job_telemetry_summary
@@ -362,12 +371,19 @@ class TelemetryAnalyticsRepository(BaseRepository):
         avg_row = dict(repo_avg.mappings().first() or {})
 
         flags: list[dict[str, str]] = []
-        cost_first = job_row.get("cost_first_half_usd") or 0
-        cost_second = job_row.get("cost_second_half_usd") or 0
-        total_cost = cost_first + cost_second
+        cost_first = job_row.get("cost_first_half_usd")
+        cost_second = job_row.get("cost_second_half_usd")
+        total_cost = sum_known((cost_first, cost_second))
         # Only flag escalation when the job spent enough for it to matter
         # and the 2nd half is significantly worse than the 1st
-        if total_cost >= 0.50 and cost_first > 0 and cost_second > 2.0 * cost_first:
+        if (
+            total_cost is not None
+            and total_cost >= 0.50
+            and cost_first is not None
+            and cost_first > 0
+            and cost_second is not None
+            and cost_second > 2.0 * cost_first
+        ):
             pct = round(cost_second / total_cost * 100)
             msg = f"Cost escalation: {pct}% of spend in second half of turns"
             flags.append({"type": "turn_escalation", "message": msg})
@@ -383,21 +399,21 @@ class TelemetryAnalyticsRepository(BaseRepository):
 
         return {
             "job": {
-                "cost": float(job_row.get("total_cost_usd") or 0),
+                "cost": optional_float(job_row.get("total_cost_usd")),
                 "durationMs": float(job_row.get("duration_ms") or 0),
                 "diffLinesAdded": int(job_row.get("diff_lines_added") or 0),
                 "diffLinesRemoved": int(job_row.get("diff_lines_removed") or 0),
                 "sdk": job_row.get("sdk") or "",
                 "model": job_row.get("model") or "",
                 "totalTurns": int(job_row.get("total_turns") or 0),
-                "peakTurnCostUsd": float(job_row.get("peak_turn_cost_usd") or 0),
-                "avgTurnCostUsd": float(job_row.get("avg_turn_cost_usd") or 0),
+                "peakTurnCostUsd": optional_float(job_row.get("peak_turn_cost_usd")),
+                "avgTurnCostUsd": optional_float(job_row.get("avg_turn_cost_usd")),
                 "costFirstHalfUsd": cost_first,
                 "costSecondHalfUsd": cost_second,
             },
             "repoAvg": {
                 "jobCount": int(avg_row.get("job_count") or 0),
-                "avgCost": float(avg_row.get("avg_cost") or 0),
+                "avgCost": optional_float(avg_row.get("avg_cost")),
                 "avgDurationMs": float(avg_row.get("avg_duration_ms") or 0),
                 "avgDiffLines": float(avg_row.get("avg_diff_lines") or 0),
             }
@@ -409,7 +425,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def turn_escalation_jobs(self, *, period_days: int = 30) -> list[dict[str, Any]]:
         """Find jobs where cost/turn escalates significantly in the second half."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     job_id,
                     total_turns,
@@ -433,7 +449,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def compaction_storm_jobs(self, *, period_days: int = 30) -> list[dict[str, Any]]:
         """Find jobs with excessive context compactions."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     job_id,
                     compactions,
@@ -493,7 +509,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
             params["repo"] = repo
 
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     CASE
                         WHEN j.resolution IN ('merged', 'pr_created') THEN 'productive'
@@ -502,8 +518,8 @@ class TelemetryAnalyticsRepository(BaseRepository):
                         ELSE 'cancelled'
                     END AS category,
                     COUNT(*) AS job_count,
-                    COALESCE(SUM(t.total_cost_usd), 0) AS total_cost_usd,
-                    COALESCE(AVG(t.total_cost_usd), 0) AS avg_cost_usd
+                    SUM(t.total_cost_usd) AS total_cost_usd,
+                    AVG(t.total_cost_usd) AS avg_cost_usd
                 FROM jobs j
                 JOIN job_telemetry_summary t ON t.job_id = j.id
                 WHERE t.created_at >= datetime('now', :offset)
@@ -516,20 +532,20 @@ class TelemetryAnalyticsRepository(BaseRepository):
         )
         rows = [dict(r) for r in result.mappings().all()]
 
-        total_cost = sum(r["total_cost_usd"] for r in rows)
+        total_cost = sum_known(r["total_cost_usd"] for r in rows)
         total_jobs = sum(r["job_count"] for r in rows)
 
         # Compute pct_of_total for each category
         categories = []
         for r in rows:
-            r["pct_of_total"] = (r["total_cost_usd"] / total_cost) if total_cost > 0 else 0.0
+            r["pct_of_total"] = divide_known(r["total_cost_usd"], total_cost or 0)
             categories.append(r)
 
         # Cost per merge
         productive = next((r for r in rows if r["category"] == "productive"), None)
-        merged_cost = productive["total_cost_usd"] if productive else 0.0
+        merged_cost = productive["total_cost_usd"] if productive else None
         merged_count = productive["job_count"] if productive else 0
-        cost_per_merge = merged_cost / merged_count if merged_count > 0 else 0.0
+        cost_per_merge = divide_known(merged_cost, merged_count)
 
         return {
             "period": period_days,
@@ -542,9 +558,9 @@ class TelemetryAnalyticsRepository(BaseRepository):
     async def monthly_burn(self) -> dict[str, Any]:
         """Current month spend, daily average, and projected month-end total."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
-                    COALESCE(SUM(total_cost_usd), 0) AS month_spend,
+                    SUM(total_cost_usd) AS month_spend,
                     COUNT(DISTINCT date(created_at)) AS active_days,
                     julianday('now') - julianday(
                         strftime('%Y-%m-01', 'now')
@@ -557,13 +573,13 @@ class TelemetryAnalyticsRepository(BaseRepository):
         row = result.mappings().first()
         if not row:
             return {
-                "month_spend_usd": 0.0,
+                "month_spend_usd": None,
                 "days_elapsed": 1,
                 "days_in_month": 30,
-                "daily_avg_usd": 0.0,
-                "projected_month_end_usd": 0.0,
+                "daily_avg_usd": None,
+                "projected_month_end_usd": None,
             }
-        month_spend = float(row["month_spend"] or 0)
+        month_spend = optional_float(row["month_spend"])
         days_elapsed = max(float(row["days_elapsed"] or 1), 1)
 
         days_in_month_result = await self._session.execute(
@@ -577,8 +593,8 @@ class TelemetryAnalyticsRepository(BaseRepository):
         )
         dim_row = days_in_month_result.mappings().first()
         days_in_month = float(dim_row["days_in_month"]) if dim_row else 30.0
-        daily_avg = month_spend / days_elapsed
-        projected = daily_avg * days_in_month
+        daily_avg = divide_known(month_spend, days_elapsed)
+        projected = daily_avg * days_in_month if daily_avg is not None else None
 
         return {
             "month_spend_usd": month_spend,
@@ -595,7 +611,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Jobs where sub-agent cost exceeds the parent's direct cost."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     t.job_id,
                     t.subagent_cost_usd,
@@ -628,16 +644,16 @@ class TelemetryAnalyticsRepository(BaseRepository):
         )
         return int(result.scalar() or 0)
 
-    async def fleet_waste_metrics(self, *, period_days: int = 30) -> dict[str, float]:
+    async def fleet_waste_metrics(self, *, period_days: int = 30) -> dict[str, float | None]:
         """Aggregate waste-related metrics across the fleet (Item 18)."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
-                    COALESCE(SUM(t.retry_cost_usd), 0) AS total_retry_cost_usd,
-                    COALESCE(SUM(
+                    SUM(t.retry_cost_usd) AS total_retry_cost_usd,
+                    SUM(
                         CASE WHEN j.resolution IN ('failed', 'discarded')
-                        THEN t.total_cost_usd ELSE 0 END
-                    ), 0) AS failed_discarded_cost_usd,
+                        THEN t.total_cost_usd END
+                    ) AS failed_discarded_cost_usd,
                     COALESCE(SUM(t.tokens_compacted), 0) AS total_tokens_compacted,
                     COALESCE(SUM(
                         CASE WHEN t.file_reread_count > t.unique_files_read
@@ -660,8 +676,8 @@ class TelemetryAnalyticsRepository(BaseRepository):
         reread_cost = excess_rereads * 0.001
 
         return {
-            "total_retry_cost_usd": float(row.get("total_retry_cost_usd", 0)),
-            "failed_discarded_cost_usd": float(row.get("failed_discarded_cost_usd", 0)),
+            "total_retry_cost_usd": optional_float(row.get("total_retry_cost_usd", 0)),
+            "failed_discarded_cost_usd": optional_float(row.get("failed_discarded_cost_usd", 0)),
             "compaction_cost_estimate_usd": compaction_cost,
             "reread_cost_estimate_usd": reread_cost,
         }
@@ -672,11 +688,11 @@ class TelemetryAnalyticsRepository(BaseRepository):
         Returns one row per session_kind (excluding 'job') with totals.
         """
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     session_kind,
                     COUNT(*) AS session_count,
-                    COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+                    SUM(total_cost_usd) AS total_cost_usd,
                     COALESCE(SUM(input_tokens), 0) AS input_tokens,
                     COALESCE(SUM(output_tokens), 0) AS output_tokens,
                     COALESCE(SUM(llm_call_count), 0) AS llm_call_count,

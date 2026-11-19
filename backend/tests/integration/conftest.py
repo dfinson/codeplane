@@ -8,6 +8,7 @@ starting real subprocesses, loading ML models, or touching disk.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
@@ -39,13 +40,16 @@ from backend.services.events.event_bus import EventBus
 from backend.services.events.ingest_service import IngestService
 from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
+from backend.services.ingest.body_limit import ObservationBodyLimit
 from backend.services.job.approval_service import ApprovalService
 from backend.services.merge_service import MergeService
 from backend.services.runtime import RuntimeService
 from backend.services.sharing.share_service import ShareService
 from backend.services.sidecar.session import SidecarSessionManager
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
 from backend.services.tracker_sync_service import TrackerSyncService
+from backend.services.tracker_write_service import TrackerWriteService
 
 # ---------------------------------------------------------------------------
 # Database
@@ -203,10 +207,14 @@ async def app(
         credentials,
         events,
         health,
+        integrations,
         job_artifacts,
         job_telemetry,
         jobs,
         projects,
+        recipe_runs,
+        recipes,
+        reviews,
         settings,
         share,
         terminal,
@@ -217,6 +225,7 @@ async def app(
     from backend.app_factory import _register_domain_exception_handlers
 
     application = FastAPI(title="CodePlane", version="0.1.0")
+    application.add_middleware(ObservationBodyLimit)
     _register_domain_exception_handlers(application)
 
     # -- routers (same order as create_app) --------------------------------
@@ -236,13 +245,35 @@ async def app(
     application.include_router(terminal.router, prefix="/api")
     application.include_router(chats.router, prefix="/api")
     application.include_router(tracker_links.router, prefix="/api")
+    application.include_router(recipes.router, prefix="/api")
+    application.include_router(integrations.router, prefix="/api")
+    application.include_router(recipe_runs.router, prefix="/api")
+    application.include_router(reviews.router, prefix="/api")
+
+    config = _test_config()
+    tracker_write_service = TrackerWriteService(
+        approval_service,
+        session_factory=session_factory,
+        event_bus=event_bus,
+    )
+    task_execution_service = TaskExecutionService(
+        session_factory,
+        config,
+        git_service=mock_git_service,
+        approval_service=approval_service,
+        tracker_write_service=tracker_write_service,
+    )
+    monkeypatch.setattr(
+        "backend.services.tracker_resolution.dispatch_tracker_write",
+        AsyncMock(side_effect=RuntimeError("Tracker dispatch must be configured by the test")),
+    )
 
     # -- dishka DI container (replaces app.state) --------------------------
     container = make_async_container(
         AppProvider(),
         RequestProvider(),
         context={
-            CPLConfig: _test_config(),
+            CPLConfig: config,
             async_sessionmaker: session_factory,
             EventBus: event_bus,
             SSEManager: sse_manager,
@@ -259,6 +290,8 @@ async def app(
             TerminalService: mock_terminal_service,
             IngestService: AsyncMock(spec=IngestService),
             TrackerSyncService: mock_tracker_sync_service,
+            TrackerWriteService: tracker_write_service,
+            TaskExecutionService: task_execution_service,
         },
     )
     setup_dishka(container, application)
@@ -266,9 +299,11 @@ async def app(
     # -- config overrides (for non-dishka load_config calls) ----
     monkeypatch.setattr("backend.config.load_config", _test_config)
 
-    yield application
-
-    await container.close()
+    try:
+        yield application
+    finally:
+        await asyncio.wait_for(tracker_write_service.close(), timeout=5)
+        await container.close()
 
 
 # ---------------------------------------------------------------------------

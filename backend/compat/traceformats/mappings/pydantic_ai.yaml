@@ -1,0 +1,152 @@
+# PydanticAI event mapping for MappedJsonAdapter
+# Targets: pydantic-ai >= 1.0.0 through 2.22.0 (preprocessor-emitted JSONL)
+# Source: pydantic/pydantic-ai pydantic_ai_slim/pydantic_ai/messages.py and tools.py
+#
+# CRITICAL: PydanticAI does NOT emit flat JSON events with a "type" field.
+# Its native format uses multi-level discrimination:
+#   - Messages: "kind" = "request" | "response"
+#   - Parts: "part_kind" = "system-prompt" | "user-prompt" | "text" | "tool-call" | ...
+#   - Stream events: "event_kind" = "part_start" | "part_delta" | "part_end" | ...
+#   - Usage: ModelResponse.usage = {input_tokens, output_tokens, ...}
+#
+# PydanticAIPreProcessor normalizes the native format to flat JSONL with a
+# "type" discriminator. It synthesizes only types supported by native objects:
+#   {"type": "model_response", "usage": {...}, ...}
+#   {"type": "stream.part_start", "part": {...}, ...}
+#   {"type": "stream.part_delta", "delta": {...}, ...}
+#   {"type": "tool_call_start", "part": {...}, ...}
+#
+# Real UsageMetadata fields: input_tokens, output_tokens,
+#   cache_write_tokens, cache_read_tokens
+# NOTE: total_tokens is a @property (input+output), NOT a stored field.
+#   It will NOT appear in model_dump() unless explicitly computed by preprocessor.
+# Real tool call field: tool_call_id (not call_id — call_id is deprecated alias)
+
+framework: pydantic_ai
+framework_version: ">=1.0.0"
+ingestion_mode: file_watch
+type_field: type
+timestamp_field: timestamp
+preprocessor: pydantic_ai
+
+motivation:
+  sources:
+    - events: ["model_response"]
+      field: content
+      role: intent
+
+events:
+  # ── Model messages ──
+  model_request:
+    kind: message.user
+    payload:
+      content: content
+  model_response:
+    kind: llm.call.completed
+    payload:
+      model: model_name
+      input_tokens: usage.input_tokens
+      output_tokens: usage.output_tokens
+      cache_read_tokens: usage.cache_read_tokens
+      cache_write_tokens: usage.cache_write_tokens
+      input_audio_tokens: usage.input_audio_tokens
+      output_audio_tokens: usage.output_audio_tokens
+      cache_audio_read_tokens: usage.cache_audio_read_tokens
+      content: content
+  # ── Tool calls ──
+  # FunctionToolCallEvent and FunctionToolResultEvent serialize their payload under part.
+  tool_call_start:
+    kind: tool.call.started
+    payload:
+      tool_name: part.tool_name
+      tool_call_id: part.tool_call_id
+      arguments: part.args
+  tool_call_end:
+    kind: tool.call.completed
+    payload:
+      tool_call_id: part.tool_call_id
+      tool_name: part.tool_name
+      result: part.content
+  tool_call_error:
+    kind: tool.call.failed
+    payload:
+      tool_call_id: part.tool_call_id
+      tool_name: part.tool_name
+      error: part.content
+      outcome: part.outcome
+
+  # ── Streaming (preprocessor synthesizes "stream.<event_kind>") ──
+  # PartStartEvent has .part (the part object), NOT .delta
+  stream.part_start:
+    kind: llm.output.chunk
+    payload:
+      content: part.content
+      part_kind: part.part_kind
+  # PartDeltaEvent has .delta with content_delta
+  # PartDeltaEvent: TextPartDelta has .content_delta; ToolCallPartDelta has .args_delta
+  # Discriminator: delta.part_delta_kind ("text" vs "tool_call")
+  stream.part_delta:
+    kind: llm.output.chunk
+    payload:
+      content: delta.content_delta
+      args_delta: delta.args_delta
+      part_delta_kind: delta.part_delta_kind
+  stream.part_end:
+    kind: message.assistant
+    payload:
+      content: part.content
+  # FinalResultEvent (event_kind="final_result") — signal-only, no content payload.
+  # Indicates which tool call produced the final result; actual data was in prior PartStart/Delta.
+  stream.final_result:
+    kind: session.ended
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+
+  # Output tools submit and acknowledge the agent's final typed output.
+  stream.output_tool_call:
+    kind: tool.call.started
+    payload:
+      tool_name: part.tool_name
+      tool_call_id: part.tool_call_id
+      arguments: part.args
+      args_valid: args_valid
+  stream.output_tool_result:
+    kind: tool.call.completed
+    payload:
+      tool_call_id: part.tool_call_id
+      tool_name: part.tool_name
+      result: part.content
+      outcome: part.outcome
+
+  # Enqueued messages can contain heterogeneous request/response objects, so retain
+  # the serialized batch instead of pretending it is a single user message.
+  stream.enqueued_messages:
+    kind: session.info
+    payload:
+      enqueue_id: enqueue_id
+      messages: messages
+
+  # Deferred requests pause for external execution or approval; resolved batches
+  # resume the run and are followed by ordinary per-tool result events. The pause
+  # intentionally creates a durable Parquet checkpoint at this interaction boundary.
+  stream.deferred_tool_requests:
+    kind: session.paused
+    payload:
+      calls: requests.calls
+      approvals: requests.approvals
+      metadata: requests.metadata
+  stream.deferred_tool_results:
+    kind: session.resumed
+    payload:
+      calls: results.calls
+      approvals: results.approvals
+      metadata: results.metadata
+
+  # RetryPromptPart is the producer's serialized tool-argument validation failure.
+  validation_error:
+    kind: tool.validation.failed
+    payload:
+      tool_name: part.tool_name
+      tool_call_id: part.tool_call_id
+      error: part.content

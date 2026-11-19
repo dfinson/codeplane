@@ -1,0 +1,100 @@
+# Derived from traceforge-toolkit 0.1.5. MIT license: backend/compat/traceforge.LICENSE.
+"""OpenCode preprocessor with decoder-owned, checkpointed message authorship."""
+
+from __future__ import annotations
+
+import json
+import re
+from copy import deepcopy
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from backend.compat.traceformats.preprocessors.registry import StatefulPreprocessor, register_preprocessor
+
+_VERSION_SUFFIX_RE = re.compile(r"\.\d+$")
+
+
+class _MessageState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roles: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+
+@register_preprocessor("opencode")
+class OpenCodePreprocessor(StatefulPreprocessor):
+    def __init__(self) -> None:
+        self._state = _MessageState()
+
+    def checkpoint(self) -> dict[str, Any]:
+        return self._state.model_dump(mode="json")
+
+    def restore(self, state: dict[str, Any]) -> None:
+        self._state = _MessageState.model_validate(deepcopy(state))
+
+    def __call__(self, obj: dict[str, Any]) -> list[dict[str, Any]]:
+        data = obj.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError("Malformed OpenCode event data JSON") from exc
+        if not isinstance(data, dict):
+            data = {}
+
+        norm = dict(obj)
+        norm["data"] = data
+        if "properties" not in norm and data:
+            norm["properties"] = data
+        norm["type"] = _VERSION_SUFFIX_RE.sub("", str(obj.get("type", "")))
+        norm["_timestamp"] = _timestamp(data, norm)
+
+        if norm["type"] == "message.updated":
+            info = value if isinstance(value := data.get("info"), dict) else {}
+            session_id = str(data.get("sessionID") or info.get("sessionID") or "")
+            message_id = str(info.get("id") or "")
+            role = str(info.get("role") or "unknown")
+            if session_id and message_id and role != "unknown":
+                self._state.roles.setdefault(session_id, {})[message_id] = role
+            norm["type"] = f"message.updated.{role}"
+            norm["message_role"] = role
+            return [norm]
+
+        if norm["type"] == "message.part.updated":
+            part = value if isinstance(value := data.get("part"), dict) else {}
+            part_type = str(part.get("type") or "unknown")
+            session_id = str(data.get("sessionID") or part.get("sessionID") or "")
+            message_id = str(part.get("messageID") or "")
+            role = self._state.roles.get(session_id, {}).get(message_id, "unknown")
+            norm["message_role"] = role
+            if part_type == "text":
+                text_role = role if role in {"user", "assistant"} else "unknown"
+                norm["type"] = f"message.part.text.{text_role}"
+            elif part_type == "tool":
+                state = value if isinstance(value := part.get("state"), dict) else {}
+                status = str(state.get("status") or "unknown")
+                if status == "pending":
+                    # Provisional rows have no execution input or timing yet.
+                    return []
+                norm["type"] = f"message.part.tool.{status}"
+            else:
+                norm["type"] = f"message.part.{part_type}"
+        return [norm]
+
+
+def _timestamp(data: dict[str, Any], obj: dict[str, Any]) -> Any:
+    props = value if isinstance(value := obj.get("properties"), dict) else {}
+    info = value if isinstance(value := data.get("info"), dict) else {}
+    info_time = value if isinstance(value := info.get("time"), dict) else {}
+    part = value if isinstance(value := data.get("part"), dict) else {}
+    part_time = value if isinstance(value := part.get("time"), dict) else {}
+
+    return (
+        data.get("timestamp")
+        or data.get("time")
+        or info_time.get("updated")
+        or info_time.get("created")
+        or part_time.get("end")
+        or part_time.get("start")
+        or props.get("timestamp")
+    )

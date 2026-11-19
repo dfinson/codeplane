@@ -134,11 +134,11 @@ class ChatService:
     ) -> ChatTurnResult:
         """Request and persist the assistant half after the user commit."""
         transcript = await self.build_transcript(chat_id)
-        prompt = f"{_CHAT_SYSTEM_PROMPT}\n\nConversation:\n{transcript or ''}\nAssistant:"
+        prompt = f"Conversation:\n{transcript or ''}\nAssistant:"
         try:
             if self._completer is None:
                 raise RuntimeError("Chat completion is unavailable")
-            assistant_content = (await self._completer.complete(prompt)).strip()
+            assistant_content = (await self._completer.complete(prompt, system_prompt=_CHAT_SYSTEM_PROMPT)).strip()
             if not assistant_content:
                 raise RuntimeError("The assistant returned an empty response")
         except Exception:

@@ -10,6 +10,7 @@ import type { SSEHandler, AppState } from "./types";
 // ---------------------------------------------------------------------------
 
 export function handleApprovalRequested(state: AppState, payload: Record<string, unknown>): Partial<AppState> | null {
+  if (payload.batchManaged === true) return null;
   const approval: ApprovalRequest = {
     id: payload.approvalId as string,
     jobId: payload.jobId as string,
@@ -55,7 +56,7 @@ export function handleBatchApprovalRequested(state: AppState, payload: Record<st
       recommendedAction: a.recommendedAction as BatchApproval["actions"][number]["recommendedAction"],
       reasonCode: a.reasonCode as string,
       reason: a.reason as string,
-      riskScore: a.riskScore as number,
+      riskScore: typeof a.riskScore === "number" ? a.riskScore : null,
       riskBand: a.riskBand as string,
       effect: (a.effect as string | null) ?? null,
       checkpointRef: (a.checkpointRef as string | null) ?? null,

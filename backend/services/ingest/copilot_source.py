@@ -5,15 +5,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
+import yaml
 
 from backend.models.domain import Job, JobSource, JobState
 from backend.models.events import EventKind
+from backend.services.completers.copilot_steer import NativeDeliveryError, NativeSessionBinding
 from backend.services.ingest._base import TraceForgeIngestBase, repo_basename
 
 if TYPE_CHECKING:
@@ -27,14 +31,24 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger()
 
-_SESSION_STORE_PATH = Path.home() / ".copilot" / "session-store.db"
-_SESSION_STATE_DIR = Path.home() / ".copilot" / "session-state"
+_COPILOT_HOME = Path(os.environ.get("COPILOT_HOME", str(Path.home() / ".copilot"))).expanduser().resolve()
+_SESSION_STORE_PATH = _COPILOT_HOME / "session-store.db"
+_SESSION_STATE_DIR = _COPILOT_HOME / "session-state"
 _DISCOVERY_POLL_S = 2.0
 _SESSION_ID_PATTERN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
 
 
 def _cwd_matches_repo(cwd: str, repo_path: str) -> bool:
     return cwd == repo_path or cwd.startswith(repo_path + "/") or cwd.startswith(repo_path + "\\")
+
+
+def _is_uuid(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
 
 
 class SessionStateWatcher(TraceForgeIngestBase):
@@ -60,7 +74,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
     async def start(self) -> None:
         if not _SESSION_STORE_PATH.exists():
             log.info("session_state_watcher_no_store", path=str(_SESSION_STORE_PATH))
-            return
         self._running = True
         self._started_at = datetime.now(UTC).isoformat()
         await self._load_existing_sessions()
@@ -70,17 +83,49 @@ class SessionStateWatcher(TraceForgeIngestBase):
         await self._stop_common()
         log.info("session_state_watcher_stopped")
 
+    def _resolve_binding(self, session_id: str) -> NativeSessionBinding:
+        if not _is_uuid(session_id):
+            raise NativeDeliveryError("Copilot local session identity is invalid")
+        try:
+            root = _SESSION_STATE_DIR.resolve(strict=True)
+            directory = root / session_id
+            workspace = directory / "workspace.yaml"
+            events = directory / "events.jsonl"
+            if (
+                directory.resolve(strict=True) != directory
+                or workspace.resolve(strict=True) != workspace
+                or events.resolve(strict=True) != events
+            ):
+                raise NativeDeliveryError("Copilot session metadata is outside its owned path")
+            metadata = yaml.safe_load(workspace.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, RuntimeError, yaml.YAMLError) as exc:
+            if isinstance(exc, NativeDeliveryError):
+                raise
+            raise NativeDeliveryError("Copilot published task binding is missing or unreadable") from None
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("id") != session_id
+            or metadata.get("mc_session_id") != session_id
+        ):
+            raise NativeDeliveryError("Copilot published task binding does not match the local session")
+        task_id = metadata.get("mc_task_id")
+        if not isinstance(task_id, str) or not _is_uuid(task_id):
+            raise NativeDeliveryError("Copilot published task identity is missing or invalid")
+        if metadata.get("remote_steerable") is not True or not self._is_remote_steerable(session_id):
+            raise NativeDeliveryError("Copilot remote control is not enabled")
+        return NativeSessionBinding(session_id, task_id)
+
     async def send_message(self, session_id: str, message: str) -> None:
         if self._steer is None:
-            log.warning("session_state_watcher_no_steer_client")
-            return
-        await self._steer.send_message(session_id, message)
+            raise NativeDeliveryError("Copilot steering is unavailable")
+        binding = self._resolve_binding(session_id)
+        await self._steer.send_message(binding.task_id, message)
 
     async def abort_session(self, session_id: str) -> None:
         if self._steer is None:
-            log.warning("session_state_watcher_no_steer_client")
-            return
-        await self._steer.abort(session_id)
+            raise NativeDeliveryError("Copilot steering is unavailable")
+        binding = self._resolve_binding(session_id)
+        await self._steer.abort(binding.task_id)
 
     async def _load_existing_sessions(self) -> None:
         running_jobs: list[tuple[str, str, int, str | None, str | None, str | None]] = []
@@ -116,10 +161,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
                     self._tracked_sessions.add(row[0])
 
             for job_id, ext_sid, count, wt, base, repo in running_jobs:
-                alive = await self._steer.check_alive(ext_sid) if self._steer else True
-                if not alive:
-                    await self._finalize_session(job_id, error_reason="session ended while CodePlane was offline")
-                    continue
+                # Reattach observation; only explicit source termination establishes an end.
                 self._session_to_job[ext_sid] = job_id
                 self._job_worktrees[job_id] = wt or repo or ""
                 self._job_base_refs[job_id] = base or "HEAD"
@@ -165,8 +207,7 @@ class SessionStateWatcher(TraceForgeIngestBase):
             return []
         results: list[tuple[str, str, str]] = []
         try:
-            db = sqlite3.connect(str(_SESSION_STORE_PATH), timeout=2.0)
-            db.execute("PRAGMA journal_mode=WAL")
+            db = sqlite3.connect(f"{_SESSION_STORE_PATH.as_uri()}?mode=ro", uri=True, timeout=2.0)
             try:
                 query = "SELECT id, cwd, summary FROM sessions WHERE 1=1"
                 params: tuple[Any, ...] = ()
@@ -189,12 +230,33 @@ class SessionStateWatcher(TraceForgeIngestBase):
 
     def _is_remote_steerable(self, session_id: str) -> bool:
         events_path = _SESSION_STATE_DIR / session_id / "events.jsonl"
+        steerable = False
         try:
-            first_line = events_path.read_text(encoding="utf-8").splitlines()[0]
-            event = json.loads(first_line)
-            return bool(event.get("data", {}).get("remoteSteerable"))
-        except (IndexError, OSError, json.JSONDecodeError):
+            with events_path.open(encoding="utf-8") as stream:
+                for line_number, line in enumerate(stream, 1):
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        log.debug(
+                            "session_state_watcher_control_record_incomplete",
+                            session_id=session_id,
+                            line_number=line_number,
+                        )
+                        continue
+                    if not isinstance(event, dict) or event.get("type") not in {
+                        "session.start",
+                        "session.started",
+                        "session.resume",
+                        "session.remote_steerable_changed",
+                    }:
+                        continue
+                    data = event.get("data")
+                    if isinstance(data, dict) and isinstance(data.get("remoteSteerable"), bool):
+                        steerable = data["remoteSteerable"]
+        except (OSError, UnicodeError):
+            log.debug("session_state_watcher_control_read_failed", session_id=session_id, exc_info=True)
             return False
+        return steerable
 
     async def _attach_session(self, session_id: str, cwd: str) -> None:
         job = await self._create_job(session_id, cwd)
@@ -221,12 +283,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
         )
         self._tail_tasks[session_id] = task
         task.add_done_callback(self._make_tail_pop_callback(session_id))
-        live = asyncio.create_task(
-            self._copilot_liveness_loop(session_id, job_id),
-            name=f"copilot-live-{session_id[:8]}",
-        )
-        self._liveness_tasks[session_id] = live
-        live.add_done_callback(self._make_liveness_pop_callback(session_id))
 
     @staticmethod
     def _raw_terminal(raw: dict[str, Any]) -> tuple[bool, str | None]:
@@ -235,18 +291,6 @@ class SessionStateWatcher(TraceForgeIngestBase):
             data = raw.get("data") or {}
             return True, str(data.get("message") or data.get("error") or "session error")
         return typ == "session.shutdown", None
-
-    async def _copilot_liveness_loop(self, session_id: str, job_id: str) -> None:
-        if self._steer is None:
-            return
-        while self._running and session_id in self._session_to_job:
-            await asyncio.sleep(_DISCOVERY_POLL_S)
-            if not await self._steer.check_alive(session_id):
-                await self._finalize_session(job_id, error_reason="session ended without clean shutdown")
-                task = self._tail_tasks.get(session_id)
-                if task:
-                    task.cancel()
-                return
 
     async def _create_job(self, session_id: str, cwd: str) -> Job | None:
         if not self._git:

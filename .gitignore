@@ -114,7 +114,6 @@ __marimo__/
 .tower-worktrees/
 
 # Tool artifacts
-.recon/
 .desloppify/
 scorecard.png
 .desloppify-observe-report*.txt

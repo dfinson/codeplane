@@ -24,6 +24,7 @@ from backend.models.events import EventKind, new_event
 from backend.services.git.git_service import GitError
 
 if TYPE_CHECKING:
+    from backend.models.session_event import EventMetadata
     from backend.services.events.event_bus import EventBus
     from backend.services.git.git_service import GitService
 
@@ -58,13 +59,25 @@ _WORKTREE_MARKER = "/.codeplane-worktrees/"
 class DiffService:
     """Generates and parses unified diffs from git worktrees."""
 
-    def __init__(self, git_service: GitService, event_bus: EventBus) -> None:
+    def __init__(
+        self,
+        git_service: GitService,
+        event_bus: EventBus,
+        *,
+        metadata: EventMetadata | None = None,
+        read_only: bool = False,
+    ) -> None:
         self._git = git_service
         self._event_bus = event_bus
+        self._metadata = metadata
+        self._read_only = read_only
         # Monotonic timestamps of last diff calculation per job
         self._last_diff_at: dict[str, float] = {}
         # Per-job locks to prevent concurrent diff calculations
         self._locks: dict[str, asyncio.Lock] = {}
+
+    def scoped(self, metadata: EventMetadata, *, read_only: bool) -> DiffService:
+        return DiffService(self._git, self._event_bus, metadata=metadata, read_only=read_only)
 
     async def on_worktree_file_modified(
         self,
@@ -151,7 +164,7 @@ class DiffService:
             # content from the other branch.  Avoid polluting the diff with
             # those unrelated changes by comparing committed state only.
             merge_in_progress = await self._git.is_merge_in_progress(cwd=worktree_path)
-            if not merge_in_progress:
+            if not merge_in_progress and not self._read_only:
                 # Mark untracked files so they appear in the diff output.
                 await self._git.add_intent_to_add(cwd=worktree_path)
             # Resolve merge-base so we only show branch-own changes,
@@ -198,6 +211,7 @@ class DiffService:
                 session_id=job_id,
                 timestamp=datetime.now(UTC),
                 kind=EventKind.diff_updated,
+                metadata=self._metadata,
                 payload=json.loads(payload.model_dump_json()),
             )
         )

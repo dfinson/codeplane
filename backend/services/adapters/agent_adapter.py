@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from backend.models.domain import AgentSDK, SDKModelMismatchError
 
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from backend.models.api_schemas import ExecutionPhase
     from backend.models.domain import SessionConfig
     from backend.models.events import SessionEvent
+    from backend.models.usage import UsageAmount
 
 
 @dataclass(slots=True)
@@ -29,6 +30,29 @@ class CompletionResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     model: str = ""
+    usage: tuple[UsageAmount, ...] = ()
+    usage_event_id: str | None = None
+    raw_text: str | None = None
+    response_normalization: Literal["single_json_code_fence"] | None = None
+
+
+class UtilityCompletionError(OSError):
+    """A text-only provider call failed; no successful completion is available.
+
+    The OSError base preserves existing utility consumers' provider-I/O
+    fallback paths. ``reason`` distinguishes timeout, abort and SDK failures.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str = "sdk_error",
+        completion: CompletionResult | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.completion = completion
 
 
 # Model prefixes accepted by each SDK.  An empty tuple means "any model".
@@ -56,12 +80,12 @@ def validate_sdk_model(sdk: str, model: str | None) -> None:
 
     No-op when model is None/empty (SDK will use its default).
     """
-    if not model:
-        return
     try:
         sdk_enum = AgentSDK(sdk)
     except ValueError:
         raise SDKModelMismatchError(f"Unknown SDK: {sdk!r}") from None
+    if not model:
+        return
     prefixes = _SDK_MODEL_PREFIXES.get(sdk_enum, ())
     if prefixes and not model.startswith(prefixes):
         allowed = ", ".join(f"{p}*" for p in prefixes)
@@ -115,6 +139,9 @@ class AgentAdapterInterface(ABC):
     async def abort_session(self, session_id: str) -> None:
         """Abort the current message processing and destroy the session."""
 
+    async def shutdown(self) -> None:  # noqa: B027
+        """Release owned clients and drain callback work before service teardown."""
+
     async def interrupt_session(self, session_id: str) -> None:  # noqa: B027
         """Interrupt the current turn without destroying the session.
 
@@ -147,9 +174,10 @@ class AgentAdapterInterface(ABC):
         """Non-agentic single-turn completion.
 
         Returns a ``CompletionResult`` with the response text and any
-        token/cost metadata the SDK exposes.  On hard error ``text`` is
-        ``None``; on timeout ``text`` may be an empty string if no
-        partial content was collected.
+        token/cost metadata the SDK exposes. Text-only implementations deny
+        tool permissions and raise ``UtilityCompletionError`` on provider
+        failure, timeout, abort or an empty response. Caller cancellation
+        propagates after releasing owned resources.
         """
         return CompletionResult()
 

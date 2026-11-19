@@ -8,7 +8,8 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 import structlog
-from traceforge.types import SessionEvent
+
+from backend.models.session_event import SessionEvent
 
 log = structlog.get_logger()
 
@@ -26,23 +27,30 @@ class EventBus:
 
     def __init__(self) -> None:
         self._subscribers: list[Subscriber] = []
+        self._required: list[Subscriber] = []
         self._muted = False
 
     def mute(self) -> None:
         """Stop dispatching events (used during shutdown)."""
         self._muted = True
 
-    def subscribe(self, handler: Subscriber) -> None:
-        self._subscribers.append(handler)
+    def subscribe(self, handler: Subscriber, *, required: bool = False) -> None:
+        (self._required if required else self._subscribers).append(handler)
 
     def unsubscribe(self, handler: Subscriber) -> None:
         """Remove a previously registered handler (no-op if not found)."""
         with contextlib.suppress(ValueError):
             self._subscribers.remove(handler)
+        with contextlib.suppress(ValueError):
+            self._required.remove(handler)
 
     async def publish(self, event: SessionEvent) -> None:
         """Fan-out *event* to every subscriber concurrently."""
-        if self._muted or not self._subscribers:
+        if self._muted:
+            return
+        for subscriber in tuple(self._required):
+            await subscriber(event)
+        if not self._subscribers:
             return
 
         results = await asyncio.gather(

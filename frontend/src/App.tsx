@@ -17,6 +17,9 @@ const JobDetailScreen = lazyRetry(() =>
 const JobCreationScreen = lazyRetry(() =>
   import("./components/JobCreationScreen").then((module) => ({ default: module.JobCreationScreen })),
 );
+const RecipeDefinitionEditor = lazyRetry(() =>
+  import("./components/RecipeDefinitionEditor").then((module) => ({ default: module.RecipeDefinitionEditor })),
+);
 const SettingsScreen = lazyRetry(() =>
   import("./components/SettingsScreen").then((module) => ({ default: module.SettingsScreen })),
 );
@@ -237,6 +240,7 @@ export function App() {
             <Routes>
               <Route path="/" element={<Navigate to="/projects" replace />} />
               <Route path="/jobs/new" element={<JobCreationScreen />} />
+              <Route path="/recipes/:definitionId?" element={<RecipeDefinitionEditor />} />
               <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
               <Route path="/history" element={<HistoryScreen />} />
               <Route path="/analytics" element={<AnalyticsScreen />} />

@@ -6,6 +6,7 @@ Routes: ``/api/preview/{port}/{path}``
 
 from __future__ import annotations
 
+import anyio
 import httpx
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
@@ -33,11 +34,17 @@ _BLOCKED_REQUEST_HEADERS = frozenset(
         "x-forwarded-proto",
         "x-real-ip",
         "forwarded",
+        "cookie",
+        "authorization",
+        "cf-access-jwt-assertion",
+        "x-codeplane-internal-token",
     }
 )
 
 # Response headers stripped before forwarding back to the client.
-_BLOCKED_RESPONSE_HEADERS = frozenset({"transfer-encoding", "connection", "content-encoding", "content-length"})
+_BLOCKED_RESPONSE_HEADERS = frozenset(
+    {"transfer-encoding", "connection", "content-encoding", "content-length", "set-cookie"}
+)
 
 
 @router.api_route(
@@ -63,12 +70,40 @@ async def preview_proxy(port: int, path: str, request: Request, client: FromDish
 
     try:
         body = await request.body()
-        upstream_response = await client.request(
+        upstream_request = client.build_request(
             method=request.method,
             url=upstream_url,
             headers=forward_headers,
             content=body if body else None,
         )
+        # build_request merges the shared client's cookie jar and defaults.
+        # Strip again after that merge; never mutate the jar around a send.
+        for header in _BLOCKED_REQUEST_HEADERS - {"host"}:
+            upstream_request.headers.pop(header, None)
+        upstream_response = await client.send(upstream_request, stream=True, auth=None, follow_redirects=False)
+        try:
+            content = bytearray()
+            async for chunk in upstream_response.aiter_bytes():
+                if len(content) + len(chunk) > _MAX_RESPONSE_BYTES:
+                    return JSONResponse(
+                        {"detail": f"Upstream response too large (limit {_MAX_RESPONSE_BYTES} bytes)"},
+                        status_code=502,
+                    )
+                content.extend(chunk)
+            response_headers = {
+                key: value
+                for key, value in upstream_response.headers.items()
+                if key.lower() not in _BLOCKED_RESPONSE_HEADERS
+            }
+            return Response(
+                content=bytes(content),
+                status_code=upstream_response.status_code,
+                headers=response_headers,
+                media_type=upstream_response.headers.get("content-type"),
+            )
+        finally:
+            with anyio.CancelScope(shield=True):
+                await upstream_response.aclose()
     except httpx.HTTPError as exc:
         error_type = type(exc).__name__
         log.debug("preview_proxy_error", port=port, path=path, error=error_type)
@@ -76,23 +111,3 @@ async def preview_proxy(port: int, path: str, request: Request, client: FromDish
             {"detail": f"Cannot connect to service on port {port}", "error": error_type},
             status_code=502,
         )
-
-    # Forward response headers (skip hop-by-hop)
-    response_headers = {}
-    for key, value in upstream_response.headers.items():
-        if key.lower() not in _BLOCKED_RESPONSE_HEADERS:
-            response_headers[key] = value
-
-    content = upstream_response.content
-    if len(content) > _MAX_RESPONSE_BYTES:
-        return JSONResponse(
-            {"detail": f"Upstream response too large ({len(content)} bytes, limit {_MAX_RESPONSE_BYTES})"},
-            status_code=502,
-        )
-
-    return Response(
-        content=content,
-        status_code=upstream_response.status_code,
-        headers=response_headers,
-        media_type=upstream_response.headers.get("content-type"),
-    )

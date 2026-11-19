@@ -423,6 +423,14 @@ class TestPrepareRestartRequest:
 
 
 class TestRunParent:
+    @pytest.fixture(autouse=True)
+    def prepared_launch_identity(self):
+        with patch(
+            "backend.services.dev_restart.restart_protocol.read_json_file",
+            return_value={"launchProfile": _profile().to_dict()},
+        ):
+            yield
+
     def _args(self) -> argparse.Namespace:
         return argparse.Namespace(
             source=None,
@@ -527,3 +535,130 @@ class TestRunParent:
             assert dev_restart.run_parent(self._args()) == 1
 
         mock_spawn.assert_not_called()
+
+
+class TestAccessOnlyHandoffParent:
+    @staticmethod
+    def profile():
+        return _profile(
+            remote=True,
+            provider="cloudflare",
+            tunnel_ownership="external",
+            tunnel_origin="https://access.example.test",
+            auth_mode="access_only",
+        )
+
+    def test_cached_token_is_captured_without_login_or_secret_arguments(self):
+        retrieve = getattr(dev_restart, "get_cached_access_token", None)
+        assert callable(retrieve), "Introduce get_cached_access_token for the authenticated parent contract"
+        token = "synthetic.header.signature"
+        with (
+            patch("backend.services.dev_restart.launch_profile.validate_launch_profile") as validate,
+            patch.object(dev_restart.shutil, "which", return_value="cloudflared"),
+            patch.object(
+                dev_restart.subprocess,
+                "run",
+                return_value=CompletedProcess([], 0, stdout=token + "\n", stderr=""),
+            ) as run,
+        ):
+            assert retrieve(self.profile()) == token
+        validate.assert_called_once()
+        assert run.call_args.args[0] == [
+            "cloudflared",
+            "access",
+            "token",
+            "--app",
+            "https://access.example.test",
+        ]
+        assert run.call_args.kwargs["capture_output"] is True
+        assert run.call_args.kwargs["timeout"] == 30
+        assert token not in repr(run.call_args)
+
+    @pytest.mark.parametrize("failure", ["empty", "nonzero", "missing", "timeout", "unsafe", "unavailable"])
+    def test_retrieval_failure_is_sanitized_and_never_adopts(self, failure):
+        retrieve = getattr(dev_restart, "get_cached_access_token", None)
+        assert callable(retrieve), "Introduce get_cached_access_token for the authenticated parent contract"
+        import subprocess
+
+        marker = "sensitive-output-never-print"
+        result = CompletedProcess([], 0, stdout="", stderr=marker)
+        error = None
+        if failure == "nonzero":
+            result = CompletedProcess([], 1, stdout=marker, stderr=marker)
+        elif failure == "missing":
+            error = FileNotFoundError(marker)
+        elif failure == "timeout":
+            error = subprocess.TimeoutExpired(["cloudflared"], 30, output=marker)
+        elif failure == "unsafe":
+            result = CompletedProcess([], 0, stdout="a.b.c\r\nInjected: " + marker, stderr="")
+        with (
+            patch("backend.services.dev_restart.launch_profile.validate_launch_profile"),
+            patch.object(dev_restart.shutil, "which", return_value=None if failure == "unavailable" else "cloudflared"),
+            patch.object(dev_restart.subprocess, "run", return_value=result, side_effect=error),
+            patch("backend.services.dev_restart.restart_helper.spawn_detached_helper") as spawn,
+            pytest.raises((dev_restart.DevRestartError, RestartProtocolError)) as caught,
+        ):
+            retrieve(self.profile())
+        assert marker not in str(caught.value)
+        spawn.assert_not_called()
+
+    def test_parent_commits_only_after_authenticated_receipt_without_persisting_token(
+        self,
+        tmp_path,
+        capsys,
+        monkeypatch,
+    ):
+        from backend.services.dev_restart import restart_helper as rh
+
+        assert hasattr(rh, "HandoffProcess"), "Introduce HandoffProcess to require a distinct parent commit"
+        monkeypatch.setenv("CODEPLANE_HOME", str(tmp_path))
+        monkeypatch.setattr("backend.config._codeplane_dir", None)
+        token = "synthetic.header.signature"
+        request_id = "private-handoff"
+        paths = dev_restart.write_pending_request(request_id, tmp_path, self.profile(), RestartTimeouts())
+        handle = MagicMock(spec=rh.HandoffProcess)
+        handle.pid = 123
+        handle.commit.return_value = True
+        captured = {}
+
+        def capture_spawn(*args, **kwargs):
+            captured.update(kwargs["handoff"])
+            assert token not in repr(args)
+            return handle
+
+        with (
+            patch.object(dev_restart, "prepare_restart_request", return_value=(paths, request_id, RestartTimeouts())),
+            patch.object(dev_restart, "get_cached_access_token", return_value=token),
+            patch("backend.services.dev_restart.restart_protocol.get_restart_log_path", return_value=tmp_path / "log"),
+            patch.object(rh, "spawn_detached_helper", side_effect=capture_spawn),
+        ):
+            assert dev_restart.run_parent(argparse.Namespace()) == 0
+        handle.commit.assert_called_once_with(paths)
+        assert captured["jwt"] == token
+        assert token not in paths.pending.read_text()
+        assert token not in capsys.readouterr().out
+        paths.pending.unlink()
+
+    @pytest.mark.parametrize("receipt", ["claimed_only", "wrong_request", "wrong_helper"])
+    def test_parent_never_commits_an_unmatched_receipt(self, tmp_path, receipt):
+        import time
+        from types import SimpleNamespace
+
+        from backend.services.dev_restart import restart_helper as rh
+        from backend.services.dev_restart.restart_protocol import write_json_atomic
+
+        assert hasattr(rh, "HandoffProcess"), "Introduce HandoffProcess with identity-bound adoption"
+        paths = SimpleNamespace(started=tmp_path / "started.json", claimed=tmp_path / "claimed.json")
+        marker = {"requestId": "expected", "helperPid": 123, "helperProcessTime": 1.0}
+        if receipt == "wrong_request":
+            marker["requestId"] = "other"
+        elif receipt == "wrong_helper":
+            marker["helperPid"] = 999
+        write_json_atomic(paths.claimed if receipt == "claimed_only" else paths.started, marker)
+        process = MagicMock(pid=123)
+        process.poll.return_value = None
+        handle = rh.HandoffProcess(process, "expected", 1.0, time.monotonic() + 0.03, "helper.py", "request.json")
+        with patch.object(rh.psutil, "Process", side_effect=rh.psutil.NoSuchProcess(999)):
+            assert handle.commit(paths) is False
+        process.stdin.fileno.assert_not_called()
+        process.stdin.close.assert_called_once()

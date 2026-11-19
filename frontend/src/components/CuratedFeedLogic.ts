@@ -11,7 +11,7 @@ import {
   stripMcpPrefix,
 } from "./ToolRenderers";
 import type { FileText } from "lucide-react";
-import { transcriptIdentity } from "../lib/transcriptIdentity";
+import { isFailedTool, isToolOutcome, removePairedToolStarts, transcriptIdentity } from "../lib/transcriptIdentity";
 import { repositoryRelativePath } from "../lib/pathDisplay";
 
 // ---------------------------------------------------------------------------
@@ -228,23 +228,7 @@ export function buildFeedItems(
   function flushTurn() {
     if (!currentTurn) return;
 
-    // Deduplicate tool_running/tool_call pairs
-    const completedNames = new Map<string, number>();
-    for (const e of currentTurn.toolCalls) {
-      if (e.kind === "tool.call.completed" && e.toolName) {
-        completedNames.set(e.toolName, (completedNames.get(e.toolName) ?? 0) + 1);
-      }
-    }
-    const runningCounts = new Map<string, number>();
-    currentTurn.toolCalls = currentTurn.toolCalls.filter((e) => {
-      if (e.kind !== "tool.call.started" || !e.toolName) return true;
-      const limit = completedNames.get(e.toolName) ?? 0;
-      if (limit <= 0) return true;
-      const seen = (runningCounts.get(e.toolName) ?? 0) + 1;
-      runningCounts.set(e.toolName, seen);
-      if (seen <= limit) return false;
-      return true;
-    });
+    currentTurn.toolCalls = removePairedToolStarts(currentTurn.toolCalls);
 
     // Filter out hidden tools
     const FRONTEND_HIDDEN = new Set([
@@ -252,6 +236,7 @@ export function buildFeedItems(
       "Think", "Sql", "sql", "ListMcpResourceTemplates", "ListMcpResources",
     ]);
     currentTurn.toolCalls = currentTurn.toolCalls.filter((e) => {
+      if (isFailedTool(e)) return true;
       if (e.toolVisibility === "hidden") return false;
       const name = e.toolName?.includes("/") ? e.toolName.split("/").pop()! : e.toolName;
       if (name && FRONTEND_HIDDEN.has(name)) return false;
@@ -311,7 +296,7 @@ export function buildFeedItems(
       continue;
     }
 
-    if (entry.kind === "tool.call.completed" || entry.kind === "tool.call.started") {
+    if (isToolOutcome(entry.kind) || entry.kind === "tool.call.started") {
       if (currentTurn && entry.turnId && currentTurn.turnId && entry.turnId !== currentTurn.turnId) {
         flushTurn();
       }

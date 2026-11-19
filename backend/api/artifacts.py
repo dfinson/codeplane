@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.models.api_schemas import ArtifactListResponse, ArtifactResponse
 from backend.models.domain import JobNotFoundError
-from backend.services.artifacts.artifact_service import ArtifactService, get_artifacts_base
+from backend.services.artifacts.artifact_service import ArtifactService, resolve_artifact_path
 from backend.services.job.job_service import JobService
 
 router = APIRouter(tags=["artifacts"], route_class=DishkaRoute)
@@ -61,10 +59,10 @@ async def download_artifact(
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    disk_path = Path(artifact.disk_path).resolve()
-    # Validate artifact path is within the expected artifacts directory
-    if not disk_path.is_relative_to(get_artifacts_base().resolve()):
-        raise HTTPException(status_code=403, detail="Artifact path outside allowed directory")
+    try:
+        disk_path = resolve_artifact_path(artifact)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=403, detail="Artifact path outside allowed directory") from exc
     if not disk_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact file missing from disk")
 

@@ -484,12 +484,7 @@ export interface paths {
         put?: never;
         /**
          * Reenrich Job
-         * @description Re-enrich historical events for a job through TraceForge.
-         *
-         *     Replays all persisted events through a fresh TraceForge Enricher so
-         *     that classification, visibility, tool_display and other metadata are
-         *     backfilled.  Idempotent — a marker event prevents double processing
-         *     unless ``force=true``.
+         * @description Rebuild structural display/duration metadata without changing raw history or risk.
          */
         post: operations["reenrich_job_api_jobs__job_id__reenrich_post"];
         delete?: never;
@@ -1956,33 +1951,33 @@ export interface paths {
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        get: operations["preview_proxy_api_preview__port___path__put"];
+        get: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        put: operations["preview_proxy_api_preview__port___path__put"];
+        put: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        post: operations["preview_proxy_api_preview__port___path__put"];
+        post: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        delete: operations["preview_proxy_api_preview__port___path__put"];
+        delete: operations["preview_proxy_api_preview__port___path__get"];
         options?: never;
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        head: operations["preview_proxy_api_preview__port___path__put"];
+        head: operations["preview_proxy_api_preview__port___path__get"];
         /**
          * Preview Proxy
          * @description Reverse-proxy a request to a local development server.
          */
-        patch: operations["preview_proxy_api_preview__port___path__put"];
+        patch: operations["preview_proxy_api_preview__port___path__get"];
         trace?: never;
     };
     "/api/jobs/{job_id}/share": {
@@ -2795,29 +2790,6 @@ export interface paths {
         patch: operations["update_project_api_settings_projects__project_id__patch"];
         trace?: never;
     };
-    "/api/settings/projects/{project_id}/ingest-tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ingest Project Tasks
-         * @description Ingest BMAD stories / spec-kit tasks for every member repo of a Project (CAP-9).
-         *
-         *     Stateless, on-demand, read-only against every source repo; re-running
-         *     upserts existing TaskLinks rather than duplicating them.
-         */
-        post: operations["ingest_project_tasks_api_settings_projects__project_id__ingest_tasks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/settings/projects/{project_id}/task-links": {
         parameters: {
             query?: never;
@@ -2856,6 +2828,159 @@ export interface paths {
          * @description Atomically claim and start one ready TaskLink.
          */
         post: operations["start_task_link_api_settings_projects__project_id__task_links__task_link_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/task-links/{task_link_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Task Link */
+        get: operations["inspect_task_link_api_settings_projects__project_id__task_links__task_link_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board */
+        get: operations["get_project_board_api_settings_projects__project_id__board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/columns/{column}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Column */
+        get: operations["get_project_board_column_api_settings_projects__project_id__board_columns__column__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Approvals */
+        get: operations["get_project_board_approvals_api_settings_projects__project_id__board_approvals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/projects/{project_id}/board/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Board Deliveries */
+        get: operations["get_project_board_deliveries_api_settings_projects__project_id__board_deliveries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tracker Operations */
+        get: operations["list_tracker_operations_api_projects__project_id__tracker_links_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tracker Operation */
+        get: operations["get_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile Tracker Operation */
+        post: operations["reconcile_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/tracker-links/operations/{operation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Tracker Operation */
+        post: operations["retry_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2914,6 +3039,640 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipes */
+        get: operations["list_recipes_api_recipes_get"];
+        put?: never;
+        /** Create Recipe */
+        post: operations["create_recipe_api_recipes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Recipe */
+        post: operations["validate_recipe_api_recipes_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/resolve-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Default Recipe */
+        post: operations["resolve_default_recipe_api_recipes_resolve_default_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/revisions/{revision_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recipe Revision */
+        get: operations["get_recipe_revision_api_recipes_revisions__revision_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/revisions/{revision_id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy Recipe Revision */
+        post: operations["copy_recipe_revision_api_recipes_revisions__revision_id__copy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recipe */
+        get: operations["get_recipe_api_recipes__definition_id__get"];
+        /** Save Recipe */
+        put: operations["save_recipe_api_recipes__definition_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish Recipe */
+        post: operations["publish_recipe_api_recipes__definition_id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recipes/{definition_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipe Revisions */
+        get: operations["list_recipe_revisions_api_recipes__definition_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/export-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Optional Export Health */
+        get: operations["optional_export_health_api_integrations_export_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Integration Profiles */
+        get: operations["list_integration_profiles_api_integrations_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/ingest-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue Ingest Credential */
+        post: operations["issue_ingest_credential_api_integrations__binding_id__ingest_credential_post"];
+        /** Revoke Ingest Credential */
+        delete: operations["revoke_ingest_credential_api_integrations__binding_id__ingest_credential_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Traces */
+        post: operations["ingest_traces_api_integrations__binding_id__traces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Observation */
+        post: operations["register_observation_api_integrations_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append Observation Records */
+        post: operations["append_observation_records_api_integrations__binding_id__records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/integrations/{binding_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observation Events */
+        get: operations["get_observation_events_api_integrations__binding_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/external-gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue Source */
+        post: operations["issue_source_api_jobs__job_id__external_gates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preflight */
+        post: operations["preflight_api_gate__source_id__requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_api_gate__source_id__requests__request_id__get"];
+        put?: never;
+        post?: never;
+        /** Retire */
+        delete: operations["retire_api_gate__source_id__requests__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume */
+        post: operations["consume_api_gate__source_id__requests__request_id__consume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/requests/{request_id}/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reported */
+        post: operations["reported_api_gate__source_id__requests__request_id__observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/gate/{source_id}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Legacy Invoke */
+        post: operations["legacy_invoke_api_gate__source_id__invoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Run */
+        get: operations["current_run_api_jobs__job_id__recipe_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending Decisions */
+        get: operations["pending_decisions_api_jobs__job_id__recipe_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run History */
+        get: operations["run_history_api_jobs__job_id__recipe_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_api_jobs__job_id__recipe_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Steps */
+        get: operations["list_steps_api_jobs__job_id__recipe_runs__run_id__steps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Step */
+        get: operations["inspect_step_api_jobs__job_id__recipe_runs__run_id__steps__step_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect Attempt */
+        get: operations["inspect_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/consumers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Consumed Inputs */
+        get: operations["consumed_inputs_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__consumers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Attempt Control */
+        get: operations["attempt_control_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__control_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Message Attempt */
+        post: operations["message_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Attempt */
+        post: operations["stop_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Attempt */
+        post: operations["resume_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile Attempt */
+        post: operations["reconcile_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/recipe/runs/{run_id}/steps/{step_id}/attempts/{attempt_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Attempt */
+        post: operations["decide_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/reviews/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare Review */
+        post: operations["prepare_review_api_jobs__job_id__reviews_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review History */
+        get: operations["review_history_api_jobs__job_id__reviews_get"];
+        put?: never;
+        /** Record Review */
+        post: operations["record_review_api_jobs__job_id__reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2924,11 +3683,8 @@ export interface components {
             action: string;
             /** Purpose */
             purpose: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Callcount
              * @default 0
@@ -2960,11 +3716,8 @@ export interface components {
              * @default
              */
             phase: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -3037,6 +3790,13 @@ export interface components {
         };
         /** AnalyticsOverviewResponse */
         AnalyticsOverviewResponse: {
+            /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
             /** Period */
             period: number;
             /**
@@ -3074,11 +3834,8 @@ export interface components {
              * @default 0
              */
             running: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -3115,10 +3872,15 @@ export interface components {
              */
             totalToolErrors: number;
             /**
-             * Toolsuccessrate
+             * Totaltoolunknown
              * @default 0
              */
-            toolSuccessRate: number;
+            totalToolUnknown: number;
+            /**
+             * Toolsuccessrate
+             * @description Percentage among known tool outcomes, or null when no known outcomes exist.
+             */
+            toolSuccessRate?: number | null;
             /**
              * Cachehitrate
              * @default 0
@@ -3129,16 +3891,10 @@ export interface components {
              * @default []
              */
             costTrend: components["schemas"]["CostTrendEntry"][];
-            /**
-             * Totalsubagentcostusd
-             * @default 0
-             */
-            totalSubagentCostUsd: number;
-            /**
-             * Totalretrycostusd
-             * @default 0
-             */
-            totalRetryCostUsd: number;
+            /** Totalsubagentcostusd */
+            totalSubagentCostUsd?: number | null;
+            /** Totalretrycostusd */
+            totalRetryCostUsd?: number | null;
             /**
              * Totalretrycount
              * @default 0
@@ -3221,7 +3977,7 @@ export interface components {
              * @default pending
              * @enum {string}
              */
-            collectionStatus: "pending" | "collecting" | "completed" | "failed";
+            collectionStatus: "pending" | "collecting" | "completed" | "failed" | "not_applicable";
             /** Collectionerror */
             collectionError?: string | null;
             /** Collectionupdatedat */
@@ -3327,6 +4083,29 @@ export interface components {
              * @default 0
              */
             jobCount: number;
+        };
+        /** CanonicalSessionEvent */
+        CanonicalSessionEvent: {
+            /** Id */
+            id?: string;
+            /** Kind */
+            kind: string;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Raw Event */
+            raw_event?: {
+                [key: string]: unknown;
+            } | null;
+            metadata?: components["schemas"]["EventMetadata"];
         };
         /**
          * ChatChainStatusResponse
@@ -3448,6 +4227,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** CopyRecipeRequest */
+        CopyRecipeRequest: {
+            /** Name */
+            name: string;
+        };
         /** CostDriverEntry */
         CostDriverEntry: {
             /**
@@ -3455,11 +4239,8 @@ export interface components {
              * @default
              */
             bucket: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -3499,11 +4280,8 @@ export interface components {
         CostTrendEntry: {
             /** Date */
             date: string;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Jobs
              * @default 0
@@ -3522,8 +4300,11 @@ export interface components {
         };
         /** CreateCredentialRequest */
         CreateCredentialRequest: {
-            /** Provider */
-            provider: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "github" | "jira" | "azure_devops" | "otlp";
             /** Label */
             label: string;
             /** Baseurl */
@@ -3532,6 +4313,8 @@ export interface components {
             pat: string;
             /** Email */
             email?: string | null;
+            /** Exportprotocol */
+            exportProtocol?: string | null;
         };
         /** CreateJobRequest */
         CreateJobRequest: {
@@ -3573,6 +4356,7 @@ export interface components {
             /** Sessiontoken */
             sessionToken?: string | null;
             mode?: components["schemas"]["JobMode"] | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** CreateJobResponse */
         CreateJobResponse: {
@@ -3878,32 +4662,148 @@ export interface components {
             categories: components["schemas"]["EditEfficiencyCategory"][];
         };
         /**
+         * EventClassification
+         * @description Read-compatible historical labels, not permission authority.
+         */
+        EventClassification: {
+            /** Mechanism */
+            mechanism: string;
+            /** Effect */
+            effect?: string | null;
+            /**
+             * Scope
+             * @default []
+             */
+            scope: string[];
+            /**
+             * Role
+             * @default []
+             */
+            role: string[];
+            /**
+             * Action
+             * @default []
+             */
+            action: string[];
+            /**
+             * Capability
+             * @default []
+             */
+            capability: string[];
+            /**
+             * Structure
+             * @default []
+             */
+            structure: string[];
+            /**
+             * Source Labels
+             * @default []
+             */
+            source_labels: string[];
+            /** Shell Dialect */
+            shell_dialect?: string | null;
+            /**
+             * Binaries
+             * @default []
+             */
+            binaries: string[];
+            /**
+             * Phase Map
+             * @default []
+             */
+            phase_map: components["schemas"]["PhaseSegment"][];
+        };
+        /** EventMetadata */
+        EventMetadata: {
+            /** Source Framework */
+            source_framework?: string | null;
+            /** Ingestion Mode */
+            ingestion_mode?: ("stream" | "file_watch" | "poll" | "replay" | "sqlite") | null;
+            /** Raw Kind */
+            raw_kind?: string | null;
+            /** Span Id */
+            span_id?: string | null;
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Correlation Id */
+            correlation_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Sequence */
+            sequence?: number | null;
+            /** Namespace */
+            namespace?: string[] | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Repo */
+            repo?: string | null;
+            /** Turn Id */
+            turn_id?: string | null;
+            /**
+             * Visibility
+             * @default visible
+             * @enum {string}
+             */
+            visibility: "visible" | "system" | "collapsed";
+            /** Phases */
+            phases?: string[] | null;
+            /** Phase */
+            phase?: string | null;
+            /** Boundary */
+            boundary?: string | null;
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Step Id */
+            step_id?: string | null;
+            /** Activity Title */
+            activity_title?: string | null;
+            /** Step Title */
+            step_title?: string | null;
+            classification?: components["schemas"]["EventClassification"] | null;
+            /** Tool Display */
+            tool_display?: string | null;
+            motivation?: components["schemas"]["ToolMotivation"] | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** File Targets */
+            file_targets?: components["schemas"]["FileTarget"][];
+            /** Governance */
+            governance?: {
+                [key: string]: unknown;
+            } | null;
+            /** Integration Binding Id */
+            integration_binding_id?: string | null;
+            /** Execution Epoch */
+            execution_epoch?: string | null;
+            /** Execution Token */
+            execution_token?: string | null;
+            /** Recipe Run Id */
+            recipe_run_id?: string | null;
+            /** Recipe Revision */
+            recipe_revision?: number | null;
+            /** Step Instance Id */
+            step_instance_id?: string | null;
+            /** Attempt Id */
+            attempt_id?: string | null;
+        };
+        /**
          * ExecutionPhase
          * @enum {string}
          */
         ExecutionPhase: "environment_setup" | "agent_reasoning" | "verification" | "finalization" | "post_completion";
         /** ExecutiveSummaryResponse */
         ExecutiveSummaryResponse: {
-            /**
-             * Buildingusd
-             * @default 0
-             */
-            buildingUsd: number;
-            /**
-             * Thinkingusd
-             * @default 0
-             */
-            thinkingUsd: number;
-            /**
-             * Wastedusd
-             * @default 0
-             */
-            wastedUsd: number;
-            /**
-             * Totalusd
-             * @default 0
-             */
-            totalUsd: number;
+            /** Buildingusd */
+            buildingUsd?: number | null;
+            /** Thinkingusd */
+            thinkingUsd?: number | null;
+            /** Wastedusd */
+            wastedUsd?: number | null;
+            /** Totalusd */
+            totalUsd?: number | null;
             /**
              * Buildingpct
              * @default 0
@@ -3919,20 +4819,62 @@ export interface components {
              * @default 0
              */
             wastedPct: number;
-            /**
-             * @default {
-             *       "retryUsd": 0,
-             *       "failedJobsUsd": 0,
-             *       "compactionUsd": 0,
-             *       "rereadsUsd": 0
-             *     }
-             */
+            /** @default {} */
             wasteBreakdown: components["schemas"]["WasteBreakdown"];
             /**
              * Perioddays
              * @default 30
              */
             periodDays: number;
+        };
+        /** ExternalGateDecision */
+        ExternalGateDecision: {
+            /** Sourceid */
+            sourceId: string;
+            /** Requestid */
+            requestId: string;
+            /** Actiondigest */
+            actionDigest: string;
+            phase: components["schemas"]["ExternalGatePhase"];
+            /**
+             * Decision
+             * @default deny
+             * @enum {string}
+             */
+            decision: "allow" | "deny";
+            /** Reason */
+            reason: string;
+            /** Approvalid */
+            approvalId?: string | null;
+        };
+        /**
+         * ExternalGatePhase
+         * @enum {string}
+         */
+        ExternalGatePhase: "pending" | "allowed" | "denied" | "retired" | "consumed";
+        /** ExternalGateSourceRequest */
+        ExternalGateSourceRequest: {
+            /** Executiontoken */
+            executionToken: string;
+            /** Attemptid */
+            attemptId?: string | null;
+            /** Externalsessionid */
+            externalSessionId?: string | null;
+        };
+        /** ExternalGateSourceResponse */
+        ExternalGateSourceResponse: {
+            /** Sourceid */
+            sourceId: string;
+            /** Credential */
+            credential: string;
+            /** Jobid */
+            jobId: string;
+            /** Executionbindingid */
+            executionBindingId: string;
+            /** Executionepoch */
+            executionEpoch: string;
+            /** Executiontoken */
+            executionToken: string;
         };
         /** FileAccessEntry */
         FileAccessEntry: {
@@ -4022,21 +4964,12 @@ export interface components {
              * @default
              */
             filePath: string;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
-            /**
-             * Totalreadcost
-             * @default 0
-             */
-            totalReadCost: number;
-            /**
-             * Totalwritecost
-             * @default 0
-             */
-            totalWriteCost: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Totalreadcost */
+            totalReadCost?: number | null;
+            /** Totalwritecost */
+            totalWriteCost?: number | null;
             /**
              * Totalturns
              * @default 0
@@ -4075,6 +5008,15 @@ export interface components {
              * @default []
              */
             unmatchedEdits: components["schemas"]["HunkMotivation"][];
+        };
+        /** FileTarget */
+        FileTarget: {
+            /** Raw Path */
+            raw_path: string;
+            /** Path */
+            path: string;
+            /** Inside Root */
+            inside_root?: boolean | null;
         };
         /**
          * FireSidecarRequest
@@ -4232,13 +5174,128 @@ export interface components {
             /** Why */
             why: string;
         };
-        /**
-         * IngestTaskGraphResponse
-         * @description Result of an ingestion run — the full upserted TaskLink set for the Project.
-         */
-        IngestTaskGraphResponse: {
-            /** Items */
-            items: components["schemas"]["TaskLinkResponse"][];
+        /** IntegrationDependencyReadiness */
+        IntegrationDependencyReadiness: {
+            /** Ready */
+            ready: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Installedversion */
+            installedVersion?: string | null;
+        };
+        /** IntegrationOperation */
+        IntegrationOperation: {
+            /** Id */
+            id: string;
+            /**
+             * Supported
+             * @default true
+             */
+            supported: boolean;
+            /** Implemented */
+            implemented: boolean;
+            /** Producer */
+            producer?: string | null;
+            dependency: components["schemas"]["IntegrationDependencyReadiness"];
+            /**
+             * Validationstatus
+             * @default not-qualified
+             * @enum {string}
+             */
+            validationStatus: "not-qualified" | "local-fixture-qualified";
+            /** Evidence */
+            evidence?: string[];
+            /** Limitations */
+            limitations?: string[];
+        };
+        /** IntegrationProfileList */
+        IntegrationProfileList: {
+            /** Specificationsha256 */
+            specificationSha256: string;
+            /** Profiles */
+            profiles: components["schemas"]["IntegrationProfileResponse"][];
+        };
+        /** IntegrationProfileResponse */
+        IntegrationProfileResponse: {
+            /** Profileid */
+            profileId: string;
+            /** Name */
+            name: string;
+            /** Adapterid */
+            adapterId: string | null;
+            /** Providerfamily */
+            providerFamily: string;
+            /** Acceptancekind */
+            acceptanceKind: string;
+            /**
+             * Descriptorversion
+             * @default 1
+             */
+            descriptorVersion: number;
+            /** Supportedversions */
+            supportedVersions: string[];
+            /** Nativeformats */
+            nativeFormats: {
+                [key: string]: string;
+            };
+            /** Hooks */
+            hooks: string[];
+            /** Observationchannels */
+            observationChannels: string[];
+            /** Declaredownership */
+            declaredOwnership: string;
+            /** Declaredsteering */
+            declaredSteering: string;
+            /** Declaredcancellation */
+            declaredCancellation: string;
+            /** Declaredinterception */
+            declaredInterception: string;
+            /** Identitysources */
+            identitySources: string[];
+            /** Usageunits */
+            usageUnits: string[];
+            /** Utilitycompletion */
+            utilityCompletion: boolean;
+            /** Operations */
+            operations: components["schemas"]["IntegrationOperation"][];
+            /** Admissionenabled */
+            admissionEnabled: boolean;
+            /** Bindingenabled */
+            bindingEnabled?: boolean | null;
+            /**
+             * Liveready
+             * @default false
+             */
+            liveReady: boolean;
+            /**
+             * Livereadinessreason
+             * @default Discovery supplies no live binding identity or capability acknowledgment
+             */
+            liveReadinessReason: string;
+            /** Historicalimportavailable */
+            historicalImportAvailable: boolean;
+            /** Sourcereference */
+            sourceReference: string;
+        };
+        /** IssueIngestCredentialRequest */
+        IssueIngestCredentialRequest: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+        };
+        /** IssuedIngestCredential */
+        IssuedIngestCredential: {
+            /** Token */
+            token: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Header
+             * @default x-codeplane-ingest-token
+             */
+            header: string;
         };
         /** JobContextFlag */
         JobContextFlag: {
@@ -4249,11 +5306,8 @@ export interface components {
         };
         /** JobContextJob */
         JobContextJob: {
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Durationms
              * @default 0
@@ -4284,26 +5338,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
         };
         /** JobContextRepoAvg */
         JobContextRepoAvg: {
@@ -4312,11 +5354,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcost
-             * @default 0
-             */
-            avgCost: number;
+            /** Avgcost */
+            avgCost?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -4383,12 +5422,31 @@ export interface components {
                 [key: string]: components["schemas"]["HunkMotivation"];
             };
         };
+        /** JobPendingDecision */
+        JobPendingDecision: {
+            approval: components["schemas"]["ApprovalResponse"];
+            /** Reciperunid */
+            recipeRunId: string | null;
+            /** Stepinstanceid */
+            stepInstanceId: string | null;
+            /** Attemptid */
+            attemptId: string | null;
+            /** Humangate */
+            humanGate: boolean;
+        };
+        /** JobPendingDecisionPage */
+        JobPendingDecisionPage: {
+            /** Items */
+            items: components["schemas"]["JobPendingDecision"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
         /** JobResponse */
         JobResponse: {
             /** Id */
             id: string;
             /** Repo */
-            repo: string;
+            repo: string | null;
             /** Prompt */
             prompt: string;
             /** Projectid */
@@ -4399,7 +5457,7 @@ export interface components {
             description?: string | null;
             state: components["schemas"]["JobState"];
             /** Baseref */
-            baseRef: string;
+            baseRef: string | null;
             /** Worktreepath */
             worktreePath: string | null;
             /** Branch */
@@ -4461,10 +5519,19 @@ export interface components {
             source: string;
             /** Externalsessionid */
             externalSessionId?: string | null;
+            /** Integrationbindingid */
+            integrationBindingId?: string | null;
+            /**
+             * Observationonly
+             * @default false
+             */
+            observationOnly: boolean;
             /** @default standard */
             mode: components["schemas"]["JobMode"];
             /** Totalcostusd */
             totalCostUsd?: number | null;
+            /** Costusage */
+            costUsage?: components["schemas"]["UsageAmount"][] | null;
             /** Totaltokens */
             totalTokens?: number | null;
             /** Inputtokens */
@@ -4508,6 +5575,11 @@ export interface components {
              * @default []
              */
             contextHandoffs: components["schemas"]["ContextHandoffPayload"][];
+            /**
+             * Verificationresults
+             * @default []
+             */
+            verificationResults: components["schemas"]["VerificationResultResponse"][];
         };
         /**
          * JobState
@@ -4516,6 +5588,15 @@ export interface components {
         JobState: "preparing" | "queued" | "running" | "waiting_for_approval" | "review" | "completed" | "failed" | "canceled";
         /** JobTelemetryResponse */
         JobTelemetryResponse: {
+            /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
+            /** Legacycostunverified */
+            legacyCostUnverified?: number | null;
             /**
              * Available
              * @default false
@@ -4571,11 +5652,8 @@ export interface components {
              * @default 0
              */
             cacheWriteTokens: number;
-            /**
-             * Totalcost
-             * @default 0
-             */
-            totalCost: number;
+            /** Totalcost */
+            totalCost?: number | null;
             /**
              * Contextwindowsize
              * @default 0
@@ -4668,10 +5746,6 @@ export interface components {
             /**
              * @default {
              *       "totalTurns": 0,
-             *       "peakTurnCostUsd": 0,
-             *       "avgTurnCostUsd": 0,
-             *       "costFirstHalfUsd": 0,
-             *       "costSecondHalfUsd": 0,
              *       "turnCurve": []
              *     }
              */
@@ -4743,6 +5817,7 @@ export interface components {
              */
             sidecarSessions: components["schemas"]["SidecarSessionSummary"][];
         };
+        JsonValue: unknown;
         /**
          * LaunchJobFromChatRequest
          * @description Launch a Job from a Chat, seeded from its transcript (CAP-12/AD-12, Story 5.2).
@@ -4922,21 +5997,15 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcost
-             * @default 0
-             */
-            avgCost: number;
+            /** Avgcost */
+            avgCost?: number | null;
             /**
              * Avgdurationms
              * @default 0
              */
             avgDurationMs: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Premiumrequests
              * @default 0
@@ -4979,51 +6048,30 @@ export interface components {
              * @default 0
              */
             cacheHitRate: number;
-            /**
-             * Costperjob
-             * @default 0
-             */
-            costPerJob: number;
-            /**
-             * Costperminute
-             * @default 0
-             */
-            costPerMinute: number;
-            /**
-             * Costperturn
-             * @default 0
-             */
-            costPerTurn: number;
-            /**
-             * Costpertoolcall
-             * @default 0
-             */
-            costPerToolCall: number;
-            /**
-             * Costperdiffline
-             * @default 0
-             */
-            costPerDiffLine: number;
+            /** Costperjob */
+            costPerJob?: number | null;
+            /** Costperminute */
+            costPerMinute?: number | null;
+            /** Costperturn */
+            costPerTurn?: number | null;
+            /** Costpertoolcall */
+            costPerToolCall?: number | null;
+            /** Costperdiffline */
+            costPerDiffLine?: number | null;
         };
         /** ModelCostMixEntry */
         ModelCostMixEntry: {
             /** Model */
             model: string;
-            /**
-             * Costpermtok
-             * @default 0
-             */
-            costPerMtok: number;
+            /** Costpermtok */
+            costPerMtok?: number | null;
             /**
              * Totaltokens
              * @default 0
              */
             totalTokens: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Pctoftokens
              * @default 0
@@ -5152,11 +6200,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -5214,17 +6259,65 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalwasteusd
-             * @default 0
-             */
-            totalWasteUsd: number;
+            /** Totalwasteusd */
+            totalWasteUsd?: number | null;
             /** Firstseenat */
             firstSeenAt?: string | null;
             /** Lastseenat */
             lastSeenAt?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** ObservationEventList */
+        ObservationEventList: {
+            /** Events */
+            events: components["schemas"]["CanonicalSessionEvent"][];
+            /** Nextcursor */
+            nextCursor: number;
+        };
+        /** ObservationRecordBatch */
+        ObservationRecordBatch: {
+            /** Sourcekey */
+            sourceKey: string;
+            /** Startindex */
+            startIndex: number;
+            /**
+             * Prefixsha256
+             * @default 0000000000000000000000000000000000000000000000000000000000000000
+             */
+            prefixSha256: string;
+            /** Records */
+            records: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Endsession
+             * @default false
+             */
+            endSession: boolean;
+        };
+        /** ObservationRecordReceipt */
+        ObservationRecordReceipt: {
+            /** Acceptedrecords */
+            acceptedRecords: number;
+            /** Nextindex */
+            nextIndex: number;
+            /** Prefixsha256 */
+            prefixSha256: string;
+            /** Checkpointversion */
+            checkpointVersion: number;
+            /**
+             * Replay
+             * @default false
+             */
+            replay: boolean;
+            /** Projectionversion */
+            projectionVersion?: number | null;
+            /**
+             * Sessionclosed
+             * @default false
+             */
+            sessionClosed: boolean;
         };
         /** ObservationsListResponse */
         ObservationsListResponse: {
@@ -5234,6 +6327,40 @@ export interface components {
              */
             observations: components["schemas"]["ObservationEntry"][];
         };
+        /** OptionalExportHealthResponse */
+        OptionalExportHealthResponse: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Lastreason */
+            lastReason?: string | null;
+            /**
+             * Droppedspans
+             * @default 0
+             */
+            droppedSpans: number;
+            /** Droppedbyreason */
+            droppedByReason?: {
+                [key: string]: number;
+            };
+            /**
+             * Queuedspans
+             * @default 0
+             */
+            queuedSpans: number;
+            /**
+             * Exportedspans
+             * @default 0
+             */
+            exportedSpans: number;
+        };
+        /**
+         * OtlpExportResponse
+         * @description Empty successful OTLP ExportTraceServiceResponse (no partial acceptance).
+         */
+        OtlpExportResponse: Record<string, never>;
         /** OutcomeMatrixCell */
         OutcomeMatrixCell: {
             /**
@@ -5246,11 +6373,8 @@ export interface components {
              * @default
              */
             resolution: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -5279,11 +6403,28 @@ export interface components {
              * @default 30
              */
             periodDays: number;
+            /** Totalwasteusd */
+            totalWasteUsd?: number | null;
+        };
+        /** PhaseSegment */
+        PhaseSegment: {
+            /** Phase */
+            phase: string;
             /**
-             * Totalwasteusd
-             * @default 0
+             * Actions
+             * @default []
              */
-            totalWasteUsd: number;
+            actions: string[];
+            /**
+             * Scopes
+             * @default []
+             */
+            scopes: string[];
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
         };
         /** PinMetricRequest */
         PinMetricRequest: {
@@ -5408,17 +6549,21 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** PrepareReviewRequest */
+        PrepareReviewRequest: {
+            /** Expectedrunid */
+            expectedRunId?: string | null;
+            /** Attemptids */
+            attemptIds?: string[];
+            /** Eventids */
+            eventIds?: string[];
+        };
         /**
          * Preset
-         * @description Action policy preset — selects the ``traceforge.governance`` profile the
-         *     router enforces (see ``action_policy/preset_profiles.py``).
+         * @description Application-owned posture for the standalone action policy.
          *
-         *     autonomous — Generous budget; protected-path writes escalate; no USD ceiling.
-         *                  Escalations handled by the monitor sidecar.
-         *     supervised — Moderate budget and USD ceiling; cost pressure and protected-path
-         *                  writes escalate; monitor handles escalations.
-         *     locked     — Tight budget and USD ceiling; protected-path writes denied; hard
-         *                  tool-call ceiling; monitor disabled — escalations go to the human.
+         *     Hard gates and incomplete evidence remain explicit human decisions.
+         *     Currency thresholds use verified USD only.
          * @enum {string}
          */
         Preset: "autonomous" | "supervised" | "locked";
@@ -5443,6 +6588,77 @@ export interface components {
              */
             replacesCount: number;
         };
+        /** ProjectApprovalPage */
+        ProjectApprovalPage: {
+            /** Items */
+            items: components["schemas"]["ApprovalResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** ProjectBoardItem */
+        ProjectBoardItem: {
+            /** Id */
+            id: string;
+            /**
+             * Column
+             * @enum {string}
+             */
+            column: "ready_blocked" | "in_progress" | "needs_decision" | "failed";
+            job: components["schemas"]["JobResponse"] | null;
+            /** Tasks */
+            tasks: components["schemas"]["ProjectTaskSummary"][];
+            /** Taskcount */
+            taskCount: number;
+            /** Pendingapprovalcount */
+            pendingApprovalCount: number;
+            /** Deliveryattentioncount */
+            deliveryAttentionCount: number;
+            recipe: components["schemas"]["ProjectRecipeSummary"] | null;
+            /** Hasfailure */
+            hasFailure: boolean;
+        };
+        /** ProjectBoardPage */
+        ProjectBoardPage: {
+            /** Items */
+            items: components["schemas"]["ProjectBoardItem"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** ProjectBoardResponse */
+        ProjectBoardResponse: {
+            project: components["schemas"]["ProjectResponse"];
+            totals: components["schemas"]["ProjectBoardTotals"];
+            /** Columns */
+            columns: {
+                [key: string]: components["schemas"]["ProjectBoardPage"];
+            };
+        };
+        /** ProjectBoardTotals */
+        ProjectBoardTotals: {
+            /** Taskcount */
+            taskCount: number;
+            /** Linkedjobcount */
+            linkedJobCount: number;
+            /** Standalonejobcount */
+            standaloneJobCount: number;
+            /** Pendingapprovalcount */
+            pendingApprovalCount: number;
+            /** Reviewjobcount */
+            reviewJobCount: number;
+            /** Deliveryattentioncount */
+            deliveryAttentionCount: number;
+            /** Workcounts */
+            workCounts: {
+                [key: string]: number;
+            };
+        };
+        /** ProjectDeliveryPage */
+        ProjectDeliveryPage: {
+            /** Items */
+            items: components["schemas"]["TrackerOperationResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
         /** ProjectListResponse */
         ProjectListResponse: {
             /** Items */
@@ -5452,6 +6668,34 @@ export interface components {
         ProjectListSummaryResponse: {
             /** Items */
             items: components["schemas"]["ProjectSummaryResponse"][];
+        };
+        /** ProjectRecipeStep */
+        ProjectRecipeStep: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /** State */
+            state: string;
+            /** Reason */
+            reason: string | null;
+        };
+        /** ProjectRecipeSummary */
+        ProjectRecipeSummary: {
+            /** Runid */
+            runId: string;
+            /** Revision */
+            revision: number;
+            /** Name */
+            name: string;
+            /** State */
+            state: string;
+            /** Reason */
+            reason: string | null;
+            /** Steps */
+            steps: components["schemas"]["ProjectRecipeStep"][];
+            /** Remainingstepcount */
+            remainingStepCount: number;
         };
         /**
          * ProjectResponse
@@ -5504,12 +6748,1091 @@ export interface components {
             /** Lastactivityat */
             lastActivityAt?: string | null;
         };
+        /** ProjectTaskSummary */
+        ProjectTaskSummary: {
+            /** Id */
+            id: string;
+            /** Repopath */
+            repoPath: string;
+            /** Storynodeid */
+            storyNodeId: string | null;
+            /** Trackerticketref */
+            trackerTicketRef: string | null;
+            /** State */
+            state: string;
+        };
         /** ProviderGuidanceResponse */
         ProviderGuidanceResponse: {
             /** Guidance */
             guidance?: {
                 [key: string]: string;
             };
+        };
+        /** PublishRecipeRequest */
+        PublishRecipeRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+        };
+        /** RecipeAgentResult */
+        RecipeAgentResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "agent";
+            /** Sessionids */
+            sessionIds: string[];
+            /** Text */
+            text: string | null;
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+            /** Actualmodels */
+            actualModels?: string[];
+        };
+        /** RecipeAgentRunner */
+        RecipeAgentRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "agent";
+            /** Provider */
+            provider?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Maxturns
+             * @default 1
+             */
+            maxTurns: number;
+            /**
+             * Session
+             * @default new
+             * @enum {string}
+             */
+            session: "new" | "reuse";
+        };
+        /** RecipeArtifactReceipt */
+        RecipeArtifactReceipt: {
+            /** Artifactid */
+            artifactId: string;
+            /** Checksum */
+            checksum: string;
+            /** Sizebytes */
+            sizeBytes: number;
+            /**
+             * Complete
+             * @default true
+             */
+            complete: boolean;
+        };
+        /** RecipeAttemptControl */
+        RecipeAttemptControl: {
+            /** Jobid */
+            jobId: string;
+            /** Runid */
+            runId: string;
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Canmessage */
+            canMessage: boolean;
+            /** Messagedisabledreason */
+            messageDisabledReason: string | null;
+            /** Executiontoken */
+            executionToken: string | null;
+            /** Nativesessionid */
+            nativeSessionId: string | null;
+            /** Executionepoch */
+            executionEpoch: string;
+            stop?: components["schemas"]["RecipeControlAction"] | null;
+            resume?: components["schemas"]["RecipeControlAction"] | null;
+            reconcile?: components["schemas"]["RecipeControlAction"] | null;
+        };
+        /** RecipeAttemptExecution */
+        RecipeAttemptExecution: {
+            /** Executiontoken */
+            executionToken: string;
+            /** Sessionid */
+            sessionId: string;
+            /** Provider */
+            provider: string;
+            /** Model */
+            model: string | null;
+            /**
+             * Startedat
+             * Format: date-time
+             */
+            startedAt: string;
+        };
+        /** RecipeAttemptInspection */
+        RecipeAttemptInspection: {
+            attempt: components["schemas"]["RecipeAttemptResponse"];
+            gate: components["schemas"]["RecipeGateInspection"] | null;
+            consumedBy?: components["schemas"]["RecipeConsumedInputPage"] | null;
+        };
+        /** RecipeAttemptResponse */
+        RecipeAttemptResponse: {
+            /** Id */
+            id: string;
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Number */
+            number: number;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["RecipeInputReceipt"];
+            };
+            /** Runner */
+            runner: components["schemas"]["RecipeAgentRunner"] | components["schemas"]["RecipeCommandRunner"] | components["schemas"]["RecipeHumanRunner"] | components["schemas"]["RecipeBlockRunner"];
+            /** Capabilities */
+            capabilities: ("read" | "write" | "shell" | "delegate" | "external_access")[];
+            workspace: components["schemas"]["RecipeResolvedWorkspace"];
+            /**
+             * Dispatchintentat
+             * Format: date-time
+             */
+            dispatchIntentAt: string;
+            result: components["schemas"]["RecipeAttemptResult"] | null;
+            /** Executions */
+            executions: components["schemas"]["RecipeAttemptExecution"][];
+            /** Outputs */
+            outputs: components["schemas"]["RecipeOutputReceipt"][];
+        };
+        /** RecipeAttemptResult */
+        RecipeAttemptResult: {
+            /** Outcome */
+            outcome: string;
+            /** Evidence */
+            evidence: components["schemas"]["RecipeCommandResult"] | components["schemas"]["RecipeAgentResult"] | components["schemas"]["RecipeHumanResult"] | components["schemas"]["RecipeBlockResult"];
+            /** Reason */
+            reason: string | null;
+            /**
+             * Completedat
+             * Format: date-time
+             */
+            completedAt: string;
+        };
+        /** RecipeAttemptResumeRequest */
+        RecipeAttemptResumeRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+        };
+        /** RecipeAttemptSummary */
+        RecipeAttemptSummary: {
+            /** Id */
+            id: string;
+            /** Number */
+            number: number;
+            /**
+             * Dispatchintentat
+             * Format: date-time
+             */
+            dispatchIntentAt: string;
+            /** Outcome */
+            outcome: string | null;
+            /** Completedat */
+            completedAt: string | null;
+        };
+        /** RecipeBlockResult */
+        RecipeBlockResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "block";
+            /** Revisionid */
+            revisionId: string;
+            /** Childattemptids */
+            childAttemptIds: string[];
+        };
+        /** RecipeBlockRunner */
+        RecipeBlockRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "block";
+            /** Revisionid */
+            revisionId: string;
+        };
+        /** RecipeCodeReference */
+        RecipeCodeReference: {
+            /** Workspace */
+            workspace: string;
+            /** Commit */
+            commit: string;
+        };
+        /** RecipeCommandArgument */
+        RecipeCommandArgument: {
+            /** Input */
+            input: string;
+            /** Field */
+            field?: ("workspace" | "commit") | null;
+        };
+        /** RecipeCommandResult */
+        RecipeCommandResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "command";
+            /** Argv */
+            argv: string[];
+            /** Exitstatus */
+            exitStatus: number | null;
+            /** Stdout */
+            stdout: string | null;
+            /** Stderr */
+            stderr: string | null;
+            /** Workspace */
+            workspace: string;
+            /** Startcoderef */
+            startCodeRef: string;
+            /** Endcoderef */
+            endCodeRef: string | null;
+            /**
+             * Uncertain
+             * @default false
+             */
+            uncertain: boolean;
+            /**
+             * Started
+             * @default true
+             */
+            started: boolean | null;
+            stdoutArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
+            stderrArtifact?: components["schemas"]["RecipeArtifactReceipt"] | null;
+            /** Stdoutpreview */
+            stdoutPreview?: string | null;
+            /** Stderrpreview */
+            stderrPreview?: string | null;
+        };
+        /** RecipeCommandRunner */
+        RecipeCommandRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "command";
+            /** Argv */
+            argv?: (string | components["schemas"]["RecipeCommandArgument"])[];
+            /**
+             * Timeoutseconds
+             * @default 300
+             */
+            timeoutSeconds: number;
+            /** Reconciles */
+            reconciles?: string[];
+        };
+        /** RecipeConsumedInput */
+        RecipeConsumedInput: {
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Steppath */
+            stepPath: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Attemptnumber */
+            attemptNumber: number;
+            /** Inputname */
+            inputName: string;
+            /** Receiptid */
+            receiptId: string | null;
+            /** Checksum */
+            checksum: string | null;
+            /** Produceroutcome */
+            producerOutcome: string | null;
+            /** Consumeroutcome */
+            consumerOutcome: string | null;
+        };
+        /** RecipeConsumedInputPage */
+        RecipeConsumedInputPage: {
+            /** Items */
+            items: components["schemas"]["RecipeConsumedInput"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** RecipeControlAction */
+        RecipeControlAction: {
+            /** Enabled */
+            enabled: boolean;
+            /** Disabledreason */
+            disabledReason: string | null;
+            /** Expectedtoken */
+            expectedToken?: string | null;
+            /** Expectedversion */
+            expectedVersion?: number | null;
+        };
+        /** RecipeCurrentRunResponse */
+        RecipeCurrentRunResponse: {
+            run: components["schemas"]["RecipeRunResponse"] | null;
+        };
+        /** RecipeDefinition */
+        RecipeDefinition: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Kind
+             * @default recipe
+             * @enum {string}
+             */
+            kind: "recipe" | "block";
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["RecipeParameter"];
+            };
+            /** Entrysteps */
+            entrySteps?: string[];
+            /** Steps */
+            steps?: components["schemas"]["RecipeStep"][];
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["RecipeExport"];
+            };
+        };
+        /** RecipeDependency */
+        RecipeDependency: {
+            /** Stepid */
+            stepId: string;
+            /** Outcomes */
+            outcomes?: string[];
+        };
+        /** RecipeDraftListResponse */
+        RecipeDraftListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeDraftResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** RecipeDraftResponse */
+        RecipeDraftResponse: {
+            /** Id */
+            id: string;
+            /** Version */
+            version: number;
+            definition: components["schemas"]["RecipeDefinition"];
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RecipeExport */
+        RecipeExport: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            binding: components["schemas"]["RecipeOutputBinding"];
+        };
+        /** RecipeGateBinding */
+        RecipeGateBinding: {
+            /** Attemptid */
+            attemptId: string;
+            /** Approvalid */
+            approvalId: string;
+            /** Inputchecksum */
+            inputChecksum: string;
+            /** Proposedaction */
+            proposedAction: string;
+            /** Nextsteps */
+            nextSteps: {
+                [key: string]: string[];
+            };
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /** RecipeGateDecisionRequest */
+        RecipeGateDecisionRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Approvalid */
+            approvalId: string;
+            /** Inputchecksum */
+            inputChecksum: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approved" | "rejected";
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Notes */
+            notes?: string | null;
+        };
+        /** RecipeGateInspection */
+        RecipeGateInspection: {
+            binding: components["schemas"]["RecipeGateBinding"];
+            /** Resolution */
+            resolution: string | null;
+            /** Notes */
+            notes: string | null;
+            /** Resolvedat */
+            resolvedAt: string | null;
+        };
+        /** RecipeHumanResult */
+        RecipeHumanResult: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "human";
+            /** Approvalid */
+            approvalId: string | null;
+            /** Decision */
+            decision: string | null;
+            /** Inputchecksum */
+            inputChecksum: string;
+        };
+        /** RecipeHumanRunner */
+        RecipeHumanRunner: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "human";
+            /**
+             * Proposedaction
+             * @default
+             */
+            proposedAction: string;
+            /**
+             * Decisions
+             * @default [
+             *       "approved",
+             *       "rejected"
+             *     ]
+             */
+            decisions: ("approved" | "rejected")[];
+        };
+        /** RecipeInput */
+        RecipeInput: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /** Binding */
+            binding?: (components["schemas"]["RecipeParameterBinding"] | components["schemas"]["RecipeOutputBinding"] | components["schemas"]["RecipeLiteralBinding"]) | null;
+            /**
+             * Optional
+             * @default false
+             */
+            optional: boolean;
+            /** Degradedreason */
+            degradedReason?: string | null;
+        };
+        /** RecipeInputReceipt */
+        RecipeInputReceipt: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /** Present */
+            present: boolean;
+            value?: components["schemas"]["JsonValue"];
+            /** Receiptid */
+            receiptId?: string | null;
+            /** Producingattemptid */
+            producingAttemptId?: string | null;
+            /** Produceroutcome */
+            producerOutcome?: string | null;
+            /** Checksum */
+            checksum?: string | null;
+            /** Degradedreason */
+            degradedReason?: string | null;
+            /** Scopeattemptid */
+            scopeAttemptId?: string | null;
+            /** Parametername */
+            parameterName?: string | null;
+        };
+        /** RecipeLiteralBinding */
+        RecipeLiteralBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "literal";
+            value: components["schemas"]["JsonValue"];
+        };
+        /** RecipeMessageReceipt */
+        RecipeMessageReceipt: {
+            /** Jobid */
+            jobId: string;
+            /** Runid */
+            runId: string;
+            /** Stepinstanceid */
+            stepInstanceId: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Executiontoken */
+            executionToken: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "conflict" | "failed" | "uncertain";
+            /** Reason */
+            reason?: string | null;
+            /** Messageeventid */
+            messageEventId?: string | null;
+            /**
+             * Executionstatus
+             * @default unconfirmed
+             * @constant
+             */
+            executionStatus: "unconfirmed";
+        };
+        /** RecipeMessageRequest */
+        RecipeMessageRequest: {
+            /** Expectedexecution */
+            expectedExecution: string;
+            /** Content */
+            content: string;
+        };
+        /** RecipeOperationReceipt */
+        RecipeOperationReceipt: {
+            /** Attemptid */
+            attemptId: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "stopped" | "resumed" | "reconciled" | "decided" | "conflict" | "uncertain";
+            /** Reason */
+            reason: string;
+            /**
+             * Requiresreconciliation
+             * @default false
+             */
+            requiresReconciliation: boolean;
+        };
+        /** RecipeOutput */
+        RecipeOutput: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** RecipeOutputBinding */
+        RecipeOutputBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "output";
+            /** Stepid */
+            stepId: string;
+            /** Output */
+            output: string;
+        };
+        /** RecipeOutputReceipt */
+        RecipeOutputReceipt: {
+            /** Id */
+            id: string;
+            /** Attemptid */
+            attemptId: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            value: components["schemas"]["JsonValue"];
+            /** Checksum */
+            checksum: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+        };
+        /** RecipeParameter */
+        RecipeParameter: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "code_ref";
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Required
+             * @default true
+             */
+            required: boolean;
+            default?: components["schemas"]["JsonValue"];
+        };
+        /** RecipeParameterBinding */
+        RecipeParameterBinding: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "parameter";
+            /** Parameter */
+            parameter: string;
+        };
+        /** RecipePinnedBlock */
+        RecipePinnedBlock: {
+            /** Definitionid */
+            definitionId: string;
+            /** Revisionid */
+            revisionId: string;
+            /** Revision */
+            revision: number;
+            /** Checksum */
+            checksum: string;
+            definition: components["schemas"]["RecipeDefinition"];
+        };
+        /** RecipeReconcileRequest */
+        RecipeReconcileRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Evidence */
+            evidence: string;
+            /**
+             * Effectsquiescent
+             * @constant
+             */
+            effectsQuiescent: true;
+            code: components["schemas"]["RecipeCodeReference"];
+        };
+        /** RecipeResolvedWorkspace */
+        RecipeResolvedWorkspace: {
+            /** Path */
+            path: string;
+            /** Coderef */
+            codeRef: string;
+            policy: components["schemas"]["RecipeWorkspacePolicy"];
+        };
+        /** RecipeResumeResponse */
+        RecipeResumeResponse: {
+            /** Id */
+            id: string;
+            /** Repo */
+            repo: string | null;
+            /** Prompt */
+            prompt: string;
+            /** Projectid */
+            projectId?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Description */
+            description?: string | null;
+            state: components["schemas"]["JobState"];
+            /** Baseref */
+            baseRef: string | null;
+            /** Worktreepath */
+            worktreePath: string | null;
+            /** Branch */
+            branch: string | null;
+            preset?: components["schemas"]["Preset"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Completedat */
+            completedAt: string | null;
+            /** Prurl */
+            prUrl?: string | null;
+            mergeStatus?: components["schemas"]["GitMergeOutcome"] | null;
+            resolution?: components["schemas"]["Resolution"] | null;
+            /** Archivedat */
+            archivedAt?: string | null;
+            /** Failurereason */
+            failureReason?: string | null;
+            /** Progressheadline */
+            progressHeadline?: string | null;
+            /** Progresssummary */
+            progressSummary?: string | null;
+            /** Model */
+            model?: string | null;
+            /**
+             * Sdk
+             * @default copilot
+             */
+            sdk: string;
+            /** Worktreename */
+            worktreeName?: string | null;
+            /** Verify */
+            verify?: boolean | null;
+            /** Selfreview */
+            selfReview?: boolean | null;
+            /** Maxturns */
+            maxTurns?: number | null;
+            /** Verifyprompt */
+            verifyPrompt?: string | null;
+            /** Selfreviewprompt */
+            selfReviewPrompt?: string | null;
+            /** Enablestalldetection */
+            enableStallDetection?: boolean | null;
+            /** Enableplantracking */
+            enablePlanTracking?: boolean | null;
+            /** Parentjobid */
+            parentJobId?: string | null;
+            /**
+             * Source
+             * @default managed
+             */
+            source: string;
+            /** Externalsessionid */
+            externalSessionId?: string | null;
+            /** Integrationbindingid */
+            integrationBindingId?: string | null;
+            /**
+             * Observationonly
+             * @default false
+             */
+            observationOnly: boolean;
+            /** @default standard */
+            mode: components["schemas"]["JobMode"];
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Costusage */
+            costUsage?: components["schemas"]["UsageAmount"][] | null;
+            /** Totaltokens */
+            totalTokens?: number | null;
+            /** Inputtokens */
+            inputTokens?: number | null;
+            /** Outputtokens */
+            outputTokens?: number | null;
+            recipeRun: components["schemas"]["RecipeRunResponse"];
+        };
+        /** RecipeRetryPolicy */
+        RecipeRetryPolicy: {
+            /**
+             * Maxattempts
+             * @default 1
+             */
+            maxAttempts: number;
+            /** Retryon */
+            retryOn?: "failed"[];
+            exhaustion?: components["schemas"]["RecipeRoute"];
+        };
+        /** RecipeRevisionListResponse */
+        RecipeRevisionListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeRevisionResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** RecipeRevisionResponse */
+        RecipeRevisionResponse: {
+            /** Id */
+            id: string;
+            /** Definitionid */
+            definitionId: string;
+            /** Revision */
+            revision: number;
+            definition: components["schemas"]["RecipeDefinition"];
+            /** Blocks */
+            blocks: {
+                [key: string]: components["schemas"]["RecipePinnedBlock"];
+            };
+            /** Checksum */
+            checksum: string;
+            /**
+             * Publishedat
+             * Format: date-time
+             */
+            publishedAt: string;
+        };
+        /** RecipeRoute */
+        RecipeRoute: {
+            /** Nextsteps */
+            nextSteps?: string[];
+            /** Terminal */
+            terminal?: ("succeeded" | "failed" | "canceled") | null;
+        };
+        /** RecipeRunListResponse */
+        RecipeRunListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeRunResponse"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** RecipeRunResponse */
+        RecipeRunResponse: {
+            /** Id */
+            id: string;
+            /** Jobid */
+            jobId: string;
+            /** Runnumber */
+            runNumber: number;
+            /** Startrequestkey */
+            startRequestKey: string;
+            /** Continuationofid */
+            continuationOfId: string | null;
+            /** Instruction */
+            instruction: string | null;
+            codeRef: components["schemas"]["RecipeCodeReference"] | null;
+            /** Reason */
+            reason: string | null;
+            /** Revisionid */
+            revisionId: string;
+            snapshot: components["schemas"]["RecipeRevisionResponse"];
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted";
+            /** Version */
+            version: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Cancelrequestedat */
+            cancelRequestedAt: string | null;
+            /** Completedat */
+            completedAt: string | null;
+            /** Resolvedat */
+            resolvedAt: string | null;
+        };
+        /** RecipeSelection */
+        RecipeSelection: {
+            /** Revisionid */
+            revisionId: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** RecipeStep */
+        RecipeStep: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /**
+             * Instructions
+             * @default
+             */
+            instructions: string;
+            /** Runner */
+            runner: components["schemas"]["RecipeAgentRunner"] | components["schemas"]["RecipeCommandRunner"] | components["schemas"]["RecipeHumanRunner"] | components["schemas"]["RecipeBlockRunner"];
+            /** Capabilities */
+            capabilities?: ("read" | "write" | "shell" | "delegate" | "external_access")[];
+            workspace?: components["schemas"]["RecipeWorkspacePolicy"];
+            /** Inputs */
+            inputs?: {
+                [key: string]: components["schemas"]["RecipeInput"];
+            };
+            /** Outputs */
+            outputs?: {
+                [key: string]: components["schemas"]["RecipeOutput"];
+            };
+            /** Dependson */
+            dependsOn?: components["schemas"]["RecipeDependency"][];
+            /** Routes */
+            routes?: {
+                [key: string]: components["schemas"]["RecipeRoute"];
+            };
+            retry?: components["schemas"]["RecipeRetryPolicy"];
+        };
+        /** RecipeStepInspection */
+        RecipeStepInspection: {
+            step: components["schemas"]["RecipeStepInstanceResponse"];
+            /** Attempts */
+            attempts: components["schemas"]["RecipeAttemptSummary"][];
+            /** Predecessors */
+            predecessors?: components["schemas"]["RecipeStepRelation"][];
+            /** Consumers */
+            consumers?: components["schemas"]["RecipeStepRelation"][];
+        };
+        /** RecipeStepInstanceResponse */
+        RecipeStepInstanceResponse: {
+            /** Id */
+            id: string;
+            /** Runid */
+            runId: string;
+            /** Steppath */
+            stepPath: string;
+            definition: components["schemas"]["RecipeStep"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted";
+            /** Reason */
+            reason: string | null;
+            /** Currentattemptid */
+            currentAttemptId: string | null;
+            /** Version */
+            version: number;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /** RecipeStepListResponse */
+        RecipeStepListResponse: {
+            /** Items */
+            items: components["schemas"]["RecipeStepInstanceResponse"][];
+            /** Nextcursor */
+            nextCursor: string | null;
+        };
+        /** RecipeStepRelation */
+        RecipeStepRelation: {
+            /** Stepid */
+            stepId: string | null;
+            /** Steppath */
+            stepPath: string;
+            /** Title */
+            title: string;
+            /** State */
+            state: ("blocked" | "ready" | "running" | "needs_decision" | "succeeded" | "failed" | "skipped" | "canceled" | "interrupted") | null;
+            /** Attemptid */
+            attemptId: string | null;
+            /** Requiredoutcomes */
+            requiredOutcomes?: string[];
+            /** Inputnames */
+            inputNames?: string[];
+        };
+        /** RecipeStopRequest */
+        RecipeStopRequest: {
+            /** Expectedtoken */
+            expectedToken: string;
+        };
+        /** RecipeValidationIssue */
+        RecipeValidationIssue: {
+            /** Path */
+            path: string;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** RecipeValidationResult */
+        RecipeValidationResult: {
+            /** Valid */
+            valid: boolean;
+            /** Issues */
+            issues: components["schemas"]["RecipeValidationIssue"][];
+        };
+        /** RecipeWorkspacePolicy */
+        RecipeWorkspacePolicy: {
+            /**
+             * Mode
+             * @default snapshot
+             * @enum {string}
+             */
+            mode: "none" | "snapshot" | "mutable" | "isolated";
+            /**
+             * Key
+             * @default job
+             */
+            key: string;
+            /** Sourceinput */
+            sourceInput?: string | null;
+        };
+        /** ReconcileTrackerOperationRequest */
+        ReconcileTrackerOperationRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "applied" | "not_applied";
+            /** Evidence */
+            evidence: string;
+        };
+        /** RecordReviewRequest */
+        RecordReviewRequest: {
+            /** Requestkey */
+            requestKey: string;
+            /** Snapshotartifactid */
+            snapshotArtifactId: string;
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            /** Rationale */
+            rationale: string;
+        };
+        /** RegisterObservationRequest */
+        RegisterObservationRequest: {
+            /** Bindingid */
+            bindingId: string;
+            /** Projectid */
+            projectId: string;
+            /** Formatid */
+            formatId: string;
+            /** Externalsessionid */
+            externalSessionId: string;
+            /** Title */
+            title?: string | null;
+            /** Repo */
+            repo?: string | null;
+            /** Baseref */
+            baseRef?: string | null;
         };
         /** RegisterRepoRequest */
         RegisterRepoRequest: {
@@ -5536,11 +7859,8 @@ export interface components {
          * @description Aggregated cost for a repo over a time period.
          */
         RepoCostSummary: {
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaljobs
              * @default 0
@@ -5620,11 +7940,8 @@ export interface components {
              * @default 0
              */
             failed: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaltokens
              * @default 0
@@ -5675,7 +7992,6 @@ export interface components {
             activeJobCount: number;
             /**
              * @default {
-             *       "totalCostUsd": 0,
              *       "totalJobs": 0,
              *       "totalTokens": 0
              *     }
@@ -5721,6 +8037,14 @@ export interface components {
         ResolveBatchResponse: {
             /** Resolved */
             resolved: boolean;
+        };
+        /** ResolveDefaultRecipeRequest */
+        ResolveDefaultRecipeRequest: {
+            /**
+             * Planfirst
+             * @default false
+             */
+            planFirst: boolean;
         };
         /**
          * ResolveGateRequest
@@ -5769,16 +8093,18 @@ export interface components {
         ResumeJobRequest: {
             /** Instruction */
             instruction?: string | null;
+            /** Expectedrunid */
+            expectedRunId?: string | null;
+            /** Startrequestkey */
+            startRequestKey?: string | null;
+            recipe?: components["schemas"]["RecipeSelection"] | null;
         };
         /** RetryCostResponse */
         RetryCostResponse: {
             /** Period */
             period: number;
-            /**
-             * Retrycostusd
-             * @default 0
-             */
-            retryCostUsd: number;
+            /** Retrycostusd */
+            retryCostUsd?: number | null;
             /**
              * Retrycount
              * @default 0
@@ -5789,16 +8115,114 @@ export interface components {
              * @default 0
              */
             totalSpans: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Retrypct */
+            retryPct?: number | null;
+        };
+        /** RetryTrackerOperationRequest */
+        RetryTrackerOperationRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            /** Requestid */
+            requestId: string;
+        };
+        /** ReviewArtifactSnapshot */
+        ReviewArtifactSnapshot: {
+            /** Originalid */
+            originalId: string;
+            retained: components["schemas"]["RecipeArtifactReceipt"];
+        };
+        /** ReviewAttemptSnapshot */
+        ReviewAttemptSnapshot: {
+            step: components["schemas"]["RecipeStepInstanceResponse"];
+            attempt: components["schemas"]["RecipeAttemptResponse"];
+            /** Checksum */
+            checksum: string;
+        };
+        /** ReviewEventSnapshot */
+        ReviewEventSnapshot: {
+            /** Eventid */
+            eventId: string;
+            /** Kind */
+            kind: string;
+            /** Checksum */
+            checksum: string;
+            /** Content */
+            content: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+        };
+        /** ReviewEvidenceSnapshot */
+        ReviewEvidenceSnapshot: {
+            /** Jobid */
+            jobId: string;
+            /** Jobversion */
+            jobVersion: number;
+            /** Runid */
+            runId: string | null;
+            /** Runversion */
+            runVersion: number | null;
+            /** Reciperevisionid */
+            recipeRevisionId: string | null;
+            /** Recipesnapshotchecksum */
+            recipeSnapshotChecksum: string | null;
+            code: components["schemas"]["RecipeCodeReference"];
+            /** Codehead */
+            codeHead: string;
+            /** Codetree */
+            codeTree: string;
+            /** Eventhighwater */
+            eventHighWater: number;
+            /** Attempts */
+            attempts: components["schemas"]["ReviewAttemptSnapshot"][];
+            /** Events */
+            events: components["schemas"]["ReviewEventSnapshot"][];
+            /** Artifacts */
+            artifacts: components["schemas"]["ReviewArtifactSnapshot"][];
             /**
-             * Totalcostusd
-             * @default 0
+             * Capturedat
+             * Format: date-time
              */
-            totalCostUsd: number;
+            capturedAt: string;
+        };
+        /** ReviewHistoryPage */
+        ReviewHistoryPage: {
+            /** Items */
+            items: components["schemas"]["ReviewRecord"][];
+            /** Nextcursor */
+            nextCursor: number | null;
+            /** Highwater */
+            highWater: number;
+        };
+        /** ReviewPreparation */
+        ReviewPreparation: {
+            /** Snapshotartifactid */
+            snapshotArtifactId: string;
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            evidence: components["schemas"]["ReviewEvidenceSnapshot"];
+        };
+        /** ReviewRecord */
+        ReviewRecord: {
+            /** Eventid */
+            eventId: string;
+            /** Jobid */
+            jobId: string;
+            /** Requestkey */
+            requestKey: string;
+            /** Rationale */
+            rationale: string;
+            /** Snapshotartifactid */
+            snapshotArtifactId: string;
+            /** Snapshotchecksum */
+            snapshotChecksum: string;
+            evidence: components["schemas"]["ReviewEvidenceSnapshot"];
             /**
-             * Retrypct
-             * @default 0
+             * Recordedat
+             * Format: date-time
              */
-            retryPct: number;
+            recordedAt: string;
         };
         /** SDKInfoResponse */
         SDKInfoResponse: {
@@ -5812,7 +8236,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "ready" | "not_installed" | "not_configured";
+            status: "ready" | "not_installed" | "not_configured" | "disabled_by_policy";
             /** Authenticated */
             authenticated?: boolean | null;
             /**
@@ -5827,6 +8251,12 @@ export interface components {
             default: string;
             /** Sdks */
             sdks: components["schemas"]["SDKInfoResponse"][];
+        };
+        /** SaveRecipeDraftRequest */
+        SaveRecipeDraftRequest: {
+            /** Expectedversion */
+            expectedVersion: number;
+            definition: components["schemas"]["RecipeDefinition"];
         };
         /** ScorecardActivity */
         ScorecardActivity: {
@@ -5875,11 +8305,8 @@ export interface components {
         ScorecardBudget: {
             /** Sdk */
             sdk: string;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Premiumrequests
              * @default 0
@@ -5890,11 +8317,8 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Avgcostperjob
-             * @default 0
-             */
-            avgCostPerJob: number;
+            /** Avgcostperjob */
+            avgCostPerJob?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -5903,6 +8327,13 @@ export interface components {
         };
         /** ScorecardResponse */
         ScorecardResponse: {
+            /**
+             * Costusage
+             * @default []
+             */
+            costUsage: components["schemas"]["UsageAmount"][];
+            /** Estimatedcostusd */
+            estimatedCostUsd?: number | null;
             /**
              * Period
              * @default 0
@@ -5914,11 +8345,8 @@ export interface components {
              * @default []
              */
             budget: components["schemas"]["ScorecardBudget"][];
-            /**
-             * Avgcostpermtok
-             * @default 0
-             */
-            avgCostPerMtok: number;
+            /** Avgcostpermtok */
+            avgCostPerMtok?: number | null;
             /**
              * Modelcostmix
              * @default []
@@ -5941,16 +8369,10 @@ export interface components {
              * @default 0
              */
             monthlyBudgetUsd: number;
-            /**
-             * Monthspendusd
-             * @default 0
-             */
-            monthSpendUsd: number;
-            /**
-             * Projectedmonthendusd
-             * @default 0
-             */
-            projectedMonthEndUsd: number;
+            /** Monthspendusd */
+            monthSpendUsd?: number | null;
+            /** Projectedmonthendusd */
+            projectedMonthEndUsd?: number | null;
             /**
              * Dayselapsed
              * @default 0
@@ -5961,31 +8383,21 @@ export interface components {
              * @default 0
              */
             daysInMonth: number;
-            /**
-             * Dailyavgusd
-             * @default 0
-             */
-            dailyAvgUsd: number;
-            /**
-             * Pctmonthlybudgetused
-             * @default 0
-             */
-            pctMonthlyBudgetUsed: number;
-            /**
-             * Costperdiffline
-             * @default 0
-             */
-            costPerDiffLine: number;
+            /** Dailyavgusd */
+            dailyAvgUsd?: number | null;
+            /** Pctmonthlybudgetused */
+            pctMonthlyBudgetUsed?: number | null;
+            /** Costperdiffline */
+            costPerDiffLine?: number | null;
             /**
              * Totaldifflines
              * @default 0
              */
             totalDiffLines: number;
-            /**
-             * Compactioncostusd
-             * @default 0
-             */
-            compactionCostUsd: number;
+            /** Compactioncostusd */
+            compactionCostUsd?: number | null;
+            /** Estimatedcompactioncostusd */
+            estimatedCompactionCostUsd?: number | null;
             /**
              * Compactiontokens
              * @default 0
@@ -6050,11 +8462,8 @@ export interface components {
              * @default 0
              */
             outputTokens: number;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Entries
              * @default []
@@ -6126,11 +8535,8 @@ export interface components {
              * @default 0
              */
             callCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Avgdurationms
              * @default 0
@@ -6169,11 +8575,8 @@ export interface components {
              * @default 0
              */
             sessionCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -6221,7 +8624,7 @@ export interface components {
             /** Outputtokens */
             outputTokens: number;
             /** Costusd */
-            costUsd: number;
+            costUsd: number | null;
         };
         /** SidecarSessionMetricsResponse */
         SidecarSessionMetricsResponse: {
@@ -6251,11 +8654,8 @@ export interface components {
              * @default 0
              */
             outputTokens: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Llmcallcount
              * @default 0
@@ -6435,6 +8835,50 @@ export interface components {
             /** Worktreename */
             worktreeName: string;
         };
+        /** TaskDependencyStatus */
+        TaskDependencyStatus: {
+            /** Key */
+            key: string;
+            /** Tasklinkid */
+            taskLinkId: string | null;
+            /** Jobid */
+            jobId: string | null;
+            /** Jobstate */
+            jobState: string | null;
+            /** Resolution */
+            resolution: string | null;
+            /** Satisfied */
+            satisfied: boolean;
+        };
+        /** TaskLinkInspectionResponse */
+        TaskLinkInspectionResponse: {
+            task: components["schemas"]["TaskLinkResponse"];
+            /** Prompt */
+            prompt: string;
+            /**
+             * Promptsource
+             * @enum {string}
+             */
+            promptSource: "stored_override" | "historical_reference";
+            /** Dependencies */
+            dependencies: components["schemas"]["TaskDependencyStatus"][];
+            /** Canstart */
+            canStart: boolean;
+            /** Disabledreason */
+            disabledReason: string | null;
+            /** Pendingapprovalids */
+            pendingApprovalIds: string[];
+            /** Requireschainapproval */
+            requiresChainApproval: boolean;
+            /** Sdk */
+            sdk: string;
+            /** Model */
+            model: string | null;
+            preset: components["schemas"]["Preset"];
+            mode: components["schemas"]["JobMode"];
+            /** Reciperevisionid */
+            recipeRevisionId: string | null;
+        };
         /** TaskLinkListResponse */
         TaskLinkListResponse: {
             /** Items */
@@ -6497,11 +8941,8 @@ export interface components {
              * @default unknown
              */
             bucket: string;
-            /**
-             * Costusd
-             * @default 0
-             */
-            costUsd: number;
+            /** Costusd */
+            costUsd?: number | null;
             /**
              * Inputtokens
              * @default 0
@@ -6717,11 +9158,8 @@ export interface components {
              * @default 0
              */
             cacheWriteTokens: number;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
+            /** Cost */
+            cost?: number | null;
             /**
              * Durationms
              * @default 0
@@ -6834,9 +9272,10 @@ export interface components {
             durationMs: number;
             /**
              * Success
+             * @description Null preserves an unknown or conflicting observed outcome.
              * @default true
              */
-            success: boolean;
+            success: boolean | null;
             /**
              * Offsetsec
              * @default 0
@@ -6854,26 +9293,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
             /**
              * Turncurve
              * @default []
@@ -6960,6 +9387,15 @@ export interface components {
             /** Items */
             items: components["schemas"]["ProgressHeadlinePayload"][];
         };
+        /** ToolMotivation */
+        ToolMotivation: {
+            /** Intent */
+            intent?: string | null;
+            /** Reasoning */
+            reasoning?: string | null;
+            /** Source Event Ids */
+            source_event_ids?: string[];
+        };
         /** ToolStatsEntry */
         ToolStatsEntry: {
             /**
@@ -6988,6 +9424,11 @@ export interface components {
              */
             failureCount: number;
             /**
+             * Unknowncount
+             * @default 0
+             */
+            unknownCount: number;
+            /**
              * P50Durationms
              * @default 0
              */
@@ -7004,6 +9445,30 @@ export interface components {
             p99DurationMs: number;
         } & {
             [key: string]: unknown;
+        };
+        /** TrackerApprovalSnapshot */
+        TrackerApprovalSnapshot: {
+            /** Id */
+            id: string;
+            /** Jobid */
+            jobId: string;
+            /** Description */
+            description: string;
+            /** Proposedaction */
+            proposedAction: string | null;
+            /**
+             * Requestedat
+             * Format: date-time
+             */
+            requestedAt: string;
+            /** Resolvedat */
+            resolvedAt?: string | null;
+            /** Resolution */
+            resolution?: ("approved" | "rejected") | null;
+            /** Requiresexplicitapproval */
+            requiresExplicitApproval: boolean;
+            /** Notes */
+            notes?: string | null;
         };
         /** TrackerLinkListResponse */
         TrackerLinkListResponse: {
@@ -7023,6 +9488,130 @@ export interface components {
             /** Createdat */
             createdAt: string;
             summary?: components["schemas"]["TrackerSummaryResponse"] | null;
+        };
+        /** TrackerOperationListResponse */
+        TrackerOperationListResponse: {
+            /** Items */
+            items: components["schemas"]["TrackerOperationResponse"][];
+        };
+        /** TrackerOperationResponse */
+        TrackerOperationResponse: {
+            /** Id */
+            id: string;
+            /** Sourcekey */
+            sourceKey: string;
+            /** Projectid */
+            projectId: string | null;
+            /** Jobid */
+            jobId: string | null;
+            /** Tasklinkid */
+            taskLinkId: string | null;
+            /** Projectref */
+            projectRef: string;
+            /** Jobref */
+            jobRef: string;
+            /** Tasklinkref */
+            taskLinkRef: string | null;
+            /** Trackerlinkid */
+            trackerLinkId: string | null;
+            /** Trackerlinkref */
+            trackerLinkRef: string;
+            /** Provider */
+            provider: string;
+            /** Baseurl */
+            baseUrl: string;
+            /** Externalref */
+            externalRef: string;
+            /** Credentialidref */
+            credentialIdRef: string;
+            /** Ticketref */
+            ticketRef: string;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "comment" | "transition";
+            /**
+             * Targetkind
+             * @enum {string}
+             */
+            targetKind: "comment" | "github_issue_state" | "jira_workflow_transition" | "azure_devops_work_item_state";
+            /** Value */
+            value: string;
+            /** Normalizedvalue */
+            normalizedValue: string | null;
+            /** Approvalid */
+            approvalId?: string | null;
+            /** Approvalref */
+            approvalRef?: string | null;
+            approvalSnapshot?: components["schemas"]["TrackerApprovalSnapshot"] | null;
+            state: components["schemas"]["TrackerOperationState"];
+            /** Claimtoken */
+            claimToken?: string | null;
+            /** Claimexpiresat */
+            claimExpiresAt?: string | null;
+            /** Version */
+            version: number;
+            /** Retryofid */
+            retryOfId?: string | null;
+            providerReceipt?: components["schemas"]["TrackerProviderReceipt"] | null;
+            /** Errorcode */
+            errorCode?: string | null;
+            /** Errordetail */
+            errorDetail?: string | null;
+            reconciliation?: components["schemas"]["TrackerReconciliation"] | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Dispatchstartedat */
+            dispatchStartedAt?: string | null;
+            /** Completedat */
+            completedAt?: string | null;
+            /** Operationid */
+            readonly operationId: string;
+            /** Normalizedtarget */
+            readonly normalizedTarget: string | null;
+        };
+        /**
+         * TrackerOperationState
+         * @enum {string}
+         */
+        TrackerOperationState: "awaiting_approval" | "approved" | "dispatching" | "applied" | "rejected" | "failed" | "uncertain" | "not_applied";
+        /**
+         * TrackerProviderReceipt
+         * @description Only allowlisted acknowledgement fields, never response bodies or headers.
+         */
+        TrackerProviderReceipt: {
+            /** Id */
+            id?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Httpstatus */
+            httpStatus?: number | null;
+        };
+        /** TrackerReconciliation */
+        TrackerReconciliation: {
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "applied" | "not_applied";
+            /** Evidence */
+            evidence: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Recordedat
+             * Format: date-time
+             */
+            recordedAt: string;
         };
         /** TrackerSummaryResponse */
         TrackerSummaryResponse: {
@@ -7246,12 +9835,23 @@ export interface components {
             kind: string;
             /** Content */
             content: string;
+            /** Admissionstatus */
+            admissionStatus?: string | null;
+            /** Executionstatus */
+            executionStatus?: string | null;
+            /** Operatorcontent */
+            operatorContent?: string | null;
             /** Title */
             title?: string | null;
             /** Turnid */
             turnId?: string | null;
             /** Toolcallid */
             toolCallId?: string | null;
+            metadata?: components["schemas"]["EventMetadata"] | null;
+            /** Pairingstatus */
+            pairingStatus?: "unresolved" | null;
+            /** Pairingreason */
+            pairingReason?: string | null;
             /** Toolname */
             toolName?: string | null;
             /** Arguments */
@@ -7346,26 +9946,14 @@ export interface components {
              * @default 0
              */
             totalTurns: number;
-            /**
-             * Peakturncostusd
-             * @default 0
-             */
-            peakTurnCostUsd: number;
-            /**
-             * Avgturncostusd
-             * @default 0
-             */
-            avgTurnCostUsd: number;
-            /**
-             * Costfirsthalfusd
-             * @default 0
-             */
-            costFirstHalfUsd: number;
-            /**
-             * Costsecondhalfusd
-             * @default 0
-             */
-            costSecondHalfUsd: number;
+            /** Peakturncostusd */
+            peakTurnCostUsd?: number | null;
+            /** Avgturncostusd */
+            avgTurnCostUsd?: number | null;
+            /** Costfirsthalfusd */
+            costFirstHalfUsd?: number | null;
+            /** Costsecondhalfusd */
+            costSecondHalfUsd?: number | null;
             /**
              * Turncurve
              * @default []
@@ -7383,6 +9971,10 @@ export interface components {
             turnId: string;
             /** Title */
             title: string;
+            /** Kind */
+            kind?: string | null;
+            /** Version */
+            version?: number | null;
             /** Activityid */
             activityId: string;
             /** Activitylabel */
@@ -7512,9 +10104,41 @@ export interface components {
                 [key: string]: components["schemas"]["UsdCeilingEntry"];
             };
         };
+        /** UsageAmount */
+        UsageAmount: {
+            /** Amount */
+            amount: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "premium_requests" | "copilot_cost_unit" | "USD";
+            /** Producer */
+            producer: string;
+            /** Model */
+            model: string | null;
+            /** Job Id */
+            job_id: string | null;
+            /** Execution Epoch */
+            execution_epoch: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "primary" | "scout" | "monitor" | "assessment" | "title" | "utility";
+            /** Source */
+            source: string;
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Currency */
+            currency?: "USD" | null;
+        };
         /**
          * UsdCeilingEntry
-         * @description A per-preset USD ceiling: warn line and hard ceiling (either may be null).
+         * @description Soft verified-USD warning and escalation lines; null disables a line.
          */
         UsdCeilingEntry: {
             /** Warnusd */
@@ -7524,7 +10148,7 @@ export interface components {
         };
         /**
          * UsdCeilingsResponse
-         * @description Effective per-preset ceilings (baked profile default overlaid with overrides).
+         * @description Configured standalone thresholds, applied only to verified USD.
          */
         UsdCeilingsResponse: {
             /** Ceilings */
@@ -7550,6 +10174,37 @@ export interface components {
             /** Publickey */
             publicKey: string;
         };
+        /** VerificationResultResponse */
+        VerificationResultResponse: {
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "verify" | "self_review";
+            /** Attempt */
+            attempt: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed" | "interrupted";
+            /** Sessionnumber */
+            sessionNumber: number;
+            /** Sdksessionid */
+            sdkSessionId?: string | null;
+            /**
+             * Startedat
+             * Format: date-time
+             */
+            startedAt: string;
+            /**
+             * Completedat
+             * Format: date-time
+             */
+            completedAt: string;
+            /** Error */
+            error?: string | null;
+        };
         /** WarmSessionResponse */
         WarmSessionResponse: {
             /** Sessiontoken */
@@ -7557,26 +10212,18 @@ export interface components {
         };
         /** WasteBreakdown */
         WasteBreakdown: {
-            /**
-             * Retryusd
-             * @default 0
-             */
-            retryUsd: number;
-            /**
-             * Failedjobsusd
-             * @default 0
-             */
-            failedJobsUsd: number;
-            /**
-             * Compactionusd
-             * @default 0
-             */
-            compactionUsd: number;
-            /**
-             * Rereadsusd
-             * @default 0
-             */
-            rereadsUsd: number;
+            /** Estimatedcompactionusd */
+            estimatedCompactionUsd?: number | null;
+            /** Estimatedrereadsusd */
+            estimatedRereadsUsd?: number | null;
+            /** Retryusd */
+            retryUsd?: number | null;
+            /** Failedjobsusd */
+            failedJobsUsd?: number | null;
+            /** Compactionusd */
+            compactionUsd?: number | null;
+            /** Rereadsusd */
+            rereadsUsd?: number | null;
         };
         /** WorkspaceEntry */
         WorkspaceEntry: {
@@ -7616,21 +10263,12 @@ export interface components {
              * @default 0
              */
             jobCount: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
-            /**
-             * Avgcostusd
-             * @default 0
-             */
-            avgCostUsd: number;
-            /**
-             * Pctoftotal
-             * @default 0
-             */
-            pctOfTotal: number;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
+            /** Avgcostusd */
+            avgCostUsd?: number | null;
+            /** Pctoftotal */
+            pctOfTotal?: number | null;
         };
         /** YieldResponse */
         YieldResponse: {
@@ -7641,16 +10279,10 @@ export interface components {
              * @default []
              */
             categories: components["schemas"]["YieldCategoryRow"][];
-            /**
-             * Costpermergeusd
-             * @default 0
-             */
-            costPerMergeUsd: number;
-            /**
-             * Totalcostusd
-             * @default 0
-             */
-            totalCostUsd: number;
+            /** Costpermergeusd */
+            costPerMergeUsd?: number | null;
+            /** Totalcostusd */
+            totalCostUsd?: number | null;
             /**
              * Totaljobs
              * @default 0
@@ -8046,7 +10678,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["JobResponse"];
+                    "application/json": components["schemas"]["RecipeResumeResponse"] | components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10594,7 +13226,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10624,7 +13256,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10654,7 +13286,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10684,7 +13316,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10714,7 +13346,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -10744,7 +13376,7 @@ export interface operations {
             };
         };
     };
-    preview_proxy_api_preview__port___path__put: {
+    preview_proxy_api_preview__port___path__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -12340,37 +14972,6 @@ export interface operations {
             };
         };
     };
-    ingest_project_tasks_api_settings_projects__project_id__ingest_tasks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                project_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestTaskGraphResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_project_task_links_api_settings_projects__project_id__task_links_get: {
         parameters: {
             query?: never;
@@ -12456,6 +15057,310 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskLinkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_task_link_api_settings_projects__project_id__task_links__task_link_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                task_link_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskLinkInspectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_api_settings_projects__project_id__board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBoardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_column_api_settings_projects__project_id__board_columns__column__get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                column: "ready_blocked" | "in_progress" | "needs_decision" | "failed";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectBoardPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_approvals_api_settings_projects__project_id__board_approvals_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectApprovalPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_board_deliveries_api_settings_projects__project_id__board_deliveries_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDeliveryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tracker_operations_api_projects__project_id__tracker_links_operations_get: {
+        parameters: {
+            query?: {
+                job_ref?: string | null;
+                tracker_link_ref?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconcileTrackerOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_tracker_operation_api_projects__project_id__tracker_links_operations__operation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetryTrackerOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackerOperationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12584,6 +15489,1480 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrackerSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recipes_api_recipes_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_recipe_api_recipes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_recipe_api_recipes_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeDefinition"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeValidationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_default_recipe_api_recipes_resolve_default_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveDefaultRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recipe_revision_api_recipes_revisions__revision_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    copy_recipe_revision_api_recipes_revisions__revision_id__copy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_recipe_api_recipes__definition_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_recipe_api_recipes__definition_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveRecipeDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeDraftResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_recipe_api_recipes__definition_id__publish_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recipe_revisions_api_recipes__definition_id__revisions_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path: {
+                definition_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    optional_export_health_api_integrations_export_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionalExportHealthResponse"];
+                };
+            };
+        };
+    };
+    list_integration_profiles_api_integrations_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProfileList"];
+                };
+            };
+        };
+    };
+    issue_ingest_credential_api_integrations__binding_id__ingest_credential_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueIngestCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedIngestCredential"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ingest_credential_api_integrations__binding_id__ingest_credential_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_traces_api_integrations__binding_id__traces_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-codeplane-ingest-token"?: string | null;
+            };
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Resourcespans */
+                    resourceSpans: {
+                        [key: string]: unknown;
+                    }[];
+                };
+                "application/x-protobuf": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OtlpExportResponse"];
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_observation_api_integrations_observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterObservationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    append_observation_records_api_integrations__binding_id__records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservationRecordBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationRecordReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observation_events_api_integrations__binding_id__events_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservationEventList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_source_api_jobs__job_id__external_gates_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalGateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_api_gate__source_id__requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Requestid */
+                    requestId: string;
+                    /** Toolname */
+                    toolName: string;
+                    /** Toolinput */
+                    toolInput: {
+                        [key: string]: unknown;
+                    } | string;
+                    /** Target */
+                    target?: string | null;
+                    /** Sessionid */
+                    sessionId?: string | null;
+                    /** Toolcallid */
+                    toolCallId?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_api_gate__source_id__requests__request_id__get: {
+        parameters: {
+            query?: {
+                waitSeconds?: number;
+            };
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retire_api_gate__source_id__requests__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consume_api_gate__source_id__requests__request_id__consume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Requestid */
+                    requestId: string;
+                    /** Toolname */
+                    toolName: string;
+                    /** Toolinput */
+                    toolInput: {
+                        [key: string]: unknown;
+                    } | string;
+                    /** Target */
+                    target?: string | null;
+                    /** Sessionid */
+                    sessionId?: string | null;
+                    /** Toolcallid */
+                    toolCallId?: string | null;
+                    /** Actiondigest */
+                    actionDigest: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reported_api_gate__source_id__requests__request_id__observations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Reportid */
+                    reportId: string;
+                    /**
+                     * Phase
+                     * @enum {string}
+                     */
+                    phase: "started" | "completed" | "failed";
+                    /** Details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_invoke_api_gate__source_id__invoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalGateDecision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    current_run_api_jobs__job_id__recipe_current_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeCurrentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pending_decisions_api_jobs__job_id__recipe_decisions_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPendingDecisionPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_history_api_jobs__job_id__recipe_runs_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+                highWater?: number | null;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRunListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_api_jobs__job_id__recipe_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_steps_api_jobs__job_id__recipe_runs__run_id__steps_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeStepListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_step_api_jobs__job_id__recipe_runs__run_id__steps__step_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeStepInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeAttemptInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consumed_inputs_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__consumers_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeConsumedInputPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attempt_control_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__control_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeAttemptControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    message_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeMessageReceipt"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeMessageReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeStopRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeOperationReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeAttemptResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeOperationReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeOperationReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_attempt_api_jobs__job_id__recipe_runs__run_id__steps__step_id__attempts__attempt_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                run_id: string;
+                step_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipeGateDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeOperationReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_review_api_jobs__job_id__reviews_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPreparation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_history_api_jobs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+                highWater?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_review_api_jobs__job_id__reviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewRecord"];
                 };
             };
             /** @description Validation Error */

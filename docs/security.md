@@ -5,7 +5,7 @@ hide:
 
 # Security
 
-By default, CodePlane binds to localhost only and never exposes itself to the network. Remote access always requires a password. This page documents the full threat model and configuration options for teams that need them.
+By default, CodePlane binds to localhost only. Remote access always requires application authentication: a password session or a validated Cloudflare Access JWT. This page documents the threat model and configuration options.
 
 ## Overview
 
@@ -26,7 +26,8 @@ The risk depends on how you run CodePlane. There are four access modes:
 | **Localhost** (default) | `cpl up` | Local processes only | Auto-password (optional) | ✅ Low |
 | **Dev Tunnels** | `cpl up --remote` | Tunnel owner only | Microsoft login + password | ✅ Low |
 | **Cloudflare Tunnels** | `cpl up --remote --provider cloudflare` | Cloudflare Access policy | Identity gate (OTP/SSO) + password | ✅ Low |
-| **Cloudflare (external tunnel)** | `cpl up` + external `cloudflared` | Cloudflare Access policy | JWT verification (signature + audience) | ✅ Low |
+| **Cloudflare (external tunnel)** | `cpl up --remote --provider cloudflare --tunnel-ownership external` | Cloudflare Access policy | Application password session or verified JWT | ✅ Low |
+| **Cloudflare Access-only** | `cpl up --remote --provider cloudflare --access-only` | Cloudflare Access policy | Verified JWT required by CodePlane | ✅ Low |
 | **All interfaces** | `cpl up --host 0.0.0.0` | Any device on your network | Password required | ⚠️ Medium |
 
 ### Safe Defaults
@@ -34,11 +35,12 @@ The risk depends on how you run CodePlane. There are four access modes:
 Out of the box, CodePlane is configured conservatively:
 
 - ✅ **Localhost-only** — server binds to `127.0.0.1`, inaccessible from the network
-- ✅ **Password auto-generated** — remote access always requires a password, regardless of provider
+- ✅ **Password auto-generated** — remote mode retains the selected password, or generates one by default. Cloudflare startup never removes it.
 - ✅ **Dangerous combos blocked** — `--host 0.0.0.0 --no-password` is rejected at startup; `--remote --no-password` is also rejected
 - ✅ **Dev Tunnels identity gate** — `--remote` with the default provider creates a Dev Tunnel that requires Microsoft account login (tunnel-owner only); the URL is unguessable and access is gated by both MS auth and the CodePlane password
-- ✅ **Cloudflare Tunnels** — `--remote --provider cloudflare` requires a Cloudflare Access application on the hostname. The server refuses to start without one, ensuring two-factor auth (Cloudflare identity + CodePlane password). See [Configuration > Cloudflare Tunnels](configuration.md#cloudflare-tunnels) for setup
-- ✅ **CF Access JWT verification** — when `CPL_CF_ACCESS_TEAM` and `CPL_CF_ACCESS_AUD` are set, CodePlane validates the `Cf-Access-Jwt-Assertion` header (RS256 signature, audience, expiry) against Cloudflare's public JWKS. JWKS keys are fetched at startup (validating the gate exists) and refreshed hourly. Forged or expired tokens are rejected.
+- ✅ **Cloudflare Tunnels** — the application gate is installed at construction, before deferred tunnel checks. A failed external check can shut down the tunnel but never opens the application gate. See [Configuration > Cloudflare Tunnels](configuration.md#cloudflare-tunnels).
+- ✅ **CF Access JWT verification** — with `CPL_CF_ACCESS_TEAM` and `CPL_CF_ACCESS_AUD`, each protected HTTP request, SSE connection and WebSocket upgrade validates the JWT's RS256 signature, issuer, audience and expiry. Keys are fetched lazily and refreshed hourly. Hostnames, forwarded headers and successful health probes are not credentials.
+- ✅ **Explicit Access-only** — `--access-only` requires Cloudflare remote mode and both Access settings; it conflicts with an explicit password, including `CPL_PASSWORD`. Session cookies do not authenticate this mode.
 - ✅ **Worktree isolation** — agents operate in a dedicated Git worktree, never on your main branch
 - ✅ **Approval system** — destructive Git commands always require operator approval
 - ✅ **Secure cookies** — httpOnly, SameSite=Strict, Secure (when over HTTPS)
@@ -66,25 +68,26 @@ Out of the box, CodePlane is configured conservatively:
 - **Session tokens**: 512-bit cryptographically random tokens (`secrets.token_hex(32)`)
 - **Token expiry**: 24-hour TTL, lazily purged during validation
 - **Cookie security**: `httpOnly` (no JavaScript access), `SameSite=Strict` (no cross-site sending), `Secure` flag set dynamically when accessed over HTTPS
-- **Localhost bypass**: requests from `127.0.0.1` / `::1` are trusted without a cookie (same-machine access)
+- **Localhost trust**: retained only without remote mode. Tunnel connectors use loopback too, so remote mode requires credentials even from `127.0.0.1` / `::1`.
+- **Internal HTTP calls**: MCP self-calls use a process-only credential for the resolved loopback listener. It is not exported to agents, logged, saved in launch profiles, or forwarded to previews.
 - **Rate limiting**: 5 failed login attempts per minute per IP (sliding window)
 
 ### Action Policy
 
-CodePlane's **action policy** delegates every agent action to TraceForge governance, which classifies it and recommends whether to allow it, proceed with a savepoint, or gate it for approval:
+CodePlane's standalone AGT policy combines strict assessment with local constraints. Model claims cannot invent Git recovery, erase known content loss or bypass hard gates:
 
 | Preset | Agent can | Approval required for |
 |--------|-----------|----------------------|
-| `autonomous` | All contained actions within worktree | Non-contained actions (external calls, outside worktree) |
-| `supervised` | Contained, reversible actions | Non-contained or irreversible actions |
-| `locked` | Nothing without checkpoint | Contained actions get git savepoint; all others gated |
+| `autonomous` | Known reads and evidenced Git-recoverable workspace mutations | Hard gates, external mutations and incomplete evidence |
+| `supervised` | Known reads; evidenced Git mutations with a savepoint | Hard gates, external mutations and incomplete evidence |
+| `locked` | Trusted native reads; known shell reads with a savepoint | Mutations and incomplete evidence |
 
 **Recommended actions:**
 
 | Action | Symbol | Behavior |
 |------|--------|----------|
 | allow | ○ | Action proceeds immediately |
-| warn / transform | ◐ | Git savepoint created, then proceeds |
+| warn | ◐ | Git savepoint created, then proceeds |
 | escalate | ● | Sent for review before continuing |
 | deny | ● | Blocks until operator approves |
 
@@ -93,9 +96,18 @@ CodePlane's **action policy** delegates every agent action to TraceForge governa
 
 **Protected paths**: the governance profile escalates writes to sensitive paths (e.g., `infra/`, `.github/workflows/`) regardless of preset.
 
-**USD ceilings**: per-preset dollar thresholds escalate oversight once a job's spend crosses them — e.g., gate all actions when spend exceeds $5.
+**USD thresholds** apply only to verified USD. Native cost units, historical estimates and missing currency are not silently converted to dollars.
 
-Policy rules are managed in **Settings → Policy** and take effect immediately on running jobs.
+**Settings → Policy** selects presets, approval batching and verified-USD warning/escalation overrides. Zero is an active threshold and null disables a line. Spend guards are soft, not security hard gates. Routine approval grants last 24 hours within the same Job, policy configuration and reason. Hard gates and incomplete evidence always require individual approval and cannot be waived.
+
+Published batch IDs identify immutable action membership. Later arrivals form a
+new batch, and partial approval releases only its selected actions. Explicit
+Job trust is a separate intent. Grant issuance is fenced through durable writes
+and cancellation cleanup without replacing an earlier valid grant. Only grants
+actually used by a decision are checked for expiry at final consumption.
+Monitor structural approval uses a workspace-bound pre-execution snapshot.
+Lazy or resumed context without that baseline falls back to monitor/human review,
+never a newly invented "pre-existing" dependency.
 
 ### Authorization Model
 
@@ -167,7 +179,7 @@ Every HTTP response includes:
 
 ### SSE Event Streaming
 
-- Authentication checked inline (not via middleware, which would buffer and break SSE)
+- Authentication checked before streaming using the same fixed posture as HTTP and WebSocket connections
 - Connection limit: max 5 concurrent SSE connections per server
 - Reconnection replay bounded: max 500 events or 5 minutes
 - Job-scoped streams: clients only receive events for their requested job
@@ -183,6 +195,46 @@ Share tokens provide **read-only** access to a single job:
 - The port preview proxy is not accessible via share tokens
 - **Share tokens do not bypass tunnel-level identity gates** — Dev Tunnels still requires Microsoft login; Cloudflare still requires the Access policy
 - No audit trail is kept for token creation or access — treat share URLs as sensitive
+
+### Preview Boundary
+
+Preview forwarding strips `Cookie`, `Authorization`, `Cf-Access-Jwt-Assertion`,
+and the internal self-call credential. Shared HTTP-client cookies cannot be
+replayed between requests or ports, and upstream `Set-Cookie` is not returned
+to the CodePlane origin. Redirects are returned without being followed.
+Decoded response bytes, including compressed responses, are counted during
+streaming against the 50 MiB cap; overflow, errors and cancellation close the
+upstream response.
+
+### Authentication Across Restart
+
+`run.json` records `authMode` (`local`, `password`, or `access_only`) and secret
+source references, never password, session, JWT or internal credential values.
+Access-only replay retains `--access-only`; legacy remote records without a
+password source are refused rather than silently interpreted as Access-only.
+Generated or command-line-only passwords remain unreplayable.
+
+The detached restart helper can authenticate using a resolvable `CPL_PASSWORD`
+and keeps its resulting session only in memory. For Access-only, the initiating
+process privately captures the operator's existing cached JWT with
+`cloudflared access token --app <recorded-origin>`. CodePlane never initiates
+login. Missing, empty, expired or invalid credentials fail before mutation.
+
+The initiating process validates the recorded process/listener and HTTPS origin,
+then passes the JWT through an inherited anonymous pipe using a versioned,
+length-prefixed frame capped at 64 KiB. No credential enters argv, environment,
+request/profile files, status receipts or logs. Credential retrieval precedes
+the adoption timer. The helper validates the bound request/server identity and
+authenticates a protected read on the exact old listener before acknowledging
+adoption. A distinct parent commit frame is required before pause/stop.
+EOF, malformed input, deadline expiry or parent death before commit aborts.
+
+After commit the helper can survive parent exit. It authenticates every allowed
+job-list/pause request with the JWT, without redirects or environment proxies.
+It closes the channel and drops token references before stopping the old process
+or starting the replacement. Replacement retains Access-only. The transfer is
+single-use; the JWT remains an ordinary application credential until its existing
+expiry, not a server-enforced restart-scoped token.
 
 ### Push Notification Security
 
@@ -203,7 +255,7 @@ Share tokens provide **read-only** access to a single job:
 1. **Keep password enabled** for any non-localhost access
 2. **Use `supervised` or `locked` preset** for repositories you don't fully trust
 3. **Rely on protected-path escalation** — the governance profile gates writes to sensitive paths (e.g., `infra/`, `.github/workflows/`)
-4. **Set per-preset USD ceilings** in Settings → Policy to escalate oversight when spend exceeds your comfort level
+4. **Review the verified-USD thresholds** in Settings → Policy and select the appropriate preset
 5. **Don't leave CodePlane running unattended** with active agents
 6. **Review approval requests carefully** — agents can be persuasive
 7. **Use defaults on shared networks** — avoid `--host 0.0.0.0` on Wi-Fi you don't control

@@ -223,9 +223,6 @@ payload: SessionEventPayload  # Union of typed dicts per kind
 | `TurnSummary` | Turn-level summary |
 | `ActionClassified` | Action policy classification result |
 | `PolicySettingsChanged` | Global policy config changed |
-| `RepoIndexProgress` | CodeRecon indexing progress |
-| `RepoIndexComplete` | CodeRecon indexing complete |
-| `StructuralWarning` | Structural code warning |
 
 ### `DomainEvent` (dataclass)
 
@@ -364,7 +361,6 @@ canceled → running (resume)
 | `protected_paths` | `list[str]` | `[]` |
 | `blocking_permission_handler` | `Callable \| None` | `None` |
 | `resume_sdk_session_id` | `str \| None` | `None` |
-| `coderecon_tools` | `Any \| None` | `None` |
 
 ---
 
@@ -423,7 +419,6 @@ Returns `(EventAction, DomainEvent | None, error_reason)`:
 
 - **Trail service** (`set_trail_service(svc)`) — late-bound for plan/activity tracking
 - **Terminal service** (`set_terminal_service(svc)`) — observer terminals
-- **CodeRecon service** — structural analysis, native tool provisioning
 - **Sister sessions** — pre-warmed session management
 - **Step tracker** — plan step tracking
 
@@ -557,11 +552,6 @@ Events are stored as `EventRow` with payload serialized as JSON string.
 | POST | `/jobs/{job_id}/unarchive` | 204 | Unarchive job |
 | GET | `/jobs/{job_id}/story` | `StoryResponse` | Story narrative |
 | GET | `/jobs/{job_id}/narrative` | `NarrativeResponse` | Rich narrative |
-| GET | `/jobs/{job_id}/structural-diff` | `StructuralDiffResponse` | Structural code diff |
-| GET | `/jobs/{job_id}/multi-session` | `MultiSessionResponse` | Multi-session segments |
-| GET | `/jobs/{job_id}/impact-graph/{symbol}` | `ImpactGraphResponse` | Symbol impact graph |
-| GET | `/jobs/{job_id}/communities` | `CommunitiesResponse` | Module communities |
-| GET | `/jobs/{job_id}/review-story` | `ReviewStoryResponse` | Review story |
 
 ### Job Telemetry (`backend/api/job_telemetry.py`)
 
@@ -788,7 +778,6 @@ POST /jobs {repo, prompt, sdk, model, ...}
 2. **Event Bus**: `EventBus.subscribe()` — any service can subscribe to all domain events
 3. **Trail Service**: Late-bound via `set_trail_service()` — pluggable plan/activity tracking
 4. **Step Tracker**: Annotation of transcript events with step IDs
-5. **CodeRecon Integration**: Structural analysis tools provisioned per-job
 6. **Action Policy**: Pluggable `PolicyRouter` and `ApprovalBatcher` per job
 7. **Sister Sessions**: Pre-warmed sessions for faster job startup
 8. **Platform Registry**: Detect and adapt to deployment platform

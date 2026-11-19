@@ -21,6 +21,8 @@ class FakeAction:
     path: str | None = None
     tool_name: str | None = None
     mcp_tool: str | None = None
+    arguments_json: str = ""
+    tool_definition: str = ""
 
 
 # ── MonitorVerdict enum ──

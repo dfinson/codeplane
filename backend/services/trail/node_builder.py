@@ -33,6 +33,20 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+_HANDLED_EVENT_KINDS = TRANSCRIPT_KINDS | {
+    EventKind.job_state_changed,
+    EventKind.session_resumed,
+    EventKind.step_completed,
+    EventKind.step_started,
+    EventKind.execution_phase_changed,
+    EventKind.approval_requested,
+    EventKind.job_completed,
+    EventKind.job_failed,
+    EventKind.job_canceled,
+    EventKind.job_review,
+}
+
+
 # ---------------------------------------------------------------------------
 # Snippet extraction (shared with StoryService — pure function)
 # ---------------------------------------------------------------------------
@@ -125,6 +139,10 @@ class TrailNodeBuilder:
         """Domain event subscriber — builds deterministic trail nodes."""
         job_id = event.session_id
         if not job_id:
+            return
+        # Terminal handling waits for enrichment that publishes ignored plan events.
+        # Those events must not re-enter the same per-job mutation lock.
+        if event.kind not in _HANDLED_EVENT_KINDS:
             return
 
         # Serialize event processing per job to prevent races between
@@ -621,7 +639,7 @@ class TrailNodeBuilder:
 
         if event.kind == EventKind.message_user:
             await self._handle_operator_transcript(event, state)
-        elif event.kind == EventKind.tool_call_completed:
+        elif event.kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             await self._handle_tool_call_transcript(event, state)
         elif event.kind == EventKind.message_assistant:
             await self._handle_assistant_transcript(event, state)
@@ -697,7 +715,7 @@ class TrailNodeBuilder:
             tool_display = format_tool_display(str(tool_name), arguments)
         motivation = getattr(event.metadata, "motivation", None)
         tool_intent = getattr(motivation, "intent", None) or None
-        tool_success = payload.get("success")
+        tool_success = False if event.kind == EventKind.tool_call_failed else payload.get("success")
         if tool_success is not None:
             tool_success = bool(tool_success)
 
@@ -826,6 +844,8 @@ class TrailNodeBuilder:
         status = "completed" if event.kind == EventKind.job_completed else "failed"
         if event.kind == EventKind.job_canceled:
             status = "canceled"
+        elif event.kind == EventKind.job_review:
+            status = "ready for review"
 
         node = TrailNodeRow(
             id=node_id,

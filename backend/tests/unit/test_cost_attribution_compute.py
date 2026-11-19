@@ -26,7 +26,7 @@ def _span(
     span_type: str = "llm",
     name: str = "llm_call",
     turn_number: int | None = 1,
-    cost_usd: float = 0.01,
+    cost_usd: float | None = 0.01,
     input_tokens: int = 100,
     output_tokens: int = 50,
     cache_read_tokens: int = 0,
@@ -746,12 +746,13 @@ class TestComputeAttributionActivityWeights:
 
 @pytest.mark.asyncio
 class TestComputeAttributionCostFromAttrs:
-    async def test_cost_fallback_to_attrs(self) -> None:
-        """When span cost_usd is 0, fall back to attrs.cost."""
+    @pytest.mark.parametrize("projected_cost", [None, 0.0])
+    async def test_legacy_attrs_cannot_replace_unknown_or_measured_zero_currency(self, projected_cost) -> None:
+        """Only the repository's qualified cost column establishes currency."""
         spans = [
             _span(
                 turn_number=1,
-                cost_usd=0,
+                cost_usd=projected_cost,
                 input_tokens=0,
                 output_tokens=0,
                 attrs={"cost": 0.07, "input_tokens": 500, "output_tokens": 250},
@@ -762,10 +763,19 @@ class TestComputeAttributionCostFromAttrs:
 
         await _compute_attribution(job_id="job-1", session=session, **repos)
 
-        rows = repos["attr_repo"].insert_batch.call_args.kwargs["rows"]
+        write = repos["attr_repo"].insert_batch.call_args.kwargs
+        rows = write["rows"]
         turn_rows = [r for r in rows if r["dimension"] == "turn"]
         assert len(turn_rows) == 1
-        assert turn_rows[0]["cost_usd"] == pytest.approx(0.07)
+        assert turn_rows[0]["input_tokens"] == 500
+        assert turn_rows[0]["output_tokens"] == 250
+        assert turn_rows[0]["call_count"] == 1
+        assert turn_rows[0]["cost_usd"] == 0.0
+        assert write["currency_qualified"] is (projected_cost is not None)
+        summary = repos["summary_repo"].set_turn_stats.call_args.kwargs
+        assert summary["peak_turn_cost_usd"] == summary["avg_turn_cost_usd"] == 0.0
+        assert summary["derived_currency_qualified"] is (projected_cost is not None)
+        assert spans[0]["attrs"]["cost"] == 0.07
 
 
 # ---------------------------------------------------------------------------

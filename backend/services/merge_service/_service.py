@@ -534,6 +534,8 @@ class MergeService:
 
         action: "merge" | "smart_merge" | "create_pr" | "discard"
         """
+        if job.observation_only:
+            return MergeResult(status=MergeStatus.error, error="Observation history has no workspace to resolve")
         # Imported sessions use a separate resolution path that avoids
         # destructive local operations (no worktree removal, no branch
         # deletion, no checkout in the user's working directory).
@@ -541,10 +543,10 @@ class MergeService:
             return await self._resolve_imported(job, action)
 
         job_id = job.id
-        repo_path = job.repo
+        repo_path = job.execution_repo
         worktree_path = job.worktree_path
         branch = job.branch
-        base_ref = job.base_ref
+        base_ref = job.execution_base_ref
         prompt = job.prompt
 
         # Capture a final diff snapshot before any resolution that removes the
@@ -597,15 +599,15 @@ class MergeService:
         if not job.branch:
             return MergeResult(status=MergeStatus.error, error="No branch to create a PR for")
 
-        if not _REF_PATTERN.match(job.branch) or not _REF_PATTERN.match(job.base_ref):
+        if not _REF_PATTERN.match(job.branch) or not _REF_PATTERN.match(job.execution_base_ref):
             return MergeResult(status=MergeStatus.error, error="Invalid branch or base_ref")
 
         return await self._create_pr(
             job.id,
-            job.repo,
+            job.execution_repo,
             job.worktree_path,
             job.branch,
-            job.base_ref,
+            job.execution_base_ref,
             job.prompt,
         )
 
@@ -827,9 +829,9 @@ class MergeService:
         or the branch, so it must never delete them.
         """
         job_id = job.id
-        repo_path = job.repo
+        repo_path = job.execution_repo
         branch = job.branch
-        base_ref = job.base_ref
+        base_ref = job.execution_base_ref
         worktree_path = job.worktree_path
         prompt = job.prompt
 

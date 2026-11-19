@@ -52,16 +52,48 @@ from backend.services.runtime import (
 log = structlog.get_logger()
 
 
-def _make_runtime(**kwargs: Any) -> RuntimeService:
-    """Build a RuntimeService with a stub governance decider wired.
+class TestRuntimeContract:
+    async def test_cancel_stops_scout_start_task(self, runtime):
+        waiting = asyncio.create_task(asyncio.Event().wait())
+        runtime._starting_tasks = {"job-1": waiting}
+        try:
+            await runtime.cancel("job-1")
+            await asyncio.sleep(0)
+            assert waiting.cancelled(), "Cancellation must stop preflight before primary launch"
+        finally:
+            waiting.cancel()
+            await asyncio.gather(waiting, return_exceptions=True)
 
-    Since the P5 governance cutover, ``_setup_action_policy`` hard-requires a
-    governance decider (wired via ``set_governance()`` at startup). These
-    runtime-lifecycle tests don't exercise the TraceForge decision path, so a
-    stub decider + subscriber satisfy the mandatory guard.
-    """
+    async def test_followup_is_the_controllable_live_session(self, monkeypatch):
+        from backend.services.runtime.verify import run_followup_turn
+
+        observed = []
+        host = SimpleNamespace(
+            _agent_sessions={},
+            _echo_suppress={},
+            _session_ids={},
+            _resolve_adapter=lambda sdk: object(),
+            _event_bus=EventBus(),
+            _event_processor=None,
+        )
+
+        async def execute(session, config, adapter):
+            yield new_event("job-1", EventKind.message_assistant, {"content": "verified"})
+
+        async def process(job_id, event, session, rejection):
+            observed.append(host._agent_sessions.get(job_id) is session)
+            return EventAction.skip, None
+
+        host._process_agent_event = process
+        monkeypatch.setattr(AgentSession, "execute", execute)
+        await run_followup_turn(host, "job-1", "verify", SessionConfig(".", "fixture"), None, None, None)
+        assert observed == [True]
+
+
+def _make_runtime(**kwargs: Any) -> RuntimeService:
+    """Isolate lifecycle tests from policy setup, which has real-root tests."""
     service = RuntimeService(**kwargs)
-    service.set_governance(MagicMock(), MagicMock())  # type: ignore[arg-type]
+    service._setup_action_policy = AsyncMock()  # type: ignore[method-assign]
     return service
 
 
@@ -199,14 +231,8 @@ async def runtime(
         config=config,
     )
     yield service
-    # Force-cancel all tasks then wait briefly — avoid slow teardown on CI.
-    for task in list(service._tasks.values()):
-        task.cancel()
-    for task in list(service._heartbeat_tasks.values()):
-        task.cancel()
-    all_tasks = list(service._tasks.values()) + list(service._heartbeat_tasks.values())
-    if all_tasks:
-        await asyncio.gather(*all_tasks, return_exceptions=True)
+    # Fence dequeueing before cancellation so cleanup cannot start another job.
+    await service.shutdown()
     # Allow aiosqlite background threads to drain so they don't
     # encounter a closed event-loop after the engine is disposed.
     await asyncio.sleep(0.05)
@@ -246,7 +272,7 @@ async def _create_db_job(
         project_repo = ProjectRepository(session)
         existing = await project_repo.get(job.project_id)
         if existing is None:
-            await project_repo.create(job.project_id, "Test Project", [job.repo])
+            await project_repo.create(job.project_id, "Test Project", [job.execution_repo])
         row = JobRow(
             id=job.id,
             repo=job.repo,
@@ -343,6 +369,9 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
     }[sdk]
     runtime._git_service = MagicMock()
     runtime.set_preflight_curator(PreflightCurator(utility, model="utility-model"))
+    router = SimpleNamespace(execution_epoch="fixture-epoch", authorize_permission=AsyncMock(return_value=True))
+    runtime._standalone_governance = SimpleNamespace(for_job=lambda pin, policy: router)
+    runtime._job_contract_pins[job.id] = MagicMock()
     await RuntimeService._setup_action_policy(
         runtime,
         job.id,
@@ -351,7 +380,8 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
         job_preset="locked",
     )
     router = runtime._policy_routers[job.id]
-    router.route = AsyncMock(return_value=SimpleNamespace(proceed=True, classification=None))
+    utility.set_job_id("scout", job.id)
+    utility.set_session_metadata("scout", SessionConfig(workspace_path=job.worktree_path, prompt="", job_id=job.id))
     result = await utility._evaluate_permission(
         "scout",
         job.id,
@@ -359,7 +389,7 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
         tool_name="view",
     )
     assert result == PermissionDecision.allow
-    router.route.assert_awaited_once()
+    router.authorize_permission.assert_awaited_once()
     assert primary._policy_router[job.id] is utility._policy_router[job.id]
 
 
@@ -406,7 +436,7 @@ async def test_cancellation_after_startup_completion_still_stops_primary(runtime
     startup = asyncio.create_task(asyncio.sleep(0))
     await startup
     primary = asyncio.create_task(asyncio.sleep(60))
-    runtime._startup_tasks["job-1"] = startup
+    runtime._starting_tasks["job-1"] = startup
     runtime._tasks["job-1"] = primary
     await runtime.cancel("job-1")
     with pytest.raises(asyncio.CancelledError):
@@ -719,11 +749,9 @@ async def test_http_cancel_order_preserves_scout_terminal_history(
         await asyncio.wait_for(entered.wait(), timeout=2)
         request_scope = asynccontextmanager(RequestProvider().session)
         async with request_scope(factory) as request_session:
-            response = await cancel_job(
-                job.id, runtime._make_job_service(request_session), runtime, AsyncMock(), request_session
-            )
+            response = await cancel_job(job.id, runtime._make_job_service(request_session), runtime, AsyncMock())
             assert response.state == "canceled"
-            # Scout must finish even while the HTTP request scope is still open.
+            # Response transmission can yield before the real provider commits.
             await asyncio.sleep(0.05)
         await asyncio.gather(start, return_exceptions=True)
         sessions = await SecondarySessionRepository(factory).get_by_job(job.id)
@@ -1332,6 +1360,9 @@ class TestResumeFallback:
         config: CPLConfig,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+        from backend.persistence.job_repo import JobRepository
+
         runtime = _make_runtime(
             session_factory=session_factory,
             event_bus=event_bus,
@@ -1351,8 +1382,15 @@ class TestResumeFallback:
         job.session_count = 4
         job.resolution = Resolution.unresolved
         await _create_db_job(session_factory, job)
+        async with session_factory() as session:
+            initial = await JobRepository(session).declare_initial_legacy_admission(job.id)
+            await session.commit()
 
         async def _boom(*args: object, **kwargs: object) -> None:
+            async with session_factory() as session:
+                current = await ExecutionAdmissionRepository(session).current(job.id)
+                assert current is not None and current.id != initial.id
+                assert current.previous_admission_id == initial.id
             raise RuntimeError("startup failed")
 
         monkeypatch.setattr(runtime, "start_or_enqueue", _boom)
@@ -1370,6 +1408,7 @@ class TestResumeFallback:
             assert row.session_count == 4
             assert row.resolution == Resolution.unresolved
             assert row.completed_at is not None
+            assert await ExecutionAdmissionRepository(session).current(job.id) == initial
 
         assert [event.kind for event in published] == []
 
@@ -1454,6 +1493,8 @@ class TestResumeFallback:
         event_bus: EventBus,
         config: CPLConfig,
     ) -> None:
+        from backend.persistence.event_repo import EventRepository
+
         adapter = ResumeFallbackAdapter()
         runtime = _make_runtime(
             session_factory=session_factory,
@@ -1509,6 +1550,12 @@ class TestResumeFallback:
             row = await repo.get(job.id)
             assert row is not None
             assert row.sdk_session_id == "resume-2"
+            declarations = [
+                item.event
+                for item in await EventRepository(session).list_after(0, job_id=job.id)
+                if item.event.kind == "execution.admission.declared"
+            ]
+            assert len(declarations) == 1, "Native fallback must retain the accepted admission"
 
         await runtime.shutdown()
 
@@ -1612,6 +1659,8 @@ class TestRecovery:
         session_factory: async_sessionmaker[AsyncSession],
         config: CPLConfig,
     ) -> None:
+        from backend.persistence.job_repo import JobRepository
+
         published: list[SessionEvent] = []
 
         async def _collect(e: SessionEvent) -> None:
@@ -1621,6 +1670,9 @@ class TestRecovery:
 
         job = _make_job(repo=config.repos[0], state=JobState.running)
         await _create_db_job(session_factory, job)
+        async with session_factory() as session:
+            initial = await JobRepository(session).declare_initial_legacy_admission(job.id)
+            await session.commit()
 
         await runtime.recover_on_startup()
         await _wait_until(
@@ -1629,12 +1681,14 @@ class TestRecovery:
         )
 
         async with session_factory() as session:
+            from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
             from backend.persistence.job_repo import JobRepository
 
             repo = JobRepository(session)
             row = await repo.get(job.id)
             assert row is not None
             assert row.state == JobState.review
+            assert await ExecutionAdmissionRepository(session).current(job.id) == initial
 
         resumed_events = [e for e in published if e.kind == EventKind.session_resumed]
         assert len(resumed_events) == 1
@@ -1928,6 +1982,20 @@ class TestBuildSessionConfig:
 
 
 class TestConcurrencyGuards:
+    @pytest.fixture(name="engine")
+    async def disk_engine(self, tmp_path: Path) -> AsyncGenerator[AsyncEngine, None]:
+        from backend.persistence.database import create_engine
+
+        # Concurrent ORM sessions need separate connections, not one shared
+        # in-memory transaction that another session can roll back.
+        engine = create_engine(tmp_path / "runtime-concurrency.db")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
+
     async def test_managed_cleanup_continues_when_artifact_finalization_raises(
         self,
         runtime: RuntimeService,

@@ -8,6 +8,7 @@ import { SdkBadge } from "./SdkBadge";
 import { Tooltip } from "./ui/tooltip";
 import { useViewStateStore } from "../store/viewStateStore";
 import { pathBasename } from "../lib/paths";
+import { jobCostWithTokens } from "../lib/jobCost";
 
 function elapsed(createdAt: string): string {
   const ms = Date.now() - new Date(createdAt).getTime();
@@ -54,7 +55,7 @@ function ResolutionBadge({ resolution }: { resolution: string }) {
 
 export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const navigate = useNavigate();
-  const repoName = pathBasename(job.repo) || job.repo;
+  const repoName = pathBasename(job.repo) || job.repo || "External observation";
   const transcript = useStore(selectJobTranscript(job.id));
   const lastSeenSeq = useViewStateStore((s) => s.lastSeenSeq[job.id]);
   const hasUnread = lastSeenSeq != null && transcript.some((e) => (e.sequence ?? 0) > lastSeenSeq);
@@ -62,6 +63,7 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
   const previewSummary = job.progressSummary ?? "";
 
   const isFailed = job.state === "failed";
+  const costLabel = jobCostWithTokens(job);
   return (
     <button
       className="w-full shrink-0 text-left rounded-lg border border-border bg-background p-3 cursor-pointer transition-colors hover:border-primary/60 hover:bg-accent overflow-hidden"
@@ -81,22 +83,22 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
             </Tooltip>
           )}
           {job.resolution && !(job.state === "review" && job.resolution === "unresolved") && <ResolutionBadge resolution={job.resolution} />}
-          <StateBadge state={job.state} />
+          <StateBadge state={job.observationOnly ? "observing" : job.state} />
         </div>
       </div>
 
       <div className="flex items-center gap-1 mb-1">
         <FolderGit2 size={11} className="text-muted-foreground/60 shrink-0" />
-        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo}>{repoName}</span>
+        <span className="text-xs text-muted-foreground/80 font-mono truncate" title={job.repo ?? undefined}>{repoName}</span>
       </div>
 
       <div className="flex items-center gap-2 mb-1">
-        <div className="flex items-center gap-1 min-w-0">
+        {!job.observationOnly && <div className="flex items-center gap-1 min-w-0">
           <GitBranch size={12} className="text-muted-foreground shrink-0" />
-          <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo}>
+          <span className="text-xs text-muted-foreground truncate" title={job.branch ?? job.repo ?? undefined}>
             {job.branch ?? repoName}
           </span>
-        </div>
+        </div>}
         <SdkBadge sdk={job.sdk} size="sm" />
       </div>
 
@@ -152,10 +154,10 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
 
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{elapsed(job.createdAt)}</span>
-        {job.totalCostUsd != null && job.totalCostUsd > 0 && (
+        {costLabel != null && (
           <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 bg-emerald-500/15 text-emerald-400 font-medium">
             <Coins size={10} />
-            {formatCostCompact(job.totalCostUsd, job.totalTokens)}
+            {costLabel}
           </span>
         )}
       </div>
@@ -163,14 +165,3 @@ export const JobCard = memo(function JobCard({ job }: { job: JobSummary }) {
     </button>
   );
 });
-
-function formatCostCompact(costUsd: number, tokens?: number | null): string {
-  const cost = costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`;
-  if (tokens == null || tokens === 0) return cost;
-  const tok = tokens >= 1_000_000
-    ? `${(tokens / 1_000_000).toFixed(1)}M`
-    : tokens >= 1_000
-      ? `${(tokens / 1_000).toFixed(0)}k`
-      : `${tokens}`;
-  return `${cost} · ${tok} tok`;
-}

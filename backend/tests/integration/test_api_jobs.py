@@ -19,6 +19,7 @@ import pytest
 from backend.models.db import EventRow
 from backend.models.domain import JobNotFoundError, StateConflictError
 from backend.models.events import EventKind
+from backend.tests.unit.conftest import make_job
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -41,6 +42,20 @@ def _patch_for_job_creation(
         "backend.services.git.git_service.GitService",
         lambda config: mock_git_service,
     )
+
+
+@pytest.fixture(autouse=True)
+def _source_aware_cancel(mock_runtime_service, session_factory, event_bus):
+    from backend.config import CPLConfig
+    from backend.services.runtime import RuntimeService
+
+    runtime = RuntimeService(
+        session_factory=session_factory,
+        event_bus=event_bus,
+        adapter_registry=MagicMock(),
+        config=CPLConfig(),
+    )
+    mock_runtime_service.cancel_job.side_effect = runtime.cancel_job
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +84,117 @@ def _create_body(**overrides: object) -> dict[str, object]:
     base: dict[str, object] = {"repo": "/test/repo", "prompt": "Fix bug"}
     base.update(overrides)
     return base
+
+
+class TestJobCostProvenance:
+    @pytest.mark.parametrize(
+        "kind", ["copilot", "verified-usd", "legacy", "observation", "forged-usd", "foreign-owner"]
+    )
+    async def test_source_units_reach_job_detail_and_list_without_rewriting_legacy_totals(
+        self, client, session_factory, seed_job, kind
+    ):
+        from backend.models.events import new_event
+        from backend.models.session_event import EventMetadata
+        from backend.models.usage import UsageAmount
+        from backend.persistence.event_repo import EventRepository
+        from backend.persistence.job_repo import JobRepository
+        from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+        from backend.services.events.sse_manager import SSEConnection, SSEManager
+
+        job_id = await seed_job(state="completed")
+        currency = kind in {"verified-usd", "observation", "forged-usd", "foreign-owner"}
+        producer = "claude" if currency else "copilot"
+        async with session_factory() as session:
+            summaries = TelemetrySummaryRepository(session)
+            await summaries.init_job(job_id, sdk="codeplane")
+            await summaries.increment(
+                job_id, total_cost_usd=2.31, input_tokens=67464, output_tokens=985, cache_read_tokens=48229
+            )
+            events = EventRepository(session)
+            for index in range(7):
+                usage = UsageAmount(
+                    amount="0.33",
+                    unit="USD" if currency else "copilot_cost_unit",
+                    producer=producer,
+                    model="fixture",
+                    job_id=job_id,
+                    execution_epoch="epoch",
+                    role="primary",
+                    source="native-usage",
+                    verified=currency,
+                    currency="USD" if currency else None,
+                )
+                source_usage = usage.model_dump(mode="json")
+                if kind == "forged-usd":
+                    source_usage["verified"] = False
+                elif kind == "foreign-owner":
+                    source_usage["job_id"] = "another-job"
+                event = new_event(
+                    job_id,
+                    "telemetry.usage",
+                    {
+                        "cost_usd": 0.33,
+                        **({"native_usage": [source_usage]} if kind != "legacy" else {}),
+                    },
+                    event_id=f"{job_id}-usage-{index}",
+                    timestamp=datetime(2020, 1, 1, tzinfo=UTC),
+                    metadata=EventMetadata(
+                        source_framework=producer,
+                        execution_epoch="epoch",
+                        integration_binding_id="observer" if kind == "observation" else None,
+                        namespace=("observation-source",) if kind == "observation" else (),
+                    ),
+                )
+                await events.append(event)
+                await events.append(event)
+            await session.commit()
+            before = await events.list_all_events_by_job(job_id)
+        detail = await client.get(f"/api/jobs/{job_id}")
+        listing = await client.get("/api/jobs")
+        hydration = await client.get(f"/api/jobs/{job_id}/snapshot")
+        assert detail.status_code == listing.status_code == hydration.status_code == 200
+        listed = next(item for item in listing.json()["items"] if item["id"] == job_id)
+        async with session_factory() as session:
+            sse = SSEManager()
+            connection = SSEConnection(job_id)
+            await sse.replay_events(
+                connection, EventRepository(session), JobRepository(session), last_event_id=0, session=session
+            )
+            frame = connection.queue.get_nowait()
+            import json
+
+            snapshot = json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for body in (detail.json(), listed, hydration.json()["job"], snapshot["jobs"][0]):
+            assert body["totalCostUsd"] == 2.31 and body["totalTokens"] == 116678
+            if kind in {"legacy", "observation", "forged-usd", "foreign-owner"}:
+                assert body["costUsage"] == []
+            else:
+                (cost,) = body["costUsage"]
+                assert cost["amount"] == "2.31" and cost["producer"] == producer
+                assert cost["unit"] == ("USD" if currency else "copilot_cost_unit")
+                assert cost["verified"] is currency and cost["currency"] == ("USD" if currency else None)
+                assert cost["role"] == "primary" and cost["source"] == "native-usage"
+        async with session_factory() as session:
+            assert await EventRepository(session).list_all_events_by_job(job_id) == before
+            assert (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id]))[job_id][
+                "total_cost_usd"
+            ] == 2.31
+
+
+class TestRuntimeContract:
+    async def test_cancel_routes_delivery_before_state_change(self):
+        from backend.api.jobs import cancel_job
+        from backend.tests.unit.conftest import make_job
+
+        jobs = AsyncMock()
+        runtime = AsyncMock()
+        ingest = AsyncMock()
+        job = make_job(state="canceled", source="copilot_cli", external_session_id="native-1")
+        jobs.cancel_job.return_value = job
+        runtime.cancel_job.return_value = job
+        await cancel_job("job-1", jobs, runtime, ingest)
+        assert runtime.cancel_job.await_count == 1
+        jobs.cancel_job.assert_not_awaited()
 
 
 @dataclass
@@ -301,7 +427,7 @@ class TestJobsCrud:
         resp = await client.post(f"/api/jobs/{jid}/cancel")
         assert resp.status_code == 200
         assert resp.json()["state"] == "canceled"
-        mock_runtime_service.cancel.assert_called_once_with(jid)
+        mock_runtime_service.cancel_job.assert_called_once_with(jid)
 
     async def test_cancel_queued_job(self, client: AsyncClient, seed_job: SeedJobFn) -> None:
         jid = await seed_job(state="queued", job_id="cancel-q")
@@ -424,37 +550,14 @@ class TestJobControl:
         mock_runtime_service: AsyncMock,
     ) -> None:
         jid = await seed_job(state="failed", job_id="resume-1")
-        fake_job = MagicMock()
-        fake_job.id = jid
-        fake_job.repo = "/test/repo"
-        fake_job.prompt = "Test prompt"
-        fake_job.title = None
-        fake_job.description = None
-        fake_job.state = "running"
-        fake_job.sdk = "copilot"
-        fake_job.base_ref = "main"
-        fake_job.worktree_path = "/tmp/wt"
-        fake_job.branch = "fix/branch"
-        fake_job.preset = "supervised"
-        fake_job.created_at = datetime.now(UTC)
-        fake_job.updated_at = datetime.now(UTC)
-        fake_job.completed_at = None
-        fake_job.pr_url = None
-        fake_job.merge_status = None
-        fake_job.resolution = None
-        fake_job.archived_at = None
-        fake_job.failure_reason = None
-        fake_job.model = None
-        fake_job.worktree_name = None
-        fake_job.verify = None
-        fake_job.self_review = None
-        fake_job.max_turns = None
-        fake_job.verify_prompt = None
-        fake_job.self_review_prompt = None
-        fake_job.parent_job_id = None
-        fake_job.source = "managed"
-        fake_job.external_session_id = None
-        mock_runtime_service.resume_job.return_value = fake_job
+        mock_runtime_service.resume_job.return_value = make_job(
+            id=jid,
+            repo="/test/repo",
+            prompt="Test prompt",
+            state="running",
+            worktree_path="/tmp/wt",
+            branch="fix/branch",
+        )
 
         resp = await client.post(
             f"/api/jobs/{jid}/resume",
@@ -497,37 +600,14 @@ class TestJobControl:
         mock_runtime_service: AsyncMock,
     ) -> None:
         jid = await seed_job(state="failed", job_id="resume-bad")
-        fake_job = MagicMock()
-        fake_job.id = jid
-        fake_job.repo = "/test/repo"
-        fake_job.prompt = "Test prompt"
-        fake_job.title = None
-        fake_job.description = None
-        fake_job.state = "running"
-        fake_job.sdk = "copilot"
-        fake_job.base_ref = "main"
-        fake_job.worktree_path = "/tmp/wt"
-        fake_job.branch = "fix/branch"
-        fake_job.preset = "supervised"
-        fake_job.created_at = datetime.now(UTC)
-        fake_job.updated_at = datetime.now(UTC)
-        fake_job.completed_at = None
-        fake_job.pr_url = None
-        fake_job.merge_status = None
-        fake_job.resolution = None
-        fake_job.archived_at = None
-        fake_job.failure_reason = None
-        fake_job.model = None
-        fake_job.worktree_name = None
-        fake_job.verify = None
-        fake_job.self_review = None
-        fake_job.max_turns = None
-        fake_job.verify_prompt = None
-        fake_job.self_review_prompt = None
-        fake_job.parent_job_id = None
-        fake_job.source = "managed"
-        fake_job.external_session_id = None
-        mock_runtime_service.resume_job.return_value = fake_job
+        mock_runtime_service.resume_job.return_value = make_job(
+            id=jid,
+            repo="/test/repo",
+            prompt="Test prompt",
+            state="running",
+            worktree_path="/tmp/wt",
+            branch="fix/branch",
+        )
 
         resp = await client.post(f"/api/jobs/{jid}/resume", json={})
         assert resp.status_code == 200
@@ -537,10 +617,10 @@ class TestJobControl:
     # ── Models ──
 
     async def test_list_models_empty(self, client: AsyncClient) -> None:
-        # Use sdk=claude to avoid the live CopilotClient fallback fetch
+        # Disabled integration catalogs fail before any provider discovery.
         resp = await client.get("/api/models", params={"sdk": "claude"})
-        assert resp.status_code == 200
-        assert resp.json() == {"items": []}
+        assert resp.status_code == 400
+        assert "disabled" in resp.json()["detail"]
 
 
 # ── Job Data ─────────────────────────────────────────────────────────

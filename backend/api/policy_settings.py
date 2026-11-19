@@ -1,14 +1,4 @@
-"""Action policy settings API — preset, batch window, per-preset USD ceilings, MCP configs, export/import.
-
-Wholesale governance adoption retired the hand-rolled path/action/cost rule editors
-and the pattern-trust grant editor: the DECISION (rules, protected paths,
-count/effect budget, reason-code trust) is owned by ``traceforge.governance``. What
-CodePlane still configures here is the product surface it owns — the preset (which
-selects a TraceForge profile), the approval batch window, the per-preset USD
-ceiling overlay (enforced natively by ``JobSpendCeilingAssessor``), and the MCP
-server launch configs. The operator "trust this whole session" action lives on
-``POST /jobs/{job_id}/approvals/trust`` (a reason-code session grant), not here.
-"""
+"""Application-owned policy, approval batching, spend and MCP settings."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -22,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.models.events import EventKind, new_event
 from backend.models.schemas.base import CamelModel
 from backend.persistence.policy_repo import PolicyRepository
-from backend.services.action_policy.preset_profiles import PROFILES, profile_for
+from backend.services.action_policy.classifier import USD_CEILING_DEFAULTS
 from backend.services.events.event_bus import EventBus
 
 router = APIRouter(prefix="/settings/policy", tags=["policy"], route_class=DishkaRoute)
@@ -54,18 +44,18 @@ class UpdatePresetRequest(CamelModel):
 
 class UpdateConfigRequest(CamelModel):
     preset: str | None = Field(default=None, pattern=_PRESET_PATTERN)
-    batch_window_seconds: float | None = None
+    batch_window_seconds: float | None = Field(default=None, ge=0.5, le=30, allow_inf_nan=False)
 
 
 class UsdCeilingEntry(CamelModel):
-    """A per-preset USD ceiling: warn line and hard ceiling (either may be null)."""
+    """Soft verified-USD warning and escalation lines; null disables a line."""
 
-    warn_usd: float | None = None
-    ceiling_usd: float | None = None
+    warn_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    ceiling_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class UsdCeilingsResponse(CamelModel):
-    """Effective per-preset ceilings (baked profile default overlaid with overrides)."""
+    """Configured standalone thresholds, applied only to verified USD."""
 
     ceilings: dict[str, UsdCeilingEntry] = Field(default_factory=dict)
 
@@ -109,15 +99,12 @@ class PolicyImportRequest(CamelModel):
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _effective_ceilings(overrides: dict[str, tuple[float | None, float | None]]) -> dict[str, UsdCeilingEntry]:
-    """Merge stored per-preset overrides over each profile's baked default ceiling."""
+def _effective_ceilings(
+    overrides: dict[str, tuple[float | None, float | None]],
+) -> dict[str, UsdCeilingEntry]:
     out: dict[str, UsdCeilingEntry] = {}
-    for preset in PROFILES:
-        profile = profile_for(preset)
-        warn, ceiling = profile.warn_usd, profile.ceiling_usd
-        if preset.value in overrides:
-            o_warn, o_ceiling = overrides[preset.value]
-            warn, ceiling = o_warn, o_ceiling
+    for preset, (warn, ceiling) in USD_CEILING_DEFAULTS.items():
+        warn, ceiling = overrides.get(preset.value, (warn, ceiling))
         out[preset.value] = UsdCeilingEntry(warn_usd=warn, ceiling_usd=ceiling)
     return out
 
@@ -132,10 +119,9 @@ async def get_policy(sf: FromDishka[async_sessionmaker[AsyncSession]]) -> FullPo
     async with sf() as session:
         repo = PolicyRepository(session)
         config = await repo.get_config()
-        overrides = await repo.get_usd_ceilings()
         return FullPolicyResponse(
             config=PolicyConfigResponse(**config),
-            usd_ceilings=_effective_ceilings(overrides),
+            usd_ceilings=_effective_ceilings(await repo.get_usd_ceilings()),
             mcp_servers=[MCPServerResponse(**r) for r in await repo.list_mcp_configs()],
         )
 
@@ -170,7 +156,7 @@ async def update_config(
 
 
 # ---------------------------------------------------------------------------
-# Per-preset USD ceilings (native cost-ceiling overlay)
+# Verified-USD warning and escalation overrides.
 # ---------------------------------------------------------------------------
 
 
@@ -179,9 +165,7 @@ async def get_usd_ceilings(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
 ) -> UsdCeilingsResponse:
     async with sf() as session:
-        repo = PolicyRepository(session)
-        overrides = await repo.get_usd_ceilings()
-    return UsdCeilingsResponse(ceilings=_effective_ceilings(overrides))
+        return UsdCeilingsResponse(ceilings=_effective_ceilings(await PolicyRepository(session).get_usd_ceilings()))
 
 
 @router.put("/usd-ceilings", response_model=UsdCeilingsResponse)
@@ -190,17 +174,16 @@ async def update_usd_ceilings(
     sf: FromDishka[async_sessionmaker[AsyncSession]],
     event_bus: FromDishka[EventBus],
 ) -> UsdCeilingsResponse:
-    ceilings = {
-        preset: {"warn_usd": entry.warn_usd, "ceiling_usd": entry.ceiling_usd}
-        for preset, entry in body.ceilings.items()
-    }
     async with sf() as session:
         repo = PolicyRepository(session)
-        await repo.set_usd_ceilings(ceilings)
-        overrides = await repo.get_usd_ceilings()
+        try:
+            await repo.set_usd_ceilings({name: entry.model_dump() for name, entry in body.ceilings.items()})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result = _effective_ceilings(await repo.get_usd_ceilings())
         await session.commit()
     await _notify_policy_changed(event_bus)
-    return UsdCeilingsResponse(ceilings=_effective_ceilings(overrides))
+    return UsdCeilingsResponse(ceilings=result)
 
 
 # ---------------------------------------------------------------------------

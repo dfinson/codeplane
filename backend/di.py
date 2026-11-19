@@ -8,6 +8,7 @@ Defines the DI container wiring that replaces the previous hand-rolled
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, NewType
 
 import httpx
@@ -20,9 +21,13 @@ from backend.persistence.chat_repo import ChatRepository
 from backend.persistence.cost_attribution_repo import CostAttributionRepository
 from backend.persistence.event_repo import EventRepository
 from backend.persistence.file_access_repo import FileAccessRepository
+from backend.persistence.integration_repo import IntegrationRepository
 from backend.persistence.job_repo import JobRepository
 from backend.persistence.latency_attribution_repo import LatencyAttributionRepository
+from backend.persistence.project_board_repo import ProjectBoardRepository
 from backend.persistence.project_repo import ProjectRepository
+from backend.persistence.recipe_repo import RecipeRepository
+from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.persistence.sidecar_template_repo import SidecarTemplateRepository
 from backend.persistence.step_repo import StepRepository
 from backend.persistence.task_link_repo import TaskLinkRepository
@@ -44,11 +49,19 @@ from backend.services.events.ingest_service import IngestService
 from backend.services.events.sse_manager import SSEManager
 from backend.services.git.git_service import GitService
 from backend.services.ingest.claude_source import ClaudeSessionStateWatcher
+from backend.services.ingest.history_registration import HistoryRegistration
+from backend.services.ingest.mapping_registry import MappingRegistry
+from backend.services.ingest.record_service import ObservationRecords
 from backend.services.job.approval_service import ApprovalService
 from backend.services.job.job_service import JobService
 from backend.services.merge_service import MergeService
+from backend.services.project.board_service import ProjectBoardService
 from backend.services.project.project_service import ProjectService
+from backend.services.recipe.control import RecipeControlService
+from backend.services.recipe.definition_service import RecipeDefinitionService
+from backend.services.recipe.inspection import RecipeInspectionService
 from backend.services.recipe.recipe_service import RecipeService
+from backend.services.recipe.review_service import ReviewService
 from backend.services.runtime import RuntimeService
 from backend.services.sharing.push_service import PushService
 from backend.services.sharing.share_service import ShareService
@@ -57,6 +70,7 @@ from backend.services.sidecar.session import SidecarSessionManager
 from backend.services.sidecar.template_service import SidecarTemplateService
 from backend.services.steps.diff_service import StepDiffService
 from backend.services.story.service import StoryService
+from backend.services.task_execution_service import TaskExecutionService
 from backend.services.terminal.terminal_service import TerminalService
 from backend.services.tracker_sync_service import TrackerSyncService
 from backend.services.tracker_write_service import TrackerWriteService
@@ -66,6 +80,14 @@ from backend.services.trail import TrailService
 CachedModelsBySdk = NewType("CachedModelsBySdk", dict[str, Any])
 VoiceMaxBytes = NewType("VoiceMaxBytes", int)
 PreviewHttpClient = NewType("PreviewHttpClient", httpx.AsyncClient)
+
+
+class _RejectPreviewCookies(DefaultCookiePolicy):
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+    def return_ok(self, cookie: Any, request: Any) -> bool:
+        return False
 
 
 class AppProvider(Provider):
@@ -102,13 +124,8 @@ class AppProvider(Provider):
     def git_service(self, config: CPLConfig) -> GitService:
         return GitService(config)
 
-    @provide
-    def tracker_write_service(
-        self,
-        approval_service: ApprovalService,
-        sf: async_sessionmaker[AsyncSession],
-    ) -> TrackerWriteService:
-        return TrackerWriteService(approval_service, session_factory=sf)
+    tracker_write_service = from_context(provides=TrackerWriteService)
+    task_execution_service = from_context(provides=TaskExecutionService)
 
     @provide
     def diff_service(self, git_service: GitService, event_bus: EventBus) -> DiffService:
@@ -137,6 +154,9 @@ class AppProvider(Provider):
     async def preview_http_client(self) -> AsyncIterator[PreviewHttpClient]:
         client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            cookies=CookieJar(policy=_RejectPreviewCookies()),
+            follow_redirects=False,
+            trust_env=False,
         )
         try:
             yield PreviewHttpClient(client)
@@ -148,6 +168,30 @@ class RequestProvider(Provider):
     """REQUEST-scoped dependencies — created fresh per HTTP request."""
 
     scope = Scope.REQUEST
+
+    @provide
+    def integration_repo(self, session: AsyncSession) -> IntegrationRepository:
+        return IntegrationRepository(session)
+
+    @provide
+    def history_registration(
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        projects: ProjectRepository,
+        config: CPLConfig,
+    ) -> HistoryRegistration:
+        return HistoryRegistration(bindings, jobs, projects, mapping_registry=MappingRegistry(config.native_mappings))
+
+    @provide
+    def observation_records(
+        self,
+        bindings: IntegrationRepository,
+        jobs: JobRepository,
+        event_bus: EventBus,
+        config: CPLConfig,
+    ) -> ObservationRecords:
+        return ObservationRecords(bindings, jobs, event_bus, mapping_registry=MappingRegistry(config.native_mappings))
 
     @provide
     async def session(
@@ -185,6 +229,34 @@ class RequestProvider(Provider):
     @provide
     def sidecar_template_repo(self, session: AsyncSession) -> SidecarTemplateRepository:
         return SidecarTemplateRepository(session)
+
+    @provide
+    def recipe_repo(self, session: AsyncSession) -> RecipeRepository:
+        return RecipeRepository(session)
+
+    @provide
+    def recipe_definition_service(self, repo: RecipeRepository) -> RecipeDefinitionService:
+        return RecipeDefinitionService(repo)
+
+    @provide
+    def recipe_run_repo(self, session: AsyncSession) -> RecipeRunRepository:
+        return RecipeRunRepository(session)
+
+    @provide
+    def recipe_inspection_service(
+        self, runs: RecipeRunRepository, jobs: JobRepository, approvals: ApprovalRepository
+    ) -> RecipeInspectionService:
+        return RecipeInspectionService(runs, jobs, approvals)
+
+    @provide
+    def recipe_control_service(
+        self, inspection: RecipeInspectionService, runtime: RuntimeService
+    ) -> RecipeControlService:
+        return RecipeControlService(inspection, runtime)
+
+    @provide
+    def review_service(self, runtime: RuntimeService) -> ReviewService:
+        return ReviewService(runtime)
 
     @provide
     def sidecar_template_service(
@@ -267,6 +339,14 @@ class RequestProvider(Provider):
         return ProjectRepository(session)
 
     @provide
+    def project_board_repo(self, session: AsyncSession) -> ProjectBoardRepository:
+        return ProjectBoardRepository(session)
+
+    @provide
+    def project_board_service(self, projects: ProjectRepository, board: ProjectBoardRepository) -> ProjectBoardService:
+        return ProjectBoardService(projects, board)
+
+    @provide
     def project_service(
         self,
         project_repo: ProjectRepository,
@@ -293,6 +373,7 @@ class RequestProvider(Provider):
         chat_repo: ChatRepository,
         approval_service: ApprovalService,
         tracker_link_repo: TrackerLinkRepository,
+        execution_service: TaskExecutionService,
     ) -> RecipeService:
         return RecipeService(
             task_link_repo,
@@ -302,6 +383,7 @@ class RequestProvider(Provider):
             chat_repo=chat_repo,
             approval_service=approval_service,
             tracker_link_repo=tracker_link_repo,
+            execution_service=execution_service,
         )
 
     @provide
