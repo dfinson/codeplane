@@ -70,11 +70,11 @@ export function YieldCard({ data }: { data: YieldResponse }) {
         {categories.map((c) => (
           <Tooltip
             key={c.category}
-            content={`${CATEGORY_LABELS[c.category] ?? c.category}: ${c.jobCount} jobs, ${formatUsd(c.totalCostUsd)} (${(c.pctOfTotal * 100).toFixed(0)}%)`}
+            content={`${CATEGORY_LABELS[c.category] ?? c.category}: ${c.jobCount} jobs, ${formatUsd(c.totalCostUsd)} (${c.pctOfTotal == null ? "unknown share" : `${(c.pctOfTotal * 100).toFixed(0)}%`})`}
           >
             <div
               className={`h-full ${CATEGORY_COLORS[c.category] ?? "bg-gray-400"} cursor-help`}
-              style={{ width: `${c.pctOfTotal * 100}%` }}
+              style={{ width: `${(c.pctOfTotal ?? 0) * 100}%` }}
             />
           </Tooltip>
         ))}

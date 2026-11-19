@@ -574,8 +574,10 @@ async def _collect_context(
     ctx["job"] = cast("_JobContext", job_row)
 
     # Telemetry summary
+    from backend.persistence.currency_projection import currency_query
+
     row = await session.execute(
-        text("""
+        currency_query("""
             SELECT duration_ms, total_cost_usd, tool_call_count,
                    tool_failure_count, retry_count
             FROM job_telemetry_summary WHERE job_id = :jid AND session_kind = 'job'

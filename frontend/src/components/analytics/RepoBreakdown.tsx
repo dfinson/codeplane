@@ -30,7 +30,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
           <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
           <RTooltip
             contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
-            formatter={(v: TooltipValueType | undefined) => [formatUsd(Number(v ?? 0)), "API-equivalent cost"]}
+            formatter={(v: TooltipValueType | undefined) => [formatUsd(v == null ? null : Number(v)), "Verified USD"]}
           />
           <Bar dataKey="cost" fill="#10b981" radius={[4, 4, 0, 0]} />
         </BarChart>
@@ -66,7 +66,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
                     {r.repo || <span className="text-muted-foreground italic">(none)</span>}
                   </td>
                   <td className="text-right py-1.5 px-2">{r.jobCount}</td>
-                  <td className="text-right py-1.5 px-2">{formatUsd(Number(r.totalCostUsd) || 0)}</td>
+                  <td className="text-right py-1.5 px-2">{formatUsd(r.totalCostUsd)}</td>
                   <td className="text-right py-1.5 px-2">{formatUsd(costPerJob)}</td>
                   <td className="text-right py-1.5 px-2">{formatDuration(Number(r.avgDurationMs) || 0)}</td>
                   <td className="text-right py-1.5 px-2">{r.toolCalls}</td>

@@ -333,6 +333,8 @@ async def _compute_attribution(
     if not spans:
         log.info("cost_attribution_skip_no_spans", job_id=job_id)
         return
+    llm_spans = [span for span in spans if span.get("span_type") == "llm"]
+    currency_qualified = bool(llm_spans) and all(span.get("cost_usd") is not None for span in llm_spans)
 
     # --- Load job metadata for sub-classification and model tagging ---
     from sqlalchemy import text as sa_text
@@ -360,7 +362,7 @@ async def _compute_attribution(
 
     for span, phase in zip(spans, normalized_phases, strict=False):
         attrs = span.get("attrs", {})
-        cost = span.get("cost_usd") or attrs.get("cost", 0.0)
+        cost = span.get("cost_usd")
         in_tok = span.get("input_tokens") or attrs.get("input_tokens", 0)
         out_tok = span.get("output_tokens") or attrs.get("output_tokens", 0)
         cache_r = span.get("cache_read_tokens") or 0
@@ -599,7 +601,7 @@ async def _compute_attribution(
     for phase_name, data in by_phase.items():
         rows.append({"dimension": "phase", "bucket": phase_name, "model": job_model, **data})
 
-    await attr_repo.insert_batch(job_id=job_id, rows=rows)
+    await attr_repo.insert_batch(job_id=job_id, rows=rows, currency_qualified=currency_qualified)
     log.info(
         "cost_attribution_written",
         job_id=job_id,
@@ -647,6 +649,7 @@ async def _compute_attribution(
                 await file_cost_repo.insert_batch(
                     job_id=job_id,
                     rows=[{"file_path": fp, **data} for fp, data in file_costs.items()],
+                    currency_qualified=currency_qualified,
                 )
     except Exception:
         log.debug("file_cost_attribution_failed", job_id=job_id, exc_info=True)
@@ -701,6 +704,7 @@ async def _compute_attribution(
         cost_second_half_usd=second_half,
         diff_lines_added=diff_added,
         diff_lines_removed=diff_removed,
+        derived_currency_qualified=currency_qualified,
     )
 
     log.info(
@@ -763,7 +767,7 @@ def _infer_execution_phases(spans: list[dict[str, Any]] | list[TelemetrySpanRow]
 
 def _accumulate(
     bucket: CostBucket,
-    cost: float,
+    cost: float | None,
     in_tok: int,
     out_tok: int,
     *,

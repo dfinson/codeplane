@@ -403,7 +403,7 @@ class CostAttributionRow(TypedDict, total=False):
 
     dimension: str
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
@@ -429,7 +429,7 @@ class TelemetrySummaryRow(TypedDict, total=False):
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     premium_requests: float
     llm_call_count: int
     total_llm_duration_ms: int
@@ -449,21 +449,21 @@ class TelemetrySummaryRow(TypedDict, total=False):
     # Added by 0009_cost_attribution
     total_turns: int
     retry_count: int
-    retry_cost_usd: float
+    retry_cost_usd: float | None
     file_read_count: int
     file_write_count: int
     unique_files_read: int
     file_reread_count: int
-    peak_turn_cost_usd: float
-    avg_turn_cost_usd: float
-    cost_first_half_usd: float
-    cost_second_half_usd: float
+    peak_turn_cost_usd: float | None
+    avg_turn_cost_usd: float | None
+    cost_first_half_usd: float | None
+    cost_second_half_usd: float | None
     diff_lines_added: int
     diff_lines_removed: int
     # Added by 0012_error_kind
     agent_error_count: int
     # Added by 0017_add_subagent_cost
-    subagent_cost_usd: float
+    subagent_cost_usd: float | None
     # Latency attribution fields
     parallelism_ratio: float
     idle_ms: int
@@ -482,7 +482,7 @@ class AggregateStats(TypedDict, total=False):
     failed: int
     cancelled: int
     running: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     avg_duration_ms: float
     total_premium_requests: float
@@ -492,8 +492,8 @@ class AggregateStats(TypedDict, total=False):
     total_agent_errors: int
     total_cache_read: int
     total_input_tokens: int
-    total_subagent_cost_usd: float
-    total_retry_cost_usd: float
+    total_subagent_cost_usd: float | None
+    total_retry_cost_usd: float | None
     total_retry_count: int
 
 
@@ -501,7 +501,7 @@ class CostByDayRow(TypedDict):
     """Shape returned by TelemetrySummaryRepository.cost_by_day()."""
 
     date: str
-    cost: float
+    cost: float | None
     jobs: int
 
 
@@ -512,7 +512,7 @@ class CostByRepoRow(TypedDict):
     job_count: int
     succeeded: int
     failed: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     tool_calls: int
     avg_duration_ms: float
@@ -525,7 +525,7 @@ class CostByModelRow(TypedDict, total=False):
     model: str
     sdk: str
     job_count: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     total_tokens: int
     input_tokens: int
     output_tokens: int
@@ -535,12 +535,12 @@ class CostByModelRow(TypedDict, total=False):
     total_turns: int
     total_tool_calls: int
     total_diff_lines: int
-    cost_per_job: float
-    cost_per_minute: float
-    cost_per_turn: float
-    cost_per_tool_call: float
-    cost_per_diff_line: float
-    cost_per_mtok: float
+    cost_per_job: float | None
+    cost_per_minute: float | None
+    cost_per_turn: float | None
+    cost_per_tool_call: float | None
+    cost_per_diff_line: float | None
+    cost_per_mtok: float | None
     cache_hit_rate: float
 
 
@@ -563,7 +563,7 @@ class ShellCommandRow(TypedDict):
 
     command: str
     call_count: int
-    total_cost_usd: float
+    total_cost_usd: float | None
     avg_duration_ms: float
     job_count: int
 
@@ -571,17 +571,17 @@ class ShellCommandRow(TypedDict):
 class RetryCostSummary(TypedDict):
     """Shape returned by TelemetrySpansRepository.retry_cost_summary()."""
 
-    retry_cost_usd: float
+    retry_cost_usd: float | None
     retry_count: int
     total_spans: int
-    total_cost_usd: float
+    total_cost_usd: float | None
 
 
 class CostDimensionRow(TypedDict):
     """Shape returned by CostAttributionRepository.by_dimension()."""
 
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
@@ -595,14 +595,14 @@ class FleetCostRow(TypedDict):
 
     dimension: str
     bucket: str
-    cost_usd: float
+    cost_usd: float | None
     input_tokens: int
     output_tokens: int
     call_count: int
     cache_read_tokens: int
     cache_write_tokens: int
     job_count: int
-    avg_cost_per_job: float
+    avg_cost_per_job: float | None
 
 
 class LatencyAttributionRow(TypedDict, total=False):
@@ -647,9 +647,9 @@ class ModelComparisonRow(TypedDict, total=False):
     model: str
     sdk: str
     job_count: int
-    avg_cost: float
+    avg_cost: float | None
     avg_duration_ms: float
-    total_cost_usd: float
+    total_cost_usd: float | None
     premium_requests: float
     merged: int
     pr_created: int
@@ -659,11 +659,11 @@ class ModelComparisonRow(TypedDict, total=False):
     verify_job_count: int
     avg_diff_lines: float
     cache_hit_rate: float
-    cost_per_job: float
-    cost_per_minute: float
-    cost_per_turn: float
-    cost_per_tool_call: float
-    cost_per_diff_line: float
+    cost_per_job: float | None
+    cost_per_minute: float | None
+    cost_per_turn: float | None
+    cost_per_tool_call: float | None
+    cost_per_diff_line: float | None
 
 
 @dataclass

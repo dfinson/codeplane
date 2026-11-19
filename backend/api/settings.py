@@ -196,14 +196,15 @@ async def get_repo_summary(
             active_job_count = len(active_count_result.scalars().all())
 
             # Aggregate cost from telemetry summary table (last 7 days)
-            from sqlalchemy import text as sa_text
+            from backend.models.currency import optional_float
+            from backend.persistence.currency_projection import currency_query
 
             cost_row = (
                 (
                     await session.execute(
-                        sa_text(
+                        currency_query(
                             "SELECT"
-                            " COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,"
+                            " SUM(total_cost_usd) AS total_cost_usd,"
                             " COUNT(*) AS total_jobs,"
                             " COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens"
                             " + cache_write_tokens), 0) AS total_tokens"
@@ -219,7 +220,7 @@ async def get_repo_summary(
             )
             if cost_row:
                 cost_summary = RepoCostSummary(
-                    total_cost_usd=float(cost_row["total_cost_usd"]),
+                    total_cost_usd=optional_float(cost_row["total_cost_usd"]),
                     total_jobs=int(cost_row["total_jobs"]),
                     total_tokens=int(cost_row["total_tokens"]),
                 )

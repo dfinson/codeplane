@@ -997,7 +997,8 @@ class TestProcessResultMessage:
         assert "error" in error_events[0].payload["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_result_with_job_records_telemetry(self) -> None:
+    @pytest.mark.parametrize("cost", [None, 0, 0.01])
+    async def test_result_with_job_records_telemetry(self, cost) -> None:
         adapter = ClaudeAdapter()
         sid = "sess-1"
         adapter._queues[sid] = asyncio.Queue()
@@ -1006,7 +1007,7 @@ class TestProcessResultMessage:
 
         msg = _FakeResultMessage(
             result="ok",
-            total_cost_usd=0.01,
+            total_cost_usd=cost,
             usage={
                 "input_tokens": 10,
                 "output_tokens": 5,
@@ -1023,7 +1024,12 @@ class TestProcessResultMessage:
         assert event.payload["output_tokens"] == 5
         assert event.payload["cache_read_tokens"] == 2
         assert event.payload["cache_write_tokens"] == 1
-        assert event.payload["cost_usd"] == 0.01
+        assert event.payload["cost_usd"] == cost
+        money = [item for item in event.payload["native_usage"] if item["unit"] == "USD"]
+        assert len(money) == int(cost is not None)
+        if money:
+            assert float(money[0]["amount"]) == cost
+            assert money[0]["verified"] is True and money[0]["currency"] == "USD"
 
     @pytest.mark.asyncio
     async def test_result_empty_usage_dict(self, adapter: ClaudeAdapter) -> None:

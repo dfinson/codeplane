@@ -469,7 +469,8 @@ async def assemble_snapshot(
                         output=row.output,
                         input_tokens=row.input_tokens or 0,
                         output_tokens=row.output_tokens or 0,
-                        cost_usd=row.cost_usd or 0.0,
+                        # The legacy secondary-session number carries no currency proof.
+                        cost_usd=None,
                         entries=entries,
                     )
                 )

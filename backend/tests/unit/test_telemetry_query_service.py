@@ -103,6 +103,7 @@ def _make_llm_span(
 ) -> dict:
     return {
         "span_type": "llm",
+        "cost_usd": cost,
         "name": model,
         "turn_number": turn_number,
         "duration_ms": duration_ms,
@@ -136,6 +137,8 @@ def _build_service(
     """Build a TelemetryQueryService with fully mocked repos."""
     summary_repo = AsyncMock()
     summary_repo.get = AsyncMock(return_value=summary)
+    summary_repo.get_currency = AsyncMock(return_value=summary)
+    summary_repo.batch_cost_usage = AsyncMock(return_value={})
     summary_repo.list_sidecars = AsyncMock(return_value=sidecar_rows or [])
 
     spans_repo = AsyncMock()

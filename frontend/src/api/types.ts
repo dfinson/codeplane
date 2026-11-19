@@ -353,3 +353,6 @@ export interface SuggestNamesResponse {
   branchName: string;
   worktreeName: string;
 }
+
+export type JobTelemetryResponse = components["schemas"]["JobTelemetryResponse"];
+export type CurrencyValue = JobTelemetryResponse["totalCost"];

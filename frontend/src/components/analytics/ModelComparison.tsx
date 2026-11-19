@@ -40,7 +40,7 @@ export function ModelComparison({
       ["Model", "SDK", "Jobs", "Avg Cost", "Avg Duration (ms)", "Total Cost", "Merged", "PR Created", "Discarded", "Failed", "Cache Hit %", "1-shot %", "Retry %", "Edit Turns", "$/Line"],
       models.map((m) => {
         const eff = efficiencyByModel.get(m.model);
-        return [m.model, m.sdk, m.jobCount, m.avgCost, m.avgDurationMs, m.totalCostUsd, m.merged, m.prCreated, m.discarded, m.failed, m.cacheHitRate != null ? (m.cacheHitRate * 100).toFixed(1) : "0", eff ? (eff.oneShotRate * 100).toFixed(1) : "", eff ? (eff.retryRate * 100).toFixed(1) : "", eff ? eff.editTurns.toFixed(1) : "", m.costPerDiffLine > 0 ? m.costPerDiffLine.toFixed(4) : ""];
+        return [m.model, m.sdk, m.jobCount, m.avgCost, m.avgDurationMs, m.totalCostUsd, m.merged, m.prCreated, m.discarded, m.failed, m.cacheHitRate != null ? (m.cacheHitRate * 100).toFixed(1) : "0", eff ? (eff.oneShotRate * 100).toFixed(1) : "", eff ? (eff.retryRate * 100).toFixed(1) : "", eff ? eff.editTurns.toFixed(1) : "", m.costPerDiffLine != null ? m.costPerDiffLine.toFixed(4) : ""];
       }),
     );
   };
@@ -118,7 +118,7 @@ export function ModelComparison({
                 </td>
                 <td className="text-right py-1.5 px-2">{m.jobCount}</td>
                 <td className="text-right py-1.5 px-2">
-                  {m.totalCostUsd > 0 || m.avgCost > 0 ? (
+                  {m.totalCostUsd != null || m.avgCost != null ? (
                     <Tooltip content={`Total: ${formatUsd(m.totalCostUsd)} · ${formatUsd(m.costPerMinute)}/min · ${formatUsd(m.costPerTurn)}/turn`}>
                       <span className="cursor-help">{formatUsd(m.avgCost)}</span>
                     </Tooltip>
@@ -136,7 +136,7 @@ export function ModelComparison({
                 <td className="text-right py-1.5 px-2">{eff ? `${(eff.retryRate * 100).toFixed(0)}%` : <span className="text-muted-foreground">—</span>}</td>
                 <td className="text-right py-1.5 px-2">{eff ? eff.editTurns.toFixed(1) : <span className="text-muted-foreground">—</span>}</td>
                 <td className="text-right py-1.5 px-2">
-                  {m.costPerDiffLine > 0 ? (
+                  {m.costPerDiffLine != null ? (
                     <Tooltip content={`${formatUsd(m.costPerDiffLine)} per diff line (added+removed)`}>
                       <span className="cursor-help">{formatUsd(m.costPerDiffLine)}</span>
                     </Tooltip>

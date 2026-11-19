@@ -25,7 +25,8 @@ function stateColor(state: string): string {
 }
 
 function formatCost(usd: number | null | undefined): string {
-  if (usd == null || usd === 0) return "—";
+  if (usd == null) return "Unknown USD";
+  if (usd === 0) return "$0.00";
   if (usd < 0.01) return "<$0.01";
   return `$${usd.toFixed(2)}`;
 }

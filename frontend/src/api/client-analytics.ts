@@ -1,3 +1,4 @@
+import type { CurrencyValue } from "./types";
 /**
  * Analytics API client module.
  *
@@ -6,6 +7,7 @@
  */
 
 import { request } from "./client";
+import type { JobTelemetryResponse } from "./types";
 
 // ---------------------------------------------------------------------------
 // Analytics Overview / Models / Tools / Repos / Jobs
@@ -39,7 +41,7 @@ export interface AnalyticsModels {
     model: string;
     sdk: string;
     job_count: number;
-    total_cost_usd: number;
+    total_cost_usd: CurrencyValue;
     total_tokens: number;
     input_tokens: number;
     output_tokens: number;
@@ -50,12 +52,12 @@ export interface AnalyticsModels {
     total_turns?: number;
     total_tool_calls?: number;
     total_diff_lines?: number;
-    cost_per_job?: number;
-    cost_per_minute?: number;
-    cost_per_turn?: number;
-    cost_per_tool_call?: number;
-    cost_per_diff_line?: number;
-    cost_per_mtok?: number;
+    cost_per_job?: CurrencyValue;
+    cost_per_minute?: CurrencyValue;
+    cost_per_turn?: CurrencyValue;
+    cost_per_tool_call?: CurrencyValue;
+    cost_per_diff_line?: CurrencyValue;
+    cost_per_mtok?: CurrencyValue;
     cache_hit_rate?: number;
     [key: string]: unknown;
   }[];
@@ -90,7 +92,7 @@ export interface AnalyticsJobs {
     input_tokens: number;
     output_tokens: number;
     cache_read_tokens: number;
-    total_cost_usd: number;
+    total_cost_usd: CurrencyValue;
     tool_call_count: number;
     llm_call_count: number;
     premium_requests: number;
@@ -104,7 +106,7 @@ export interface AnalyticsRepos {
     jobCount: number;
     succeeded: number;
     failed: number;
-    totalCostUsd: number;
+    totalCostUsd: CurrencyValue;
     totalTokens: number;
     toolCalls: number;
     avgDurationMs: number;
@@ -180,7 +182,7 @@ export interface CostDriversResponse {
 export interface CostAttributionBucket {
   dimension: string;
   bucket: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -193,7 +195,7 @@ export interface FleetCostDriversResponse {
   period: number;
   summary?: Array<CostAttributionBucket & {
     jobCount?: number;
-    avgCostPerJob?: number;
+    avgCostPerJob?: CurrencyValue;
     confidence?: "exact" | "approximate";
   }>;
   dimension?: string;
@@ -258,10 +260,10 @@ export interface FileAccessResponse {
 export interface TurnEconomicsResponse {
   jobId: string;
   totalTurns: number;
-  peakTurnCostUsd: number;
-  avgTurnCostUsd: number;
-  costFirstHalfUsd: number;
-  costSecondHalfUsd: number;
+  peakTurnCostUsd: CurrencyValue;
+  avgTurnCostUsd: CurrencyValue;
+  costFirstHalfUsd: CurrencyValue;
+  costSecondHalfUsd: CurrencyValue;
   turnCurve: CostAttributionBucket[];
 }
 
@@ -308,7 +310,7 @@ export function fetchTurnEconomics(jobId: string): Promise<TurnEconomicsResponse
 export interface ShellCommandRow {
   command: string;
   call_count: number;
-  total_cost_usd: number;
+  total_cost_usd: CurrencyValue;
   avg_duration_ms: number;
   job_count: number;
 }
@@ -324,10 +326,10 @@ export function fetchShellCommands(period = 30): Promise<ShellCommandsResponse> 
 
 export interface RetryCostResponse {
   period: number;
-  retryCostUsd: number;
+  retryCostUsd: CurrencyValue;
   retryCount: number;
   totalSpans: number;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   retryPct: number;
 }
 
@@ -359,10 +361,10 @@ export function fetchEditEfficiency(period = 30): Promise<EditEfficiencyResponse
 
 export interface ScorecardBudget {
   sdk: string;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   premiumRequests: number;
   jobCount: number;
-  avgCostPerJob: number;
+  avgCostPerJob: CurrencyValue;
   avgDurationMs: number;
 }
 
@@ -379,35 +381,37 @@ export interface ScorecardActivity {
 
 export interface ModelCostMixEntry {
   model: string;
-  costPerMtok: number;
+  costPerMtok: CurrencyValue;
   totalTokens: number;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   pctOfTokens: number;
 }
 
 export interface ScorecardResponse {
+  costUsage?: JobTelemetryResponse["costUsage"];
+  estimatedCostUsd?: JobTelemetryResponse["estimatedCostUsd"];
   period: number;
   activity: ScorecardActivity;
   budget: ScorecardBudget[];
   quotaJson: string | null;
-  costTrend: { date: string; cost: number; jobs: number }[];
+  costTrend: { date: string; cost: CurrencyValue; jobs: number }[];
   dailySpendLimitUsd: number;
   // Average cost per MTok + model mix
-  avgCostPerMtok: number;
+  avgCostPerMtok: CurrencyValue;
   modelCostMix: ModelCostMixEntry[];
   // Monthly budget (Item 5)
   monthlyBudgetUsd: number;
-  monthSpendUsd: number;
-  projectedMonthEndUsd: number;
+  monthSpendUsd: CurrencyValue;
+  projectedMonthEndUsd: CurrencyValue;
   daysElapsed: number;
   daysInMonth: number;
-  dailyAvgUsd: number;
-  pctMonthlyBudgetUsed: number;
+  dailyAvgUsd: CurrencyValue;
+  pctMonthlyBudgetUsed: CurrencyValue;
   // Cost-per-line (Item 9)
-  costPerDiffLine: number;
+  costPerDiffLine: CurrencyValue;
   totalDiffLines: number;
   // Compaction cost (Item 13)
-  compactionCostUsd: number;
+  compactionCostUsd: CurrencyValue;
   compactionTokens: number;
 }
 
@@ -415,9 +419,9 @@ export interface ModelComparisonRow {
   model: string;
   sdk: string;
   jobCount: number;
-  avgCost: number;
+  avgCost: CurrencyValue;
   avgDurationMs: number;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   premiumRequests: number;
   merged: number;
   prCreated: number;
@@ -427,11 +431,11 @@ export interface ModelComparisonRow {
   verifyJobCount: number;
   avgDiffLines: number;
   cacheHitRate: number;
-  costPerJob: number;
-  costPerMinute: number;
-  costPerTurn: number;
-  costPerToolCall: number;
-  costPerDiffLine: number;
+  costPerJob: CurrencyValue;
+  costPerMinute: CurrencyValue;
+  costPerTurn: CurrencyValue;
+  costPerToolCall: CurrencyValue;
+  costPerDiffLine: CurrencyValue;
 }
 
 export interface ModelComparisonResponse {
@@ -447,21 +451,21 @@ export interface JobContextFlag {
 
 export interface JobContextResponse {
   job: {
-    cost: number;
+    cost: CurrencyValue;
     durationMs: number;
     diffLinesAdded: number;
     diffLinesRemoved: number;
     sdk: string;
     model: string;
     totalTurns: number;
-    peakTurnCostUsd: number;
-    avgTurnCostUsd: number;
-    costFirstHalfUsd: number;
-    costSecondHalfUsd: number;
+    peakTurnCostUsd: CurrencyValue;
+    avgTurnCostUsd: CurrencyValue;
+    costFirstHalfUsd: CurrencyValue;
+    costSecondHalfUsd: CurrencyValue;
   };
   repoAvg: {
     jobCount: number;
-    avgCost: number;
+    avgCost: CurrencyValue;
     avgDurationMs: number;
     avgDiffLines: number;
   } | null;
@@ -476,7 +480,7 @@ export interface Observation {
   detail: string;
   evidence: Record<string, unknown>;
   jobCount: number;
-  totalWasteUsd: number;
+  totalWasteUsd: CurrencyValue;
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -524,16 +528,16 @@ export function dismissObservation(observationId: number): Promise<{ status: str
 export interface YieldCategoryRow {
   category: string;
   jobCount: number;
-  totalCostUsd: number;
-  avgCostUsd: number;
-  pctOfTotal: number;
+  totalCostUsd: CurrencyValue;
+  avgCostUsd: CurrencyValue;
+  pctOfTotal: CurrencyValue;
 }
 
 export interface YieldResponse {
   period: number;
   categories: YieldCategoryRow[];
-  costPerMergeUsd: number;
-  totalCostUsd: number;
+  costPerMergeUsd: CurrencyValue;
+  totalCostUsd: CurrencyValue;
   totalJobs: number;
 }
 
@@ -598,7 +602,7 @@ export function fetchCacheEfficiency(
 
 export interface RepoCostBreakdown {
   repo: string;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   buckets: CostAttributionBucket[];
 }
 
@@ -632,9 +636,9 @@ export function exportCostDrivers(
 
 export interface FileCostEntry {
   filePath: string;
-  totalCostUsd: number;
-  totalReadCost: number;
-  totalWriteCost: number;
+  totalCostUsd: CurrencyValue;
+  totalReadCost: CurrencyValue;
+  totalWriteCost: CurrencyValue;
   totalTurns: number;
   jobCount: number;
 }
@@ -655,7 +659,7 @@ export function fetchFileCost(period = 30, limit = 30): Promise<FileCostResponse
 export interface OutcomeMatrixCell {
   activity: string;
   resolution: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   inputTokens: number;
   outputTokens: number;
   jobCount: number;
@@ -664,7 +668,7 @@ export interface OutcomeMatrixCell {
 export interface OutcomeMatrixResponse {
   cells: OutcomeMatrixCell[];
   periodDays: number;
-  totalWasteUsd: number;
+  totalWasteUsd: CurrencyValue;
 }
 
 export function fetchOutcomeMatrix(period = 30): Promise<OutcomeMatrixResponse> {
@@ -678,7 +682,7 @@ export function fetchOutcomeMatrix(period = 30): Promise<OutcomeMatrixResponse> 
 export interface ActivityPhaseCell {
   activity: string;
   phase: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   inputTokens: number;
   outputTokens: number;
   callCount: number;
@@ -701,7 +705,7 @@ export function fetchActivityPhaseMatrix(period = 30): Promise<ActivityPhaseMatr
 export interface ActionPurposeCell {
   action: string;
   purpose: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   callCount: number;
 }
 
@@ -719,17 +723,17 @@ export function fetchActionPurposeMatrix(period = 30): Promise<ActionPurposeMatr
 // ---------------------------------------------------------------------------
 
 export interface WasteBreakdown {
-  retryUsd: number;
-  failedJobsUsd: number;
-  compactionUsd: number;
-  rereadsUsd: number;
+  retryUsd: CurrencyValue;
+  failedJobsUsd: CurrencyValue;
+  compactionUsd: CurrencyValue;
+  rereadsUsd: CurrencyValue;
 }
 
 export interface ExecutiveSummaryResponse {
-  buildingUsd: number;
-  thinkingUsd: number;
-  wastedUsd: number;
-  totalUsd: number;
+  buildingUsd: CurrencyValue;
+  thinkingUsd: CurrencyValue;
+  wastedUsd: CurrencyValue;
+  totalUsd: CurrencyValue;
   buildingPct: number;
   thinkingPct: number;
   wastedPct: number;

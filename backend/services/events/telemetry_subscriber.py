@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.models.currency import verified_usd
 from backend.models.events import EventKind
+from backend.models.usage import UsageAmount
 from backend.services.events.observation import has_source_grouping, observed_operation_id
 
 if TYPE_CHECKING:
@@ -114,7 +116,7 @@ class TelemetrySubscriber:
             if phase:
                 self.set_execution_phase(job_id, str(phase))
         elif kind == EventKind.telemetry_usage:
-            self._record_usage(job_id, event.payload, sdk)
+            self._record_usage(job_id, event.payload, sdk, epoch=metadata.execution_epoch)
         elif kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             self._record_completed_tool(job_id, event, sdk)
         elif kind == EventKind.message_user:
@@ -152,7 +154,7 @@ class TelemetrySubscriber:
         """Return the current per-job turn counter."""
         return self._turn_counters.get(job_id, 0)
 
-    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str) -> None:
+    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str, *, epoch: str | None = None) -> None:
         from backend.services.analytics import telemetry as tel
 
         input_tokens = int(payload.get("input_tokens") or 0)
@@ -164,13 +166,21 @@ class TelemetrySubscriber:
         is_subagent = bool(payload.get("is_subagent", False))
         advance_turn = bool(payload.get("advance_turn", True))
         num_turns = int(payload.get("num_turns") or 1)
-        cost_usd = self._resolve_cost_usd(
-            payload.get("cost_usd"),
-            model,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
+        usage = [UsageAmount.model_validate(raw) for raw in payload.get("native_usage", [])]
+        if any(item.job_id != job_id or item.execution_epoch != epoch or item.producer != sdk for item in usage):
+            raise ValueError("Telemetry usage does not match its producer and execution source")
+        roles = {item.role for item in usage}
+        if len(roles) > 1:
+            raise ValueError("One telemetry invocation cannot combine different accounting roles")
+        role = next(iter(roles), "primary")
+        session_kind = "job" if role == "primary" else "preflight" if role == "scout" else role
+        advance_turn = advance_turn and session_kind == "job"
+        known_usd = verified_usd(usage)
+        cost_usd = float(known_usd) if known_usd is not None else None
+        estimate = (
+            self._estimate_cost(model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+            if cost_usd is None and all(payload.get(key) is not None for key in ("input_tokens", "output_tokens"))
+            else None
         )
 
         attrs: dict[str, Any] = {"job_id": job_id, "sdk": sdk}
@@ -178,21 +188,22 @@ class TelemetrySubscriber:
         tel.tokens_output.add(output_tokens, {**attrs, "model": model})
         tel.tokens_cache_read.add(cache_read_tokens, attrs)
         tel.tokens_cache_write.add(cache_write_tokens, attrs)
-        if cost_usd:
+        if cost_usd is not None:
             tel.cost_usd.add(cost_usd, attrs)
         if duration_ms:
             tel.llm_duration.record(duration_ms, {**attrs, "is_subagent": is_subagent})
 
         db_counters: dict[str, Any] = {
+            "session_kind": session_kind,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_write_tokens": cache_write_tokens,
             "llm_call_count": num_turns,
         }
-        if cost_usd:
+        if cost_usd is not None:
             db_counters["total_cost_usd"] = cost_usd
-        if is_subagent and cost_usd:
+        if is_subagent and cost_usd is not None:
             db_counters["subagent_cost_usd"] = cost_usd
         if duration_ms:
             db_counters["total_llm_duration_ms"] = int(duration_ms)
@@ -209,10 +220,10 @@ class TelemetrySubscriber:
             for _ in range(num_turns):
                 self.advance_turn(job_id)
 
-        if model:
+        if model and session_kind == "job":
             self._schedule_write(self._db_set_model(job_id, model))
 
-        if duration_ms or input_tokens or output_tokens:
+        if duration_ms or input_tokens or output_tokens or usage or estimate is not None:
             self._record_llm_span(
                 job_id,
                 model,
@@ -223,21 +234,30 @@ class TelemetrySubscriber:
                 cache_write_tokens,
                 cost_usd,
                 sdk,
+                usage=usage,
+                estimate=estimate,
+                session_kind=session_kind,
+                is_subagent=is_subagent,
             )
 
-    def _resolve_cost_usd(
+    def _estimate_cost(
         self,
-        raw_cost: Any,
         model: str,
         input_tokens: int,
         output_tokens: int,
         cache_read_tokens: int,
         cache_write_tokens: int,
-    ) -> float:
-        if raw_cost is not None:
-            return float(raw_cost or 0.0)
+    ) -> float | None:
         if self._model_pricing is None or not model:
-            return 0.0
+            return None
+        prices = self._model_pricing.get(model)
+        needed = ["input", "output"]
+        if cache_read_tokens:
+            needed.append("cache_read")
+        if cache_write_tokens:
+            needed.append("cache_write")
+        if not prices or any(type(prices.get(key)) not in (int, float) for key in needed):
+            return None
         return self._model_pricing.compute_cost(
             model,
             input_tokens,
@@ -456,8 +476,13 @@ class TelemetrySubscriber:
         output_tokens: int,
         cache_read: int,
         cache_write: int,
-        cost_usd: float,
+        cost_usd: float | None,
         sdk: str,
+        *,
+        usage: list[UsageAmount],
+        estimate: float | None,
+        session_kind: str,
+        is_subagent: bool,
     ) -> None:
         _ = sdk
         turn_num = self._turn_counters.get(job_id, 0)
@@ -468,6 +493,7 @@ class TelemetrySubscriber:
         self._schedule_write(
             self._db_insert_span(
                 job_id=job_id,
+                session_kind=session_kind,
                 span_type="llm",
                 name=model or "unknown",
                 started_at=round(offset, 2),
@@ -478,6 +504,14 @@ class TelemetrySubscriber:
                     "cache_read_tokens": cache_read,
                     "cache_write_tokens": cache_write,
                     "cost": cost_usd,
+                    "is_subagent": is_subagent,
+                    "cost_provenance": "verified_usd"
+                    if cost_usd is not None
+                    else "estimate"
+                    if estimate is not None
+                    else "unknown",
+                    "estimated_cost_usd": estimate,
+                    "native_usage": [item.model_dump(mode="json") for item in usage],
                 },
                 turn_number=turn_num,
                 execution_phase=current_phase,
@@ -593,7 +627,7 @@ class TelemetrySubscriber:
                 repo = TelemetrySummaryRepository(session)
                 totals = await repo.increment(job_id=job_id, **counters)
                 if not totals.get("_row_found") and counters:
-                    await repo.init_job(job_id, sdk=sdk)
+                    await repo.init_job(job_id, sdk=sdk, session_kind=counters.get("session_kind", "job"))
                     await repo.increment(job_id=job_id, **counters)
         except Exception:
             log.warning("telemetry_subscriber_db_write_failed", fn="increment", exc_info=True)

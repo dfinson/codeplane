@@ -224,7 +224,7 @@ class TestSidecarSession:
         assert session.call_count == 1
         assert session.total_input_tokens == 10
         assert session.total_output_tokens == 5
-        assert session.total_cost_usd == 0.001
+        assert session.total_cost_usd is None  # The legacy mock supplies no typed currency evidence.
         assert session.last_call_at is not None
         assert session.total_latency_ms >= 0
 
@@ -273,7 +273,7 @@ class TestSidecarSession:
         assert session.total_latency_ms == 0.0
         assert session.total_input_tokens == 0
         assert session.total_output_tokens == 0
-        assert session.total_cost_usd == 0.0
+        assert session.total_cost_usd is None
         assert session.last_call_at is None
 
 

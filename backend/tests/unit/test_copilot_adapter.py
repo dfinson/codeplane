@@ -1653,7 +1653,8 @@ class TestTfEventEmission:
         assert completed[0].payload["success"] is False
 
     @pytest.mark.asyncio
-    async def test_assistant_usage_emits_tf_usage_event(self, adapter: CopilotAdapter) -> None:
+    @pytest.mark.parametrize("cost", [None, 0, 0.01])
+    async def test_assistant_usage_emits_tf_usage_event(self, adapter: CopilotAdapter, cost) -> None:
         sid, queue, session = await self._setup_session(adapter)
 
         data = _FakeEventData(
@@ -1662,7 +1663,7 @@ class TestTfEventEmission:
             output_tokens=50,
             cache_read_tokens=0,
             cache_write_tokens=0,
-            cost=0.01,
+            cost=cost,
             duration=timedelta(milliseconds=500),
             quota_snapshots=None,
         )
@@ -1673,6 +1674,13 @@ class TestTfEventEmission:
         usage = [e for e in events if e.kind == EventKind.telemetry_usage]
         assert len(usage) == 1
         assert usage[0].payload["model"] == "gpt-4o"
+        assert "cost_usd" not in usage[0].payload
+        assert usage[0].payload["copilot_cost_unit"] == cost
+        costs = [item for item in usage[0].payload["native_usage"] if item["unit"] == "copilot_cost_unit"]
+        assert len(costs) == int(cost is not None)
+        if costs:
+            assert float(costs[0]["amount"]) == cost
+            assert costs[0]["currency"] is None and costs[0]["verified"] is False
 
     @pytest.mark.asyncio
     async def test_assistant_usage_model_mismatch_emits_downgrade_event(self, adapter: CopilotAdapter) -> None:

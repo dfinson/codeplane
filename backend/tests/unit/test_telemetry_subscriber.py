@@ -17,6 +17,7 @@ from backend.models.api_schemas import ExecutionPhase
 from backend.models.db import Base, JobRow, ProjectRow
 from backend.models.domain import JobState
 from backend.models.events import EventKind, new_event
+from backend.models.usage import UsageAmount
 from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
 from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
@@ -64,6 +65,9 @@ class _FakePricing:
     def __init__(self, cost: float) -> None:
         self.cost = cost
         self.calls: list[tuple[str, int, int, int, int]] = []
+
+    def get(self, model):
+        return {"input": 1, "output": 1, "cache_read": 1, "cache_write": 1}
 
     def compute_cost(
         self,
@@ -175,11 +179,25 @@ async def test_subscriber_persists_usage_tools_files_and_messages(
                 "cache_read_tokens": 10,
                 "cache_write_tokens": 5,
                 "cost_usd": 0.25,
+                "native_usage": [
+                    UsageAmount(
+                        amount="0.25",
+                        unit="USD",
+                        currency="USD",
+                        verified=True,
+                        producer="claude",
+                        model="gpt-4o",
+                        job_id="job-1",
+                        execution_epoch=None,
+                        role="primary",
+                        source="sdk.result",
+                    ).model_dump(mode="json")
+                ],
                 "duration_ms": 1234.9,
                 "premium_requests": 2,
                 "advance_turn": True,
             },
-            metadata=EventMetadata(source_framework="copilot"),
+            metadata=EventMetadata(source_framework="claude"),
         ),
         new_event(
             "job-1",
@@ -309,11 +327,10 @@ async def test_subscriber_persists_usage_tools_files_and_messages(
 
 
 @pytest.mark.asyncio
-async def test_usage_cost_prefers_sdk_then_falls_back_to_model_pricing(
+async def test_usage_keeps_verified_sdk_currency_separate_from_pricing_estimate(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Both cost paths: SDK-provided cost_usd is authoritative (managed); when it
-    is absent (imported), cost is derived via ModelPricingService from tokens."""
+    """Verified source USD is known currency; model pricing is only an estimate."""
     pricing = _FakePricing(0.42)
     harness = _Harness(session_factory, model_pricing=pricing)
     harness.subscriber.set_job_start_time("sdk-job", 100.0)
@@ -351,10 +368,24 @@ async def test_usage_cost_prefers_sdk_then_falls_back_to_model_pricing(
                 "cache_read_tokens": 0,
                 "cache_write_tokens": 0,
                 "cost_usd": 0.25,
+                "native_usage": [
+                    UsageAmount(
+                        amount="0.25",
+                        unit="USD",
+                        currency="USD",
+                        verified=True,
+                        producer="claude",
+                        model="gpt-4o",
+                        job_id="sdk-job",
+                        execution_epoch=None,
+                        role="primary",
+                        source="sdk.result",
+                    ).model_dump(mode="json")
+                ],
                 "duration_ms": 10.0,
                 "advance_turn": True,
             },
-            metadata=EventMetadata(source_framework="copilot"),
+            metadata=EventMetadata(source_framework="claude"),
         )
     )
     assert pricing.calls == []
@@ -384,12 +415,13 @@ async def test_usage_cost_prefers_sdk_then_falls_back_to_model_pricing(
         assert sdk_summary is not None
         assert imported_summary is not None
         assert sdk_summary["total_cost_usd"] == pytest.approx(0.25)
-        assert imported_summary["total_cost_usd"] == pytest.approx(0.42)
+        assert imported_summary["total_cost_usd"] == 0  # Legacy storage default is not exposed as currency.
 
         sdk_spans = await TelemetrySpansRepository(session).list_for_job("sdk-job")
         imported_spans = await TelemetrySpansRepository(session).list_for_job("imported-job")
         assert sdk_spans[0]["cost_usd"] == pytest.approx(0.25)
-        assert imported_spans[0]["cost_usd"] == pytest.approx(0.42)
+        assert imported_spans[0]["cost_usd"] is None
+        assert imported_spans[0]["attrs"]["estimated_cost_usd"] == pytest.approx(0.42)
 
 
 @pytest.mark.asyncio

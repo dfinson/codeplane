@@ -47,7 +47,7 @@ export function ObservationsPanel({ observations, onDismiss }: { observations: O
                 <Badge variant="outline" className="text-[10px]">{obs.category}</Badge>
               </div>
               <p className="text-xs text-muted-foreground">{obs.detail}</p>
-              {obs.totalWasteUsd > 0 && (
+              {(obs.totalWasteUsd ?? -1) > 0 && (
                 <p className="text-xs mt-1">
                   <Tooltip content="Estimated excess spend attributable to this pattern">
                     <span className="cursor-help text-yellow-400">{formatUsd(obs.totalWasteUsd)} estimated waste</span>

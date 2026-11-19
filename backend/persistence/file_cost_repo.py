@@ -7,13 +7,14 @@ from typing import Any
 
 from sqlalchemy import text
 
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 
 class FileCostRepository(BaseRepository):
     """Read/write for per-job file cost attribution."""
 
-    async def insert_batch(self, *, job_id: str, rows: list[dict[str, Any]]) -> None:
+    async def insert_batch(self, *, job_id: str, rows: list[dict[str, Any]], currency_qualified: bool = False) -> None:
         """Replace file cost rows for a job."""
         await self._session.execute(
             text("DELETE FROM job_file_cost WHERE job_id = :job_id"),
@@ -25,10 +26,10 @@ class FileCostRepository(BaseRepository):
                 text("""
                     INSERT INTO job_file_cost
                         (job_id, file_path, cost_usd, read_cost, write_cost,
-                         turn_count, created_at)
+                         turn_count, created_at, currency_qualified)
                     VALUES
                         (:job_id, :file_path, :cost_usd, :read_cost, :write_cost,
-                         :turn_count, :now)
+                         :turn_count, :now, :currency_qualified)
                 """),
                 {
                     "job_id": job_id,
@@ -38,6 +39,7 @@ class FileCostRepository(BaseRepository):
                     "write_cost": row.get("write_cost", 0.0),
                     "turn_count": row.get("turn_count", 0),
                     "now": now,
+                    "currency_qualified": currency_qualified,
                 },
             )
         await self._session.flush()
@@ -45,7 +47,7 @@ class FileCostRepository(BaseRepository):
     async def for_job(self, job_id: str) -> list[dict[str, Any]]:
         """Fetch file cost breakdown for a job."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT file_path, cost_usd, read_cost, write_cost, turn_count
                 FROM job_file_cost
                 WHERE job_id = :job_id
@@ -63,7 +65,7 @@ class FileCostRepository(BaseRepository):
     ) -> list[dict[str, Any]]:
         """Most expensive files across all jobs in the period."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT
                     fc.file_path,
                     SUM(fc.cost_usd) AS total_cost_usd,

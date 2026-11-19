@@ -58,6 +58,7 @@ from backend.models.api_schemas import (
     YieldCategoryRow,
     YieldResponse,
 )
+from backend.models.currency import optional_float, sum_known
 from backend.services.analytics.analytics_service import AnalyticsService
 from backend.services.analytics.model_pricing import ModelPricingService
 
@@ -87,6 +88,8 @@ async def analytics_overview(
     tool_success_rate = (known_tools - total_failures) / known_tools * 100 if known_tools > 0 else None
 
     return AnalyticsOverviewResponse(
+        cost_usage=await svc.cost_usage(period_days=period),
+        estimated_cost_usd=optional_float(agg.get("estimated_cost_usd")),
         period=period,
         total_jobs=agg.get("total_jobs", 0),
         succeeded=agg.get("succeeded", 0),
@@ -95,7 +98,7 @@ async def analytics_overview(
         failed=agg.get("failed", 0),
         cancelled=agg.get("cancelled", 0),
         running=agg.get("running", 0),
-        total_cost_usd=float(agg.get("total_cost_usd", 0)),
+        total_cost_usd=optional_float(agg.get("total_cost_usd")),
         total_tokens=agg.get("total_tokens", 0),
         avg_duration_ms=float(agg.get("avg_duration_ms", 0)),
         total_premium_requests=float(agg.get("total_premium_requests", 0)),
@@ -107,8 +110,8 @@ async def analytics_overview(
         tool_success_rate=round(tool_success_rate, 1) if tool_success_rate is not None else None,
         cache_hit_rate=round(cache_rate, 1),
         cost_trend=cost_trend,
-        total_subagent_cost_usd=float(agg.get("total_subagent_cost_usd", 0)),
-        total_retry_cost_usd=float(agg.get("total_retry_cost_usd", 0)),
+        total_subagent_cost_usd=optional_float(agg.get("total_subagent_cost_usd")),
+        total_retry_cost_usd=optional_float(agg.get("total_retry_cost_usd")),
         total_retry_count=int(agg.get("total_retry_count", 0)),
     )
 
@@ -234,8 +237,10 @@ async def fleet_cost_drivers(
         for r in rows:
             repo_map[r.get("repo", "")].append(r)
         repos = []
-        for repo_name, buckets in sorted(repo_map.items(), key=lambda x: -sum(b.get("cost_usd", 0) for b in x[1])):
-            total = sum(b.get("cost_usd", 0) for b in buckets)
+        for repo_name, buckets in sorted(
+            repo_map.items(), key=lambda x: -(sum_known(b.get("cost_usd") for b in x[1]) or 0)
+        ):
+            total = sum_known(b.get("cost_usd") for b in buckets)
             repos.append(
                 RepoCostBreakdown(
                     repo=repo_name or "(unknown)",
@@ -316,7 +321,7 @@ async def turn_economics_for_job(
         TelemetryCostBucket(
             dimension=r.get("dimension", "turn"),
             bucket=r.get("bucket", ""),
-            cost_usd=float(r.get("cost_usd", 0)),
+            cost_usd=optional_float(r.get("cost_usd")),
             input_tokens=int(r.get("input_tokens", 0)),
             output_tokens=int(r.get("output_tokens", 0)),
             call_count=int(r.get("call_count", 0)),
@@ -333,10 +338,10 @@ async def turn_economics_for_job(
     return TurnEconomicsResponse(
         job_id=job_id,
         total_turns=summary.get("total_turns", 0) if summary else 0,
-        peak_turn_cost_usd=summary.get("peak_turn_cost_usd", 0) if summary else 0,
-        avg_turn_cost_usd=summary.get("avg_turn_cost_usd", 0) if summary else 0,
-        cost_first_half_usd=summary.get("cost_first_half_usd", 0) if summary else 0,
-        cost_second_half_usd=summary.get("cost_second_half_usd", 0) if summary else 0,
+        peak_turn_cost_usd=summary.get("peak_turn_cost_usd") if summary else None,
+        avg_turn_cost_usd=summary.get("avg_turn_cost_usd") if summary else None,
+        cost_first_half_usd=summary.get("cost_first_half_usd") if summary else None,
+        cost_second_half_usd=summary.get("cost_second_half_usd") if summary else None,
         turn_curve=turn_data,
     )
 
@@ -444,15 +449,15 @@ async def retry_cost_summary(
 ) -> RetryCostResponse:
     """Fleet-wide retry cost and count."""
     summary = await svc.retry_cost_summary(period_days=period)
-    total = float(summary.get("total_cost_usd") or 0)
-    retry = float(summary.get("retry_cost_usd") or 0)
+    total = optional_float(summary.get("total_cost_usd"))
+    retry = optional_float(summary.get("retry_cost_usd"))
     return RetryCostResponse(
         period=period,
         retry_cost_usd=retry,
         retry_count=summary.get("retry_count", 0),
         total_spans=summary.get("total_spans", 0),
         total_cost_usd=total,
-        retry_pct=round((retry / total * 100) if total > 0 else 0, 1),
+        retry_pct=round(retry / total * 100, 1) if retry is not None and total is not None and total > 0 else None,
     )
 
 
@@ -584,7 +589,7 @@ async def analytics_outcome_matrix(
 ) -> OutcomeMatrixResponse:
     """Cost breakdown by activity × job resolution."""
     cells = await svc.outcome_cost_matrix(period_days=period)
-    total_waste = sum(c["cost_usd"] for c in cells if c.get("resolution") in ("discarded", "failed"))
+    total_waste = sum_known(c["cost_usd"] for c in cells if c.get("resolution") in ("discarded", "failed"))
     return OutcomeMatrixResponse(
         cells=[OutcomeMatrixCell(**c) for c in cells],
         period_days=period,

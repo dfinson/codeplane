@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 from backend.models.db import EventRow
 from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -29,7 +30,7 @@ log = structlog.get_logger()
 class TelemetrySummaryRepository(BaseRepository):
     """Event-driven upserts into ``job_telemetry_summary``."""
 
-    async def batch_cost_usage(self, job_ids: list[str]) -> dict[str, list[UsageAmount]]:
+    async def batch_cost_usage(self, job_ids: list[str], *, all_roles: bool = False) -> dict[str, list[UsageAmount]]:
         """Read source-typed primary cost evidence without relabeling historical totals."""
         if not job_ids:
             return {}
@@ -37,7 +38,7 @@ class TelemetrySummaryRepository(BaseRepository):
             select(EventRow.job_id, EventRow.event_id, EventRow.kind, EventRow.payload, EventRow.event_metadata)
             .where(
                 EventRow.job_id.in_(job_ids),
-                EventRow.kind.in_(("telemetry.usage", "execution.native.usage")),
+                EventRow.kind.in_(("telemetry.usage", "execution.native.usage", "utility.completion.completed")),
             )
             .order_by(EventRow.id)
             .execution_options(yield_per=100)
@@ -54,7 +55,10 @@ class TelemetrySummaryRepository(BaseRepository):
                     continue
                 entries = payload.get("native_usage", [])
             else:
-                if metadata.source_framework != "codeplane" or metadata.namespace != ("control", "native-execution"):
+                if metadata.source_framework != "codeplane" or metadata.namespace not in {
+                    ("control", "native-execution"),
+                    ("control", "utility"),
+                }:
                     continue
                 entries = payload.get("usage", [])
             if not isinstance(entries, list):
@@ -66,7 +70,9 @@ class TelemetrySummaryRepository(BaseRepository):
                 except ValidationError:
                     log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="invalid_source_usage")
                     continue
-                if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or usage.role != "primary":
+                if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or (
+                    not all_roles and usage.role != "primary"
+                ):
                     continue
                 if (
                     usage.job_id != row.job_id
@@ -181,6 +187,8 @@ class TelemetrySummaryRepository(BaseRepository):
                     total_cost_usd        = total_cost_usd + :total_cost_usd,
                     premium_requests      = premium_requests + :premium_requests,
                     llm_call_count        = llm_call_count + :llm_call_count,
+                    derived_currency_qualified = CASE WHEN :llm_call_count > 0
+                        THEN 0 ELSE derived_currency_qualified END,
                     total_llm_duration_ms = total_llm_duration_ms + :total_llm_duration_ms,
                     tool_call_count       = tool_call_count + :tool_call_count,
                     tool_failure_count    = tool_failure_count + :tool_failure_count,
@@ -325,6 +333,7 @@ class TelemetrySummaryRepository(BaseRepository):
         cost_second_half_usd: float = 0.0,
         diff_lines_added: int = 0,
         diff_lines_removed: int = 0,
+        derived_currency_qualified: bool = False,
     ) -> None:
         """Set computed turn economics stats (called by post-job attribution)."""
         now = datetime.now(UTC).isoformat()
@@ -339,6 +348,7 @@ class TelemetrySummaryRepository(BaseRepository):
                     cost_second_half_usd= :cost_second_half_usd,
                     diff_lines_added    = :diff_lines_added,
                     diff_lines_removed  = :diff_lines_removed,
+                    derived_currency_qualified = :derived_currency_qualified,
                     updated_at          = :now
                 WHERE job_id = :job_id AND session_kind = 'job'
             """),
@@ -352,6 +362,7 @@ class TelemetrySummaryRepository(BaseRepository):
                 "cost_second_half_usd": cost_second_half_usd,
                 "diff_lines_added": diff_lines_added,
                 "diff_lines_removed": diff_lines_removed,
+                "derived_currency_qualified": derived_currency_qualified,
                 "now": now,
             },
         )
@@ -372,7 +383,7 @@ class TelemetrySummaryRepository(BaseRepository):
     async def list_sidecars(self, job_id: str) -> list[TelemetrySummaryRow]:
         """Return all non-job session_kind rows for a job."""
         result = await self._session.execute(
-            text(
+            currency_query(
                 "SELECT session_kind, input_tokens, output_tokens, total_cost_usd, "
                 "llm_call_count, tool_call_count "
                 "FROM job_telemetry_summary "
@@ -381,6 +392,14 @@ class TelemetrySummaryRepository(BaseRepository):
             {"job_id": job_id},
         )
         return [cast("TelemetrySummaryRow", dict(r)) for r in result.mappings().all()]
+
+    async def get_currency(self, job_id: str) -> TelemetrySummaryRow | None:
+        result = await self._session.execute(
+            currency_query("SELECT * FROM job_telemetry_summary WHERE job_id = :job_id AND session_kind = 'job'"),
+            {"job_id": job_id},
+        )
+        row = result.mappings().first()
+        return cast("TelemetrySummaryRow", dict(row)) if row is not None else None
 
     async def batch_cost_tokens(self, job_ids: list[str]) -> dict[str, dict[str, float | int]]:
         """Return {job_id: {total_cost_usd, total_tokens}} for a batch of jobs.

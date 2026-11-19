@@ -9,7 +9,8 @@ import type { ModelComparisonRow, YieldCategoryRow } from "../api/client-analyti
 import { Spinner } from "./ui/spinner";
 import { pathBasename } from "../lib/paths";
 
-function formatCost(usd: number): string {
+function formatCost(usd: number | null | undefined): string {
+  if (usd == null) return "Unknown USD";
   if (usd === 0) return "$0";
   if (usd < 0.01) return "<$0.01";
   return `$${usd.toFixed(2)}`;
@@ -149,7 +150,7 @@ export function RepoCost() {
                     <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
                       <div
                         className="bg-primary h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(100, cat.pctOfTotal)}%` }}
+                        style={{ width: `${Math.min(100, cat.pctOfTotal ?? 0)}%` }}
                       />
                     </div>
                     <span className="text-xs text-muted-foreground w-16 text-right">

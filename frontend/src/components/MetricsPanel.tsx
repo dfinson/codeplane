@@ -31,6 +31,8 @@ import {
   SubAgentGroup,
 } from "./MetricsPanelSections";
 import { LatencyBreakdown } from "./analytics/LatencyBreakdown";
+import { CostEvidence } from "./CostEvidence";
+import { sumKnown } from "../lib/currency";
 
 // ---------------------------------------------------------------------------
 // Section group — wraps children in a visually distinct card with a header
@@ -161,15 +163,15 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
 
   // Aggregate sub-agent calls by model
   const subAgentGroups = useMemo(() => {
-    const map = new Map<string, { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number; durationMs: number; calls: LLMCall[] }>();
+    const map = new Map<string, { model: string; count: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cost: number | null; durationMs: number; calls: LLMCall[] }>();
     for (const c of subCalls) {
       const key = c.model || "unknown";
-      const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: 0, durationMs: 0, calls: [] };
+      const g = map.get(key) ?? { model: key, count: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: null, durationMs: 0, calls: [] };
       g.count += c.callCount ?? 1;
       g.inputTokens += c.inputTokens;
       g.outputTokens += c.outputTokens;
       g.cacheReadTokens += c.cacheReadTokens;
-      g.cost += c.cost ?? 0;
+      g.cost = sumKnown([g.cost, c.cost]);
       g.durationMs += c.durationMs;
       g.calls.push(c);
       map.set(key, g);
@@ -182,7 +184,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     inputTokens: mainCalls.reduce((s, c) => s + c.inputTokens, 0),
     outputTokens: mainCalls.reduce((s, c) => s + c.outputTokens, 0),
     cacheReadTokens: mainCalls.reduce((s, c) => s + c.cacheReadTokens, 0),
-    cost: mainCalls.reduce((s, c) => s + (c.cost ?? 0), 0),
+    cost: sumKnown(mainCalls.map(c => c.cost)),
     durationMs: mainCalls.reduce((s, c) => s + c.durationMs, 0),
   }), [mainCalls]);
 
@@ -200,9 +202,9 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
     const totalRetries = editEfficiencyBuckets.reduce((s, b) => s + b.outputTokens, 0);
     const totalEditTurns = editEfficiencyBuckets.reduce((s, b) => s + b.callCount, 0);
     // Approximate rework cost: retries / total-edit-turns * total-activity-cost
-    const totalCost = activityBuckets.reduce((s, b) => s + b.costUsd, 0);
+    const totalCost = sumKnown(activityBuckets.map(b => b.costUsd));
     const reworkFraction = totalEditTurns > 0 ? totalRetries / totalEditTurns : 0;
-    const reworkCost = totalCost * reworkFraction;
+    const reworkCost = totalCost == null ? null : totalCost * reworkFraction;
     return { retries: totalRetries, editTurns: totalEditTurns, cost: reworkCost, totalCost, fraction: reworkFraction };
   }, [editEfficiencyBuckets, activityBuckets]);
 
@@ -233,6 +235,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
           ) : (
             <>
               <SectionGroup title="Overview">
+              <CostEvidence usage={data.costUsage} estimate={data.estimatedCostUsd} />
               {/* Stat cards — hero numbers first */}
               {(() => {
                 const sdkConf = SDK_COST_CONFIG[data.sdk ?? ""] ?? DEFAULT_COST_CONFIG;
@@ -241,10 +244,10 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                 <Tooltip content="Wall-clock time from job start to completion">
                   <div><StatCard icon={<Clock size={14} />} label="Duration" value={formatDuration(data.durationMs ?? 0)} color="text-blue-400" /></div>
                 </Tooltip>
-                {(data.totalCost ?? 0) > 0 && (
+                {(
                   <Tooltip content={sdkConf.costTooltip}>
                     <div>
-                      <StatCard icon={<Zap size={14} />} label="Cost" value={formatUsd(data.totalCost ?? 0)} color="text-green-400" />
+                      <StatCard icon={<Zap size={14} />} label="Verified USD" value={formatUsd(data.totalCost)} color="text-green-400" />
                     </div>
                   </Tooltip>
                 )}
@@ -437,12 +440,12 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                       {/* Activity breakdown rows */}
                       {activityBuckets
                         .slice()
-                        .sort((a, b) => b.costUsd - a.costUsd)
+                        .sort((a, b) => (b.costUsd ?? -1) - (a.costUsd ?? -1))
                         .map((bucket) => {
-                          const total = activityBuckets.reduce((sum, entry) => sum + entry.costUsd, 0);
-                          const widthPct = total > 0 ? (bucket.costUsd / total) * 100 : 0;
-                          const pctLabel = total > 0 ? `${(widthPct).toFixed(0)}%` : "0%";
-                          const costPerTurn = bucket.callCount > 0 ? bucket.costUsd / bucket.callCount : 0;
+                          const total = sumKnown(activityBuckets.map(entry => entry.costUsd));
+                          const widthPct = total != null && total > 0 && bucket.costUsd != null ? (bucket.costUsd / total) * 100 : 0;
+                          const pctLabel = total != null && bucket.costUsd != null ? `${(widthPct).toFixed(0)}%` : "Unknown";
+                          const costPerTurn = bucket.callCount > 0 && bucket.costUsd != null ? bucket.costUsd / bucket.callCount : null;
                           const isExpanded = expandedActivities.has(bucket.bucket);
                           const toggleExpand = () => {
                             setExpandedActivities((prev) => {
@@ -554,8 +557,8 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                             <span>{turnsCollapsed ? `Show ${turnCurve.length} turns` : "Hide turns"}</span>
                           </button>
                           {!turnsCollapsed && turnCurve.map((bucket) => {
-                            const maxCost = Math.max(...turnCurve.map((entry) => entry.costUsd), 0);
-                            const widthPct = maxCost > 0 ? (bucket.costUsd / maxCost) * 100 : 0;
+                            const maxCost = Math.max(...turnCurve.map((entry) => entry.costUsd ?? 0), 0);
+                            const widthPct = maxCost > 0 && bucket.costUsd != null ? (bucket.costUsd / maxCost) * 100 : 0;
                             const actions = bucket.actions ?? [];
                             return (
                               <div key={bucket.bucket} className="space-y-0.5 py-1.5 border-b border-border/30 last:border-0">
@@ -755,7 +758,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                             <span>{formatTokens(mainTotals.inputTokens)} in</span>
                             <span>{formatTokens(mainTotals.outputTokens)} out</span>
                             {mainTotals.cacheReadTokens > 0 && <span>{formatTokens(mainTotals.cacheReadTokens)} cache</span>}
-                            {mainTotals.cost > 0 && <span className="text-green-400">{formatUsd(mainTotals.cost)}</span>}
+                            <span className="text-green-400">{formatUsd(mainTotals.cost)}</span>
                             <span>{formatDuration(mainTotals.durationMs)}</span>
                           </span>
                         </button>
@@ -808,9 +811,7 @@ export function MetricsPanel({ jobId, isRunning = false }: { jobId: string; isRu
                               <span>{subCalls.length} calls</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.inputTokens, 0))} in</span>
                               <span>{formatTokens(subCalls.reduce((s, c) => s + c.outputTokens, 0))} out</span>
-                              {subAgentGroups.reduce((s, g) => s + g.cost, 0) > 0 && (
-                                <span className="text-green-400">{formatUsd(subAgentGroups.reduce((s, g) => s + g.cost, 0))}</span>
-                              )}
+                              <span className="text-green-400">{formatUsd(sumKnown(subAgentGroups.map(g => g.cost)))}</span>
                               <span>{formatDuration(subCalls.reduce((s, c) => s + c.durationMs, 0))}</span>
                             </span>
                           </button>
