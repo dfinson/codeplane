@@ -451,6 +451,9 @@ absence in both the worktree and commit. Existing bytes absent from that commit,
 ignored new targets, symlinks, hard links, ambiguous host paths, partial repositories and opaque target sets do
 not acquire a recovery witness. Inspection uses the existing 20-second decision
 and 32-KiB input bounds, without filters, snapshots, index or object/ref writes.
+Path and handle versions are checked against their own API's observations,
+preserving change-time checks where Windows exposes different `ctime` semantics.
+A final reopened handle verifies identity and version after the asynchronous Git work.
 The witness is included in the action binding and audit metadata and rechecked
 before permission consumption, including after a human wait. Changed bytes,
 absence or retained commit cannot consume the old permission. Read-only actions

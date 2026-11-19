@@ -273,7 +273,13 @@ class GitService:
                     "rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment
                 )
                 targets: list[GitRecoveryTarget] = []
-                versions: list[tuple[str, Path, os.stat_result | None]] = []
+                versions: list[tuple[str, Path, os.stat_result | None, os.stat_result | None]] = []
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_BINARY", 0)
+                )
                 for declared in sorted(set(paths)):
                     lexical = Path(declared.replace("\\", "/"))
                     if not lexical.is_absolute():
@@ -321,7 +327,7 @@ class GitService:
                         else:
                             return unavailable("ignored_new_target")
                         targets.append(GitRecoveryTarget(declared, relative, None))
-                        versions.append((declared, target, None))
+                        versions.append((declared, target, None, None))
                         continue
                     if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1 or not entry:
                         return unavailable("current_bytes_not_retained")
@@ -334,20 +340,23 @@ class GitService:
                     retained_mode, kind, blob = description.split()
                     if retained_path != relative or kind != "blob" or retained_mode not in {"100644", "100755"}:
                         return unavailable("nonregular_retained_target")
-                    flags = (
-                        os.O_RDONLY
-                        | getattr(os, "O_NOFOLLOW", 0)
-                        | getattr(os, "O_NONBLOCK", 0)
-                        | getattr(os, "O_BINARY", 0)
-                    )
                     with os.fdopen(os.open(target, flags), "rb") as stream:
                         opened = os.fstat(stream.fileno())
-                        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                        if not stat.S_ISREG(opened.st_mode) or (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_size,
+                            opened.st_mtime_ns,
+                        ) != (
                             observed.st_dev,
                             observed.st_ino,
+                            observed.st_size,
+                            observed.st_mtime_ns,
                         ):
                             return unavailable("target_changed_during_inspection")
                         content = stream.read(remaining_bytes + 1)
+                        if file_version(os.fstat(stream.fileno())) != file_version(opened):
+                            return unavailable("target_changed_during_inspection")
                     if len(content) > remaining_bytes:
                         return unavailable("current_byte_bound_exceeded")
                     remaining_bytes -= len(content)
@@ -360,19 +369,20 @@ class GitService:
                         input_bytes=content,
                     )
                     after = target.lstat()
-                    if file_version(after) != file_version(opened):
+                    # Windows path stat and fstat may expose different meanings of ctime.
+                    if file_version(after) != file_version(observed):
                         return unavailable("target_changed_during_inspection")
                     if current_blob != blob:
                         return unavailable("current_bytes_not_retained")
                     await self._run_git("cat-file", "-e", blob, cwd=root, env_overrides=environment)
                     targets.append(GitRecoveryTarget(declared, relative, blob))
-                    versions.append((declared, target, after))
+                    versions.append((declared, target, after, opened))
                 if (
                     await self._run_git("rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment)
                     != head
                 ):
                     return unavailable("retained_reference_changed")
-                for declared, target, before in versions:
+                for declared, target, before, before_handle in versions:
                     if workspace_target(str(root), declared) != target:
                         return unavailable("target_changed_during_inspection")
                     try:
@@ -383,6 +393,10 @@ class GitService:
                         None if before is None else file_version(before)
                     ):
                         return unavailable("target_changed_during_inspection")
+                    if before_handle is not None:
+                        with os.fdopen(os.open(target, flags), "rb") as stream:
+                            if file_version(os.fstat(stream.fileno())) != file_version(before_handle):
+                                return unavailable("target_changed_during_inspection")
                 return GitRecoveryWitness(str(root), head, tuple(targets))
         except (GitError, OSError, ValueError, TimeoutError) as exc:
             log.warning("git_recovery_unavailable", reason=type(exc).__name__, detail=str(exc), target_count=len(paths))

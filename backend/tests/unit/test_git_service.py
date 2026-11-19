@@ -113,6 +113,40 @@ class TestRecoveryWitness:
         assert await self.witness(git_service, root, [target.path for target in witness.targets]) == witness
         assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
 
+    @pytest.mark.parametrize("changed_sample", [None, 2, 3], ids=["stable", "during-read", "after-git"])
+    async def test_distinct_path_and_handle_ctimes_keep_both_change_fences(
+        self, git_service, recovery_repo, monkeypatch, changed_sample
+    ):
+        target = (recovery_repo / "source.txt").stat()
+        original = os.fstat
+        samples = 0
+
+        def handle_stat(fd):
+            nonlocal samples
+            observed = original(fd)
+            if (observed.st_dev, observed.st_ino) != (target.st_dev, target.st_ino):
+                return observed
+            samples += 1
+            # Windows path stat can report birth time while fstat reports change time.
+            changed = changed_sample is not None and samples >= changed_sample
+            return os.stat_result(
+                observed,
+                {
+                    "st_atime_ns": observed.st_atime_ns,
+                    "st_mtime_ns": observed.st_mtime_ns,
+                    "st_ctime_ns": observed.st_ctime_ns + 1_000_000_000 + int(changed),
+                },
+            )
+
+        monkeypatch.setattr(os, "fstat", handle_stat)
+        witness = await self.witness(git_service, recovery_repo, ["source.txt"])
+        if changed_sample is None:
+            assert witness is not None
+            assert samples == 3
+        else:
+            assert witness is None
+            assert samples == changed_sample
+
     @pytest.mark.parametrize("kind", ["dirty", "staged", "untracked", "ignored-new", "directory"])
     async def test_missing_current_byte_proof_stays_unknown(self, git_service, recovery_repo, kind):
         root = recovery_repo
