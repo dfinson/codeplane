@@ -219,7 +219,11 @@ def _tool(gate: GateAttachment, tool: Any) -> None:
             evidence=ExecutionEvidence(False),
         )
 
-    def emit(kind: str, invocation: NativeCall, result: Any = None) -> None:
+    def outcome(result: Any) -> bool | None:
+        error = getattr(result, "is_error", None)
+        return not error if isinstance(error, bool) else None
+
+    def emit(kind: str, invocation: NativeCall, result: Any = None, *, success: bool | None = None) -> None:
         gate.binding.observe(
             {
                 "type": kind,
@@ -229,6 +233,7 @@ def _tool(gate: GateAttachment, tool: Any) -> None:
                 # remains explicitly app-owned instead of impersonating a vendor ID.
                 "operation_id": invocation.operation_id,
                 "result": str(result) if result is not None else None,
+                "success": success,
             }
         )
 
@@ -237,12 +242,25 @@ def _tool(gate: GateAttachment, tool: Any) -> None:
         if not gate.allow_sync(invocation):
             raise NativeGateDeniedError("LlamaIndex function denied before invocation")
         emit("tool_started", invocation)
+        succeeded: bool | None = None
+
+        def invoke() -> Any:
+            nonlocal succeeded
+            try:
+                result = original_call(*args, **kwargs)
+            except Exception:
+                if invocation.evidence.started:
+                    succeeded = False
+                raise
+            succeeded = outcome(result)
+            return result
+
         try:
-            result = gate.complete_sync(invocation, lambda: original_call(*args, **kwargs))
+            result = gate.complete_sync(invocation, invoke, outcome=outcome)
         except BaseException:
-            emit("tool_failed", invocation)
+            emit("tool_failed", invocation, success=succeeded)
             raise
-        emit("tool_completed", invocation, result)
+        emit("tool_completed", invocation, result, success=succeeded)
         return result
 
     async def asynchronous(*args: Any, **kwargs: Any) -> Any:
@@ -250,12 +268,25 @@ def _tool(gate: GateAttachment, tool: Any) -> None:
         if not await gate.allow(invocation):
             raise NativeGateDeniedError("LlamaIndex function denied before invocation")
         emit("tool_started", invocation)
+        succeeded: bool | None = None
+
+        async def invoke() -> Any:
+            nonlocal succeeded
+            try:
+                result = await original_acall(*args, **kwargs)
+            except Exception:
+                if invocation.evidence.started:
+                    succeeded = False
+                raise
+            succeeded = outcome(result)
+            return result
+
         try:
-            result = await gate.complete(invocation, lambda: original_acall(*args, **kwargs))
+            result = await gate.complete(invocation, invoke, outcome=outcome)
         except BaseException:
-            emit("tool_failed", invocation)
+            emit("tool_failed", invocation, success=succeeded)
             raise
-        emit("tool_completed", invocation, result)
+        emit("tool_completed", invocation, result, success=succeeded)
         return result
 
     gate.patch(tool, "call", synchronous)

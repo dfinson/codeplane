@@ -35,11 +35,13 @@ class Request:
     value: str
 
 
-async def native_fixture(gates):
+async def native_fixture(gates, *, fail=False):
     calls, sibling_calls, receipts = [], [], []
 
     def body(value: str) -> str:
         calls.append(value)
+        if fail:
+            raise ValueError("actual local function failure")
         return value
 
     tool = tools.FunctionTool(body, "Inert original function")
@@ -84,6 +86,8 @@ async def test_real_autogen_intervention_and_function_boundary(allow, binding_fa
     gates, decision, _ = binding_factory("autogen")
     decision.allow = allow
     runtime, attachment, tool, original, calls, sibling_calls, receipts, handlers = await native_fixture(gates)
+    records: list[dict[str, Any]] = []
+    gates.binding._observation = records.append
     try:
         if allow:
             result = await runtime.send_message(Request("local"), core.AgentId("local", "default"), message_id="msg-1")
@@ -94,6 +98,7 @@ async def test_real_autogen_intervention_and_function_boundary(allow, binding_fa
                 ("autogen.send_message", None, True, True),
             ]
             assert sibling_calls == ["msg-1"]
+            assert next(raw for raw in records if raw["type"] == "tool_completed")["success"] is True
         else:
             with pytest.raises(MessageDroppedException):
                 await runtime.send_message(Request("local"), core.AgentId("local", "default"), message_id="msg-1")
@@ -105,6 +110,22 @@ async def test_real_autogen_intervention_and_function_boundary(allow, binding_fa
         attachment.detach()
     assert tool._func is original
     assert len(handlers) == 1 and runtime._intervention_handlers is handlers
+
+
+async def test_autogen_actual_function_exception_preserves_false_outcome(binding_factory):
+    gates, _, _ = binding_factory("autogen")
+    runtime, attachment, _, _, calls, _, _, _ = await native_fixture(gates, fail=True)
+    records: list[dict[str, Any]] = []
+    gates.binding._observation = records.append
+    try:
+        with pytest.raises(ValueError, match="actual local function failure"):
+            await runtime.send_message(Request("local"), core.AgentId("local", "default"), message_id="failed-msg")
+        failed = [raw for raw in records if raw["type"] == "tool_failed"]
+        assert calls == ["local"] and len(failed) == 1 and failed[0]["success"] is False
+        assert not any(raw["type"] == "tool_completed" for raw in records)
+    finally:
+        await runtime.stop()
+        attachment.detach()
 
 
 @pytest.mark.parametrize("change", ["none", "arguments", "revoke"])

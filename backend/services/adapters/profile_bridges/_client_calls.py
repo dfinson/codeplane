@@ -189,6 +189,9 @@ def install_functions(gate: GateAttachment, target: FunctionDispatcher) -> None:
             gate, "function_started", call, tool_name=name, tool_call_id=tool_call_id, run_id=run_id, arguments=snapshot
         )
 
+        # This is the observed local invocation, never a hosted provider/tool outcome.
+        succeeded: bool | None = None
+
         async def execute() -> Any:
             async def waiting(pending: asyncio.Task[Any]) -> Any:
                 revoked = asyncio.create_task(gate.binding.wait_revoked())
@@ -230,10 +233,29 @@ def install_functions(gate: GateAttachment, target: FunctionDispatcher) -> None:
                 result = await waiting(asyncio.create_task(finish(result)))
             return result
 
+        async def observed_execute() -> Any:
+            nonlocal succeeded
+            try:
+                result = await execute()
+            except Exception:
+                if call.evidence.started:
+                    succeeded = False
+                raise
+            succeeded = True if call.evidence.started else None
+            return result
+
         try:
-            result = await gate.complete(call, execute)
+            result = await gate.complete(call, observed_execute)
         except BaseException:
-            record(gate, "function_failed", call, tool_name=name, tool_call_id=tool_call_id, run_id=run_id)
+            record(
+                gate,
+                "function_failed",
+                call,
+                tool_name=name,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                success=succeeded,
+            )
             raise
         record(
             gate,
@@ -243,6 +265,7 @@ def install_functions(gate: GateAttachment, target: FunctionDispatcher) -> None:
             tool_call_id=tool_call_id,
             run_id=run_id,
             result=plain(result),
+            success=succeeded,
         )
         return result
 

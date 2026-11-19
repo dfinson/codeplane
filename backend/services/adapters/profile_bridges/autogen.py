@@ -242,8 +242,21 @@ def _install_tool(gate: GateAttachment, tool: Any, current_message: ContextVar[s
         if cancellation_token.is_cancelled() or not await gate.allow(call) or cancellation_token.is_cancelled():
             raise NativeGateDeniedError("AutoGen function denied before native invoker")
 
+        succeeded: bool | None = None
+
+        async def observed_run() -> Any:
+            nonlocal succeeded
+            try:
+                result = await run(args, cancellation_token)
+            except Exception:
+                if call.evidence.started:
+                    succeeded = False
+                raise
+            succeeded = True if call.evidence.started else None
+            return result
+
         async def invoke() -> Any:
-            pending = asyncio.create_task(run(args, cancellation_token))
+            pending = asyncio.create_task(observed_run())
             revoked = asyncio.create_task(gate.binding.wait_revoked())
             try:
                 await asyncio.wait((pending, revoked), return_when=asyncio.FIRST_COMPLETED)
@@ -264,9 +277,11 @@ def _install_tool(gate: GateAttachment, tool: Any, current_message: ContextVar[s
         try:
             result = await gate.complete(call, invoke)
         except BaseException as exc:
-            gate.binding.observe({"type": "tool_failed", **raw, "error_type": type(exc).__name__})
+            gate.binding.observe({"type": "tool_failed", **raw, "error_type": type(exc).__name__, "success": succeeded})
             raise
-        gate.binding.observe({"type": "tool_completed", **raw, "result": tool.return_value_as_string(result)})
+        gate.binding.observe(
+            {"type": "tool_completed", **raw, "result": tool.return_value_as_string(result), "success": succeeded}
+        )
         return result
 
     async def identified(args: Any, cancellation_token: Any, call_id: str | None = None) -> Any:

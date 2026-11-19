@@ -258,8 +258,7 @@ class TelemetrySpansRepository(BaseRepository):
                     SUM(CASE WHEN json_extract(attrs_json, '$.success') = 0
                              OR json_extract(attrs_json, '$.success') = 'false'
                         THEN 1 ELSE 0 END) as failure_count,
-                    SUM(CASE WHEN json_extract(attrs_json, '$.observation_operation_id') IS NOT NULL
-                              AND json_type(attrs_json, '$.success') = 'null'
+                    SUM(CASE WHEN COALESCE(json_type(attrs_json, '$.success'), 'null') = 'null'
                         THEN 1 ELSE 0 END) as unknown_count
                 FROM job_telemetry_spans
                 WHERE span_type = 'tool'

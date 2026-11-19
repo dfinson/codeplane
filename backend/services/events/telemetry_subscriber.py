@@ -115,7 +115,7 @@ class TelemetrySubscriber:
                 self.set_execution_phase(job_id, str(phase))
         elif kind == EventKind.telemetry_usage:
             self._record_usage(job_id, event.payload, sdk)
-        elif kind == EventKind.tool_call_completed:
+        elif kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             self._record_completed_tool(job_id, event, sdk)
         elif kind == EventKind.message_user:
             self._buffer_message(job_id, "operator", event.payload)
@@ -250,7 +250,8 @@ class TelemetrySubscriber:
         payload = event.payload
         tool_name = str(payload.get("tool_name") or "tool")
         tool_args_str = self._stringify_tool_arguments(payload.get("arguments"))
-        success = bool(payload.get("success"))
+        supplied = payload.get("success")
+        success = supplied if isinstance(supplied, bool) else None
         result_text = str(payload.get("result") or "")
         duration_ms = float(event.metadata.duration_ms or 0.0)
         turn_id = payload.get("turn_id")
@@ -343,7 +344,7 @@ class TelemetrySubscriber:
         *,
         tool_name: str,
         tool_args_str: str | None,
-        success: bool,
+        success: bool | None,
         duration_ms: float,
         result_text: str,
         turn_id: str | None = None,
@@ -351,7 +352,7 @@ class TelemetrySubscriber:
         sdk: str,
     ) -> None:
         from backend.services.analytics import telemetry as tel
-        from backend.services.job.retry_tracker import RetryTracker
+        from backend.services.job.retry_tracker import RetryResult, RetryTracker
         from backend.services.tools.tool_classifier import (
             classify_tool,
             extract_file_paths,
@@ -363,8 +364,9 @@ class TelemetrySubscriber:
             "job_id": job_id,
             "sdk": sdk,
             "tool_name": tool_name,
-            "success": bool(success),
         }
+        if success is not None:
+            attrs["success"] = success
         tel.tool_duration.record(duration_ms, attrs)
 
         category = classify_tool(tool_name)
@@ -378,7 +380,11 @@ class TelemetrySubscriber:
 
         if job_id not in self._retry_trackers:
             self._retry_trackers[job_id] = RetryTracker()
-        retry_result = self._retry_trackers[job_id].record(tool_name, target, 0, success)
+        retry_result = (
+            self._retry_trackers[job_id].record(tool_name, target, 0, success)
+            if success is not None
+            else RetryResult(False, None)
+        )
 
         result_size = len(result_text.encode("utf-8", errors="replace")) if result_text else None
 
@@ -405,7 +411,7 @@ class TelemetrySubscriber:
                 job_id,
                 sdk=sdk,
                 tool_call_count=1,
-                tool_failure_count=0 if success else 1,
+                tool_failure_count=int(success is False),
                 total_tool_duration_ms=int(duration_ms),
                 retry_count=1 if retry_result.is_retry else 0,
                 **file_rw_increment,
@@ -425,7 +431,7 @@ class TelemetrySubscriber:
                 duration_ms=duration_ms,
                 attrs={
                     "success": success,
-                    **({"error_snippet": result_text} if not success and result_text else {}),
+                    **({"error_snippet": result_text} if success is False and result_text else {}),
                 },
                 tool_category=category,
                 tool_target=target,
@@ -500,7 +506,7 @@ class TelemetrySubscriber:
         tool_name: str,
         tool_args_str: str | None,
         result_text: str,
-        success: bool,
+        success: bool | None,
     ) -> None:
         payload: dict[str, Any] = {
             "role": "tool_call",

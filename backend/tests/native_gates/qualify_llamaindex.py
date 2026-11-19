@@ -104,6 +104,7 @@ async def test_llamaindex_original_query_and_function_boundaries(asynchronous, a
             with trace.use_span(span):
                 assert str(await pending) == "local"
             assert calls == ["local"] and receipts == [(True, True), (True, True)]
+            assert next(raw for raw in records if raw["type"] == "tool_completed")["success"] is True
             assert any(raw.get("event_id") == "native-query" for raw in records)
             assert any(raw.get("otel_trace_id") == f"{123:032x}" for raw in records)
             assert any(raw.get("native_span_id") for raw in records)
@@ -115,6 +116,58 @@ async def test_llamaindex_original_query_and_function_boundaries(asynchronous, a
         attachment.detach()
     assert manager.handlers == [sibling]
     assert target.tools[0]._fn is body
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_llamaindex_explicit_tool_error_is_preserved_in_observation_and_receipt(asynchronous, binding_factory):
+    calls = []
+
+    def body(value: str) -> str:
+        calls.append(value)
+        return value
+
+    target, _ = make_engine(body)
+
+    def error_response(result):
+        return tools.ToolOutput(
+            content="native tool error",
+            tool_name="body",
+            raw_input={},
+            raw_output=result,
+            is_error=True,
+        )
+
+    async def async_error_response(result):
+        return error_response(result)
+
+    target.tools[0]._callback = error_response
+    target.tools[0]._async_callback = async_error_response
+    gates, _, _ = binding_factory("llamaindex")
+    records: list[dict[str, Any]] = []
+    receipts = []
+    gates.binding._observation = records.append
+
+    async def report(call, started, succeeded):
+        receipts.append((started, succeeded))
+
+    gates.binding._on_result = report
+    attachment = GateAttachment(gates.binding, target)
+    attachment.claim(target)
+    install(attachment, target)
+    try:
+        result = (
+            await target.tools[0].acall(value="input")
+            if asynchronous
+            else await asyncio.to_thread(
+                target.tools[0].call,
+                value="input",
+            )
+        )
+        assert result.is_error is True and calls == ["input"]
+        assert next(raw for raw in records if raw["type"] == "tool_completed")["success"] is False
+        assert receipts == [(True, False)]
+    finally:
+        attachment.detach()
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

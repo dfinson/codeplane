@@ -111,8 +111,7 @@ class TelemetryAnalyticsRepository(BaseRepository):
                         SELECT COUNT(*) FROM job_telemetry_spans AS observed
                         WHERE observed.job_id = job_telemetry_summary.job_id
                           AND observed.session_kind = 'job' AND observed.span_type = 'tool'
-                          AND json_extract(observed.attrs_json, '$.observation_operation_id') IS NOT NULL
-                          AND json_type(observed.attrs_json, '$.success') = 'null'
+                          AND COALESCE(json_type(observed.attrs_json, '$.success'), 'null') = 'null'
                     )), 0) as total_tool_unknown,
                     COALESCE(SUM(agent_error_count), 0) as total_agent_errors,
                     COALESCE(SUM(cache_read_tokens), 0) as total_cache_read,

@@ -132,12 +132,77 @@ async def test_adk_actual_native_before_callbacks_and_tool_entry(deny_stage, bin
             assert len(requests) == 2
             assert ("body", True, True) in receipts
             assert any(raw.get("tool_call_id") == "native-function" for raw in records)
+            assert next(raw for raw in records if raw["type"] == "tool_observed")["success"] is True
         elif deny_stage in {"run", "model"}:
             assert not requests
     finally:
         attachment.detach()
         await target.runner.close()
     assert not any(plugin.name.startswith("codeplane-") for plugin in target.runner.plugin_manager.plugins)
+
+
+async def test_adk_plugin_shortcut_without_body_preserves_unknown_tool_outcome(binding_factory):
+    calls = []
+
+    def body(value: str) -> str:
+        calls.append(value)
+        return value
+
+    target, invoke, _ = await make_target(body)
+
+    class Shortcut(BasePlugin):
+        async def before_tool_callback(self, *, tool, tool_args, tool_context):
+            return {"result": "plugin response, not actual function execution"}
+
+    target.runner.plugin_manager.register_plugin(Shortcut(name="shortcut"))
+    gates, _, _ = binding_factory("google-adk")
+    records: list[dict[str, Any]] = []
+    gates.binding._observation = records.append
+
+    async def usage(operation_id, result):
+        return None
+
+    gates.binding._usage = usage
+    attachment = GateAttachment(gates.binding, target)
+    attachment.claim(target)
+    install(attachment, target)
+    try:
+        await invoke()
+        observed = [raw for raw in records if raw["type"] == "tool_observed"]
+        assert len(observed) == 1 and observed[0]["success"] is None
+        assert calls == [] and not any(raw["type"] == "tool_started" for raw in records)
+    finally:
+        attachment.detach()
+        await target.runner.close()
+
+
+async def test_adk_actual_function_exception_preserves_false_outcome(binding_factory):
+    calls = []
+
+    def body(value: str) -> str:
+        calls.append(value)
+        raise ValueError("actual local function failure")
+
+    target, invoke, _ = await make_target(body)
+    gates, _, _ = binding_factory("google-adk")
+    records: list[dict[str, Any]] = []
+    gates.binding._observation = records.append
+
+    async def usage(operation_id, result):
+        return None
+
+    gates.binding._usage = usage
+    attachment = GateAttachment(gates.binding, target)
+    attachment.claim(target)
+    install(attachment, target)
+    try:
+        await asyncio.gather(invoke(), return_exceptions=True)
+        failed = [raw for raw in records if raw["type"] == "tool_failed"]
+        assert calls == ["local"] and len(failed) == 1 and failed[0]["success"] is False
+        assert not any(raw["type"] == "tool_observed" for raw in records)
+    finally:
+        attachment.detach()
+        await target.runner.close()
 
 
 @pytest.mark.parametrize("change", ["none", "revoke", "model-request", "tool-arguments"])
