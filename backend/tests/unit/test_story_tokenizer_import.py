@@ -148,10 +148,24 @@ async def test_populated_story_drain_does_not_stall_http_or_shutdown(session_fac
         listener.close()
 
 
-async def test_story_tokenizer_deadline_is_explicit_and_reaps_worker(blocked_tokenizer, monkeypatch):
+@pytest.mark.parametrize("block_before_import", [False, True])
+async def test_story_tokenizer_deadline_is_explicit_and_reaps_worker(
+    blocked_tokenizer, monkeypatch, block_before_import
+):
     from backend.services.story import service, tokenizer
 
     started, release = blocked_tokenizer
+    if block_before_import:
+        (started.parent / "sitecustomize.py").write_text("import time\ntime.sleep(10)\n")
+    processes: list[asyncio.subprocess.Process] = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def record_worker(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(tokenizer.asyncio, "create_subprocess_exec", record_worker)
     monkeypatch.setattr(tokenizer, "_TIMEOUT", 0.5)
     completer = AsyncMock()
     story = service.StoryService(completer)
@@ -167,8 +181,11 @@ async def test_story_tokenizer_deadline_is_explicit_and_reaps_worker(blocked_tok
     assert time.monotonic() - began < 1.5
     assert not release.exists() and not story._tokenizer_lock.locked()
     completer.complete.assert_not_called()
+    assert len(processes) == 1 and processes[0].returncode is not None
+    if block_before_import:
+        assert not started.exists()
     with pytest.raises(ProcessLookupError):
-        os.kill(int(started.read_text()), 0)
+        os.kill(processes[0].pid, 0)
 
 
 async def test_loader_error_remains_explicit_without_estimated_story(blocked_tokenizer):
