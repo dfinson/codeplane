@@ -76,6 +76,9 @@ async def test_single_text_only_attempt_binds_sources_and_rechecks_epoch() -> No
     system = provider.complete.call_args.kwargs["system_message"]
     lengths = system.split("Source codepoint lengths: ", 1)[1].splitlines()[0]
     assert json.loads(lengths) == {"command": 3, "arguments": 0, "tool_definition": 0, "context": 2}
+    example_fields = json.loads(system.split("FORMAT-ONLY EXAMPLE INPUT: ", 1)[1].splitlines()[0])
+    example_output = system.split("FORMAT-ONLY EXAMPLE OUTPUT: ", 1)[1].splitlines()[0]
+    assert ActionAssessment.model_validate_json(example_output, context=example_fields).complete
     assert current.await_count == 2
     assert binding.matches({"tool": "bash", "policy": "v1"}, fields=fields)
     assert not binding.matches({"tool": "bash", "policy": "v2"}, fields=fields)
