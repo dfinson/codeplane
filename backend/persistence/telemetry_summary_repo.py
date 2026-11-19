@@ -6,6 +6,7 @@ always up-to-date.  No timers, no flush intervals.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
@@ -15,8 +16,8 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 
 from backend.models.db import EventRow
+from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
-from backend.persistence.event_repo import EventRepository
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -32,8 +33,8 @@ class TelemetrySummaryRepository(BaseRepository):
         """Read source-typed primary cost evidence without relabeling historical totals."""
         if not job_ids:
             return {}
-        rows = await self._session.stream_scalars(
-            select(EventRow)
+        rows = await self._session.stream(
+            select(EventRow.job_id, EventRow.event_id, EventRow.kind, EventRow.payload, EventRow.event_metadata)
             .where(
                 EventRow.job_id.in_(job_ids),
                 EventRow.kind.in_(("telemetry.usage", "execution.native.usage")),
@@ -43,38 +44,39 @@ class TelemetrySummaryRepository(BaseRepository):
         )
         totals: dict[str, dict[str, UsageAmount]] = {}
         async for row in rows:
-            event = EventRepository._to_domain(row)
-            metadata = event.metadata
+            assert row.job_id is not None  # The query selects only the supplied Job identities.
+            metadata = EventMetadata.model_validate_json(row.event_metadata or "{}")
+            payload = json.loads(row.payload)
             if metadata.integration_binding_id and (metadata.namespace or ())[:1] == ("observation-source",):
                 continue
-            if event.kind == "telemetry.usage":
+            if row.kind == "telemetry.usage":
                 if metadata.source_framework not in {"copilot", "claude"}:
                     continue
-                entries = event.payload.get("native_usage", [])
+                entries = payload.get("native_usage", [])
             else:
                 if metadata.source_framework != "codeplane" or metadata.namespace != ("control", "native-execution"):
                     continue
-                entries = event.payload.get("usage", [])
+                entries = payload.get("usage", [])
             if not isinstance(entries, list):
-                log.warning("job_cost_usage_invalid", event_id=event.id, reason="expected_usage_list")
+                log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="expected_usage_list")
                 continue
             for entry in entries:
                 try:
                     usage = UsageAmount.model_validate(entry)
                 except ValidationError:
-                    log.warning("job_cost_usage_invalid", event_id=event.id, reason="invalid_source_usage")
+                    log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="invalid_source_usage")
                     continue
                 if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or usage.role != "primary":
                     continue
                 if (
-                    usage.job_id != event.session_id
+                    usage.job_id != row.job_id
                     or usage.execution_epoch != metadata.execution_epoch
-                    or (event.kind == "telemetry.usage" and usage.producer != metadata.source_framework)
+                    or (row.kind == "telemetry.usage" and usage.producer != metadata.source_framework)
                 ):
-                    log.warning("job_cost_usage_invalid", event_id=event.id, reason="source_identity_mismatch")
+                    log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="source_identity_mismatch")
                     continue
                 key = usage.model_dump_json(exclude={"amount"})
-                by_source = totals.setdefault(event.session_id, {})
+                by_source = totals.setdefault(row.job_id, {})
                 previous = by_source.get(key)
                 by_source[key] = usage.model_copy(
                     update={"amount": (previous.amount if previous is not None else Decimal(0)) + usage.amount}

@@ -151,7 +151,8 @@ class TestJobCostProvenance:
             before = await events.list_all_events_by_job(job_id)
         detail = await client.get(f"/api/jobs/{job_id}")
         listing = await client.get("/api/jobs")
-        assert detail.status_code == listing.status_code == 200
+        hydration = await client.get(f"/api/jobs/{job_id}/snapshot")
+        assert detail.status_code == listing.status_code == hydration.status_code == 200
         listed = next(item for item in listing.json()["items"] if item["id"] == job_id)
         async with session_factory() as session:
             sse = SSEManager()
@@ -163,7 +164,7 @@ class TestJobCostProvenance:
             import json
 
             snapshot = json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
-        for body in (detail.json(), listed, snapshot["jobs"][0]):
+        for body in (detail.json(), listed, hydration.json()["job"], snapshot["jobs"][0]):
             assert body["totalCostUsd"] == 2.31 and body["totalTokens"] == 116678
             if kind in {"legacy", "observation", "forged-usd", "foreign-owner"}:
                 assert body["costUsage"] == []
