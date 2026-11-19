@@ -4,6 +4,8 @@ import { BudgetCard } from "../analytics/BudgetCard";
 import { CostEvidence } from "../CostEvidence";
 import { SidecarSessionsSection } from "../MetricsPanelSections";
 import { MetricViz } from "../metrics/VizTemplates";
+import { RepoBreakdown } from "../analytics/RepoBreakdown";
+import { MotivationBreakdown } from "../analytics/MotivationBreakdown";
 import type { ScorecardResponse } from "../../api/client";
 import type { UsageAmount } from "../../api/types";
 
@@ -64,5 +66,38 @@ describe("currency provenance analytics", () => {
     ]} />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();
     expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
+  it.each([null, 0])("preserves repository cost and per-job ratio for %s currency", cost => {
+    const { container } = render(<RepoBreakdown repos={[{
+      repo: "/fixture", jobCount: 2, succeeded: 2, failed: 0, totalCostUsd: cost,
+      totalTokens: 10, toolCalls: 1, avgDurationMs: 1, premiumRequests: 0,
+    }]} />);
+    if (cost == null) {
+      expect(screen.getAllByText("Unknown USD")).toHaveLength(2);
+      expect(container.textContent).not.toContain("$0.00");
+    } else {
+      expect(screen.getAllByText("$0.00")).toHaveLength(2);
+    }
+  });
+
+  it("does not describe unknown motivation cost as a zero percent share", () => {
+    render(<MotivationBreakdown data={{ motivation: [{
+      dimension: "motivation", bucket: "context_gathering", costUsd: null,
+      inputTokens: 1, outputTokens: 1, callCount: 1,
+    }] }} />);
+    expect(screen.getByText("(unknown share)")).toBeInTheDocument();
+    expect(screen.queryByText("(0.0%)")).not.toBeInTheDocument();
+  });
+
+  it("shows verified USD for receipt-only utility roles", () => {
+    const roles = ["assessment", "title", "monitor"] as const;
+    render(<CostEvidence usage={roles.map(role => ({
+      ...native, amount: "1.25", unit: "USD", currency: "USD", verified: true,
+      role,
+    }))} />);
+    for (const role of roles) {
+      expect(screen.getByText(`copilot ${role} verified USD: $1.25`)).toBeInTheDocument();
+    }
   });
 });

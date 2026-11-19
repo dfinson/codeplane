@@ -17,7 +17,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
 
   const chartData = repos.slice(0, 10).map((r) => ({
     name: r.repo ? pathBasename(r.repo) || r.repo : "(none)",
-    cost: Number(r.totalCostUsd) || 0,
+    cost: r.totalCostUsd ?? null,
     jobs: r.jobCount,
   }));
 
@@ -44,10 +44,10 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
                 <Tooltip content="Number of jobs run against this repository"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Jobs</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
-                <Tooltip content="Total API-equivalent cost"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Cost</span></Tooltip>
+                <Tooltip content="Verified source USD; unknown is not zero"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Cost</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
-                <Tooltip content="API-equivalent cost per job"><span className="cursor-help border-b border-dotted border-muted-foreground/50">$/Job</span></Tooltip>
+                <Tooltip content="Verified USD per job; unavailable when currency is unknown"><span className="cursor-help border-b border-dotted border-muted-foreground/50">$/Job</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
                 <Tooltip content="Average wall-clock time per job"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Avg Time</span></Tooltip>
@@ -59,7 +59,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
           </thead>
           <tbody>
             {repos.map((r, i) => {
-              const costPerJob = r.jobCount > 0 ? (Number(r.totalCostUsd) || 0) / r.jobCount : 0;
+              const costPerJob = r.jobCount > 0 && r.totalCostUsd != null ? r.totalCostUsd / r.jobCount : null;
               return (
                 <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
                   <td className="py-1.5 px-2 font-mono truncate max-w-[200px]" title={r.repo || "(none)"}>

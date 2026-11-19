@@ -334,6 +334,9 @@ async def _compute_attribution(
         log.info("cost_attribution_skip_no_spans", job_id=job_id)
         return
     llm_spans = [span for span in spans if span.get("span_type") == "llm"]
+    # Attribution requires a complete Job-level currency basis. A known turn
+    # stays readable in span/source usage, but does not qualify mixed/unknown
+    # derived buckets or their ratios as complete USD accounting.
     currency_qualified = bool(llm_spans) and all(span.get("cost_usd") is not None for span in llm_spans)
 
     # --- Load job metadata for sub-classification and model tagging ---

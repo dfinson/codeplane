@@ -7,33 +7,13 @@ import type { CurrencyValue } from "./types";
  */
 
 import { request } from "./client";
-import type { JobTelemetryResponse } from "./types";
+import type { JobTelemetryResponse, AnalyticsOverviewResponse, RetryCostResponse as GeneratedRetryCostResponse } from "./types";
 
 // ---------------------------------------------------------------------------
 // Analytics Overview / Models / Tools / Repos / Jobs
 // ---------------------------------------------------------------------------
 
-export interface AnalyticsOverview {
-  period: number;
-  totalJobs: number;
-  succeeded: number;
-  review: number;
-  completed: number;
-  failed: number;
-  cancelled: number;
-  running: number;
-  totalCostUsd: number;
-  totalTokens: number;
-  avgDurationMs: number;
-  totalPremiumRequests: number;
-  totalToolCalls: number;
-  totalToolFailures: number;
-  totalAgentErrors: number;
-  totalToolErrors: number;
-  toolSuccessRate: number;
-  cacheHitRate: number;
-  costTrend: { date: string; cost: number; jobs: number }[];
-}
+export type AnalyticsOverview = AnalyticsOverviewResponse;
 
 export interface AnalyticsModels {
   period: number;
@@ -324,14 +304,7 @@ export function fetchShellCommands(period = 30): Promise<ShellCommandsResponse> 
   return request(`/analytics/shell-commands?period=${period}`);
 }
 
-export interface RetryCostResponse {
-  period: number;
-  retryCostUsd: CurrencyValue;
-  retryCount: number;
-  totalSpans: number;
-  totalCostUsd: CurrencyValue;
-  retryPct: number;
-}
+export type RetryCostResponse = GeneratedRetryCostResponse;
 
 export function fetchRetryCost(period = 30): Promise<RetryCostResponse> {
   return request(`/analytics/retry-cost?period=${period}`);
@@ -394,7 +367,7 @@ export interface ScorecardResponse {
   activity: ScorecardActivity;
   budget: ScorecardBudget[];
   quotaJson: string | null;
-  costTrend: { date: string; cost: CurrencyValue; jobs: number }[];
+  costTrend: AnalyticsOverviewResponse["costTrend"];
   dailySpendLimitUsd: number;
   // Average cost per MTok + model mix
   avgCostPerMtok: CurrencyValue;

@@ -11,20 +11,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-import structlog
-from pydantic import ValidationError
 from sqlalchemy import select, text
 
+from backend.models.currency import event_usage_json
 from backend.models.db import EventRow
-from backend.models.session_event import EventMetadata
 from backend.models.usage import UsageAmount
 from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
     from backend.models.domain import TelemetrySummaryRow
-
-log = structlog.get_logger()
 
 
 class TelemetrySummaryRepository(BaseRepository):
@@ -46,40 +42,12 @@ class TelemetrySummaryRepository(BaseRepository):
         totals: dict[str, dict[str, UsageAmount]] = {}
         async for row in rows:
             assert row.job_id is not None  # The query selects only the supplied Job identities.
-            metadata = EventMetadata.model_validate_json(row.event_metadata or "{}")
-            payload = json.loads(row.payload)
-            if metadata.integration_binding_id and (metadata.namespace or ())[:1] == ("observation-source",):
-                continue
-            if row.kind == "telemetry.usage":
-                if metadata.source_framework not in {"copilot", "claude"}:
-                    continue
-                entries = payload.get("native_usage", [])
-            else:
-                if metadata.source_framework != "codeplane" or metadata.namespace not in {
-                    ("control", "native-execution"),
-                    ("control", "utility"),
-                }:
-                    continue
-                entries = payload.get("usage", [])
-            if not isinstance(entries, list):
-                log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="expected_usage_list")
-                continue
-            for entry in entries:
-                try:
-                    usage = UsageAmount.model_validate(entry)
-                except ValidationError:
-                    log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="invalid_source_usage")
-                    continue
+            qualified = event_usage_json(row.kind, row.job_id, row.payload, row.event_metadata)
+            for entry in json.loads(qualified):
+                usage = UsageAmount.model_validate(entry)
                 if usage.unit not in {"USD", "copilot_cost_unit", "premium_requests"} or (
                     not all_roles and usage.role != "primary"
                 ):
-                    continue
-                if (
-                    usage.job_id != row.job_id
-                    or usage.execution_epoch != metadata.execution_epoch
-                    or (row.kind == "telemetry.usage" and usage.producer != metadata.source_framework)
-                ):
-                    log.warning("job_cost_usage_invalid", event_id=row.event_id, reason="source_identity_mismatch")
                     continue
                 key = usage.model_dump_json(exclude={"amount"})
                 by_source = totals.setdefault(row.job_id, {})

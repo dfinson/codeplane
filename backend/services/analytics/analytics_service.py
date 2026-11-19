@@ -56,12 +56,13 @@ class AnalyticsService:
         return await TelemetryAnalyticsRepository(self._session).aggregate(period_days=period_days)
 
     async def cost_usage(self, *, period_days: int) -> list[UsageAmount]:
-        from sqlalchemy import text
-
+        from backend.persistence.currency_projection import currency_query
         from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
         ids = await self._session.scalars(
-            text("SELECT DISTINCT job_id FROM job_telemetry_summary WHERE created_at >= datetime('now', :offset)"),
+            currency_query(
+                "SELECT DISTINCT job_id FROM job_telemetry_summary WHERE created_at >= datetime('now', :offset)"
+            ),
             {"offset": f"-{int(period_days)} days"},
         )
         by_job = await TelemetrySummaryRepository(self._session).batch_cost_usage(list(ids), all_roles=True)

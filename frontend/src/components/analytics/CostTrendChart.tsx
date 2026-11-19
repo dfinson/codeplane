@@ -9,7 +9,7 @@ import { formatUsd } from "./helpers";
 // Cost trend chart
 // ---------------------------------------------------------------------------
 
-export function CostTrendChart({ data }: { data: { date: string; cost: import("../../api/types").CurrencyValue; jobs: number }[] }) {
+export function CostTrendChart({ data }: { data: import("../../api/types").AnalyticsOverviewResponse["costTrend"] }) {
   if (!data.length) return <p className="text-muted-foreground text-sm">No data yet.</p>;
   return (
     <ResponsiveContainer width="100%" height={220}>
