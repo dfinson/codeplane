@@ -161,6 +161,17 @@ Both providers are supported on Linux, macOS, native Windows, and WSL.
 |----------|-------------|---------|
 | `OTEL_EXPORTER_ENDPOINT` | Legacy value. Does not enable network export or bypass the explicit export binding below. | Local only |
 
+## Optional story tokenization
+
+Story generation loads `tiktoken` only when needed. A missing package uses the
+logged character estimate. With the package installed, uncached story token
+counting runs in one owned, short-lived process per Story service, with a
+five-second deadline. Cached encodings retain exact tokenization. Loader errors
+and deadlines fail story preparation explicitly, without substituting estimates
+or caching a generated story. Core HTTP processing stays responsive, and
+shutdown kills and reaps an outstanding tokenizer process before closing story
+storage. No global tokenizer cache or network settings are changed.
+
 ## Optional metadata-only telemetry export
 
 Local history, approvals, governance and telemetry work without exporter extras.

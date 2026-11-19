@@ -1314,6 +1314,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     async def _quiet_shutdown() -> None:
         """Run teardown steps, suppressing noisy exceptions."""
+        _story_drain_task.cancel()
+        await asyncio.gather(_story_drain_task, return_exceptions=True)
         await services.tracker_write_service.close()
         await tracker_sync_service.stop()
         await container.close()
