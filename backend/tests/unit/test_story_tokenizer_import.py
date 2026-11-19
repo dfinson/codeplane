@@ -27,16 +27,26 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 def _assert_worker_exited(pid: int) -> None:
     # Windows may retain a terminated PID while its handles are still open.
     with contextlib.suppress(psutil.NoSuchProcess):
-        psutil.Process(pid).wait(timeout=0)
+        process = psutil.Process(pid)
+        try:
+            process.wait(timeout=0)
+        except psutil.TimeoutExpired:
+            pytest.fail(f"Owned worker is not signaled: {process.as_dict(attrs=['pid', 'ppid', 'create_time', 'exe'])}")
 
 
 @pytest.fixture
-def blocked_tokenizer(tmp_path, monkeypatch):
+def blocked_tokenizer(tmp_path, monkeypatch, record_property):
     started, release = tmp_path / "started", tmp_path / "release"
+    identity_path = tmp_path / "worker-identity.json"
     (tmp_path / "tiktoken.py").write_text(
-        "import os, time\n"
+        "import json, os, sys, time, psutil\n"
         "from pathlib import Path\n"
         "def get_encoding(name):\n"
+        f"    Path({str(identity_path)!r}).write_text(json.dumps({{"
+        "'pid': os.getpid(), 'ppid': os.getppid(), 'created': psutil.Process().create_time(), "
+        "'executable': sys.executable, 'prefix': sys.prefix, "
+        "'parents': [p.as_dict(attrs=['pid', 'create_time']) for p in psutil.Process().parents()]"
+        "}))\n"
         f"    Path({str(started)!r}).write_text(str(os.getpid()))\n"
         f"    while not Path({str(release)!r}).exists(): time.sleep(0.01)\n"
         "    raise OSError('controlled tokenizer cache loader failure')\n"
@@ -46,10 +56,46 @@ def blocked_tokenizer(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(map(str, sys.path)))
     from backend.services.story.service import _get_tokenizer
 
+    spawning = asyncio.create_subprocess_exec
+    launched = []
+    job_activity: list[dict[str, Any]] = []
+    if sys.platform == "win32":
+        from backend.services.recipe.windows_process import WindowsCommandJob
+
+        active_processes = WindowsCommandJob.active_processes
+
+        def record_activity(owner):
+            active = active_processes(owner)
+            job_activity.append({"job": owner.name, "active": active})
+            return active
+
+        monkeypatch.setattr(WindowsCommandJob, "active_processes", record_activity)
+
+    async def record_spawn(*args, **kwargs):
+        process = await spawning(*args, **kwargs)
+        identity = {"pid": process.pid}
+        with contextlib.suppress(psutil.NoSuchProcess):
+            identity["created"] = psutil.Process(process.pid).create_time()
+        launched.append((process, identity))
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", record_spawn)
     _get_tokenizer.cache_clear()
     yield started, release
+    record_property(
+        "tokenizer_process_identity",
+        json.dumps(
+            {
+                "launchers": [{**identity, "returncode": process.returncode} for process, identity in launched],
+                "worker": json.loads(identity_path.read_text()) if identity_path.exists() else None,
+                "owned_jobs": job_activity,
+            }
+        ),
+    )
     release.touch()
     _get_tokenizer.cache_clear()
+    if sys.platform == "win32" and launched:
+        assert job_activity and job_activity[-1]["active"] == 0
 
 
 async def test_populated_story_drain_does_not_stall_http_or_shutdown(session_factory, blocked_tokenizer):
@@ -274,6 +320,8 @@ import sys
 from pathlib import Path
 
 attempts = []
+runner = asyncio.Runner()
+runner.get_loop()  # Create Windows' owned self-pipe before denying network to Story.
 def deny_network(event, args):
     if event in {"socket.connect", "socket.getaddrinfo", "socket.sendto"}:
         attempts.append(event)
@@ -309,7 +357,7 @@ async def start_empty_story_drain():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await engine.dispose()
-asyncio.run(start_empty_story_drain())
+runner.run(start_empty_story_drain())
 assert not attempts, attempts
 assert not list(Path(os.environ["TIKTOKEN_CACHE_DIR"]).rglob("*"))
 installed = importlib.util.find_spec("tiktoken") is not None
@@ -340,7 +388,7 @@ if installed:
         from backend.services.story import service
         with patch.object(service, "count_tokens", AsyncMock(side_effect=AssertionError("Already cached"))):
             assert await StoryService(NoModel())._count_tokens(["ASCII", "\\u03bb", ""]) == [5, 2, 0]
-    asyncio.run(cached_counting())
+    runner.run(cached_counting())
     bootstrap = Path(os.environ["CODEPLANE_HOME"]) / "cached-worker"
     bootstrap.mkdir(parents=True)
     (bootstrap / "sitecustomize.py").write_text(
@@ -354,7 +402,7 @@ if installed:
     )
     os.environ["PYTHONPATH"] = str(bootstrap) + os.pathsep + os.pathsep.join(sys.path)
     from backend.services.story.tokenizer import count_tokens
-    assert asyncio.run(count_tokens(["ASCII", "\\u03bb", ""])) == [5, 2, 0]
+    assert runner.run(count_tokens(["ASCII", "\\u03bb", ""])) == [5, 2, 0]
     from backend.services.story import service
     service._get_tokenizer.cache_clear()
     class LocalCompleter:
@@ -371,11 +419,12 @@ if installed:
                 ctx={"job": {"prompt": "inert"}}, system="system", max_input_tokens=1000, job_id="fixture",
             )
         assert len(completer.prompts) == 3
-    asyncio.run(exact_multipass())
+    runner.run(exact_multipass())
 else:
     assert _estimate_tokens("a" * 400) == 100
     assert not attempts
 assert not list(Path(os.environ["TIKTOKEN_CACHE_DIR"]).rglob("*"))
+runner.close()
 print(json.dumps({"installed_tiktoken": installed, "blocked_explicit_requests": len(attempts)}))
 """
     environment = {
