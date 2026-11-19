@@ -24,7 +24,7 @@ events:
     payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, arguments: arguments}
   function_completed:
     kind: tool.call.completed
-    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, result: result}
+    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, result: result, success: success}
   function_failed:
     kind: tool.call.failed
-    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id}
+    payload: {tool_name: tool_name, tool_call_id: tool_call_id, native_run_id: run_id, app_operation_id: operation_id, success: success}

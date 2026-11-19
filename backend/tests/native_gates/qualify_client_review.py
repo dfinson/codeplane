@@ -11,6 +11,38 @@ from backend.tests.native_gates.qualify_runtime_integration import composed_runt
 from backend.tests.native_gates.qualify_runtime_integration import events_for
 
 
+@pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.parametrize("failure", [False, True])
+async def test_actual_local_function_emits_known_invocation_outcome(family, failure, composed_runtime):
+    host, approvals, _, create = composed_runtime
+    job = await create()
+    approve_requests(host, approvals)
+    calls = []
+
+    def body(value):
+        calls.append(value)
+        if failure:
+            raise ValueError("actual local function failure")
+        # A false business value does not mean that invocation itself failed.
+        return False
+
+    async with client_target(family, body) as producer:
+
+        async def invoke():
+            return await producer.target.call_function("local", {"value": "local-body"}, tool_call_id="actual-call")
+
+        task = await host.start_native(job.id, family=family, target=producer.target, invoke=invoke)
+        if failure:
+            with pytest.raises(ValueError, match="actual local function failure"):
+                await task
+        else:
+            assert await task is False
+        assert calls == ["local-body"] and producer.calls == []
+    events = await events_for(host, job.id)
+    outcomes = [event for event in events if event.kind in {"tool.call.completed", "tool.call.failed"}]
+    assert len(outcomes) == 1 and outcomes[0].payload["success"] is not failure
+
+
 @pytest.mark.parametrize("synchronous", [False, True])
 @pytest.mark.parametrize("failure", ["normalization", "observation"])
 async def test_sdk_return_survives_local_diagnostics_failure(synchronous, failure, composed_runtime, monkeypatch):
@@ -150,6 +182,13 @@ async def test_async_callable_object_runs_inside_the_real_governed_lifetime(mode
     else:
         assert len(receipts) == 1 and receipts[0].payload["started"] is True
         assert receipts[0].payload["succeeded"] is (mode == "positive")
+        observed = [
+            event
+            for event in await events_for(host, job.id)
+            if event.kind in {"tool.call.completed", "tool.call.failed"}
+        ]
+        assert len(observed) == 1
+        assert observed[0].payload.get("success") is (True if mode == "positive" else None)
     assert (await governance._ledger.job_totals(job.id)).executed_calls == int(mode != "deny")
 
 

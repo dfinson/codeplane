@@ -37,11 +37,13 @@ events:
   tool_completed:
     kind: tool.call.completed
     payload:
+      success: success
       tool_name: tool_name
       app_operation_id: operation_id
       result: result
   tool_failed:
     kind: tool.call.failed
     payload:
+      success: success
       tool_name: tool_name
       app_operation_id: operation_id

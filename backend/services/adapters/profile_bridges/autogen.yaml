@@ -29,6 +29,7 @@ events:
   tool_completed:
     kind: tool.call.completed
     payload:
+      success: success
       tool_name: tool_name
       tool_call_id: tool_call_id
       message_id: message_id
@@ -36,6 +37,7 @@ events:
   tool_failed:
     kind: tool.call.failed
     payload:
+      success: success
       tool_name: tool_name
       tool_call_id: tool_call_id
       message_id: message_id

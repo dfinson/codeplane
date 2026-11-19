@@ -216,7 +216,7 @@ class TelemetryQueryService:
                         activity=classify_tool_activity(tool_name, tool_args),
                         tool_category=_refine_tool_category(tool_name, tool_args),
                         duration_ms=float(span.get("duration_ms", 0)),
-                        success=attrs.get("success", True),
+                        success=attrs.get("success") if isinstance(attrs.get("success"), bool) else None,
                         offset_sec=float(span.get("started_at", 0)),
                         motivation_summary=span.get("motivation_summary"),
                         edit_motivations=edit_motivations,

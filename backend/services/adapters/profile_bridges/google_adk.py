@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 
 from backend.services.adapters.native_gates._optional import load_sdk
 from backend.services.adapters.native_gates.binding import (
@@ -58,6 +58,7 @@ def install(gate: GateAttachment, target: object) -> None:
     pending_models: dict[int, tuple[NativeCall, str]] = {}
     pending_runs: dict[str, tuple[NativeCall, str]] = {}
     failed_tools: WeakSet[Any] = WeakSet()
+    tool_outcomes: WeakKeyDictionary[Any, bool | None] = WeakKeyDictionary()
     denied = types.Content(role="model", parts=[types.Part(text="Denied by CodePlane")])
 
     def run_fingerprint(ctx: Any) -> str:
@@ -160,6 +161,7 @@ def install(gate: GateAttachment, target: object) -> None:
                     "run_id": tool_context.invocation_id,
                     "arguments": tool_args,
                     "result": result,
+                    "success": tool_outcomes.pop(tool_context, None),
                 }
             )
 
@@ -203,7 +205,7 @@ def install(gate: GateAttachment, target: object) -> None:
     gate.claim(runner.agent)
     gate.patch(runner.agent, "run_async", run)
     for tool in target.tools:
-        _tool(gate, tool, pending_tools, tool_fingerprint, failed_tools)
+        _tool(gate, tool, pending_tools, tool_fingerprint, failed_tools, tool_outcomes)
     for model in target.models:
         _model(gate, model, pending_models, model_fingerprint)
 
@@ -214,6 +216,7 @@ def _tool(
     pending: dict[int, tuple[NativeCall, str]],
     fingerprint: Any,
     failed: WeakSet[Any],
+    outcomes: WeakKeyDictionary[Any, bool | None],
 ) -> None:
     gate.claim(tool)
     gate.track_callable(tool, "func")
@@ -237,7 +240,7 @@ def _tool(
 
         async def invoke() -> Any:
             try:
-                return await original(args=args, tool_context=tool_context)
+                result = await original(args=args, tool_context=tool_context)
             except BaseException as exc:
                 failed.add(tool_context)
                 gate.binding.observe(
@@ -249,9 +252,12 @@ def _tool(
                         "arguments": args,
                         "error": str(exc),
                         "error_type": type(exc).__name__,
+                        "success": False if isinstance(exc, Exception) and call.evidence.started else None,
                     }
                 )
                 raise
+            outcomes[tool_context] = True if call.evidence.started else None
+            return result
 
         return await gate.complete(call, invoke)
 

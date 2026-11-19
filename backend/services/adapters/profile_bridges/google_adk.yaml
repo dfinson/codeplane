@@ -23,6 +23,7 @@ events:
   tool_observed:
     kind: tool.call.completed
     payload:
+      success: success
       tool_name: tool_name
       tool_call_id: tool_call_id
       arguments: arguments
@@ -30,6 +31,7 @@ events:
   tool_failed:
     kind: tool.call.failed
     payload:
+      success: success
       tool_name: tool_name
       tool_call_id: tool_call_id
       arguments: arguments
