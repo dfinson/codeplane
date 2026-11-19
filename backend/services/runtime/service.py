@@ -3003,7 +3003,7 @@ class RuntimeService:
             raise JobNotFoundError(f"Job {job_id} does not exist")
         if job.observation_only:
             raise StateConflictError("Observation-only history has no instruction channel")
-        if await self._native_executions.owns_job(job_id):
+        if job.source == JobSource.managed and await self._native_executions.owns_job(job_id):
             token = await self._execution_token(job)
             if token is None:
                 raise StateConflictError("Native input requires the exact currently owned runnable")
@@ -3154,7 +3154,7 @@ class RuntimeService:
             return await self.send_operator_message(job_id, message)
         if agent_session is None:
             job = await self._get_job(job_id)
-            if job is not None and await self._native_executions.owns_job(job_id):
+            if job is not None and job.source == JobSource.managed and await self._native_executions.owns_job(job_id):
                 raise StateConflictError("Native continuation requires its original caller-owned input boundary")
             if job is not None and job.source != JobSource.managed:
                 return await self.send_operator_message(job_id, message)

@@ -106,14 +106,17 @@ async def native_admission_stack(native_disk_factory, tmp_path, monkeypatch):
 
 
 class TestNativeOperatorAdmission:
-    async def test_admission_without_echo_survives_new_runtime_and_database_connection(self, native_admission_stack):
+    @pytest.mark.parametrize("entrypoint", ["send_operator_message", "send_message"])
+    async def test_admission_without_echo_survives_new_runtime_and_database_connection(
+        self, native_admission_stack, entrypoint
+    ):
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
         from backend.config import CPLConfig
         from backend.services.runtime import RuntimeService
 
         stack = native_admission_stack
-        assert await stack.runtime.send_operator_message(stack.job.id, "Inspect the fixture") is True
+        assert await getattr(stack.runtime, entrypoint)(stack.job.id, "Inspect the fixture") is True
         stack.post.assert_awaited_once_with(
             f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
             json={"content": "Inspect the fixture", "type": "user_message"},
