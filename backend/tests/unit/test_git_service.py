@@ -76,6 +76,8 @@ class TestRuntimeContract:
 class TestRecoveryWitness:
     @pytest.fixture
     async def recovery_repo(self, git_service, tmp_path):
+        tmp_path = tmp_path / "repository"
+        tmp_path.mkdir()
         await git_service.run_git("init", "--initial-branch=main", cwd=tmp_path)
         await git_service.run_git("config", "user.name", "Recovery fixture", cwd=tmp_path)
         await git_service.run_git("config", "user.email", "recovery@example.invalid", cwd=tmp_path)
@@ -216,6 +218,24 @@ class TestRecoveryWitness:
 
         monkeypatch.setattr(git_service, "_run_git", changed_after_git)
         assert await self.witness(git_service, recovery_repo, ["new.txt"]) is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX backslashes are literal filename characters")
+    async def test_separator_normalization_cannot_certify_different_native_bytes(self, git_service, recovery_repo):
+        root = recovery_repo
+        external = root.parent / "outside.txt"
+        external.write_text("valuable bytes outside this repository\n")
+        (root / "outside.txt").write_text("different retained workspace bytes\n")
+        (root / "a" / "b").mkdir(parents=True)
+        (root / r"a\b").mkdir()
+        await git_service.run_git("add", "outside.txt", cwd=root)
+        await git_service.commit(
+            "test: retain distinct bytes\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=root,
+        )
+        declared = r"a\b/../../outside.txt"
+        assert (root / declared).resolve() == external
+        assert (root / declared).read_bytes() == external.read_bytes()
+        assert await self.witness(git_service, root, [declared]) is None
 
 
 class TestIsRemoteUrl:

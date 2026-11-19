@@ -251,6 +251,8 @@ class GitService:
             remaining_bytes = max_input_bytes - sum(len(path.encode("utf-8")) for path in paths)
             if not paths or remaining_bytes < 0:
                 return unavailable("missing_or_oversized_target_set")
+            if os.name != "nt" and any("\\" in path for path in paths):
+                return unavailable("ambiguous_posix_target")
             async with asyncio.timeout_at(deadline):
                 supplied_root = Path(cwd).absolute()
                 root = supplied_root.resolve(strict=True)

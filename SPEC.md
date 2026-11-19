@@ -428,7 +428,7 @@ writes, read-only Git inspection binds the complete declared target, current
 unfiltered bytes and retained HEAD commit. SDK path hints alone cannot establish
 that target set, which must match the immutable native arguments. A known new target instead binds
 absence in both the worktree and commit. Existing bytes absent from that commit,
-ignored new targets, symlinks, hard links, partial repositories and opaque target sets do
+ignored new targets, symlinks, hard links, ambiguous host paths, partial repositories and opaque target sets do
 not acquire a recovery witness. Inspection uses the existing 20-second decision
 and 32-KiB input bounds, without filters, snapshots, index or object/ref writes.
 The witness is included in the action binding and audit metadata and rechecked
