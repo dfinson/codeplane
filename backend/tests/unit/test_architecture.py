@@ -26,6 +26,7 @@ ALLOWED_EVENT_REPO_CONSUMERS = {
     # --- Durable control receipts and their recovery owners ---
     "backend/persistence/execution_admission_repo.py",
     "backend/persistence/execution_contract_repo.py",
+    "backend/persistence/external_gate_repo.py",  # durable external gate control receipts and recovery
     "backend/persistence/governance_provider_repo.py",  # validates retained accounting source receipts
     "backend/persistence/integration_repo.py",
     "backend/persistence/native_execution_repo.py",  # durable native receipts and recovery
