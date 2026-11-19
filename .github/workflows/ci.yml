@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       windows_recipe_qualification:
-        description: Run native Windows containment, audit, VAPID, and source ownership/watch cases
+        description: Run native Windows containment, audit, VAPID, source ownership/watch, and Story subprocess cases
         type: boolean
         default: false
   push:
@@ -170,11 +170,125 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Native Windows recipe qualification: $revision"
           Add-Content -Path $env:GITHUB_ENV -Value "CODEPLANE_HOME=$env:RUNNER_TEMP/codeplane-recipe-qualification"
           uv --version
-      - name: Run real owned-process tests serially
+      - name: Install default-core dependencies
         shell: pwsh
         run: |
           uv sync --no-default-groups
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Capture verified public wheels for the installed Windows core
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          $corePython = uv run --no-sync python -c "import sys; print(sys.executable)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import tomllib
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+          from urllib.request import HTTPRedirectHandler, build_opener
+          from packaging.tags import sys_tags
+          from packaging.utils import canonicalize_name, parse_wheel_filename
+
+          assert sys.platform == "win32", sys.platform
+          root = Path.cwd()
+          lock_bytes = (root / "uv.lock").read_bytes()
+          lock = tomllib.loads(lock_bytes.decode())
+          project = canonicalize_name(tomllib.loads((root / "pyproject.toml").read_text())["project"]["name"])
+          tags = {tag: index for index, tag in enumerate(sys_tags())}
+          output = Path(os.environ["RUNNER_TEMP"]) / "codeplane-core-wheelhouse"
+          output.mkdir(exist_ok=False)
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise ValueError("Public wheel capture does not follow redirects")
+
+          client = build_opener(NoRedirect())
+          core = json.loads(subprocess.check_output([sys.argv[1], "-c", """
+          import importlib.metadata as metadata
+          import json, sys
+          print(json.dumps({
+              "python": sys.version, "platform": sys.platform,
+              "packages": [
+                  {"name": dist.metadata["Name"], "version": dist.version,
+                   "editable": json.loads(dist.read_text("direct_url.json") or "{}").get("dir_info", {}).get("editable", False)}
+                  for dist in metadata.distributions()
+              ],
+          }))
+          """], text=True))
+          assert core["python"] == sys.version and core["platform"] == sys.platform
+          manifest = {
+              "format": "codeplane-installed-core-wheels-v1",
+              "source_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+              "python": sys.version,
+              "platform": sys.platform,
+              "packages": [],
+          }
+          installed = {}
+          for dist in core["packages"]:
+              name = canonicalize_name(dist["name"])
+              if name == project or dist["editable"]:
+                  continue
+              assert name not in installed or installed[name] == dist["version"], f"Conflicting installed versions: {name}"
+              installed[name] = dist["version"]
+
+          for name, version in sorted(installed.items()):
+              candidates = []
+              for package in lock["package"]:
+                  if canonicalize_name(package["name"]) != name or package["version"] != version:
+                      continue
+                  for wheel in package.get("wheels", []):
+                      url = urlsplit(wheel["url"])
+                      assert url.scheme == "https" and url.netloc == "files.pythonhosted.org", wheel["url"]
+                      assert not url.query and not url.fragment, wheel["url"]
+                      filename = unquote(url.path.rsplit("/", 1)[-1])
+                      assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*\.whl", filename), filename
+                      wheel_name, wheel_version, _, wheel_tags = parse_wheel_filename(filename)
+                      assert wheel_name == name and str(wheel_version) == version, filename
+                      supported = [tags[tag] for tag in wheel_tags if tag in tags]
+                      if supported:
+                          candidates.append((min(supported), filename, wheel))
+              assert candidates, f"No locked compatible public wheel for installed {name}=={version}"
+              _, filename, wheel = min(candidates, key=lambda item: (item[0], item[1]))
+              assert re.fullmatch(r"sha256:[0-9a-f]{64}", wheel["hash"]), filename
+              expected = wheel["hash"].split(":", 1)[1]
+              size = wheel["size"]
+              assert type(size) is int and size > 0, filename
+              digest, received = hashlib.sha256(), 0
+              target = output / filename
+              with client.open(wheel["url"], timeout=30) as response, target.open("xb") as destination:
+                  assert response.status == 200 and response.geturl() == wheel["url"], filename
+                  while chunk := response.read(1024 * 1024):
+                      received += len(chunk)
+                      assert received <= size, f"Wheel exceeds locked size: {filename}"
+                      digest.update(chunk)
+                      destination.write(chunk)
+              assert received == size and digest.hexdigest() == expected, f"Wheel integrity mismatch: {filename}"
+              manifest["packages"].append({
+                  "name": name, "version": version, "filename": filename, "url": wheel["url"],
+                  "size": received, "sha256": digest.hexdigest(),
+              })
+          assert manifest["packages"], "No installed core packages were captured"
+          (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          print(f"Verified {len(manifest['packages'])} exact installed core wheels against uv.lock")
+          '@ | uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python - "$corePython"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload verified installed-core wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-core-wheels-${{ github.sha }}
+          path: ${{ runner.temp }}/codeplane-core-wheelhouse/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Run real owned-process tests serially
+        shell: pwsh
+        run: |
           uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -q backend/tests/unit/test_recipe_windows_process.py -k native_windows_child --junitxml=recipe-windows-results.xml --tb=short
       - name: Require both native cases without skips
         run: >-
@@ -236,6 +350,39 @@ jobs:
           print("\n".join(f"{module}::{name}" for module, name in sorted(actual)))
           '@ | uv run --no-project python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify native Windows Story tokenizer process cleanup
+        shell: pwsh
+        run: |
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -c "import importlib.util, sys; assert sys.platform == 'win32', sys.platform; assert importlib.util.find_spec('tiktoken') is None, 'Story qualification requires the default core without optional tokenizer packages'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-sync --with "pytest>=8,<9" --with "pytest-asyncio>=0.24,<1" --with "pytest-timeout>=2.4,<3" python -m pytest -v backend/tests/unit/test_story_tokenizer_import.py --timeout=60 --junitxml=story-tokenizer-windows-results.xml --tb=short
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Require all exact Story cases without skips or errors
+        shell: pwsh
+        run: |
+          @'
+          from xml.etree import ElementTree as E
+          root = E.parse("story-tokenizer-windows-results.xml")
+          cases = root.findall(".//testcase")
+          module = "backend.tests.unit.test_story_tokenizer_import"
+          expected = {(module, name) for name in (
+              "test_populated_story_drain_does_not_stall_http_or_shutdown",
+              "test_story_tokenizer_deadline_is_explicit_and_reaps_worker[False]",
+              "test_story_tokenizer_deadline_is_explicit_and_reaps_worker[True]",
+              "test_loader_error_remains_explicit_without_estimated_story",
+              "test_overlapping_story_counts_keep_one_owned_worker_through_repeated_cancellation",
+              "test_missing_optional_tokenizer_still_uses_logged_estimate_without_worker",
+              "test_cold_cache_story_and_lifespan_imports_do_not_load_encoding",
+          )}
+          actual = {(case.get("classname"), case.get("name")) for case in cases}
+          assert len(cases) == len(expected) == 7, (len(cases), len(expected))
+          assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+          assert all(case.find(tag) is None for case in cases for tag in ("skipped", "failure", "error"))
+          assert all(int(suite.get(tag, "0")) == 0 for suite in root.findall(".//testsuite") for tag in ("skipped", "failures", "errors"))
+          print("All 7 exact Story subprocess cases passed without skips, failures, or errors:")
+          print("\n".join(f"{module}::{name}" for module, name in sorted(actual)))
+          '@ | uv run --no-project python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -245,5 +392,6 @@ jobs:
             audit-windows-results.xml
             vapid-windows-results.xml
             native-source-windows-results.xml
+            story-tokenizer-windows-results.xml
           if-no-files-found: warn
           retention-days: 14
