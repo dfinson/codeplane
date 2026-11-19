@@ -47,11 +47,14 @@ evidence. Historical re-enrichment rebuilds structural tool display and duration
 with application-owned pairing. It does not rewrite raw payloads, reclassify
 risk, regenerate titles or invoke a model.
 
-Preset and MCP settings remain current controls. Old batching, blanket TF
-trust and configurable TF spend overrides are not final-runtime permissions.
-Stored historical values remain exportable for transition recovery. The
-settings UI shows the unchanged standalone thresholds and distinguishes
-verified USD from native usage units and unavailable currency.
+Preset, MCP, approval batching and configured spend overrides remain
+application-owned controls. Verified-USD warning/escalation lines preserve
+zero and null and do not become security hard gates. Full approval applies
+only to immutable displayed batch membership. Partial approval grants no
+routine waiver. Explicit Job trust and full eligible approvals can issue
+24-hour Job/policy/configuration/reason grants without reinterpreting historical
+TF grants. The UI distinguishes verified USD, native units, estimates and
+unavailable currency.
 
 Final-wheel absence, registered-profile, history/checkpoint/readback, policy,
 latency and actual enabled-provider evidence must be bound to the final source.

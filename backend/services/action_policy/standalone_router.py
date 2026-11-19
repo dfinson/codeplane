@@ -75,23 +75,21 @@ class StandalonePolicyRouter:
 
     async def trust_job(self) -> bool:
         selected = self._policy
-        if self._closed or not await self._job_is_current(self.pin.job_id, "codeplane.command"):
-            return False
-        await self._authority.trust_job(self.pin, selected, self.execution_epoch)
-        if self._closed or self._policy is not selected:
+
+        async def current() -> bool:
+            return (
+                not self._closed
+                and self._policy is selected
+                and await self._job_is_current(self.pin.job_id, "codeplane.command")
+                and not self._closed
+                and self._policy is selected
+            )
+
+        issued = await self._authority.trust_job(self.pin, selected, self.execution_epoch, is_current=current)
+        if issued is None:
             return False
         if self._batcher is not None:
-            from backend.services.action_policy.batcher import BatchResolution
-
-            for batch in self._batcher.get_pending_batches(self.pin.job_id):
-                self._batcher.resolve_batch(batch.id, BatchResolution.approved)
-                await self._events.publish(
-                    new_event(
-                        self.pin.job_id,
-                        EventKind.batch_approval_resolved,
-                        {"batch_id": batch.id, "resolution": "approved"},
-                    )
-                )
+            self._batcher.resolve_trusted_job(self.pin.job_id, self._authority.policy_scope(self.pin, selected), issued)
         return True
 
     async def authorize_permission(self, invocation: PermissionInvocation) -> bool:
@@ -319,7 +317,14 @@ class StandalonePolicyRouter:
                 metadata=metadata,
             )
         )
-        return authorized.proceed and await recovery_current(recovery_deadline) and await current()
+
+        async def consume_current() -> bool:
+            return await recovery_current(recovery_deadline) and await current()
+
+        if not authorized.proceed or not await consume_current():
+            return False
+        committed = await self._authority.commit_authorization(authorized, is_current=consume_current)
+        return committed and not self._closed and self._policy is selected_policy and authorized.grants_current()
 
     async def route(self, action: object, *, cwd: str | None = None) -> None:
         raise StateConflictError("Standalone invocation requires exact execution ownership and immutable tool inputs")

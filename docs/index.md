@@ -121,7 +121,7 @@ Not a transcript — a structured intent graph. Each action is recorded as a tra
 
 <div class="feature-card" markdown>
 ### :material-lock-check: Action Policy Engine
-The agent SDKs give binary allow/deny. CodePlane adds bound per-action decisions, protected-path gates, recovery witnesses and verified-USD thresholds. Historical TF grants and overrides remain preserved data, not final-runtime waivers.
+The agent SDKs give binary allow/deny. CodePlane adds bound decisions, protected-path gates, recovery witnesses, configured soft verified-USD controls and immutable approval batches. Routine grants are scoped to the Job, policy and reason for 24 hours. Historical TF grants remain preserved data, not silently converted waivers.
 </div>
 
 <div class="feature-card" markdown>

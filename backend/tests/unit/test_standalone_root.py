@@ -268,13 +268,17 @@ async def test_persisted_spend_controls_reload_into_actual_root_and_bound_monito
     assert contexts[0].execution_contract == host._job_contract_pins["job-1"]
 
 
-async def test_routine_batch_preserves_runtime_waiting_state_and_durable_resolution(recovery_runtime, session_factory):
+@pytest.mark.parametrize("cancel_issuance", [False, True])
+async def test_routine_batch_preserves_runtime_waiting_state_and_durable_resolution(
+    recovery_runtime, session_factory, monkeypatch, cancel_issuance
+):
     from backend.persistence.policy_repo import PolicyRepository
     from backend.tests.unit.test_policy_authority import _verified_spend
 
     host, root, adapter, approvals, _, workspace = recovery_runtime
     async with session_factory() as session:
         await PolicyRepository(session).set_usd_ceilings({"locked": {"warn_usd": None, "ceiling_usd": 0}})
+        await PolicyRepository(session).update_config(batch_window_seconds=0.5)
         await session.commit()
     await _verified_spend(root._ledger)
     config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
@@ -293,30 +297,179 @@ async def test_routine_batch_preserves_runtime_waiting_state_and_durable_resolut
         )
     )
     waiting = asyncio.Event()
+    displayed = asyncio.Event()
 
     async def observe(event):
         if event.kind == EventKind.approval_requested:
             waiting.set()
+        if event.kind == EventKind.batch_approval_requested:
+            displayed.set()
 
     host._event_bus.subscribe(observe)
     handler = None
+    release = None
     try:
         event = await asyncio.wait_for(adapter._queues["batch-session"].get(), 2)
         assert event.kind == EventKind.approval_requested
         handler = asyncio.create_task(host._handle_approval_request("job-1", event, "Rejected fixture"))
         await asyncio.wait_for(waiting.wait(), 2)
         assert (await host._get_job("job-1")).state == JobState.waiting_for_approval
+        await asyncio.wait_for(displayed.wait(), 2)
         (batch,) = host._policy_batchers["job-1"].get_pending_batches("job-1")
+        if cancel_issuance:
+            from backend.tests.unit.test_governance_ledger import pause_grant_write
+
+            entered, release = pause_grant_write(monkeypatch, root._ledger)
         assert await host.resolve_policy_batch("job-1", batch.id, "approved")
         assert await asyncio.wait_for(handler, 2) == ApprovalResolution.approved
-        assert await asyncio.wait_for(pending, 2) == PermissionDecision.allow
+        if cancel_issuance:
+            await asyncio.wait_for(entered.wait(), 2)
+            pending.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            router = host._policy_routers["job-1"]
+            assert not await root._ledger.active_reason_grants(
+                "job-1", router._authority.policy_scope(router.pin, router._policy)
+            )
+        else:
+            assert await asyncio.wait_for(pending, 2) == PermissionDecision.allow
         assert not await approvals.list_pending("job-1")
         assert (await host._get_job("job-1")).state == JobState.running
     finally:
+        if release is not None:
+            release.set()
         pending.cancel()
         if handler is not None:
             handler.cancel()
         await asyncio.gather(pending, *([handler] if handler is not None else []), return_exceptions=True)
+
+
+@pytest.mark.parametrize("scenario", ["late_manifest", "other_workspace", "prior_execution", "prior_decision"])
+async def test_monitor_uses_only_pre_execution_workspace_baseline(recovery_runtime, session_factory, scenario):
+    from backend.models.events import new_event
+    from backend.persistence.database import serialized_write
+    from backend.services.action_policy.classifier import Action, ActionKind, Classification, RecommendedAction
+    from backend.services.action_policy.monitor import MonitorVerdict
+
+    host, root, adapter, _, _, workspace = recovery_runtime
+    package = workspace / "package.json"
+    if scenario != "late_manifest":
+        package.write_text(json.dumps({"dependencies": {"fixturelib": "1"}}))
+    if scenario == "prior_execution":
+        async with serialized_write(session_factory) as session:
+            await EventRepository(session).append(
+                new_event("job-1", EventKind.tool_call_started, {"tool_name": "write"})
+            )
+    if scenario == "prior_decision":
+        await root._ledger.enqueue_decision(
+            decision_id="prior-permission",
+            job_id="job-1",
+            epoch=host.execution_epoch,
+            action_digest="prior-bound-action",
+            decision="allow",
+            metadata={"reason_code": "known_read"},
+        )
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace))
+    adapter.complete = AsyncMock(
+        return_value=CompletionResult(text="escalate", model=host._config.runtime.utility_model)
+    )
+    router = host._policy_routers["job-1"]
+    classification = Classification(
+        RecommendedAction.ESCALATE, "external_mutation", None, "unknown", "mutating", "shell", "Review dependency"
+    )
+    action = Action(ActionKind.shell, command="uv add fixturelib", job_id="job-1", workspace_path=str(workspace))
+    assert router._monitor is not None
+    if scenario == "late_manifest":
+        package.write_text(json.dumps({"dependencies": {"fixturelib": "1"}}))
+    elif scenario == "other_workspace":
+        assert (await router._monitor(action, classification))[0] == MonitorVerdict.approve
+        adapter.complete.assert_not_awaited()
+        other = workspace.parent / "other-workspace"
+        other.mkdir()
+        from dataclasses import replace
+
+        action = replace(action, workspace_path=str(other))
+    verdict, _ = await router._monitor(action, classification)
+    assert verdict == MonitorVerdict.escalate
+    adapter.complete.assert_awaited_once()
+
+
+@pytest.mark.parametrize("change", ["closed", "reloaded", "canceled"])
+async def test_operator_grant_issuance_cannot_outlive_router_fence(recovery_runtime, monkeypatch, change):
+    from backend.tests.unit.test_governance_ledger import pause_grant_write
+
+    host, root, _, _, _, workspace = recovery_runtime
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace))
+    router = host._policy_routers["job-1"]
+    scope = router._authority.policy_scope(router.pin, router._policy)
+    entered, release = pause_grant_write(monkeypatch, root._ledger)
+    task = asyncio.create_task(router.trust_job())
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if change == "closed":
+            router.cleanup_job("job-1")
+        elif change == "reloaded":
+            router.update_policy(RepoPolicy(preset=Preset.locked))
+        else:
+            task.cancel()
+        release.set()
+        if change == "canceled":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert not await task
+        assert not await root._ledger.active_reason_grants("job-1", scope)
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_used_grant_expiring_after_classification_publication_is_rejected(
+    recovery_runtime, session_factory, monkeypatch
+):
+    from datetime import timedelta
+
+    from backend.persistence.policy_repo import PolicyRepository
+    from backend.tests.unit.test_policy_authority import _verified_spend, grant_clock
+
+    host, root, adapter, _, _, workspace = recovery_runtime
+    clock = grant_clock(monkeypatch)
+    async with session_factory() as session:
+        await PolicyRepository(session).set_usd_ceilings({"supervised": {"warn_usd": None, "ceiling_usd": 0}})
+        await session.commit()
+    await _verified_spend(root._ledger)
+    config = SessionConfig(workspace_path=str(workspace), prompt="", job_id="job-1")
+    await host._setup_action_policy("job-1", config, str(workspace))
+    router = host._policy_routers["job-1"]
+    await root._ledger.grant_reasons(
+        "job-1",
+        router._authority.policy_scope(router.pin, router._policy),
+        frozenset({"cp_usd_ceiling"}),
+        epoch=host.execution_epoch,
+        source_id="ceiling",
+    )
+    adapter.set_job_id("expiry-session", "job-1")
+    adapter.set_session_metadata("expiry-session", config)
+
+    async def expire(event):
+        if event.kind == EventKind.action_classified:
+            clock[0] += timedelta(days=2)
+            await asyncio.sleep(0)
+
+    host._event_bus.subscribe(expire)
+    result = await adapter._evaluate_permission(
+        "expiry-session",
+        "job-1",
+        invocation_permission_request(str(workspace), "view", {"path": "source.txt"}),
+        tool_name="view",
+        tool_input={"path": "source.txt"},
+        tool_call_id="read",
+    )
+    assert result == PermissionDecision.deny
 
 
 @pytest.mark.parametrize(

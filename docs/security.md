@@ -100,6 +100,15 @@ CodePlane's standalone AGT policy combines strict assessment with local constrai
 
 **Settings → Policy** selects presets, approval batching and verified-USD warning/escalation overrides. Zero is an active threshold and null disables a line. Spend guards are soft, not security hard gates. Routine approval grants last 24 hours within the same Job, policy configuration and reason. Hard gates and incomplete evidence always require individual approval and cannot be waived.
 
+Published batch IDs identify immutable action membership. Later arrivals form a
+new batch, and partial approval releases only its selected actions. Explicit
+Job trust is a separate intent. Grant issuance is fenced through durable writes
+and cancellation cleanup without replacing an earlier valid grant. Only grants
+actually used by a decision are checked for expiry at final consumption.
+Monitor structural approval uses a workspace-bound pre-execution snapshot.
+Lazy or resumed context without that baseline falls back to monitor/human review,
+never a newly invented "pre-existing" dependency.
+
 ### Authorization Model
 
 CodePlane is a **single-user, local-first application**. All authenticated requests have full access to all jobs and resources — there is no per-job ownership or role-based access control.

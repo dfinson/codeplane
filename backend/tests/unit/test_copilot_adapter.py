@@ -1274,7 +1274,7 @@ class TestEventTelemetry:
             "output_tokens": 50,
             "cache_read_tokens": 10,
             "cache_write_tokens": 5,
-            "cost_usd": 0.002,
+            "copilot_cost_unit": 0.002,
             "duration_ms": 1500.0,
             "is_subagent": False,
             "advance_turn": True,
@@ -2513,7 +2513,8 @@ class TestScoutAccounting:
         assert event.payload["model"] == "gpt-4o-mini"
         assert event.payload["input_tokens"] == 120
         assert event.payload["output_tokens"] == 30
-        assert event.payload["cost_usd"] == pytest.approx(0.0015)
+        assert event.payload["copilot_cost_unit"] == pytest.approx(0.0015)
+        assert "cost_usd" not in event.payload
         assert adapter.get_session_kind(scout_id) == "preflight"
 
         usage.model = "primary-heavy-model"

@@ -17,6 +17,7 @@ import re
 import shlex
 import time
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -146,12 +147,17 @@ class MonitorSession:
         repo: str | None,
         completer: LightweightCompleter,
         trail_repo: TrailNodeRepository,
+        baseline: ProjectContext | None = None,
     ) -> None:
         self._job_id = job_id
         self._job_prompt = job_prompt
         self._completer = completer
         self._trail_repo = trail_repo
-        self._context = ProjectContext(worktree, repo)
+        self._context = (
+            baseline
+            if baseline is not None and baseline.matches_initial_workspace(worktree)
+            else ProjectContext(worktree, repo)
+        )
         self._context_lock = asyncio.Lock()
         # LLM rate limiter: track timestamps of recent LLM calls
         self._llm_call_times: list[float] = []
@@ -182,7 +188,9 @@ class MonitorSession:
         action: Action,
         classification: Classification,
     ) -> tuple[MonitorVerdict, str]:
-        # Ensure project context is built (under lock to avoid concurrent rebuild)
+        if not action.workspace_path or Path(action.workspace_path).resolve() != Path(self._context.worktree).resolve():
+            return MonitorVerdict.escalate, "Monitor context does not belong to this action workspace"
+        # Current files inform the model, never a new trusted initial snapshot.
         async with self._context_lock:
             if not self._context.built:
                 await self._context.build()

@@ -1376,7 +1376,8 @@ class RuntimeService:
         pin = self._recipe_contract_pins.get(job_id) or self._job_contract_pins.get(job_id)
         if pin is None:
             raise StateConflictError("Standalone policy requires the exact durable admission contract")
-        router = self._standalone_governance.for_job(pin, policy)
+        baseline = await self._standalone_governance.prepare_monitor_baseline(pin, worktree_path)
+        router = self._standalone_governance.for_job(pin, policy, monitor_baseline=baseline)
         adapter = self._resolve_adapter(config.sdk)
         adapter.set_policy_router(router, policy, job_id, worktree_path or "")  # type: ignore[attr-defined]
         if self._preflight_curator is not None and self._preflight_curator.adapter is not adapter:
@@ -3130,13 +3131,9 @@ class RuntimeService:
                     session_id=job_id,
                     timestamp=datetime.now(UTC),
                     kind=EventKind.batch_approval_resolved,
-                    payload={
-                        "batch_id": batch_id,
-                        "resolution": resolution,
-                    },
+                    payload={"batch_id": batch_id, "resolution": resolution},
                 )
             )
-
         return bool(resolved)
 
     async def trust_job_policy(self, job_id: str) -> bool:

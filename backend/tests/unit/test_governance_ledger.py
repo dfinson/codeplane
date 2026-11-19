@@ -10,6 +10,80 @@ from backend.models.usage import UsageAmount
 from backend.persistence.governance_repo import GovernanceLedger
 
 
+def pause_grant_write(monkeypatch, ledger):
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = ledger._io
+
+    async def paused(operation, *arguments):
+        result = await original(operation, *arguments)
+        if operation.__qualname__.endswith("grant_reasons.<locals>.write") and not entered.is_set():
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(ledger, "_io", paused)
+    return entered, release
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_failed_grant_issuance_preserves_prior_and_concurrent_same_source_grants(tmp_path, monkeypatch, cancel):
+    ledger = GovernanceLedger(tmp_path / "governance.db", application_database=tmp_path / "data.db")
+    await ledger.initialize()
+    await ledger.grant_reasons("job", "policy", frozenset({"cp_usd_ceiling"}), epoch="epoch", source_id="same-source")
+    before = await ledger.reason_grants("job", "policy")
+    entered, release = pause_grant_write(monkeypatch, ledger)
+    alive = True
+
+    async def current():
+        return alive
+
+    task = asyncio.create_task(
+        ledger.grant_reasons(
+            "job",
+            "policy",
+            frozenset({"cp_usd_ceiling", "external_mutation"}),
+            epoch="epoch",
+            source_id="same-source",
+            is_current=current,
+        )
+    )
+    sibling = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        reader = asyncio.create_task(ledger.reason_grants("job", "policy"))
+        await asyncio.sleep(0)
+        assert not reader.done(), "An unconfirmed issuance must not be observable"
+        sibling = asyncio.create_task(
+            ledger.grant_reasons(
+                "job",
+                "policy",
+                frozenset({"budget_pressure"}),
+                epoch="epoch",
+                source_id="same-source",
+            )
+        )
+        alive = False
+        if cancel:
+            task.cancel()
+        release.set()
+        if cancel:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert await task is None
+        await sibling
+        await reader
+        after = await ledger.reason_grants("job", "policy")
+        assert set(after) == {"cp_usd_ceiling", "budget_pressure"}
+        assert after["cp_usd_ceiling"] == before["cp_usd_ceiling"]
+        assert after["budget_pressure"].issuance_id != after["cp_usd_ceiling"].issuance_id
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, *([sibling] if sibling is not None else []), return_exceptions=True)
+        await ledger.close()
+
+
 async def test_reason_grants_preserve_job_policy_scope_and_24_hour_expiry_across_restart(tmp_path):
     from datetime import UTC, datetime, timedelta
 
@@ -24,12 +98,13 @@ async def test_reason_grants_preserve_job_policy_scope_and_24_hour_expiry_across
         assert not await restored.active_reason_grants("other-job", "policy")
         assert not await restored.active_reason_grants("job", "changed-policy")
         with restored._connect() as connection:
-            row = connection.execute("SELECT created_at,expires_at FROM cp_reason_grants").fetchone()
+            row = connection.execute("SELECT created_at,expires_at FROM cp_reason_grant_issuances").fetchone()
             assert datetime.fromisoformat(row["expires_at"]) - datetime.fromisoformat(row["created_at"]) == timedelta(
                 hours=24
             )
             connection.execute(
-                "UPDATE cp_reason_grants SET expires_at=?", ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(),)
+                "UPDATE cp_reason_grant_issuances SET expires_at=?",
+                ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(),),
             )
         assert not await restored.active_reason_grants("job", "policy")
     finally:

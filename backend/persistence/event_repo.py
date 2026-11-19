@@ -41,6 +41,12 @@ class EventRepository(BaseRepository):
     RuntimeTelemetry (log lines). All other services must use
     TrailNodeRepository projections. See internal-docs/design/unified-trail-service.md §6."""
 
+    async def has_any_kind(self, job_id: str, kinds: tuple[str, ...]) -> bool:
+        result = await self._session.execute(
+            select(EventRow.id).where(EventRow.job_id == job_id, EventRow.kind.in_(kinds)).limit(1)
+        )
+        return result.first() is not None
+
     @staticmethod
     def _to_domain(row: EventRow) -> SessionEvent:
         raw_md = row.event_metadata

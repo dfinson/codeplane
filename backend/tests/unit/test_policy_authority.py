@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.models.domain import ApprovalResolution
-from backend.models.events import EventKind
+from backend.models.events import EventKind, SessionEvent
 from backend.models.execution_contracts import ExecutionContract, ImplementationPin
 from backend.persistence.execution_contract_repo import ExecutionContractRepository
 from backend.persistence.governance_repo import GovernanceLedger
@@ -276,7 +277,7 @@ async def test_batch_selects_exact_actions_and_only_full_approval_grants_a_reaso
         )
         results = await asyncio.wait_for(asyncio.gather(*pending), 2)
         for result in results:
-            assert result.proceed is (
+            assert await authority.commit_authorization(result, is_current=current) is (
                 resolution == "approved" or resolution == "partial" and result.decision_id == first_id
             )
         grants = await ledger.active_reason_grants("job-1", authority.policy_scope(pin, settings))
@@ -301,7 +302,7 @@ async def test_grants_and_monitor_cannot_bypass_individual_or_locked_routes(tmp_
 
     authority, pin, ledger, _, approvals, events, _ = await _services(tmp_path, session_factory)
     settings = RepoPolicy(preset=Preset.locked if reason == "locked" else Preset.supervised)
-    await authority.trust_job(pin, settings, "epoch")
+    await authority.trust_job(pin, settings, "epoch", is_current=AsyncMock(return_value=True))
     args = _read_arguments(pin, settings)
     if reason == "locked":
         # A new spend override is not covered by the old policy-scope grant.
@@ -330,4 +331,160 @@ async def test_grants_and_monitor_cannot_bypass_individual_or_locked_routes(tmp_
     finally:
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
+        await ledger.close()
+
+
+async def test_full_batch_approval_never_releases_or_grants_an_unseen_later_member(tmp_path, session_factory):
+    from backend.services.action_policy.batcher import ApprovalBatcher, BatchResolution
+
+    authority, pin, ledger, _, _, events, _ = await _services(tmp_path, session_factory)
+    await _verified_spend(ledger)
+    settings = RepoPolicy(usd_ceilings={"supervised": (None, 0)})
+    batcher = ApprovalBatcher(events, batch_window_seconds=0.01)
+    displayed: asyncio.Queue[SessionEvent] = asyncio.Queue()
+
+    async def observe(event):
+        if event.kind == EventKind.batch_approval_requested:
+            await displayed.put(event)
+
+    events.subscribe(observe)
+    first = asyncio.create_task(authority.authorize(**_read_arguments(pin, settings), batcher=batcher))
+    later = None
+    try:
+        event = await asyncio.wait_for(displayed.get(), 2)
+        assert [row["reasonCode"] for row in event.payload["actions"]] == ["cp_usd_ceiling"]
+        batcher.set_batch_window(30)
+        with ledger._connect() as connection:
+            connection.execute("INSERT INTO cp_governance_totals VALUES('job-1','epoch',750,0)")
+        later = asyncio.create_task(authority.authorize(**_read_arguments(pin, settings), batcher=batcher))
+        async with asyncio.timeout(2):
+            while len(batcher.get_pending_batches("job-1")) != 2:
+                await asyncio.sleep(0)
+        hidden = next(batch for batch in batcher.get_pending_batches("job-1") if batch.id != event.payload["batch_id"])
+        assert hidden.displayed is None
+        assert not batcher.resolve_batch(hidden.id, BatchResolution.approved)
+        assert batcher.resolve_batch(event.payload["batch_id"], BatchResolution.approved)
+        authorization = await asyncio.wait_for(first, 2)
+        assert await authority.commit_authorization(authorization, is_current=AsyncMock(return_value=True))
+        assert not later.done()
+        assert await ledger.active_reason_grants("job-1", authority.policy_scope(pin, settings)) == {"cp_usd_ceiling"}
+        assert len(event.payload["actions"]) == 1
+    finally:
+        first.cancel()
+        if later is not None:
+            later.cancel()
+        await asyncio.gather(first, *([later] if later is not None else []), return_exceptions=True)
+        batcher.cleanup_job("job-1")
+        await ledger.close()
+
+
+@pytest.mark.parametrize("expire", [False, True])
+async def test_explicit_job_trust_is_distinct_from_unpublished_full_batch_approval(
+    tmp_path, session_factory, monkeypatch, expire
+):
+    from backend.services.action_policy.batcher import ApprovalBatcher, BatchResolution
+
+    authority, pin, ledger, _, _, events, _ = await _services(tmp_path, session_factory)
+    clock = grant_clock(monkeypatch)
+    await _verified_spend(ledger)
+    settings = RepoPolicy(usd_ceilings={"supervised": (None, 0)})
+    batcher = ApprovalBatcher(events, batch_window_seconds=30)
+    pending = asyncio.create_task(authority.authorize(**_read_arguments(pin, settings), batcher=batcher))
+    try:
+        async with asyncio.timeout(2):
+            while not batcher.get_pending_batches("job-1"):
+                await asyncio.sleep(0)
+        (batch,) = batcher.get_pending_batches("job-1")
+        assert batch.displayed is None
+        assert not batcher.resolve_batch(batch.id, BatchResolution.approved)
+        issuance = await authority.trust_job(pin, settings, "epoch", is_current=AsyncMock(return_value=True))
+        assert issuance is not None
+        batcher.resolve_trusted_job("job-1", authority.policy_scope(pin, settings), issuance)
+        if expire:
+            clock[0] += timedelta(days=2)
+        result = await asyncio.wait_for(pending, 2)
+        assert await authority.commit_authorization(result, is_current=AsyncMock(return_value=True)) is not expire
+        assert result.grant_reason is None, "Trust consumption must not renew itself as a full human approval"
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        batcher.cleanup_job("job-1")
+        await ledger.close()
+
+
+def grant_clock(monkeypatch):
+    clock = [datetime.now(UTC)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0]
+
+    monkeypatch.setattr("backend.persistence.governance_repo.datetime", Clock)
+    return clock
+
+
+async def test_unused_grant_expiry_does_not_invalidate_indefinite_explicit_approval(
+    tmp_path, session_factory, monkeypatch
+):
+    from dataclasses import replace
+
+    authority, pin, ledger, _, approvals, events, _ = await _services(tmp_path, session_factory)
+    clock = grant_clock(monkeypatch)
+    settings = RepoPolicy()
+    await ledger.grant_reasons(
+        "job-1",
+        authority.policy_scope(pin, settings),
+        frozenset({"cp_usd_ceiling_warn"}),
+        epoch="epoch",
+        source_id="unrelated-warning",
+    )
+    args = _read_arguments(pin, settings)
+    args["local"] = replace(args["local"], hard_gate=True)
+    requested = asyncio.Event()
+
+    async def observe(event):
+        if event.kind == EventKind.approval_requested:
+            requested.set()
+
+    events.subscribe(observe)
+    task = asyncio.create_task(authority.authorize(**args))
+    try:
+        await asyncio.wait_for(requested.wait(), 2)
+        clock[0] += timedelta(days=2)
+        (approval,) = await approvals.list_pending("job-1")
+        await approvals.resolve(approval.id, ApprovalResolution.approved)
+        result = await asyncio.wait_for(task, 2)
+        assert result.proceed and result.consumed_grants == ()
+        assert await authority.commit_authorization(result, is_current=AsyncMock(return_value=True))
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await ledger.close()
+
+
+async def test_consumed_grant_expiring_during_audit_cannot_release_permission(tmp_path, session_factory, monkeypatch):
+    authority, pin, ledger, _, _, _, _ = await _services(tmp_path, session_factory)
+    clock = grant_clock(monkeypatch)
+    await _verified_spend(ledger)
+    settings = RepoPolicy(usd_ceilings={"supervised": (None, 0)})
+    await ledger.grant_reasons(
+        "job-1",
+        authority.policy_scope(pin, settings),
+        frozenset({"cp_usd_ceiling"}),
+        epoch="epoch",
+        source_id="ceiling",
+    )
+    enqueue = ledger.enqueue_decision
+
+    async def delayed(**kwargs):
+        await enqueue(**kwargs)
+        clock[0] += timedelta(days=2)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(ledger, "enqueue_decision", delayed)
+    try:
+        result = await authority.authorize(**_read_arguments(pin, settings))
+        assert not result.proceed and result.decision.reason_code == "reason_grant_expired"
+    finally:
         await ledger.close()

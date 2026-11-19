@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     from backend.models.events import SessionEvent
     from backend.models.execution_contracts import ExecutionContractPin
-    from backend.persistence.governance_repo import GovernanceLedger, GovernanceTotals
+    from backend.persistence.governance_repo import GovernanceLedger, GovernanceTotals, ReasonGrant
     from backend.services.action_policy.batcher import ApprovalBatcher
     from backend.services.adapters.contracts import ExecutionIdentity, TextCompletionProvider
     from backend.services.events.event_bus import EventBus
@@ -56,6 +56,12 @@ class Authorization:
     binding: ActionBinding
     approval_id: str | None = None
     checkpoint_ref: str | None = None
+    policy_scope: str = ""
+    consumed_grants: tuple[ReasonGrant, ...] = ()
+    grant_reason: str | None = None
+
+    def grants_current(self) -> bool:
+        return all(grant.current for grant in self.consumed_grants)
 
 
 class PolicyAuthority:
@@ -111,42 +117,80 @@ class PolicyAuthority:
 
     def _select(
         self, local: PolicyInput, totals: GovernanceTotals, settings: RepoPolicy, grants: frozenset[str]
-    ) -> FactDecision:
-        if "budget_pressure" in grants:
+    ) -> tuple[FactDecision, frozenset[str]]:
+        consumed: set[str] = set()
+        if "budget_pressure" in grants and local.budget_pressure:
             local = replace(local, budget_pressure=False)
+            consumed.add("budget_pressure")
         decision = self._policy.decide(local)
         if decision.individual_human or decision.action in {"reject", "deny"}:
-            return decision
+            return decision, frozenset()
         if decision.reason_code in grants & WAIVABLE_REASON_CODES:
+            consumed.add(decision.reason_code)
             decision = replace(decision, action="allow", monitor_eligible=False)
         warn, ceiling = settings.usd_ceilings.get(str(local.preset), USD_CEILING_DEFAULTS[local.preset])
         if totals.verified_usd_present:
             if (
                 ceiling is not None
                 and totals.verified_usd >= Decimal(str(ceiling))
-                and "cp_usd_ceiling" not in grants
                 and decision.action in {"allow", "warn"}
             ):
-                return FactDecision("escalate", "cp_usd_ceiling", False, monitor_eligible=local.preset != Preset.locked)
-            if (
-                warn is not None
-                and totals.verified_usd >= Decimal(str(warn))
-                and "cp_usd_ceiling_warn" not in grants
-                and decision.action == "allow"
-            ):
-                return FactDecision("warn", "cp_usd_ceiling_warn", False)
-        return decision
+                if "cp_usd_ceiling" in grants:
+                    consumed.add("cp_usd_ceiling")
+                else:
+                    return (
+                        FactDecision(
+                            "escalate", "cp_usd_ceiling", False, monitor_eligible=local.preset != Preset.locked
+                        ),
+                        frozenset(consumed),
+                    )
+            if warn is not None and totals.verified_usd >= Decimal(str(warn)) and decision.action == "allow":
+                if "cp_usd_ceiling_warn" in grants:
+                    consumed.add("cp_usd_ceiling_warn")
+                else:
+                    return FactDecision("warn", "cp_usd_ceiling_warn", False), frozenset(consumed)
+        return decision, frozenset(consumed)
 
-    async def trust_job(self, pin: ExecutionContractPin, settings: RepoPolicy, epoch: str) -> None:
+    async def trust_job(
+        self,
+        pin: ExecutionContractPin,
+        settings: RepoPolicy,
+        epoch: str,
+        *,
+        is_current: Callable[[], Awaitable[bool]],
+    ) -> str | None:
         self._contracts.require_available(pin)
         await self._ledger.require_policy_scope(pin.job_id, pin.contract.policy.id)
-        await self._ledger.grant_reasons(
+        return await self._ledger.grant_reasons(
             pin.job_id,
             self.policy_scope(pin, settings),
             WAIVABLE_REASON_CODES,
             epoch=epoch,
             source_id=f"operator:{uuid.uuid4()}",
+            is_current=is_current,
         )
+
+    async def commit_authorization(
+        self, authorization: Authorization, *, is_current: Callable[[], Awaitable[bool]]
+    ) -> bool:
+        """Commit after the consumer's last publication, witness and owner awaits."""
+        if not authorization.proceed:
+            return False
+
+        async def current() -> bool:
+            return await is_current() and authorization.grants_current()
+
+        if authorization.grant_reason is not None:
+            issued = await self._ledger.grant_reasons(
+                authorization.binding.job_id,
+                authorization.policy_scope,
+                frozenset({authorization.grant_reason}),
+                epoch=authorization.binding.epoch,
+                source_id=authorization.decision_id,
+                is_current=current,
+            )
+            return issued is not None
+        return await current()
 
     async def authorize(
         self,
@@ -209,6 +253,8 @@ class PolicyAuthority:
         settings = settings or RepoPolicy(preset=local.preset)
         policy_scope = self.policy_scope(pin, settings)
         grants: frozenset[str] = frozenset()
+        grant_proofs: dict[str, ReasonGrant] = {}
+        consumed: frozenset[str] = frozenset()
         source_fields = dict(fields)
         if action is not None and (
             action.job_id != execution.job_id
@@ -248,7 +294,8 @@ class PolicyAuthority:
         try:
             async with asyncio.timeout_at(deadline):
                 if await is_current():
-                    grants = await self._ledger.active_reason_grants(execution.job_id, policy_scope)
+                    grant_proofs = await self._ledger.reason_grants(execution.job_id, policy_scope)
+                    grants = frozenset(grant_proofs)
                     totals = await self._ledger.job_totals(execution.job_id)
                     local = self._budget(local, totals)
                     if source_fields["command"]:
@@ -257,7 +304,7 @@ class PolicyAuthority:
                     # These local decisions never need a model to preserve their priority.
                     preliminary = self._policy.decide(local)
                     if preliminary.reason_code in {"execution_ineligible", "hard_gate"} or local.trusted_file_read:
-                        decision = self._select(local, totals, settings, grants)
+                        decision, consumed = self._select(local, totals, settings, grants)
                     else:
                         result = await self._assessments.assess(
                             binding,
@@ -280,7 +327,7 @@ class PolicyAuthority:
                         totals = await self._ledger.job_totals(execution.job_id)
                         local = self._budget(local, totals)
                         local = replace(local, assessment=result.assessment)
-                        decision = self._select(local, totals, settings, grants)
+                        decision, consumed = self._select(local, totals, settings, grants)
                 if not await is_current():
                     decision = FactDecision("reject", "execution_ineligible", False)
         except TimeoutError:
@@ -356,6 +403,7 @@ class PolicyAuthority:
                     "admission_id": pin.admission_id,
                     "policy": pin.contract.policy.model_dump(mode="json"),
                     "reason_code": decision.reason_code,
+                    "policy_scope": policy_scope,
                     **({"correlation_id": origin.correlation_id} if origin.correlation_id is not None else {}),
                     "fields": {key: filter_credentials(value).text for key, value in source_fields.items()},
                 },
@@ -417,6 +465,7 @@ class PolicyAuthority:
                                 action_id=decision_id,
                                 metadata=origin,
                                 approval_id=approval.id,
+                                policy_scope=policy_scope,
                             )
                         )
                         approval_wait = asyncio.create_task(self._approvals.wait_for_resolution(approval.id))
@@ -426,12 +475,22 @@ class PolicyAuthority:
                             )
                             if approval_wait in done:
                                 resolution = approval_wait.result()
+                                consumed = frozenset()
                             else:
                                 batch_result = batch_wait.result()
-                                approved = batch_result.resolution == BatchResolution.approved or (
-                                    batch_result.resolution == BatchResolution.partial
+                                approved = (
+                                    batch_result.resolution in {BatchResolution.approved, BatchResolution.partial}
                                     and decision_id in batch_result.approved_ids
                                 )
+                                if approved and batch_result.trusted:
+                                    grant_proofs = await self._ledger.reason_grants(execution.job_id, policy_scope)
+                                    consumed = consumed | {decision.reason_code}
+                                    approved = (
+                                        decision.reason_code in WAIVABLE_REASON_CODES
+                                        and consumed <= grant_proofs.keys()
+                                    )
+                                elif approved:
+                                    consumed = frozenset()
                                 resolution = ApprovalResolution.approved if approved else ApprovalResolution.rejected
                                 try:
                                     await self._approvals.resolve(
@@ -439,9 +498,12 @@ class PolicyAuthority:
                                     )
                                 except ApprovalAlreadyResolvedError:
                                     resolution = await self._approvals.wait_for_resolution(approval.id)
+                                    if resolution == ApprovalResolution.approved:
+                                        consumed = frozenset()
                                 human_grant = (
                                     resolution == ApprovalResolution.approved
                                     and batch_result.resolution == BatchResolution.approved
+                                    and not batch_result.trusted
                                 )
                         finally:
                             batch_wait.cancel()
@@ -451,6 +513,7 @@ class PolicyAuthority:
                         # Human waits have no machine-decision timeout.
                         resolution = await self._approvals.wait_for_resolution(approval.id)
                         human_grant = resolution == ApprovalResolution.approved and not decision.individual_human
+                        consumed = frozenset()
                 except BaseException:
                     if self._preserve_pending_on_cancel is None or not self._preserve_pending_on_cancel():
                         try:
@@ -475,9 +538,6 @@ class PolicyAuthority:
             if not await recovery_is_current(consumption_deadline):
                 proceed = False
                 decision = FactDecision("reject", "execution_ineligible", False)
-        if proceed and grants and not grants <= await self._ledger.active_reason_grants(execution.job_id, policy_scope):
-            proceed = False
-            decision = FactDecision("reject", "reason_grant_expired", False)
 
         try:
             await self._ledger.enqueue_decision(
@@ -510,6 +570,15 @@ class PolicyAuthority:
                     "assessment_reason": assessment_reason,
                     "policy_scope": policy_scope,
                     "active_reason_grants": sorted(grants),
+                    "consumed_reason_grants": [
+                        {
+                            "reason": grant_proofs[reason].reason,
+                            "issuance_id": grant_proofs[reason].issuance_id,
+                            "expires_at": grant_proofs[reason].expires_at.isoformat(),
+                        }
+                        for reason in sorted(consumed)
+                        if reason in grant_proofs
+                    ],
                     "monitor_verdict": monitor_verdict,
                     "monitor_evidence": monitor_evidence,
                     "git_recovery": asdict(local.git_recovery) if local.git_recovery is not None else None,
@@ -540,17 +609,10 @@ class PolicyAuthority:
             proceed = False
         if not await is_current():
             proceed = False
-        if proceed and human_grant and decision.reason_code in WAIVABLE_REASON_CODES:
-            await self._ledger.grant_reasons(
-                execution.job_id,
-                policy_scope,
-                frozenset({decision.reason_code}),
-                epoch=execution.epoch,
-                source_id=decision_id,
-            )
-            if not await is_current():
-                await self._ledger.revoke_reason_grants(execution.job_id, decision_id)
-                proceed = False
+        proofs = tuple(grant_proofs[reason] for reason in sorted(consumed) if reason in grant_proofs)
+        if proceed and (len(proofs) != len(consumed) or not all(grant.current for grant in proofs)):
+            proceed = False
+            decision = FactDecision("reject", "reason_grant_expired", False)
         return Authorization(
             proceed,
             replace(decision, policy_version=selected_policy),
@@ -558,4 +620,7 @@ class PolicyAuthority:
             binding,
             approval_id,
             checkpoint_ref,
+            policy_scope,
+            proofs,
+            decision.reason_code if proceed and human_grant and decision.reason_code in WAIVABLE_REASON_CODES else None,
         )

@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -26,11 +27,10 @@ from backend.services.events.title_refinement import TitleRefinement
 from backend.services.runtime.contract_catalog import standalone_contract
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from backend.models.execution_contracts import ExecutionContract, ExecutionContractPin
     from backend.services.action_policy.classifier import Action, Classification, RepoPolicy
     from backend.services.action_policy.monitor import MonitorSession, MonitorVerdict
+    from backend.services.action_policy.project_context import ProjectContext
     from backend.services.runtime.service import RuntimeService
 
 log = structlog.get_logger()
@@ -331,7 +331,52 @@ class StandaloneGovernance:
             self.accounting_error = str(exc)
             log.error("governance_accounting_failed", event_id=event.id, job_id=event.session_id, exc_info=True)
 
-    def for_job(self, pin: ExecutionContractPin, policy: RepoPolicy) -> StandalonePolicyRouter:
+    async def prepare_monitor_baseline(self, pin: ExecutionContractPin, workspace: str | None) -> ProjectContext | None:
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.action_policy.project_context import ProjectContext
+
+        if not workspace:
+            return None
+
+        async def prior_execution() -> bool:
+            if await self._ledger.has_decisions(pin.job_id):
+                return True
+            totals = await self._ledger.job_totals(pin.job_id)
+            if totals.executed_calls or totals.unaccounted:
+                return True
+            async with self._host._session_factory() as session:
+                return await EventRepository(session).has_any_kind(
+                    pin.job_id,
+                    (
+                        EventKind.message_assistant.value,
+                        EventKind.tool_call_started.value,
+                        EventKind.tool_call_completed.value,
+                        EventKind.tool_call_failed.value,
+                        EventKind.session_started.value,
+                        "agent.session_started",
+                        "execution.contract.handle_bound",
+                        "execution.native.bound",
+                        "execution.command.result",
+                    ),
+                )
+
+        if await prior_execution():
+            log.info("monitor_baseline_unavailable", job_id=pin.job_id, reason="prior_execution")
+            return None
+        try:
+            baseline = ProjectContext(str(Path(workspace).resolve(strict=True)))
+            await baseline.capture_initial()
+        except (OSError, RuntimeError, ValueError) as exc:
+            log.warning("monitor_baseline_unavailable", job_id=pin.job_id, reason=str(exc))
+            return None
+        if await prior_execution():
+            log.warning("monitor_baseline_unavailable", job_id=pin.job_id, reason="execution_started_during_capture")
+            return None
+        return baseline
+
+    def for_job(
+        self, pin: ExecutionContractPin, policy: RepoPolicy, *, monitor_baseline: ProjectContext | None = None
+    ) -> StandalonePolicyRouter:
         from backend.persistence.trail_repo import TrailNodeRepository
         from backend.services.action_policy.batcher import ApprovalBatcher
         from backend.services.action_policy.checkpoint_service import CheckpointService
@@ -354,12 +399,20 @@ class StandaloneGovernance:
 
         batcher = ApprovalBatcher(host._event_bus, policy.batch_window_seconds)
         host._policy_batchers[pin.job_id] = batcher
-        monitor_session: MonitorSession | None = None
+        monitors: dict[tuple[str, int, int], MonitorSession] = {}
 
         async def monitor(action: Action, classification: Classification) -> tuple[MonitorVerdict, str]:
-            nonlocal monitor_session
             if provider is None or not action.workspace_path:
                 return MonitorVerdict.escalate, "Monitor provider or workspace is unavailable"
+            try:
+                root = Path(action.workspace_path).resolve(strict=True)
+                identity = root.stat()
+            except (OSError, RuntimeError, ValueError) as exc:
+                log.warning("monitor_workspace_unavailable", job_id=pin.job_id, reason=str(exc))
+                return MonitorVerdict.escalate, "Monitor workspace is unavailable"
+            workspace = str(root)
+            key = (workspace, identity.st_dev, identity.st_ino)
+            monitor_session = monitors.get(key)
             if monitor_session is None:
                 job = await host._get_job(pin.job_id)
                 if job is None:
@@ -367,11 +420,13 @@ class StandaloneGovernance:
                 monitor_session = MonitorSession(
                     job_id=pin.job_id,
                     job_prompt=job.prompt,
-                    worktree=action.workspace_path,
+                    worktree=workspace,
                     repo=job.repo,
                     completer=LightweightCompleter(provider, model=host._config.runtime.utility_model),
                     trail_repo=TrailNodeRepository(host._session_factory),
+                    baseline=monitor_baseline,
                 )
+                monitors[key] = monitor_session
             return await monitor_session.evaluate(action, classification)
 
         async def current(job_id: str, provider: str) -> bool:

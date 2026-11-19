@@ -6,6 +6,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import copy_context
@@ -17,7 +18,7 @@ from typing import TYPE_CHECKING
 from backend.models.domain import StateConflictError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Awaitable, Callable, Iterator
     from concurrent.futures import Future
     from pathlib import Path
 
@@ -63,6 +64,18 @@ class GovernanceAdmission:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class ReasonGrant:
+    reason: str
+    issuance_id: str
+    source_id: str
+    expires_at: datetime
+
+    @property
+    def current(self) -> bool:
+        return datetime.now(UTC) < self.expires_at
+
+
 class GovernanceLedger:
     def __init__(self, path: Path, *, application_database: Path) -> None:
         if path.resolve() == application_database.resolve() or (
@@ -78,6 +91,8 @@ class GovernanceLedger:
         self._io_drained = asyncio.Event()
         self._io_close_loop: asyncio.AbstractEventLoop | None = None
         self._io_close_task: asyncio.Task[None] | None = None
+        self._grant_lock = asyncio.Lock()
+        self._grant_error: str | None = None
 
     async def _io[T](self, operation: Callable[..., T], *arguments: object) -> T:
         context = copy_context()
@@ -103,12 +118,14 @@ class GovernanceLedger:
         if self._io_closed:
             return
         if self._io_close_task is None:
-            with self._io_lock:
-                self._io_closing = True
-                self._io_close_loop = asyncio.get_running_loop()
-                if self._io_pending == 0:
-                    self._io_drained.set()
-            self._io_close_task = asyncio.create_task(self._close_io(), name="governance-io-drain")
+            async with self._grant_lock:
+                if self._io_close_task is None:
+                    with self._io_lock:
+                        self._io_closing = True
+                        self._io_close_loop = asyncio.get_running_loop()
+                        if self._io_pending == 0:
+                            self._io_drained.set()
+                    self._io_close_task = asyncio.create_task(self._close_io(), name="governance-io-drain")
         interrupted = False
         while not self._io_close_task.done():
             try:
@@ -174,11 +191,18 @@ class GovernanceLedger:
                     action_digest TEXT NOT NULL, decision TEXT NOT NULL, metadata_json TEXT NOT NULL,
                     delivered INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE INDEX IF NOT EXISTS cp_decision_job ON cp_decision_outbox(job_id);
                 CREATE TABLE IF NOT EXISTS cp_reason_grants (
                     job_id TEXT NOT NULL, policy_scope TEXT NOT NULL, reason_code TEXT NOT NULL,
                     created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
                     execution_epoch TEXT NOT NULL, source_id TEXT NOT NULL,
                     PRIMARY KEY(job_id, policy_scope, reason_code)
+                );
+                CREATE TABLE IF NOT EXISTS cp_reason_grant_issuances (
+                    job_id TEXT NOT NULL, policy_scope TEXT NOT NULL, reason_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                    execution_epoch TEXT NOT NULL, source_id TEXT NOT NULL, issuance_id TEXT NOT NULL,
+                    PRIMARY KEY(job_id, policy_scope, reason_code, issuance_id)
                 );
                 CREATE TABLE IF NOT EXISTS cp_audit_head (
                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -197,32 +221,68 @@ class GovernanceLedger:
                 INSERT OR IGNORE INTO cp_admission_control VALUES(1,0,0,'');
             """)
 
-    async def active_reason_grants(self, job_id: str, policy_scope: str) -> frozenset[str]:
-        def read() -> frozenset[str]:
+    async def has_decisions(self, job_id: str) -> bool:
+        def read() -> bool:
             with self._connect(read_only=True) as connection:
-                rows = connection.execute(
-                    "SELECT reason_code,expires_at FROM cp_reason_grants WHERE job_id=? AND policy_scope=?",
-                    (job_id, policy_scope),
+                return (
+                    connection.execute("SELECT 1 FROM cp_decision_outbox WHERE job_id=? LIMIT 1", (job_id,)).fetchone()
+                    is not None
                 )
-                now = datetime.now(UTC)
-                return frozenset(row["reason_code"] for row in rows if datetime.fromisoformat(row["expires_at"]) > now)
 
         return await self._io(read)
 
+    async def active_reason_grants(self, job_id: str, policy_scope: str) -> frozenset[str]:
+        return frozenset(await self.reason_grants(job_id, policy_scope))
+
+    async def reason_grants(self, job_id: str, policy_scope: str) -> dict[str, ReasonGrant]:
+        def read() -> dict[str, ReasonGrant]:
+            with self._connect(read_only=True) as connection:
+                rows = connection.execute(
+                    """SELECT reason_code,source_id,expires_at,'legacy:' || source_id AS issuance_id
+                       FROM cp_reason_grants WHERE job_id=? AND policy_scope=?
+                       UNION ALL
+                       SELECT reason_code,source_id,expires_at,issuance_id
+                       FROM cp_reason_grant_issuances WHERE job_id=? AND policy_scope=?""",
+                    (job_id, policy_scope, job_id, policy_scope),
+                )
+                result: dict[str, ReasonGrant] = {}
+                for row in rows:
+                    grant = ReasonGrant(
+                        row["reason_code"],
+                        row["issuance_id"],
+                        row["source_id"],
+                        datetime.fromisoformat(row["expires_at"]),
+                    )
+                    prior = result.get(grant.reason)
+                    if grant.current and (prior is None or prior.expires_at < grant.expires_at):
+                        result[grant.reason] = grant
+                return result
+
+        async with self._grant_lock:
+            if self._grant_error is not None:
+                raise StateConflictError(f"Grant issuance requires reconciliation: {self._grant_error}")
+            return await self._io(read)
+
     async def grant_reasons(
-        self, job_id: str, policy_scope: str, reasons: frozenset[str], *, epoch: str, source_id: str
-    ) -> None:
+        self,
+        job_id: str,
+        policy_scope: str,
+        reasons: frozenset[str],
+        *,
+        epoch: str,
+        source_id: str,
+        is_current: Callable[[], Awaitable[bool]] | None = None,
+    ) -> str | None:
         if not all((job_id, policy_scope, epoch, source_id)) or not reasons or len(reasons) > 32:
             raise ValueError("A reason grant requires an exact Job, policy scope and issuing source")
+
+        issuance_id = str(uuid.uuid4())
 
         def write() -> None:
             now = datetime.now(UTC)
             with self._connect() as connection:
                 connection.executemany(
-                    """INSERT INTO cp_reason_grants VALUES(?,?,?,?,?,?,?)
-                       ON CONFLICT(job_id,policy_scope,reason_code) DO UPDATE SET
-                       created_at=excluded.created_at,expires_at=excluded.expires_at,
-                       execution_epoch=excluded.execution_epoch,source_id=excluded.source_id""",
+                    "INSERT INTO cp_reason_grant_issuances VALUES(?,?,?,?,?,?,?,?)",
                     [
                         (
                             job_id,
@@ -232,19 +292,50 @@ class GovernanceLedger:
                             (now + timedelta(hours=24)).isoformat(),
                             epoch,
                             source_id,
+                            issuance_id,
                         )
                         for reason in sorted(reasons)
                     ],
                 )
 
-        await self._io(write)
+        async with self._grant_lock:
+            if self._grant_error is not None:
+                raise StateConflictError(f"Grant issuance requires reconciliation: {self._grant_error}")
+            if is_current is not None and not await is_current():
+                return None
+            try:
+                await self._io(write)
+                if is_current is not None and not await is_current():
+                    await self._io(self._revoke_reason_grants, job_id, issuance_id)
+                    return None
+                return issuance_id
+            except BaseException as error:
+                # Readers share this lock. The admitted write and its exact
+                # compensation must finish before any waiter can observe it.
+                cleanup = asyncio.create_task(self._io(self._revoke_reason_grants, job_id, issuance_id))
+                while not cleanup.done():
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                try:
+                    cleanup.result()
+                except BaseException as cleanup_error:
+                    self._grant_error = str(cleanup_error)
+                    raise BaseExceptionGroup("Grant issuance rollback failed", [error, cleanup_error]) from None
+                raise
 
-    async def revoke_reason_grants(self, job_id: str, source_id: str) -> None:
-        def write() -> None:
-            with self._connect() as connection:
-                connection.execute("DELETE FROM cp_reason_grants WHERE job_id=? AND source_id=?", (job_id, source_id))
+    def _revoke_reason_grants(self, job_id: str, issuance_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM cp_reason_grant_issuances WHERE job_id=? AND issuance_id=?", (job_id, issuance_id)
+            )
 
-        await self._io(write)
+    async def revoke_reason_grants(self, job_id: str, issuance_id: str) -> None:
+        async with self._grant_lock:
+            await self._io(self._revoke_reason_grants, job_id, issuance_id)
 
     async def admission_state(self) -> GovernanceAdmission:
         return await self._io(self._admission_state)

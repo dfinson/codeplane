@@ -250,7 +250,10 @@ class NativeExecutions:
                     mcp_configs={},
                     usd_ceilings=usd_ceilings,
                 )
-                host._policy_routers[job_id] = host._standalone_governance.for_job(pin, policy)
+                baseline = await host._standalone_governance.prepare_monitor_baseline(pin, job.execution_workspace)
+                host._policy_routers[job_id] = host._standalone_governance.for_job(
+                    pin, policy, monitor_baseline=baseline
+                )
                 host._repo_policies[job_id] = policy
                 await host._publish_state_event(job_id, JobState.queued, JobState.running)
 
