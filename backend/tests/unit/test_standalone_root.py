@@ -6,7 +6,9 @@ import pytest
 
 from backend.config import CPLConfig
 from backend.models.domain import ApprovalResolution, JobState, SessionConfig
+from backend.models.events import EventKind
 from backend.persistence.event_repo import EventRepository
+from backend.services.action_policy.classifier import Preset, RepoPolicy
 from backend.services.action_policy.production import StandaloneGovernance
 from backend.services.adapters.adapter_registry import AdapterRegistry
 from backend.services.adapters.agent_adapter import CompletionResult
@@ -223,6 +225,10 @@ async def recovery_runtime(session_factory, tmp_path):
         "path-mismatch",
         "path-hint-only",
         "opaque-write",
+        "final-policy-change",
+        "final-policy-unchanged",
+        "final-owner-change",
+        "final-current-policy-change",
     ],
 )
 async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_claim(recovery_runtime, scenario):
@@ -281,6 +287,29 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
         arguments = {**arguments, "path": "other.txt"}
     elif scenario == "path-hint-only":
         arguments = {}
+    final_read_entered, release_final_read = asyncio.Event(), asyncio.Event()
+    classified = False
+    final_head_reads = 0
+    original_git = git._run_git
+
+    async def observe_classification(event):
+        nonlocal classified
+        if event.kind == EventKind.action_classified:
+            classified = True
+
+    async def pause_final_read(*args, **kwargs):
+        nonlocal final_head_reads
+        result = await original_git(*args, **kwargs)
+        if classified and args == ("rev-parse", "--verify", "HEAD^{commit}"):
+            final_head_reads += 1
+            if final_head_reads == 2:
+                final_read_entered.set()
+                await release_final_read.wait()
+        return result
+
+    if scenario.startswith("final-"):
+        host._event_bus.subscribe(observe_classification)
+        git._run_git = pause_final_read
     pending = asyncio.create_task(
         adapter._evaluate_permission(
             "native-write",
@@ -292,6 +321,24 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
         )
     )
     try:
+        if scenario.startswith("final-"):
+            await asyncio.wait_for(final_read_entered.wait(), 3)
+            router = host._policy_routers["job-1"]
+            if scenario == "final-policy-change":
+                router.update_policy(RepoPolicy(preset=Preset.locked))
+            elif scenario == "final-owner-change":
+                adapter.pause_tools("native-write")
+                adapter.resume_tools("native-write")
+            elif scenario == "final-current-policy-change":
+                original_current = router._job_is_current
+
+                async def replace_after_liveness(*args):
+                    result = await original_current(*args)
+                    router.update_policy(RepoPolicy(preset=Preset.locked))
+                    return result
+
+                router._job_is_current = replace_after_liveness
+            release_final_read.set()
         if scenario in {
             "dirty",
             "contradictory-read",
@@ -307,7 +354,11 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
             assert json.loads(approval.proposed_action)["reason_code"] == "incomplete_evidence"
             await approvals.resolve(approval.id, ApprovalResolution.rejected)
         decision = await asyncio.wait_for(pending, 3)
-        assert decision == (PermissionDecision.allow if scenario in {"clean", "new"} else PermissionDecision.deny)
+        assert decision == (
+            PermissionDecision.allow
+            if scenario in {"clean", "new", "final-policy-unchanged"}
+            else PermissionDecision.deny
+        )
         adapter.complete.assert_awaited_once()
         assert adapter._sessions == {}, "The regression must not create real provider sessions"
         token = adapter._event_metadata("native-write").execution_token
@@ -323,6 +374,9 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
             assert recorded.decision == "reject"
             assert recorded.metadata["reason_code"] == "execution_ineligible"
     finally:
+        release_final_read.set()
+        if scenario.startswith("final-"):
+            host._event_bus.unsubscribe(observe_classification)
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
 

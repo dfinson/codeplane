@@ -436,7 +436,8 @@ before permission consumption, including after a human wait. Changed bytes,
 absence or retained commit cannot consume the old permission. Read-only actions
 need no recovery witness. Local loss/protection constraints and model unknowns
 or contradictions remain authoritative and cannot be repaired by positive
-recovery evidence.
+recovery evidence. The final owner and selected-policy fences run after witness
+I/O, with the local policy identity rechecked after the last asynchronous check.
 Its standalone ledger uses separate storage with atomic source-qualified executed-call identity
 and counters, marks missing call IDs unaccountable, and sums only verified USD.
 The metadata-only export projection excludes raw prompts, arguments, results,

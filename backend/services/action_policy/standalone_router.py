@@ -98,8 +98,10 @@ class StandalonePolicyRouter:
             return (
                 not self._closed
                 and self._policy is selected_policy
-                and await invocation.is_current()
                 and await self._job_is_current(invocation.job_id, invocation.provider)
+                and await invocation.is_current()
+                and not self._closed
+                and self._policy is selected_policy
             )
 
         if not await current():
@@ -298,7 +300,7 @@ class StandalonePolicyRouter:
                 metadata=metadata,
             )
         )
-        return authorized.proceed and await current() and await recovery_current(recovery_deadline)
+        return authorized.proceed and await recovery_current(recovery_deadline) and await current()
 
     async def route(self, action: object, *, cwd: str | None = None) -> None:
         raise StateConflictError("Standalone invocation requires exact execution ownership and immutable tool inputs")
