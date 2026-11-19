@@ -19,7 +19,14 @@ from backend.services.events.event_bus import EventBus
 from backend.services.git.git_service import GitService
 from backend.services.job.approval_service import ApprovalService
 from backend.services.runtime import RuntimeService
-from backend.tests.unit.test_approval_service import session_factory as session_factory
+from backend.tests.unit.test_approval_service import approval_database
+
+
+@pytest.fixture
+async def session_factory(tmp_path):
+    # Concurrent Runtime readers must not share an in-memory writer's physical transaction.
+    async with approval_database(f"sqlite+aiosqlite:///{tmp_path / 'data.db'}") as factory:
+        yield factory
 
 
 @pytest.mark.parametrize("resolution", [ApprovalResolution.approved, ApprovalResolution.rejected, None, "shutdown"])

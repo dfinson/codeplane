@@ -243,7 +243,7 @@ async def test_soft_ceiling_uses_monitor_but_does_not_create_monitor_grants(tmp_
 
 @pytest.mark.parametrize("resolution", ["approved", "partial", "rejected", "stale"])
 async def test_batch_selects_exact_actions_and_only_full_approval_grants_a_reason(
-    tmp_path, session_factory, resolution
+    tmp_path, session_factory, monkeypatch, resolution
 ):
     from backend.services.action_policy.batcher import ApprovalBatcher, BatchResolution
 
@@ -252,6 +252,21 @@ async def test_batch_selects_exact_actions_and_only_full_approval_grants_a_reaso
     settings = RepoPolicy(usd_ceilings={"supervised": (None, 0)})
     batcher = ApprovalBatcher(events, batch_window_seconds=0.01)
     ready = asyncio.Event()
+    both_arrived = asyncio.Event()
+    reset_timer = batcher._reset_timer
+    publish = batcher._on_window_close
+
+    def observe_arrival(batch):
+        reset_timer(batch)
+        if len(batch.actions) == 2:
+            both_arrived.set()
+
+    async def publish_after_arrivals(batch):
+        await both_arrived.wait()
+        await publish(batch)
+
+    monkeypatch.setattr(batcher, "_reset_timer", observe_arrival)
+    monkeypatch.setattr(batcher, "_on_window_close", publish_after_arrivals)
 
     async def observe(event):
         if event.kind == EventKind.batch_approval_requested and event.payload["batch_size"] == 2:

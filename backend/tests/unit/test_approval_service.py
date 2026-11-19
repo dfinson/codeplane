@@ -20,9 +20,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 
-@pytest.fixture
-async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+@contextlib.asynccontextmanager
+async def approval_database(database_url: str) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    engine = create_async_engine(database_url)
     sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -53,8 +53,16 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
                 )
             )
         await session.commit()
-    yield factory
-    await engine.dispose()
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    async with approval_database("sqlite+aiosqlite:///:memory:") as factory:
+        yield factory
 
 
 @pytest.fixture
