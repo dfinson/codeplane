@@ -88,7 +88,7 @@ BRIDGES = MappingProxyType(
         "langflow": BridgeSpec(
             id="langflow",
             module="backend.services.adapters.profile_bridges.langflow",
-            dependencies=(("lfx", "1.13.3"), ("agent-governance-toolkit-core", "5.0.0")),
+            dependencies=(("lfx", "0.4.6"), ("agent-governance-toolkit-core", "5.0.0")),
             operations=frozenset({"invoke", "observe", "gate", "cancel"}),
             observation_mapping=True,
         ),

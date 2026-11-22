@@ -40,6 +40,20 @@ def test_optional_native_entry_is_metadata_not_a_passing_sdk_claim(monkeypatch, 
     assert not readiness.ready and package in readiness.reason
 
 
+@pytest.mark.parametrize("lfx_version", ["0.4.6", "1.13.3"])
+def test_langflow_readiness_requires_the_core_compatible_qualified_release(monkeypatch, lfx_version):
+    from backend.services.adapters import profile_bridges
+
+    installed_version = profile_bridges.version
+    monkeypatch.setattr(
+        profile_bridges, "version", lambda package: lfx_version if package == "lfx" else installed_version(package)
+    )
+    readiness = profile_bridges.dependency_readiness("langflow")
+    assert readiness.ready is (lfx_version == "0.4.6")
+    if not readiness.ready:
+        assert readiness.reason == "Unsupported lfx; qualified bridge release is 0.4.6"
+
+
 @pytest.mark.parametrize("profile,module", [("haystack", "haystack"), ("langflow", "lfx"), ("swarm", "swarm")])
 def test_host_catalogue_does_not_load_optional_host_or_invent_live_input(monkeypatch, profile, module):
     from backend.services.adapters import profile_bridges

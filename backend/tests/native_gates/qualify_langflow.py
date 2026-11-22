@@ -21,7 +21,7 @@ else:
 Graph = load_sdk("lfx.graph.graph.base").Graph
 Output = load_sdk("lfx.io").Output
 StrInput = load_sdk("lfx.io").StrInput
-async_helpers = load_sdk(Component._get_output_result.__globals__["async_delegate_target"].__module__)
+async_helpers = load_sdk("lfx.utils.async_helpers")
 
 
 class InertComponent(Component):
@@ -54,7 +54,6 @@ class AsyncInertComponent(Component):
 
 
 class DelegatedInertComponent(InertComponent):
-    @async_helpers.delegates_to("produce_async")
     def produce(self) -> str:
         return str(async_helpers.run_until_complete(self.produce_async()))
 

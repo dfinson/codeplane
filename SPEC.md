@@ -179,11 +179,16 @@ OpenAI 2.38.0 ChatGenerator responses retain the actual completion identity and
 typed usage once per response, not once per choice. Component-supplied usage
 without that source correlation remains in local history, not inferred accrual.
 
-Langflow uses the actual `lfx==1.13.3` host engine with core 5.0.0
+Langflow uses the actual `lfx==0.4.6` host engine with core 5.0.0
 `TrustGatedFlow`, `IdentityComponent` and blocking `TrustVerificationComponent`.
+This release satisfies the unchanged core cryptography 46 contract. LFX 1.13.3
+requires cryptography 50, which conflicts with both CodePlane's `<47` and
+governance core 5.0.0's `<50` constraints; it is not a qualified installation.
+Readiness still requires the exact qualified release, and Langflow is optional.
 Connection trust and Runtime policy precede the original sync/async output
-method, including the host's native async-delegate dispatch. Thin sync delegates
-retain one operation receipt, and changed output selectors fail closed.
+method. Thin synchronous wrappers using that release's `run_until_complete`
+retain one operation receipt, and changed output selectors fail closed. The
+newer LFX `delegates_to` dispatcher is not present or claimed for this release.
 Real graph edges, node IDs, flow/run IDs and component DIDs remain source
 evidence. Runtime retains entered work until completion and exact detach leaves
 the host graph intact. Trust configuration export alone is not execution.
