@@ -1790,6 +1790,148 @@ class TestTfEventEmission:
 
 
 class TestComplete:
+    @staticmethod
+    def _client(session: _FakeCopilotSession) -> SimpleNamespace:
+        return SimpleNamespace(
+            start=AsyncMock(),
+            list_models=AsyncMock(return_value=[SimpleNamespace(id="approved-model", policy=None)]),
+            create_session=AsyncMock(return_value=session),
+            stop=AsyncMock(),
+        )
+
+    @pytest.mark.parametrize("catalog", ["error", "missing", "ambiguous", "disabled", "unconfigured", "no-model"])
+    async def test_structured_completion_rejects_unavailable_catalog_before_session_or_inference(
+        self, adapter: CopilotAdapter, catalog: str
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+        client = self._client(session)
+        if catalog == "error":
+            client.list_models.side_effect = OSError("Catalog metadata unavailable")
+        elif catalog == "missing":
+            client.list_models.return_value = []
+        elif catalog == "ambiguous":
+            client.list_models.return_value *= 2
+        elif catalog in {"disabled", "unconfigured"}:
+            client.list_models.return_value[0].policy = SimpleNamespace(state=catalog)
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content="{}"))
+
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as sent,
+            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            pytest.raises(agent_adapter.UtilityCompletionError) as rejected,
+        ):
+            await adapter.complete("fixture", model=None if catalog == "no-model" else "approved-model")
+        assert rejected.value.reason == "model_catalog_unavailable"
+        client.create_session.assert_not_awaited()
+        sent.assert_not_awaited()
+        client.stop.assert_awaited_once()
+        assert not adapter._clients and not adapter._sessions and not adapter._queues and not adapter._opening_tasks
+
+    @pytest.mark.parametrize("stage", ["start", "catalog", "shutdown-late-catalog", "cleanup-late-catalog"])
+    async def test_structured_catalog_cancellation_drains_without_admitting_a_session(
+        self, adapter: CopilotAdapter, stage: str
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        client = self._client(_FakeCopilotSession())
+        entered, drained = asyncio.Event(), asyncio.Event()
+        release_cleanup = asyncio.Event()
+        catalog = client.list_models.return_value
+        if stage == "cleanup-late-catalog":
+            client.stop.side_effect = release_cleanup.wait
+
+        async def wait_for_catalog():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if stage in {"shutdown-late-catalog", "cleanup-late-catalog"}:
+                    return catalog
+                raise
+            finally:
+                drained.set()
+
+        target = client.start if stage == "start" else client.list_models
+        target.side_effect = wait_for_catalog
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+        ):
+            task = asyncio.create_task(adapter.complete("fixture", model="approved-model"))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                if stage in {"shutdown-late-catalog", "cleanup-late-catalog"}:
+                    if stage == "shutdown-late-catalog":
+                        await adapter.shutdown()
+                    else:
+                        adapter._begin_session_cleanup(next(iter(adapter._clients)))
+                        task.cancel()
+                        await asyncio.wait_for(drained.wait(), 1)
+                        client.create_session.assert_not_awaited()
+                        release_cleanup.set()
+                    with pytest.raises(agent_adapter.UtilityCompletionError) as stopped:
+                        await task
+                    assert stopped.value.reason == "shutdown"
+                else:
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+            finally:
+                release_cleanup.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        assert drained.is_set()
+        client.create_session.assert_not_awaited()
+        client.stop.assert_awaited_once()
+        assert not adapter._clients and not adapter._sessions and not adapter._queues and not adapter._opening_tasks
+
+    async def test_assessment_deadline_includes_catalog_lookup_and_retains_cleanup(self, adapter, monkeypatch):
+        from backend.services.action_policy import assessment
+        from backend.tests.unit.test_assessment_service import FIELDS
+
+        monkeypatch.setattr(assessment, "DECISION_SECONDS", 0.03)
+        client = self._client(_FakeCopilotSession())
+        cancelled, release_cleanup = asyncio.Event(), asyncio.Event()
+
+        async def blocked_catalog():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        client.list_models.side_effect = blocked_catalog
+        client.stop.side_effect = release_cleanup.wait
+        service = assessment.AssessmentService()
+        try:
+            with patch("copilot.CopilotClient", return_value=client):
+                result = await asyncio.wait_for(
+                    service.assess(
+                        assessment.ActionBinding.create("fixture", "epoch", {}, fields=FIELDS),
+                        FIELDS,
+                        provider=adapter,
+                        model="approved-model",
+                        is_current=AsyncMock(return_value=True),
+                    ),
+                    1,
+                )
+                assert result.reason == "assessment_timeout"
+                await asyncio.wait_for(cancelled.wait(), 1)
+                assert adapter._clients and adapter._opening_tasks and service.active
+                client.create_session.assert_not_awaited()
+        finally:
+            release_cleanup.set()
+            await asyncio.gather(*tuple(service._tasks), return_exceptions=True)
+            await service.shutdown()
+        assert not adapter._clients and not adapter._opening_tasks and not service.active
+
     @pytest.mark.parametrize("defect", [None, "extra", "span"])
     async def test_recognized_envelope_still_uses_unchanged_assessment_validation(
         self, adapter: CopilotAdapter, defect: str | None
@@ -1810,7 +1952,7 @@ class TestComplete:
             session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
             return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=raw))
 
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
         service = AssessmentService()
         try:
             with (
@@ -1862,7 +2004,7 @@ class TestComplete:
             session.fire_event(message)
             return message
 
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(
@@ -1901,7 +2043,7 @@ class TestComplete:
             session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
             return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=native_text))
 
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
@@ -1918,7 +2060,7 @@ class TestComplete:
         from backend.services.adapters.completion_context import CompletionContext, completion_context
 
         session = _FakeCopilotSession()
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(
@@ -1931,7 +2073,7 @@ class TestComplete:
             completion_context(CompletionContext(max_output_bytes=2, response_schema={"type": "object"})),
             pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
-            await adapter.complete("fixture")
+            await adapter.complete("fixture", model="approved-model")
         assert failure.value.reason == "output_limit"
 
     @pytest.mark.asyncio
@@ -1957,7 +2099,15 @@ class TestComplete:
             await send(*args, **kwargs)
             return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content='{"ready":true}'))
 
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
+
+        async def create_session(**kwargs: Any) -> _FakeCopilotSession:
+            assert client.start.await_count == int(structured)
+            assert client.list_models.await_count == int(structured)
+            assert kwargs["model"] == "approved-model"
+            return session
+
+        client.create_session.side_effect = create_session
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send", side_effect=send) as sent,
@@ -1974,12 +2124,16 @@ class TestComplete:
             )
         assert result.text == '{"ready":true}' and result.model == "approved-model"
         if structured:
+            client.start.assert_awaited_once()
+            client.list_models.assert_awaited_once()
             waited.assert_awaited_once()
             assert waited.await_args.args == ("fixture",)
             assert waited.await_args.kwargs["mode"] == "enqueue"
             assert waited.await_args.kwargs["response_schema"] == schema
             sent.assert_not_awaited()
         else:
+            client.start.assert_not_awaited()
+            client.list_models.assert_not_awaited()
             sent.assert_awaited_once_with("fixture", mode="immediate")
             waited.assert_not_awaited()
         assert client.create_session.await_args.kwargs["available_tools"] == []
@@ -2003,14 +2157,14 @@ class TestComplete:
             finally:
                 cancelled.set()
 
-        client = SimpleNamespace(create_session=AsyncMock(return_value=session), stop=AsyncMock())
+        client = self._client(session)
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
             completion_context(CompletionContext(max_output_bytes=4, response_schema={"type": "object"})),
             pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
-            await adapter.complete("fixture")
+            await adapter.complete("fixture", model="approved-model")
         assert failure.value.reason == "output_limit"
         assert cancelled.is_set()
         assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks

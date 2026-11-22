@@ -412,9 +412,15 @@ bindings and invalid evidence cannot become automatic permission. A completed
 utility call retains its known model and usage even when its assessment is
 rejected for stale state or invalid output. Copilot assessment calls request the
 existing evidence schema through native per-run structured output on a fresh
-session, not immediate steering. Its classifier instructions replace the coding
-assistant's default presentation prompt; tool access remains disabled and
-permission callbacks still reject requests. Other text completion calls are unchanged.
+session, not immediate steering. Before schema-bound inference, the same SDK
+client must load its actual model catalog and find exactly one entry for the
+explicit requested ID, without a disabled or unconfigured policy. Startup and
+catalog lookup remain inside the decision deadline; unavailable metadata raises
+`model_catalog_unavailable` before session creation, without changing the model
+or retrying inference. This readiness check does not assert provider-side schema
+enforcement, and ordinary nonstructured completions retain their existing path.
+Its classifier instructions replace the coding assistant's default presentation
+prompt; tool access remains disabled and permission callbacks still reject requests.
 For explicitly schema-requested Copilot utility replies, the adapter may remove
 one exact whole-output `json` code fence around a single JSON object. It retains
 the original text and normalization provenance and applies the raw-byte bound

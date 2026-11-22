@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,6 +24,46 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 
 
 class TestAdapterRegistry:
+    async def test_catalog_readiness_failure_records_request_without_fabricating_completion(self, session_factory):
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+        registry = AdapterRegistry(session_factory=session_factory)
+        client = SimpleNamespace(
+            start=AsyncMock(),
+            list_models=AsyncMock(side_effect=OSError("Catalog unavailable")),
+            create_session=AsyncMock(),
+            stop=AsyncMock(),
+        )
+        with (
+            patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client),
+            completion_context(
+                CompletionContext(
+                    role="assessment",
+                    job_id="job-1",
+                    execution_epoch="epoch",
+                    execution_contract=pin,
+                    response_schema={"type": "object"},
+                )
+            ),
+            pytest.raises(UtilityCompletionError) as rejected,
+        ):
+            await registry.get_completion_provider("copilot").complete("fixture", model="approved-model")
+        assert rejected.value.reason == "model_catalog_unavailable" and rejected.value.completion is None
+        client.create_session.assert_not_awaited()
+        client.stop.assert_awaited_once()
+        async with session_factory() as session:
+            records = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in records] == ["utility.completion.requested"]
+        assert records[0].payload["contract"] == pin.contract.model_dump(mode="json")
+        assert records[0].payload["requested_model"] == "approved-model"
+        assert records[0].metadata.execution_epoch == "epoch"
+
     async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(self, session_factory) -> None:
         from decimal import Decimal
 

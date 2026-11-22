@@ -1022,6 +1022,7 @@ class CopilotAdapter(BaseAgentAdapter):
         excluded_tools: list[str] | None = None,
     ) -> CompletionResult:
         """Complete a text-only turn, failing explicitly unless the turn finishes."""
+        from copilot._jsonrpc import JsonRpcError, ProcessExitedError
         from copilot.generated.rpc import PermissionDecisionReject
 
         if self._closing:
@@ -1135,6 +1136,45 @@ class CopilotAdapter(BaseAgentAdapter):
                         done_event.set()
 
             async with asyncio.timeout(COMPLETION_TIMEOUT_S):
+                if completion.response_schema is not None:
+                    if not model:
+                        raise UtilityCompletionError(
+                            "Structured completion requires an explicit catalog model",
+                            reason="model_catalog_unavailable",
+                        )
+                    try:
+                        await client.start()
+                        catalog = await client.list_models()
+                    except (
+                        JsonRpcError,
+                        ProcessExitedError,
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        AssertionError,
+                    ) as exc:
+                        log.warning(
+                            "copilot_structured_catalog_unavailable", model=model, error_type=type(exc).__name__
+                        )
+                        raise UtilityCompletionError(
+                            "Structured completion could not load the SDK model catalog",
+                            reason="model_catalog_unavailable",
+                        ) from exc
+                    matches = [entry for entry in catalog if entry.id == model]
+                    if len(matches) != 1 or (matches[0].policy is not None and matches[0].policy.state != "enabled"):
+                        log.warning("copilot_structured_model_unavailable", model=model, catalog_matches=len(matches))
+                        raise UtilityCompletionError(
+                            "Structured completion requires one available SDK catalog entry for the requested model",
+                            reason="model_catalog_unavailable",
+                        )
+                    if (
+                        self._closing
+                        or tmp_session_id in self._stop_tasks
+                        or self._clients.get(tmp_session_id) is not client
+                        or self._queues.get(tmp_session_id) is not queue
+                    ):
+                        raise UtilityCompletionError("Structured completion ownership ended", reason="shutdown")
                 session = await client.create_session(
                     working_directory=tempfile.gettempdir(),
                     on_permission_request=_deny_permission,
