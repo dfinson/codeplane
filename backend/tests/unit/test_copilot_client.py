@@ -68,8 +68,9 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
             session.send_and_wait = AsyncMock(side_effect=response)
             client.create_session = AsyncMock(return_value=session)
             adapter = CopilotAdapter()
+            schema = {"type": "object", "additionalProperties": False}
             with patch("backend.services.copilot_adapter._adapter.create_copilot_client", return_value=client):
-                with completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})):
+                with completion_context(CompletionContext(role="assessment", response_schema=schema)):
                     result = await adapter.complete("offline fixture", model="approved-model")
             assert result.text == "{}" and result.model == "approved-model" and result.input_tokens == 7
             rpc.assert_awaited_once_with("models.list", {})

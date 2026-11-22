@@ -19,10 +19,13 @@ def test_assessment_and_title_wire_projection_preserves_full_local_contract():
     assert wire["required"] == full["required"]
     assert wire["additionalProperties"] is False
     assert wire["properties"]["effect"]["enum"] == full["properties"]["effect"]["enum"]
+    assert wire["properties"]["effect"]["type"] == "string"
     assert wire["properties"]["schema_version"]["const"] == "cp-action-v1"
+    assert wire["properties"]["schema_version"]["type"] == "string"
     evidence = wire["$defs"]["AssessmentEvidence"]["properties"]
     assert evidence["field"]["enum"] == full["$defs"]["AssessmentEvidence"]["properties"]["field"]["enum"]
     assert evidence["source"]["enum"] == full["$defs"]["AssessmentEvidence"]["properties"]["source"]["enum"]
+    assert evidence["field"]["type"] == evidence["source"]["type"] == "string"
     assert "minimum" not in evidence["start"] and "maximum" not in evidence["start"]
     assert '"minimum":0' in evidence["start"]["description"]
     assert '"maximum":32767' in evidence["start"]["description"]
@@ -68,6 +71,21 @@ def test_schema_keyword_property_names_and_reference_definitions_are_not_strippe
     assert full == prepared.full_schema == before
 
 
+def test_typed_enums_and_constants_keep_their_declared_openai_compatible_types():
+    full = {
+        "type": "object",
+        "properties": {
+            "level": {"type": "integer", "enum": [1, 2]},
+            "kind": {"type": "string", "const": "entry"},
+        },
+        "required": ["level", "kind"],
+        "additionalProperties": False,
+    }
+    prepared = prepare_response_schema(full)
+    assert prepared.wire_schema == prepared.full_schema == full
+    assert prepared.full_sha256 == prepared.wire_sha256
+
+
 @pytest.mark.parametrize("minimum", [0, 1, 2])
 def test_native_supported_array_minima_and_nested_union_formats(minimum):
     full = {
@@ -94,7 +112,10 @@ def test_native_supported_array_minima_and_nested_union_formats(minimum):
 @pytest.mark.parametrize(
     "schema",
     [
+        {"type": "object"},
+        {"type": "object", "properties": {"value": {"type": "integer"}}},
         {"type": "object", "additionalProperties": True},
+        {"enum": ["missing", "type"]},
         {"type": "object", "not": {"required": ["secret"]}},
         {"oneOf": [{"type": "integer"}, {"type": "number"}]},
         {"$ref": "#/$defs/item", "enum": ["must-not-be-dropped"]},

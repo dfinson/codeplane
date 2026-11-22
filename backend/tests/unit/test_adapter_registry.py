@@ -73,7 +73,7 @@ class TestAdapterRegistry:
         ]
         provenance = records[0].payload["response_schema"]
         assert provenance == records[1].payload["response_schema"]
-        assert provenance["projection_version"] == "cp-copilot-wire-schema-v1"
+        assert provenance["projection_version"] == "cp-copilot-wire-schema-v2"
         assert (
             provenance["full_sha256"]
             == hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -105,7 +105,7 @@ class TestAdapterRegistry:
                     job_id="job-1",
                     execution_epoch="epoch",
                     execution_contract=pin,
-                    response_schema={"type": "object"},
+                    response_schema={"type": "object", "additionalProperties": False},
                 )
             ),
             pytest.raises(UtilityCompletionError) as rejected,
@@ -120,7 +120,7 @@ class TestAdapterRegistry:
         assert records[0].payload["contract"] == pin.contract.model_dump(mode="json")
         assert records[0].payload["requested_model"] == "approved-model"
         assert records[0].metadata.execution_epoch == "epoch"
-        assert records[0].payload["response_schema"]["projection_version"] == "cp-copilot-wire-schema-v1"
+        assert records[0].payload["response_schema"]["projection_version"] == "cp-copilot-wire-schema-v2"
 
     async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(self, session_factory) -> None:
         from decimal import Decimal

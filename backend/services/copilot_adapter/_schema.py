@@ -1,8 +1,9 @@
-"""Anthropic-compatible Copilot wire schemas, separate from application validation.
+"""Closed, explicitly typed Copilot wire schemas, separate from local validation.
 
-Supported keywords follow anthropic-sdk-python 2.10.0's
-src/anthropic/lib/_parse/_transform.py. Unsupported scalar/collection bounds
-remain descriptive guidance on the wire and mandatory in the caller's validator.
+Bounds follow anthropic-sdk-python 2.10.0's lib/_parse/_transform.py.
+Literal types are retained, as in OpenAI's lib/_pydantic.py and Anthropic's
+strict-schema examples. Unsupported bounds remain descriptive wire guidance
+and mandatory in the caller's validator.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 
 from backend.services.adapters.agent_adapter import UtilityCompletionError
 
-PROJECTION_VERSION = "cp-copilot-wire-schema-v1"
+PROJECTION_VERSION = "cp-copilot-wire-schema-v2"
 _TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
 _FORMATS = {"date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"}
 _LOCAL_CONSTRAINTS = {
@@ -123,10 +124,11 @@ def _project(value: object) -> dict[str, object]:
             raise ValueError(f"Unsupported wire schema keyword: {key}")
 
     if value.get("type") == "object":
+        if value.get("additionalProperties") is not False:
+            raise ValueError("Wire object schemas require explicit closed properties")
         result.setdefault("properties", {})
-        result["additionalProperties"] = False
-    if "enum" in result or "const" in result:
-        result.pop("type", None)
+    if ("enum" in result or "const" in result) and "type" not in result:
+        raise ValueError("Wire literals require an explicit type")
     if not {"type", "enum", "const", "anyOf", "allOf"} & result.keys():
         raise ValueError("Schema requires a type, literal, reference or composition")
     if local:

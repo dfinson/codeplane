@@ -1843,7 +1843,15 @@ class TestComplete:
             patch.object(
                 session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
             ) as sent,
-            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    role="assessment",
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
             pytest.raises(agent_adapter.UtilityCompletionError) as rejected,
         ):
             await adapter.complete("fixture", model=None if catalog == "no-model" else "approved-model")
@@ -1881,7 +1889,15 @@ class TestComplete:
         target.side_effect = wait_for_catalog
         with (
             patch("copilot.CopilotClient", return_value=client),
-            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    role="assessment",
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
         ):
             task = asyncio.create_task(adapter.complete("fixture", model="approved-model"))
             try:
@@ -2041,7 +2057,15 @@ class TestComplete:
             patch.object(
                 session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
             ) as sent,
-            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    role="assessment",
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
         ):
             result = await adapter.complete("fixture", model="approved-model")
         assert result.text == expected and result.raw_text == native_text
@@ -2078,7 +2102,15 @@ class TestComplete:
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
-            completion_context(CompletionContext(role="assessment", response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    role="assessment",
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
             pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
             await adapter.complete("fixture", model="approved-model")
@@ -2101,7 +2133,15 @@ class TestComplete:
                 new_callable=AsyncMock,
                 return_value=_FakeSdkSessionEvent("assistant.message", _FakeEventData(content="```json\n{}\n```")),
             ),
-            completion_context(CompletionContext(max_output_bytes=2, response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    max_output_bytes=2,
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
             pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
             await adapter.complete("fixture", model="approved-model")
@@ -2118,6 +2158,7 @@ class TestComplete:
             "type": "object",
             "properties": {"ready": {"type": "boolean"}},
             "required": ["ready"],
+            "additionalProperties": False,
         }
         session = _FakeCopilotSession()
 
@@ -2160,8 +2201,8 @@ class TestComplete:
             waited.assert_awaited_once()
             assert waited.await_args.args == ("fixture",)
             assert waited.await_args.kwargs["mode"] == "enqueue"
-            assert waited.await_args.kwargs["response_schema"] == {**schema, "additionalProperties": False}
-            assert "additionalProperties" not in schema
+            assert waited.await_args.kwargs["response_schema"] == schema
+            assert schema["additionalProperties"] is False
             sent.assert_not_awaited()
         else:
             client.start.assert_not_awaited()
@@ -2193,7 +2234,15 @@ class TestComplete:
         with (
             patch("copilot.CopilotClient", return_value=client),
             patch.object(session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock),
-            completion_context(CompletionContext(max_output_bytes=4, response_schema={"type": "object"})),
+            completion_context(
+                CompletionContext(
+                    max_output_bytes=4,
+                    response_schema={
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                )
+            ),
             pytest.raises(agent_adapter.UtilityCompletionError) as failure,
         ):
             await adapter.complete("fixture", model="approved-model")

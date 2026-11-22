@@ -419,11 +419,13 @@ catalog lookup remain inside the decision deadline; unavailable metadata raises
 `model_catalog_unavailable` before session creation, without changing the model
 or retrying inference. This readiness check does not assert provider-side schema
 enforcement, and ordinary nonstructured completions retain their existing path.
-The provider request uses `cp-copilot-wire-schema-v1`, a separate projection of
-the Anthropic-compatible JSON Schema subset documented by the Anthropic Python
-SDK. Unsupported numeric, string and collection bounds become descriptive wire
+The provider request uses `cp-copilot-wire-schema-v2`, a separate projection that
+retains declared literal types for OpenAI compatibility and follows the
+Anthropic SDK's supported bound keywords. Unsupported numeric, string and
+collection bounds become descriptive wire
 guidance, not removed application rules. Enums, required fields, references and
-closed object shapes remain in the wire schema. Unsupported structural rules
+explicitly closed object shapes remain in the wire schema. Implicit open
+objects, typeless literals and unsupported structural rules
 fail explicitly instead of disappearing. The original schema is never mutated;
 the full caller schema and strict local validation remain authoritative.
 Existing utility request/completion receipts retain the projection version and
