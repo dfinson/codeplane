@@ -41,8 +41,6 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
         def offline(event, arguments):
             if event in {"socket.connect", "socket.getaddrinfo", "subprocess.Popen"}:
                 raise AssertionError("This SDK cache regression must not start a CLI or use the network")
-        sys.addaudithook(offline)
-
         async def main():
             client = CopilotClient()
             rpc = AsyncMock(return_value={"models": [{
@@ -82,7 +80,10 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
             assert session.send_and_wait.await_args.kwargs["response_schema"] == {"type": "object"}
             client.stop.assert_awaited_once()
             assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
-        asyncio.run(main())
+        with asyncio.Runner() as runner:
+            runner.get_loop()
+            sys.addaudithook(offline)
+            runner.run(main())
     """)
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
