@@ -5,9 +5,8 @@ Run all rows explicitly, with no skips, using an isolated uv environment:
 
     uv venv <qualification-env>
     uv pip install --python <qualification-env>/bin/python \
-        --excludes backend/tests/native_gates/excluded-model-runtime.txt \
-        -r backend/tests/native_gates/requirements.txt
-    HATCH_BUILD_NO_HOOKS=true uv pip install --python <qualification-env>/bin/python --no-deps -e .
+        -r backend/tests/native_gates/requirements.txt -e .
+    uv pip check --python <qualification-env>/bin/python
     uv run --no-project --python <qualification-env>/bin/python \
         python -m pytest backend/tests/native_gates/qualify_native_*.py \
         backend/tests/native_gates/qualify_runtime_integration.py \
@@ -16,13 +15,14 @@ Run all rows explicitly, with no skips, using an isolated uv environment:
         backend/tests/native_gates/qualify_executor_isolation.py
 
 The AutoGen/LlamaIndex/ADK follow-ups use a separate environment with
-requirements-profiles.txt and the same no-deps editable install, then run
+requirements-profiles.txt and the same dependency-checked editable install, then run
 qualify_autogen.py, qualify_llamaindex.py, qualify_google_adk.py and
 qualify_profile_release.py. None of
 these optional environments changes the application's default profile.
 
-The excluded ONNX package is an unused CrewAI/Chroma embedding dependency, not a
-tool-hook requirement. No native package code is patched or replaced.
+Chroma declares ONNX Runtime as mandatory, so it must be installed for a complete
+optional environment even though these fixtures do not import it or run embeddings.
+No model weights are required. No native package code is patched or replaced.
 """
 
 import asyncio
