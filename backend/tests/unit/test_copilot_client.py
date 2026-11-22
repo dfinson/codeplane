@@ -77,7 +77,9 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
             client.create_session.assert_awaited_once()
             assert client.create_session.await_args.kwargs["model"] == "approved-model"
             session.send_and_wait.assert_awaited_once()
-            assert session.send_and_wait.await_args.kwargs["response_schema"] == {"type": "object"}
+            assert session.send_and_wait.await_args.kwargs["response_schema"] == {
+                "type": "object", "properties": {}, "additionalProperties": False
+            }
             client.stop.assert_awaited_once()
             assert not adapter._sessions and not adapter._clients and not adapter._opening_tasks
         with asyncio.Runner() as runner:

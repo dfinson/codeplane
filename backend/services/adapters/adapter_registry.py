@@ -69,9 +69,16 @@ class _RegisteredTextCompletion:
             validate_sdk_model(str(self._sdk), model)
         except SDKModelMismatchError as exc:
             raise UtilityCompletionError(str(exc), reason="model_mismatch") from exc
-        from backend.services.adapters.completion_context import current_completion_context
+        from backend.services.adapters.completion_context import completion_context, current_completion_context
 
         context = current_completion_context()
+        schema_metadata: dict[str, object] = {}
+        if context.response_schema is not None and self._sdk == AgentSDK.copilot:
+            from backend.services.copilot_adapter._schema import prepare_response_schema
+
+            prepared_schema = prepare_response_schema(context.response_schema)
+            context = replace(context, response_schema=prepared_schema.full_schema)
+            schema_metadata["response_schema"] = prepared_schema.provenance
         operation_id = str(uuid.uuid4())
         if context.execution_contract is not None:
             from sqlalchemy.exc import SQLAlchemyError
@@ -81,7 +88,7 @@ class _RegisteredTextCompletion:
                     operation_id,
                     "requested",
                     context,
-                    {"provider": str(self._sdk), "requested_model": model},
+                    {"provider": str(self._sdk), "requested_model": model, **schema_metadata},
                 )
             except (OSError, SQLAlchemyError) as exc:
                 log.error("utility_request_persistence_failed", job_id=context.job_id, operation_id=operation_id)
@@ -89,12 +96,13 @@ class _RegisteredTextCompletion:
                     "Utility was not invoked because its request could not be recorded",
                     reason="receipt_persistence_failed",
                 ) from exc
-        result = await adapter.complete(
-            prompt,
-            model=model,
-            system_message=system_message,
-            excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
-        )
+        with completion_context(context):
+            result = await adapter.complete(
+                prompt,
+                model=model,
+                system_message=system_message,
+                excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
+            )
         if context.execution_contract is not None:
             result = replace(result, usage_event_id=_utility_receipt_id(operation_id, "completed"))
             try:
@@ -107,6 +115,7 @@ class _RegisteredTextCompletion:
                         "requested_model": model,
                         "actual_model": result.model or None,
                         "usage": [amount.model_dump(mode="json") for amount in result.usage],
+                        **schema_metadata,
                     },
                 )
             except (OSError, SQLAlchemyError) as exc:

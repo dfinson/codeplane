@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,6 +27,60 @@ from backend.tests.unit.test_approval_service import session_factory as session_
 
 
 class TestAdapterRegistry:
+    async def test_schema_provenance_uses_an_immutable_snapshot_in_existing_receipts(self, session_factory):
+        from backend.models.execution_contracts import ExecutionContractPin
+        from backend.persistence.event_repo import EventRepository
+        from backend.services.adapters.completion_context import (
+            CompletionContext,
+            completion_context,
+            current_completion_context,
+        )
+        from backend.tests.unit.test_execution_contracts import _contract
+
+        schema = {
+            "type": "object",
+            "properties": {"count": {"type": "integer", "minimum": 1, "maximum": 9}},
+            "required": ["count"],
+            "additionalProperties": False,
+        }
+        snapshot = copy.deepcopy(schema)
+        registry = AdapterRegistry(session_factory=session_factory)
+        pin = ExecutionContractPin(
+            job_id="job-1", admission_id="admission", budget_id="job-1", contract=_contract("pinned")
+        )
+
+        async def complete(*args, **kwargs):
+            schema["properties"]["count"]["minimum"] = 7
+            assert current_completion_context().response_schema == snapshot
+            return CompletionResult(text='{"count":3}', model="approved-model")
+
+        registry.get_adapter("copilot").complete = AsyncMock(side_effect=complete)
+        with completion_context(
+            CompletionContext(
+                role="assessment",
+                job_id="job-1",
+                execution_epoch="epoch",
+                execution_contract=pin,
+                response_schema=schema,
+            )
+        ):
+            await registry.get_completion_provider("copilot").complete("fixture", model="approved-model")
+        async with session_factory() as session:
+            records = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
+        assert [str(event.kind) for event in records] == [
+            "utility.completion.requested",
+            "utility.completion.completed",
+        ]
+        provenance = records[0].payload["response_schema"]
+        assert provenance == records[1].payload["response_schema"]
+        assert provenance["projection_version"] == "cp-copilot-wire-schema-v1"
+        assert (
+            provenance["full_sha256"]
+            == hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        )
+        assert len(provenance["wire_sha256"]) == 64
+        assert provenance["wire_sha256"] != provenance["full_sha256"]
+
     async def test_catalog_readiness_failure_records_request_without_fabricating_completion(self, session_factory):
         from backend.models.execution_contracts import ExecutionContractPin
         from backend.persistence.event_repo import EventRepository
@@ -63,6 +120,7 @@ class TestAdapterRegistry:
         assert records[0].payload["contract"] == pin.contract.model_dump(mode="json")
         assert records[0].payload["requested_model"] == "approved-model"
         assert records[0].metadata.execution_epoch == "epoch"
+        assert records[0].payload["response_schema"]["projection_version"] == "cp-copilot-wire-schema-v1"
 
     async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(self, session_factory) -> None:
         from decimal import Decimal

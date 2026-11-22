@@ -1799,6 +1799,24 @@ class TestComplete:
             stop=AsyncMock(),
         )
 
+    async def test_unsupported_wire_schema_stops_before_catalog_or_inference(self, adapter):
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        schema = {"type": "object", "additionalProperties": True}
+        client = self._client(_FakeCopilotSession())
+        with (
+            patch("copilot.CopilotClient", return_value=client),
+            completion_context(CompletionContext(response_schema=schema)),
+            pytest.raises(agent_adapter.UtilityCompletionError) as rejected,
+        ):
+            await adapter.complete("fixture", model="approved-model")
+        assert rejected.value.reason == "response_schema_unsupported"
+        assert schema == {"type": "object", "additionalProperties": True}
+        client.start.assert_not_awaited()
+        client.list_models.assert_not_awaited()
+        client.create_session.assert_not_awaited()
+        client.stop.assert_awaited_once()
+
     @pytest.mark.parametrize("catalog", ["error", "missing", "ambiguous", "disabled", "unconfigured", "no-model"])
     async def test_structured_completion_rejects_unavailable_catalog_before_session_or_inference(
         self, adapter: CopilotAdapter, catalog: str
@@ -1932,7 +1950,7 @@ class TestComplete:
             await service.shutdown()
         assert not adapter._clients and not adapter._opening_tasks and not service.active
 
-    @pytest.mark.parametrize("defect", [None, "extra", "span"])
+    @pytest.mark.parametrize("defect", [None, "extra", "span", "minimum", "empty-value", "duplicate", "max-items"])
     async def test_recognized_envelope_still_uses_unchanged_assessment_validation(
         self, adapter: CopilotAdapter, defect: str | None
     ) -> None:
@@ -1944,11 +1962,24 @@ class TestComplete:
             payload["authority"] = "allow"
         elif defect == "span":
             payload["evidence"][0]["end"] = len(FIELDS["command"]) + 1
+        elif defect == "minimum":
+            payload["evidence"][0]["start"] = -1
+        elif defect == "empty-value":
+            payload["evidence"][0]["value"] = ""
+        elif defect == "duplicate":
+            payload["unknowns"] = ["unresolved_expansion", "unresolved_expansion"]
+        elif defect == "max-items":
+            payload["evidence"] *= 7
         body = json.dumps(payload)
         raw = f"```json\n{body}\n```"
         session = _FakeCopilotSession()
 
         async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            wire = kwargs["response_schema"]
+            start = wire["$defs"]["AssessmentEvidence"]["properties"]["start"]
+            assert "minimum" not in start and "maximum" not in start
+            assert "maxItems" not in wire["properties"]["evidence"]
+            assert "uniqueItems" not in wire["properties"]["unknowns"]
             session.fire_event(_FakeSdkSessionEvent("assistant.usage", _FakeEventData(model="approved-model")))
             return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content=raw))
 
@@ -2129,7 +2160,8 @@ class TestComplete:
             waited.assert_awaited_once()
             assert waited.await_args.args == ("fixture",)
             assert waited.await_args.kwargs["mode"] == "enqueue"
-            assert waited.await_args.kwargs["response_schema"] == schema
+            assert waited.await_args.kwargs["response_schema"] == {**schema, "additionalProperties": False}
+            assert "additionalProperties" not in schema
             sent.assert_not_awaited()
         else:
             client.start.assert_not_awaited()

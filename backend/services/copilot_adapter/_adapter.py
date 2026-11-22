@@ -26,6 +26,7 @@ from backend.services.adapters.base_adapter import (
 from backend.services.adapters.completion_context import current_completion_context, validate_completion_identity
 from backend.services.auth.permission_policy import PermissionRequest as PolicyRequest
 from backend.services.copilot_adapter._client import create_copilot_client, stop_copilot_client
+from backend.services.copilot_adapter._schema import prepare_response_schema
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -1054,6 +1055,16 @@ class CopilotAdapter(BaseAgentAdapter):
         try:
             import tempfile
 
+            prepared_schema = (
+                prepare_response_schema(completion.response_schema) if completion.response_schema is not None else None
+            )
+            if prepared_schema is not None:
+                log.info(
+                    "copilot_structured_schema_prepared",
+                    job_id=completion.job_id,
+                    execution_epoch=completion.execution_epoch,
+                    **prepared_schema.provenance,
+                )
             sys_msg_config: SystemMessageAppendConfig | SystemMessageReplaceConfig | None = None
             if system_message is not None:
                 if completion.response_schema is None:
@@ -1189,7 +1200,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 unsubscribe = session.on(_on_event)
                 if callable(unsubscribe):
                     self._unsubscribe[tmp_session_id] = unsubscribe
-                if completion.response_schema is None:
+                if prepared_schema is None:
                     await session.send(prompt, mode="immediate")
                     await done_event.wait()
                 else:
@@ -1197,7 +1208,7 @@ class CopilotAdapter(BaseAgentAdapter):
                         session.send_and_wait(
                             prompt,
                             mode="enqueue",
-                            response_schema=completion.response_schema,
+                            response_schema=prepared_schema.wire_schema,
                             timeout=COMPLETION_TIMEOUT_S,
                         )
                     )

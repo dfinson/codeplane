@@ -25,6 +25,7 @@ from backend.tests.unit.test_execution_contracts import _contract
     [
         ('{"title":"Inspect worker cancellation ownership"}', True),
         ('{"title":"one"}', False),
+        (json.dumps({"title": "Inspect " + "x" * 80 + " now"}), False),
         ('{"title":"Inspect worker cancellation ownership","extra":true}', False),
         ('```json\n{"title":"Inspect worker cancellation ownership"}\n```', False),
     ],
