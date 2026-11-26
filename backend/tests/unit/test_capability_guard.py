@@ -34,6 +34,27 @@ def test_malformed_native_search_paths_are_not_silently_discarded(tmp_path, path
         invocation_permission_request(str(tmp_path), "grep", {"paths": paths})
 
 
+@pytest.mark.parametrize("pattern", ["**/*", "src/**/*.py"])
+async def test_native_glob_resolves_search_root_not_windows_wildcard_filename(tmp_path, pattern) -> None:
+    await enforce_invocation_capabilities(
+        frozenset({"read"}),
+        workspace=str(tmp_path),
+        tool_name="glob",
+        arguments={"paths": ["."], "pattern": pattern},
+    )
+
+
+@pytest.mark.parametrize("pattern", ["../outside/*.py", "**/../outside", "{src,../outside}/*.py"])
+async def test_native_glob_does_not_authorize_escaping_patterns(tmp_path, pattern) -> None:
+    with pytest.raises(CapabilityDeniedError):
+        await enforce_invocation_capabilities(
+            frozenset({"read"}),
+            workspace=str(tmp_path),
+            tool_name="glob",
+            arguments={"paths": ["."], "pattern": pattern},
+        )
+
+
 async def test_shell_capability_does_not_authorize_writes_or_network(tmp_path) -> None:
     for command in ("echo x > output", "curl example.test", "git status", "printf hello"):
         with pytest.raises(CapabilityDeniedError):

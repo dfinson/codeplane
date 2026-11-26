@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from backend.services.action_policy.syntax import analyze_syntax_async
 from backend.services.adapters.contracts import Capability, CapabilityDeniedError, CapabilityGrant
 from backend.services.auth.permission_policy import PermissionRequest
-from backend.services.auth.workspace_paths import workspace_target
+from backend.services.auth.workspace_paths import workspace_glob_root, workspace_target
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -129,11 +129,12 @@ async def enforce_invocation_capabilities(
     )
 
 
-def _contained(workspace: str, paths: Sequence[str]) -> None:
+def _contained(workspace: str, paths: Sequence[str], *, glob_paths: bool = False) -> None:
     try:
         root = Path(workspace).resolve(strict=True)
+        resolve = workspace_glob_root if glob_paths else workspace_target
         for value in paths:
-            workspace_target(str(root), value)
+            resolve(str(root), value)
     except (OSError, RuntimeError, ValueError) as exc:
         raise CapabilityDeniedError("Workspace containment could not be established") from exc
 
@@ -225,7 +226,7 @@ async def enforce_tool_capabilities(
         # Unclassified SDK/MCP/custom tools can have arbitrary effects.
         grant.require(frozenset(Capability))
     if paths and Capability.external_access not in grant.capabilities:
-        _contained(workspace, paths)
+        _contained(workspace, paths, glob_paths=name == "glob")
 
 
 def excluded_tools_for_capabilities(capabilities: frozenset[str] | None, existing: Sequence[str]) -> list[str]:

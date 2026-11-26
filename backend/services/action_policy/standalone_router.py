@@ -19,7 +19,7 @@ from backend.services.action_policy.classifier import Action, ActionKind
 from backend.services.adapters.capability_guard import has_explicit_file_target, invocation_permission_request
 from backend.services.adapters.contracts import CapabilityDeniedError, ExecutionIdentity
 from backend.services.auth.permission_policy import is_hard_gated_command
-from backend.services.auth.workspace_paths import workspace_target
+from backend.services.auth.workspace_paths import workspace_glob_root, workspace_target
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -149,9 +149,14 @@ class StandalonePolicyRouter:
         )
         contained = bool(paths)
         protected = False
+        resolve = (
+            workspace_glob_root
+            if request.kind == "read" and invocation.tool_name.lower() == "glob"
+            else workspace_target
+        )
         for path in paths:
             try:
-                target = workspace_target(invocation.workspace, path)
+                target = resolve(invocation.workspace, path)
                 relative = str(target.relative_to(Path(invocation.workspace).resolve())).replace("\\", "/")
             except (OSError, ValueError, RuntimeError):
                 contained = False

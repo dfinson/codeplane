@@ -8,6 +8,7 @@ from backend.config import CPLConfig
 from backend.models.domain import ApprovalResolution, JobState, SessionConfig
 from backend.models.events import EventKind
 from backend.persistence.event_repo import EventRepository
+from backend.services.action_policy.assessment import DECISION_SECONDS
 from backend.services.action_policy.classifier import Preset, RepoPolicy
 from backend.services.action_policy.production import StandaloneGovernance
 from backend.services.adapters.adapter_registry import AdapterRegistry
@@ -125,7 +126,11 @@ async def test_managed_policy_gate_uses_runtime_approval_state_and_exact_adapter
 
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
-    [("view", {"path": "source.py"}), ("grep", {"paths": "source.py", "pattern": "fixture"})],
+    [
+        ("view", {"path": "source.py"}),
+        ("grep", {"paths": "source.py", "pattern": "fixture"}),
+        ("glob", {"paths": ["."], "pattern": "**/*"}),
+    ],
 )
 async def test_real_root_catalogue_pin_policy_and_audit_reach_the_adapter_boundary(
     session_factory, tmp_path, tool_name, arguments
@@ -589,7 +594,7 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
     )
     try:
         if scenario.startswith("final-"):
-            await asyncio.wait_for(final_read_entered.wait(), 3)
+            await asyncio.wait_for(final_read_entered.wait(), DECISION_SECONDS + 1)
             router = host._policy_routers["job-1"]
             if scenario == "final-policy-change":
                 router.update_policy(RepoPolicy(preset=Preset.locked))
@@ -614,13 +619,13 @@ async def test_real_native_write_requires_bound_current_bytes_not_a_model_git_cl
             "path-hint-only",
             "opaque-write",
         }:
-            event = await asyncio.wait_for(adapter._queues["native-write"].get(), 3)
+            event = await asyncio.wait_for(adapter._queues["native-write"].get(), DECISION_SECONDS + 1)
             assert event.kind == "permission.requested"
             (approval,) = await approvals.list_pending("job-1")
             assert approval.requires_explicit_approval
             assert json.loads(approval.proposed_action)["reason_code"] == "incomplete_evidence"
             await approvals.resolve(approval.id, ApprovalResolution.rejected)
-        decision = await asyncio.wait_for(pending, 3)
+        decision = await asyncio.wait_for(pending, DECISION_SECONDS + 1)
         assert decision == (
             PermissionDecision.allow
             if scenario in {"clean", "new", "final-policy-unchanged"}
