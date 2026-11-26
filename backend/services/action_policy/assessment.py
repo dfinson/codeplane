@@ -286,7 +286,7 @@ class AssessmentService:
                 with completion_context(invocation):
                     result = await provider.complete(prompt, model=model, system_message=system, excluded_tools=["*"])
                 try:
-                    validate_completion_identity(model, result.model, invocation)
+                    validate_completion_identity(model, result.model, invocation, result=result)
                     if not await is_current():
                         return unavailable("stale_execution", result)
                     if result.text is None or len(result.text.encode("utf-8")) > MAX_OUTPUT_BYTES:

@@ -122,7 +122,10 @@ class TestAdapterRegistry:
         assert records[0].metadata.execution_epoch == "epoch"
         assert records[0].payload["response_schema"]["projection_version"] == "cp-copilot-wire-schema-v2"
 
-    async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(self, session_factory) -> None:
+    @pytest.mark.parametrize("rejection_reason", [None, "invalid_structured_output", "model_mismatch"])
+    async def test_governed_utility_retains_exact_contract_model_and_usage_receipt(
+        self, session_factory, rejection_reason
+    ) -> None:
         from decimal import Decimal
 
         from backend.models.execution_contracts import ExecutionContractPin
@@ -149,13 +152,17 @@ class TestAdapterRegistry:
             execution_epoch="epoch",
             source="assistant.usage",
         )
-        adapter.complete = AsyncMock(
-            return_value=CompletionResult(
-                text="private completion content",
-                model="served-model",
-                usage=(usage,),
-            )
+        completion = CompletionResult(
+            text="private completion content",
+            model="served-model",
+            usage=(usage,),
         )
+        rejection = (
+            UtilityCompletionError("Rejected output", reason=rejection_reason, completion=completion)
+            if rejection_reason
+            else None
+        )
+        adapter.complete = AsyncMock(return_value=completion, side_effect=rejection)
         with completion_context(
             CompletionContext(
                 job_id="job-1",
@@ -163,10 +170,16 @@ class TestAdapterRegistry:
                 execution_contract=pin,
             )
         ):
-            result = await registry.get_completion_provider("copilot").complete(
-                "private input",
-                model="requested-model",
-            )
+            provider = registry.get_completion_provider("copilot")
+            if rejection is not None:
+                with pytest.raises(UtilityCompletionError) as caught:
+                    await provider.complete("private input", model="requested-model")
+                assert caught.value is rejection
+                result = caught.value.completion
+                assert result is not None
+            else:
+                result = await provider.complete("private input", model="requested-model")
+        adapter.complete.assert_awaited_once()
         async with session_factory() as session:
             recorded = [row.event for row in await EventRepository(session).list_after(0, job_id="job-1")]
         assert [str(event.kind) for event in recorded] == [
@@ -180,6 +193,7 @@ class TestAdapterRegistry:
         assert completed.payload["actual_model"] == "served-model"
         assert completed.payload["requested_model"] == "requested-model"
         assert completed.payload["usage"] == [usage.model_dump(mode="json")]
+        assert completed.payload["rejection_reason"] == rejection_reason
         assert "private" not in str(completed.payload)
         assert result.usage == (usage,)
 

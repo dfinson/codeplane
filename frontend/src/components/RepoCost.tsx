@@ -8,6 +8,7 @@ import {
 import type { ModelComparisonRow, YieldCategoryRow } from "../api/client-analytics";
 import { Spinner } from "./ui/spinner";
 import { pathBasename } from "../lib/paths";
+import { sumKnown } from "../lib/currency";
 
 function formatCost(usd: number | null | undefined): string {
   if (usd == null) return "Unknown USD";
@@ -25,7 +26,7 @@ export function RepoCost() {
   const [period, setPeriod] = useState(30);
   const [models, setModels] = useState<ModelComparisonRow[]>([]);
   const [yieldData, setYieldData] = useState<YieldCategoryRow[]>([]);
-  const [totalCost, setTotalCost] = useState(0);
+  const [totalCost, setTotalCost] = useState<number | null>(null);
   const [totalJobs, setTotalJobs] = useState(0);
 
   useEffect(() => {
@@ -40,7 +41,9 @@ export function RepoCost() {
         if (ignore) return;
         setModels(modelRes.models);
         setYieldData(yieldRes.categories);
-        setTotalCost(modelRes.models.reduce((s, m) => s + (m.totalCostUsd || 0), 0));
+        setTotalCost(modelRes.models.some(m => m.totalCostUsd == null)
+          ? null
+          : sumKnown(modelRes.models.map(m => m.totalCostUsd)));
         setTotalJobs(modelRes.models.reduce((s, m) => s + (m.jobCount || 0), 0));
       })
       .catch(() => { if (!ignore) toast.error("Failed to load cost data"); })
@@ -96,7 +99,7 @@ export function RepoCost() {
             </div>
             <div className="rounded-lg border border-border bg-card p-4 text-center">
               <p className="text-2xl font-bold text-foreground">
-                {totalJobs > 0 ? formatCost(totalCost / totalJobs) : "—"}
+                {totalJobs > 0 ? formatCost(totalCost == null ? null : totalCost / totalJobs) : "—"}
               </p>
               <p className="text-xs text-muted-foreground">Avg Cost/Job</p>
             </div>
@@ -126,8 +129,8 @@ export function RepoCost() {
                     <tr key={m.model} className="border-b border-border/50">
                       <td className="px-4 py-2 text-foreground font-medium truncate max-w-[12rem]">{m.model}</td>
                       <td className="px-4 py-2 text-right text-muted-foreground">{m.jobCount}</td>
-                      <td className="px-4 py-2 text-right text-muted-foreground">{formatCost(m.totalCostUsd || 0)}</td>
-                      <td className="px-4 py-2 text-right text-muted-foreground">{formatCost(m.avgCost || 0)}</td>
+                      <td className="px-4 py-2 text-right text-muted-foreground">{formatCost(m.totalCostUsd)}</td>
+                      <td className="px-4 py-2 text-right text-muted-foreground">{formatCost(m.avgCost)}</td>
                       <td className="px-4 py-2 text-right text-muted-foreground">{m.premiumRequests.toLocaleString()}</td>
                     </tr>
                   ))}

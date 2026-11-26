@@ -22,7 +22,7 @@ from backend.services.analytics.telemetry_query_service import TelemetryQuerySer
 from backend.services.artifacts.diff_service import DiffService
 from backend.services.events.sse_manager import SSEConnection, SSEManager
 from backend.services.job.job_service import JobService
-from backend.services.sharing.share_service import ShareService
+from backend.services.sharing.share_service import InvalidShareTokenError, ShareService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -47,13 +47,23 @@ async def create_share_link(
     """Generate a read-only share URL for a job."""
     # Ensure the job exists
     await svc.get_job(job_id)
-    entry = share_service.create_token(job_id)
+    entry = await share_service.create_token(job_id)
     base = str(request.base_url).rstrip("/")
     return ShareTokenResponse(
         token=entry.token,
         job_id=job_id,
         url=f"{base}/shared/{entry.token}",
     )
+
+
+@router.delete("/jobs/{job_id}/share/{token}", status_code=204, response_model=None)
+async def revoke_share_link(
+    job_id: str,
+    token: str,
+    share_service: FromDishka[ShareService],
+) -> None:
+    """Revoke this job's share link. Requires operator authentication; idempotent."""
+    await share_service.revoke(token, job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +78,7 @@ async def get_shared_job(
     svc: FromDishka[JobService],
 ) -> JobResponse:
     """Read-only job detail via share token."""
-    job_id = share_service.validate(token)
+    job_id = await share_service.validate(token)
     job = await svc.get_job(job_id)
     progress = await svc.get_latest_progress_preview(job_id)
 
@@ -92,7 +102,7 @@ async def stream_shared_events(
     session_factory: FromDishka[async_sessionmaker],  # type: ignore[type-arg]  # dishka DI resolves the full parameterized type at runtime
 ) -> StreamingResponse:
     """SSE stream scoped to a shared job (read-only)."""
-    job_id = share_service.validate(token)
+    job_id = await share_service.validate(token)
 
     header_last_id = request.headers.get("Last-Event-ID")
     conn = SSEConnection(job_id=job_id)
@@ -107,16 +117,21 @@ async def stream_shared_events(
                 except (ValueError, TypeError):
                     log.debug("sse_last_id_parse_failed", header_last_id=header_last_id)
 
+            await share_service.validate(token)
             yield "event: session_heartbeat\ndata: {}\n\n"
 
             while not conn.closed:
                 try:
                     data = await asyncio.wait_for(conn.queue.get(), timeout=5.0)
-                    yield data
                 except TimeoutError:
-                    yield "event: session_heartbeat\ndata: {}\n\n"
+                    data = "event: session_heartbeat\ndata: {}\n\n"
                 except (asyncio.CancelledError, GeneratorExit):
                     break
+                # Recheck after waiting, including replayed events, before disclosing data.
+                await share_service.validate(token)
+                yield data
+        except InvalidShareTokenError:
+            return
         finally:
             sse_manager.unregister(conn)
 
@@ -151,7 +166,7 @@ async def get_shared_snapshot(
     from backend.api.jobs import job_to_response, resolve_tool_display, resolve_tool_display_full
     from backend.services.artifacts.snapshot_helpers import assemble_snapshot
 
-    job_id = share_service.validate(token)
+    job_id = await share_service.validate(token)
     job = await svc.get_job(job_id)
     progress_preview = await svc.get_latest_progress_preview(job_id)
 
@@ -184,5 +199,5 @@ async def get_shared_telemetry(
     telemetry_svc: FromDishka[TelemetryQueryService],
 ) -> JobTelemetryResponse:
     """Read-only telemetry data via share token."""
-    job_id = share_service.validate(token)
+    job_id = await share_service.validate(token)
     return await telemetry_svc.get_telemetry(job_id)

@@ -1039,8 +1039,7 @@ class ClaudeAdapter(BaseAgentAdapter):
             raise UtilityCompletionError("Text-only completion requested tools", reason="tool_request")
         if not completed or not "\n".join(collected).strip():
             raise UtilityCompletionError("Claude completion returned no complete text", reason="empty_response")
-        validate_completion_identity(model, served_model, completion)
-        return CompletionResult(
+        result = CompletionResult(
             text="\n".join(collected),
             input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
             output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
@@ -1048,6 +1047,8 @@ class ClaudeAdapter(BaseAgentAdapter):
             model=served_model,
             usage=tuple(usage),
         )
+        validate_completion_identity(model, served_model, completion, result=result)
+        return result
 
 
 # ---------------------------------------------------------------------------

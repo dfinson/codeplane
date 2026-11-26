@@ -29,6 +29,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class ShareTokenRow(Base):
+    __tablename__ = "share_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False, index=True)
+
+
 class RecipeDefinitionRow(Base):
     __tablename__ = "recipe_definitions"
 

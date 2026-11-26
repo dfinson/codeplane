@@ -2073,6 +2073,39 @@ class TestComplete:
         assert result.model == "approved-model" and result.input_tokens == 7
         sent.assert_awaited_once()
 
+    @pytest.mark.parametrize("actual_model", ["unexpected-model", ""])
+    async def test_rejected_model_retains_observed_completion_usage(
+        self, adapter: CopilotAdapter, actual_model: str
+    ) -> None:
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        session = _FakeCopilotSession()
+
+        async def send_and_wait(*args: Any, **kwargs: Any) -> _FakeSdkSessionEvent:
+            session.fire_event(
+                _FakeSdkSessionEvent("assistant.usage", _FakeEventData(model=actual_model, inputTokens=7, cost=0.1))
+            )
+            return _FakeSdkSessionEvent("assistant.message", _FakeEventData(content='{"title":"observed"}'))
+
+        with (
+            patch("copilot.CopilotClient", return_value=self._client(session)),
+            patch.object(
+                session, "send_and_wait", side_effect=send_and_wait, create=True, new_callable=AsyncMock
+            ) as sent,
+            completion_context(
+                CompletionContext(role="title", response_schema={"type": "object", "additionalProperties": False})
+            ),
+            pytest.raises(agent_adapter.UtilityCompletionError) as caught,
+        ):
+            await adapter.complete("fixture", model="approved-model")
+        assert caught.value.reason == ("model_mismatch" if actual_model else "model_identity_missing")
+        result = caught.value.completion
+        assert result is not None
+        assert result.model == actual_model
+        assert result.input_tokens == 7
+        assert any(amount.unit == "copilot_cost_unit" for amount in result.usage)
+        sent.assert_awaited_once()
+
     @pytest.mark.parametrize(
         "native_text",
         [

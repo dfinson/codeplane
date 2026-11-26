@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from backend.models.execution_contracts import ExecutionContractPin
+    from backend.services.adapters.agent_adapter import CompletionResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,15 +31,25 @@ def current_completion_context() -> CompletionContext:
     return _CURRENT.get() or CompletionContext()
 
 
-def validate_completion_identity(requested: str | None, actual: str, context: CompletionContext) -> None:
+def validate_completion_identity(
+    requested: str | None,
+    actual: str,
+    context: CompletionContext,
+    *,
+    result: CompletionResult | None = None,
+) -> None:
     from backend.services.adapters.agent_adapter import UtilityCompletionError, normalize_model_name
 
     if context.role not in {"assessment", "title"}:
         return
     if not actual or not requested:
-        raise UtilityCompletionError("Utility model identity is unavailable", reason="model_identity_missing")
+        raise UtilityCompletionError(
+            "Utility model identity is unavailable", reason="model_identity_missing", completion=result
+        )
     if normalize_model_name(actual) != normalize_model_name(requested):
-        raise UtilityCompletionError("Utility provider served a different model", reason="model_mismatch")
+        raise UtilityCompletionError(
+            "Utility provider served a different model", reason="model_mismatch", completion=result
+        )
 
 
 @contextmanager

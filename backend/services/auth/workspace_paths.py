@@ -46,6 +46,22 @@ def _relative_target(root: Path, supplied_root: Path, candidate: Path) -> tuple[
     raise ValueError("Tool target is outside the workspace")
 
 
+def workspace_glob_root(workspace: str, raw: str) -> Path:
+    """Validate glob syntax and resolve its fixed, contained search root."""
+    parts = _local_path(raw).parts
+    wildcard = next(
+        (index for index, part in enumerate(parts) if any(char in part for char in "*?[")),
+        None,
+    )
+    if wildcard is None:
+        return workspace_target(workspace, raw)
+    if any(part == ".." for part in parts[wildcard:]) or any(char in raw for char in "{}"):
+        raise ValueError("Glob suffix cannot traverse upward or expand alternative paths")
+    # Wildcards are not literal Windows filenames. Resolve only the fixed root;
+    # subsequent explicit file reads still require their own containment check.
+    return workspace_target(workspace, str(Path(*parts[:wildcard])))
+
+
 def workspace_target(workspace: str, raw: str) -> Path:
     candidate = _local_path(raw)
     supplied_root = Path(os.path.abspath(workspace))

@@ -279,7 +279,7 @@ async def app(
             SSEManager: sse_manager,
             ApprovalService: approval_service,
             RuntimeService: mock_runtime_service,
-            ShareService: ShareService(),
+            ShareService: ShareService(session_factory),
             MergeService: mock_merge_service,
             GitService: mock_git_service,
             PlatformRegistry: mock_platform_registry,

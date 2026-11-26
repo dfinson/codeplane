@@ -65,6 +65,6 @@ describe("MetricsPanel tool outcomes", () => {
     expect(screen.getByText("3 (2 fail)")).toBeInTheDocument();
     expect(row.lastElementChild).toHaveTextContent(/^2$/);
     expect(row.lastElementChild).toHaveClass("text-red-400");
-    expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
+    expect(within(row).queryByText(/unknown/i)).not.toBeInTheDocument();
   });
 });

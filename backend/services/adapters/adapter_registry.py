@@ -96,13 +96,20 @@ class _RegisteredTextCompletion:
                     "Utility was not invoked because its request could not be recorded",
                     reason="receipt_persistence_failed",
                 ) from exc
-        with completion_context(context):
-            result = await adapter.complete(
-                prompt,
-                model=model,
-                system_message=system_message,
-                excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
-            )
+        rejection: UtilityCompletionError | None = None
+        try:
+            with completion_context(context):
+                result = await adapter.complete(
+                    prompt,
+                    model=model,
+                    system_message=system_message,
+                    excluded_tools=sorted(set(excluded_tools or ()) | {"*"}),
+                )
+        except UtilityCompletionError as exc:
+            if exc.completion is None:
+                raise
+            result = exc.completion
+            rejection = exc
         if context.execution_contract is not None:
             result = replace(result, usage_event_id=_utility_receipt_id(operation_id, "completed"))
             try:
@@ -115,6 +122,7 @@ class _RegisteredTextCompletion:
                         "requested_model": model,
                         "actual_model": result.model or None,
                         "usage": [amount.model_dump(mode="json") for amount in result.usage],
+                        "rejection_reason": rejection.reason if rejection is not None else None,
                         **schema_metadata,
                     },
                 )
@@ -125,6 +133,9 @@ class _RegisteredTextCompletion:
                     reason="receipt_persistence_failed",
                     completion=result,
                 ) from exc
+        if rejection is not None:
+            rejection.completion = result
+            raise rejection
         return result
 
 

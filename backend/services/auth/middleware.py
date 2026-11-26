@@ -470,6 +470,10 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
     """Enforce app posture with narrowly scoped bootstrap/share exceptions."""
     path = request.url.path
     if is_public_request(request):
+        app = request.scope.get("app")
+        policy = _policy(getattr(getattr(app, "state", None), "auth_policy", None))
+        if policy.access_only and path.startswith(("/api/share/", "/shared/")) and not _has_cloudflare_access(request):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
         return await call_next(request)
     if is_request_authenticated(request):
         return await call_next(request)

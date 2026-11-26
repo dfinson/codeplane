@@ -1416,6 +1416,35 @@ class TestAbortSession:
 
 
 class TestComplete:
+    @pytest.mark.parametrize("actual_model", ["claude-unexpected", ""])
+    async def test_rejected_model_retains_observed_completion_usage(
+        self, adapter: ClaudeAdapter, actual_model: str
+    ) -> None:
+        from backend.services.adapters.agent_adapter import UtilityCompletionError
+        from backend.services.adapters.completion_context import CompletionContext, completion_context
+
+        calls = 0
+
+        async def query(**kwargs: Any):
+            nonlocal calls
+            calls += 1
+            yield _FakeAssistantMessage(content=[_FakeTextBlock("observed")], model=actual_model)
+            yield _FakeResultMessage(result="", usage={"input_tokens": 7}, total_cost_usd=0.1)
+
+        with (
+            patch.dict(sys.modules["claude_code_sdk"].__dict__, {"query": query}),
+            completion_context(CompletionContext(role="title")),
+            pytest.raises(UtilityCompletionError) as caught,
+        ):
+            await adapter.complete("fixture", model="claude-approved")
+        assert caught.value.reason == ("model_mismatch" if actual_model else "model_identity_missing")
+        result = caught.value.completion
+        assert result is not None
+        assert result.model == actual_model
+        assert result.input_tokens == 7
+        assert result.cost_usd == 0.1
+        assert calls == 1
+
     @pytest.mark.asyncio
     async def test_collects_text_from_assistant(self, adapter: ClaudeAdapter) -> None:
         async def _fake_query(**kwargs: Any):

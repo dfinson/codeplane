@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.action_policy.batcher import ApprovalBatcher
 from backend.services.action_policy.classifier import Preset
+from backend.services.action_policy.standalone_router import StandalonePolicyRouter
 from backend.services.events.event_bus import EventBus
 
 # ---------------------------------------------------------------------------
@@ -54,8 +55,18 @@ class TestOnPolicySettingsChanged:
     async def test_reloads_policy_for_running_jobs(self) -> None:
         svc = _make_runtime_service()
 
-        mock_router = MagicMock()
-        svc._policy_routers["job-1"] = mock_router
+        router = StandalonePolicyRouter(
+            pin=MagicMock(),
+            execution_epoch="epoch",
+            policy=MagicMock(),
+            authority=MagicMock(),
+            contracts=MagicMock(),
+            events=svc._event_bus,
+            checkpoint=MagicMock(),
+            git=MagicMock(),
+            job_is_current=AsyncMock(),
+        )
+        svc._policy_routers["job-1"] = router
 
         mock_batcher = MagicMock()
         svc._policy_batchers["job-1"] = mock_batcher
@@ -73,7 +84,7 @@ class TestOnPolicySettingsChanged:
             svc._session_factory = _make_session_factory(AsyncMock())
             await svc._on_policy_settings_changed(_make_policy_event())
 
-        mock_repo.get_usd_ceilings.assert_not_awaited()
+        mock_repo.get_usd_ceilings.assert_awaited_once()
         # Batcher window updated + adapter policy pushed with the new preset.
         mock_batcher.set_batch_window.assert_called_once_with(3.0)
         mock_adapter.update_repo_policy.assert_called_once()
@@ -81,6 +92,8 @@ class TestOnPolicySettingsChanged:
         assert call_args[0][0] == "job-1"
         policy = call_args[0][1]
         assert policy.preset == Preset.locked
+        assert router._policy is policy
+        assert svc._repo_policies["job-1"] is policy
 
     async def test_skips_jobs_that_finish_mid_reload(self) -> None:
         svc = _make_runtime_service()

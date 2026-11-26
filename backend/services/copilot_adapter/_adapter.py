@@ -1237,7 +1237,6 @@ class CopilotAdapter(BaseAgentAdapter):
                 raise UtilityCompletionError("Text-only output exceeds its bound", reason="output_limit")
             if not text.strip():
                 raise UtilityCompletionError("Text-only completion returned no text", reason="empty_response")
-            validate_completion_identity(model, served_model, completion)
             result = CompletionResult(
                 text=text,
                 model=served_model,
@@ -1245,6 +1244,7 @@ class CopilotAdapter(BaseAgentAdapter):
                 input_tokens=sum(int(item.amount) for item in usage if item.unit == "input_tokens"),
                 output_tokens=sum(int(item.amount) for item in usage if item.unit == "output_tokens"),
             )
+            validate_completion_identity(model, served_model, completion, result=result)
             if completion.response_schema is not None:
                 result.raw_text = text
                 try:

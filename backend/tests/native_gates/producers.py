@@ -147,7 +147,7 @@ def make_producer(mode):
     elif family == "openai_agents":
         agents = load_sdk("agents")
         tool_context = load_sdk("agents.tool_context")
-        from openai.types.responses import ResponseFunctionToolCall
+        responses = load_sdk("openai.types.responses")
 
         tool = agents.function_tool(p.abody, name_override="local", failure_error_function=None)
         p.target = agents.Agent(name="original", tools=[tool])
@@ -157,7 +157,9 @@ def make_producer(mode):
             context = tool_context.ToolContext.from_agent_context(
                 agents.RunContextWrapper(context=None),
                 "native-call",
-                ResponseFunctionToolCall(name="local", arguments=args, call_id="native-call", type="function_call"),
+                responses.ResponseFunctionToolCall(
+                    name="local", arguments=args, call_id="native-call", type="function_call"
+                ),
             )
             return await tool.on_invoke_tool(context, args)
 

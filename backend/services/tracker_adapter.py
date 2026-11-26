@@ -271,10 +271,26 @@ class GitHubProjectsTrackerAdapter(_HttpTrackerAdapter):
                 "variables": {"owner": owner, "number": int(raw_number)},
             },
         )
-        if payload.get("errors"):
-            raise TrackerAdapterError("GitHub Projects query failed")
-
         data = payload.get("data")
+        errors = payload.get("errors")
+        if errors:
+            if not isinstance(data, dict):
+                raise TrackerAdapterError("GitHub Projects query failed")
+            owner_field = "organization" if isinstance(data.get("organization"), dict) else "user"
+            missing_field = "user" if owner_field == "organization" else "organization"
+            # Only the unmatched owner lookup may fail, never the selected project's fields.
+            if (
+                not isinstance(data.get(owner_field), dict)
+                or data.get(missing_field) is not None
+                or not isinstance(errors, list)
+                or any(
+                    not isinstance(error, dict)
+                    or error.get("type") != "NOT_FOUND"
+                    or error.get("path") != [missing_field]
+                    for error in errors
+                )
+            ):
+                raise TrackerAdapterError("GitHub Projects query failed")
         if not isinstance(data, dict):
             raise TrackerAdapterError("GitHub Projects returned an invalid response")
         owner_data = data.get("organization") or data.get("user")

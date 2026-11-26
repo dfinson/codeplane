@@ -437,11 +437,7 @@ async def list_models(
     cached_models_by_sdk: FromDishka[CachedModelsBySdk],
     sdk: str | None = Query(default=None, description="SDK id (copilot | claude). Omit for default."),
 ) -> ModelListResponse:
-    """Return the model list for the requested SDK, cached at server startup.
-
-    If the cache is empty for the copilot SDK (e.g. auth wasn't ready at
-    startup), attempt a live fetch so the user doesn't have to restart.
-    """
+    """Resolve enabled provider models on demand and cache successful discovery."""
     from backend.config import load_config
     from backend.services.adapters.integration_policy import IntegrationPolicy
 

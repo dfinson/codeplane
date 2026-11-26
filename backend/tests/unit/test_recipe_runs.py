@@ -43,6 +43,7 @@ from backend.persistence.database import _set_sqlite_pragmas
 from backend.persistence.recipe_repo import RecipeRepository
 from backend.persistence.recipe_run_repo import RecipeRunRepository
 from backend.services.job.approval_service import ApprovalService
+from backend.services.project.repo_membership import normalize_repo_path
 from backend.services.recipe.definition_service import RecipeDefinitionService
 from backend.services.recipe.run_service import RecipeRunService, resolve_command_arguments
 from backend.services.recipe.run_state import can_retry, completed_route, completed_run_state, project_cursor
@@ -121,7 +122,7 @@ async def ready_attempt(session, run, step_id, workspace="/repo/snapshot"):
         runner=runner,
         capabilities=instance.definition.capabilities,
         workspace=RecipeResolvedWorkspace(
-            path=workspace, code_ref="immutable-code", policy=instance.definition.workspace
+            path=normalize_repo_path(workspace), code_ref="immutable-code", policy=instance.definition.workspace
         ),
     )
     await session.commit()

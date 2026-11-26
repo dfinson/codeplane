@@ -192,7 +192,7 @@ async def test_original_openai_runner_executes_original_tools_without_network(bi
         from backend.tests.native_gates.sdk_types import ModelBase
     else:
         ModelBase = agents.Model  # noqa: N806 - the real SDK base.
-    from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
+    responses = load_sdk("openai.types.responses")
 
     calls = []
 
@@ -210,7 +210,7 @@ async def test_original_openai_runner_executes_original_tools_without_network(bi
             self.responses += 1
             output = (
                 [
-                    ResponseFunctionToolCall(
+                    responses.ResponseFunctionToolCall(
                         id="call-local",
                         call_id="native-runner-call",
                         name="local",
@@ -220,12 +220,12 @@ async def test_original_openai_runner_executes_original_tools_without_network(bi
                 ]
                 if self.responses == 1
                 else [
-                    ResponseOutputMessage(
+                    responses.ResponseOutputMessage(
                         id="message-local",
                         type="message",
                         role="assistant",
                         status="completed",
-                        content=[ResponseOutputText(text="done", type="output_text", annotations=[])],
+                        content=[responses.ResponseOutputText(text="done", type="output_text", annotations=[])],
                     )
                 ]
             )

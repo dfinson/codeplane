@@ -3840,13 +3840,16 @@ All errors return a consistent envelope:
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/jobs/{job_id}/share` | Generate a read-only share token (24 h TTL) |
+| `DELETE` | `/api/jobs/{job_id}/share/{token}` | Operator-authenticated, job-scoped revocation (idempotent 204) |
 | `GET` | `/api/share/{token}/job` | Job detail via share token (bypasses password auth) |
 | `GET` | `/api/share/{token}/events` | SSE stream for the shared job (bypasses password auth) |
+| `GET` | `/api/share/{token}/snapshot` | Read-only job snapshot via share token |
+| `GET` | `/api/share/{token}/telemetry` | Read-only job telemetry via share token |
 
 #### Create Share Link — Response
 
 ```json
-201 Created
+200 OK
 {
   "token": "dGhpcyBpcyBhIHRva2Vu...",
   "jobId": "job-104",
@@ -3854,7 +3857,9 @@ All errors return a consistent envelope:
 }
 ```
 
-Share tokens are ephemeral (in-memory, 24-hour TTL). If the server restarts, all tokens are invalidated. Share endpoints bypass CodePlane's password authentication but provide strictly read-only access — no approval, cancel, or message operations are possible.
+Share tokens persist across server restarts with a fixed 24-hour UTC expiry. Only SHA-256 token hashes are stored in the database. Operator-authenticated revocation deletes the matching job's credential; unknown, already revoked, or wrong-job tokens return 204 without changing other links. Expired credentials are pruned when new links are created. Shared SSE streams revalidate before every delivery and close on expiry or revocation, with idle connections checked every five seconds. Share endpoints bypass CodePlane's password authentication but provide strictly read-only access: no approval, cancel, or message operations are possible. Access-only mode still requires a valid Cloudflare Access JWT.
+
+Previously issued in-memory links cannot be migrated and must be reissued after upgrading.
 
 > **Scope:** Share tokens bypass CodePlane's password gate only. They do **not** bypass tunnel-level identity gates (Dev Tunnels requires Microsoft login; Cloudflare Tunnels requires the Access policy). Share links are useful for giving read-only access to team members who can already reach the server — e.g. via the same tunnel, LAN, or localhost.
 
@@ -4447,12 +4452,12 @@ SSE connections are capped at `max_sse_connections` (default: 5) to prevent reso
 Share tokens provide **read-only** access to a single job. Security properties:
 
 - Tokens are 256-bit cryptographically random values (`secrets.token_urlsafe(32)`)
-- 24-hour TTL, stored in-memory only (lost on server restart)
+- Fixed 24-hour UTC expiry, persisted as a token hash across server restarts; operators can revoke a job's link before expiry
 - Share endpoints bypass CodePlane's password authentication but expose only: job metadata, SSE event stream, and progress state
 - No mutation operations are possible via share tokens — approvals, cancellation, messages, and resolution are all blocked
 - The port preview proxy is **not** accessible via share tokens
 - **Share tokens do not bypass tunnel-level identity gates.** Dev Tunnels still requires Microsoft login; Cloudflare Tunnels still requires the Access policy. The viewer must be able to reach the server before the share token matters
-- No audit trail is kept for token creation or access — treat share URLs as sensitive
+- Share credentials, including token prefixes, are not logged by the sharing service. Treat share URLs as sensitive and redact them in external access logs
 
 ### 21.8 Push Notification Security
 

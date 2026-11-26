@@ -87,6 +87,22 @@ A password is always required for remote access. By default one is auto-generate
 
 After startup, run `cpl info` to print the tunnel URL and a QR code you can scan from your phone.
 
+#### URL stability
+
+CodePlane records the selected tunnel in `CODEPLANE_HOME/devtunnel.json` (by default
+`~/.codeplane/devtunnel.json`). An explicit `--tunnel-name` takes precedence; otherwise,
+the saved name takes precedence over account tunnel-list ordering. The CLI's assigned
+`portUri` is used when available. If it is unavailable, CodePlane warns and uses the
+name-based relay alias.
+
+Keep the local port fixed for a bookmarkable URL. A changed origin is reported through
+`devtunnel_origin_changed`. A corrupt or unreadable identity record stops startup rather
+than silently selecting another tunnel; repair or remove that specific record to recover.
+Deleting or expiring the server-side tunnel can still change its assigned hostname.
+Use a distinct tunnel per machine: remembering a name does not provide exclusive ownership
+of an account-level tunnel. The Microsoft identity gate and application authentication
+remain required.
+
 ### Cloudflare Tunnels
 
 Use Cloudflare Tunnels when you want a stable public hostname (e.g., `codeplane.yourdomain.com`) instead of the auto-provisioned Dev Tunnels URL.

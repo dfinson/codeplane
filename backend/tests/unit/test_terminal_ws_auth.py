@@ -29,6 +29,12 @@ class TestCheckWebsocketAuth:
         auth_mod._password_hash = None
         assert check_websocket_auth(client_host="8.8.8.8", cookies={}) is True
 
+    @pytest.mark.parametrize("client_host", ["8.8.8.8", "127.0.0.1"])
+    def test_remote_posture_requires_auth_even_without_password(self, client_host: str) -> None:
+        auth_mod._password_hash = None
+        policy = auth_mod.AuthPolicy(remote=True)
+        assert check_websocket_auth(client_host=client_host, cookies={}, policy=policy) is False
+
     def test_password_enabled_rejects_remote_without_cookie(self) -> None:
         set_password("secret")
         assert check_websocket_auth(client_host="8.8.8.8", cookies={}) is False

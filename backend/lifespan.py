@@ -738,26 +738,8 @@ async def _init_optional_services(
         log.debug("terminal_service_enabled", max_sessions=config.terminal.max_sessions)
 
     # --- Model list cache ---
-    # Fetch once at startup so the job-creation form renders instantly.
-    # Models are keyed by SDK id so the frontend can fetch per-SDK.
-    cached_models_by_sdk: dict[str, list[dict[str, object]]] = {}
-
-    # Copilot models — retry up to 3 times since auth tokens may not be ready immediately
-    copilot_models: list[dict[str, object]] = []
-    for _attempt in range(3):
-        try:
-            from backend.services.copilot_adapter._models import fetch_copilot_models_raw
-
-            copilot_models = await fetch_copilot_models_raw()
-            log.debug("copilot_models_cached", count=len(copilot_models))
-            break  # success
-        except Exception as exc:
-            if _attempt < 2:
-                log.debug("copilot_model_cache_retry", attempt=_attempt + 1, error=str(exc))
-                await asyncio.sleep(2)
-            else:
-                log.warning("copilot_model_cache_failed", error=str(exc))
-    cached_models_by_sdk["copilot"] = copilot_models
+    # Provider discovery is lazy at /models; startup never launches an SDK client.
+    cached_models_by_sdk: dict[str, list[dict[str, object]]] = {"copilot": []}
 
     # Claude Code models — loaded from data/claude_models.json
     _claude_models_path = Path(__file__).resolve().parent / "data" / "claude_models.json"
@@ -1216,7 +1198,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await recovery_task
 
     # --- Share service ---
-    share_service = ShareService()
+    share_service = ShareService(session_factory)
 
     from backend.services.tracker_sync_service import TrackerSyncService
 
