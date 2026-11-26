@@ -17,7 +17,8 @@ from typing import Any
 
 import structlog
 
-from backend.services.copilot_adapter._client import create_copilot_client
+from backend.services.adapters.base_adapter import CLIENT_STOP_TIMEOUT_S
+from backend.services.copilot_adapter._client import create_copilot_client, stop_copilot_client
 
 log = structlog.get_logger(__name__)
 
@@ -60,4 +61,4 @@ async def fetch_copilot_models_raw(*, github_token: str | None = None) -> list[d
                 log.debug("copilot_model_parse_skipped", model_id=raw.get("id"), error=str(exc))
         return models
     finally:
-        await client.stop()
+        await stop_copilot_client(client, timeout=CLIENT_STOP_TIMEOUT_S, explicit_account=bool(github_token))

@@ -81,6 +81,63 @@ def test_real_sdk_teardown_sanitizes_explicit_diagnostics_without_hiding_concurr
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_model_catalog_teardown_sanitizes_explicit_account_diagnostics():
+    script = textwrap.dedent("""
+        import asyncio
+        import io
+        import logging
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        import structlog
+        from copilot import CopilotClient, RuntimeConnection
+        from copilot.session import CopilotSession
+        from copilot._jsonrpc import JsonRpcClient, JsonRpcError
+        from backend.services.copilot_adapter._models import fetch_copilot_models_raw
+
+        def offline(event, arguments):
+            if event in {"socket.connect", "socket.getaddrinfo", "subprocess.Popen"}:
+                raise AssertionError("Model catalog teardown validation must not start a CLI or use the network")
+
+        def offline_client(marker):
+            client = CopilotClient(connection=RuntimeConnection.for_stdio(path=sys.executable))
+            async def start():
+                client._client = SimpleNamespace(request=AsyncMock(return_value={"models": []}), stop=AsyncMock())
+                rpc = JsonRpcClient(None)
+                rpc._loop = asyncio.get_running_loop()
+                rpc._send_message = AsyncMock(side_effect=JsonRpcError(-32603, marker))
+                client._sessions["offline"] = CopilotSession("offline", rpc)
+            client.start = start
+            return client
+
+        async def fetch(token, marker):
+            with patch("backend.services.copilot_adapter._models.create_copilot_client",
+                       return_value=offline_client(marker)):
+                assert await fetch_copilot_models_raw(github_token=token) == []
+
+        async def main():
+            output = io.StringIO()
+            logging.basicConfig(level=logging.DEBUG, stream=output, force=True)
+            structlog.configure(processors=[
+                structlog.processors.format_exc_info,
+                structlog.processors.JSONRenderer(),
+            ])
+            await fetch("explicit-account", "explicit-fake-token-sentinel")
+            await fetch(None, "ambient-error-sentinel")
+            text = output.getvalue()
+            assert "explicit-fake-token-sentinel" not in text, text
+            assert "diagnostic withheld for explicit inference account" in text, text
+            assert "ambient-error-sentinel" in text, text
+
+        with asyncio.Runner() as runner:
+            runner.get_loop()
+            sys.addaudithook(offline)
+            runner.run(main())
+    """)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_rpc():
     script = textwrap.dedent("""
         import asyncio

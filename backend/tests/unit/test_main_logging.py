@@ -65,3 +65,27 @@ def test_setup_logging_renders_structlog_human_readable(tmp_path) -> None:
     assert "job_id=job-1" in output
     assert "state=running" in output
     assert "{'job_id': 'job-1'" not in output
+
+
+def test_setup_logging_console_traceback_omits_frame_locals(tmp_path) -> None:
+    setup_logging(str(tmp_path / "codeplane.log"))
+    console_handler = next(
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
+    )
+    stream = StringIO()
+    console_handler.setStream(stream)
+
+    def fail(token: str) -> None:
+        raise RuntimeError("completion failed")
+
+    sentinel = "ghu_" + "console-local-sentinel"
+    try:
+        fail(sentinel)
+    except RuntimeError:
+        structlog.get_logger("backend.test").error("completion_failed", exc_info=True)
+
+    output = stream.getvalue()
+    assert "RuntimeError: completion failed" in output
+    assert sentinel not in output
