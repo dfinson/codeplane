@@ -11,6 +11,7 @@ a running SDK subprocess:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -270,8 +271,7 @@ class TestEvaluatePermission:
         from backend.services.auth.permission_policy import PermissionRequest
 
         adapter = _make_adapter()
-        router = MagicMock()
-        router.route = AsyncMock(return_value=MagicMock(proceed=True, classification=None))
+        router = SimpleNamespace(execution_epoch="epoch", authorize_permission=AsyncMock(return_value=True))
         adapter._policy_router["job"] = router
         adapter._worktree_paths["job"] = "/primary"
         adapter.set_session_metadata(
@@ -291,8 +291,11 @@ class TestEvaluatePermission:
             tool_name="Read",
         )
         assert decision == PermissionDecision.allow
-        assert router.route.call_args.kwargs["cwd"] == "/attempt"
-        assert router.route.call_args.args[0].workspace_path == "/attempt"
+        invocation = router.authorize_permission.await_args.args[0]
+        assert invocation.workspace == "/attempt"
+        assert invocation.metadata.execution_epoch == "epoch"
+        assert invocation.metadata.attempt_id == "attempt"
+        assert await invocation.is_current()
 
     @pytest.mark.asyncio
     async def test_paused_session_denied(self) -> None:
@@ -313,15 +316,14 @@ class TestEvaluatePermission:
         """Trusted jobs are allowed when a policy router is set up (trust goes via router)."""
         adapter = _make_adapter()
 
-        # Set up a policy router that always allows (simulating trust coverage)
-        from unittest.mock import AsyncMock
+        from backend.models.domain import SessionConfig
 
-        mock_decision = MagicMock(proceed=True, checkpoint_ref=None, classification=None)
-        mock_router = MagicMock()
-        mock_router.route = AsyncMock(return_value=mock_decision)
+        mock_router = SimpleNamespace(execution_epoch="epoch", authorize_permission=AsyncMock(return_value=True))
         adapter._policy_router["j1"] = mock_router
         adapter._repo_policies["j1"] = MagicMock()
         adapter._worktree_paths["j1"] = "/tmp"
+        adapter.set_job_id("s1", "j1")
+        adapter.set_session_metadata("s1", SessionConfig(workspace_path="/tmp", prompt="", job_id="j1"))
 
         from backend.services.auth.permission_policy import PermissionRequest
 
@@ -332,6 +334,7 @@ class TestEvaluatePermission:
             tool_name="Read",
         )
         assert result == PermissionDecision.allow
+        mock_router.authorize_permission.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_git_reset_hard_blocked(self) -> None:
@@ -352,7 +355,7 @@ class TestEvaluatePermission:
         assert result == PermissionDecision.deny
 
     @pytest.mark.asyncio
-    async def test_git_reset_hard_approved(self) -> None:
+    async def test_approval_service_cannot_replace_current_policy_router(self) -> None:
         mock_approval = MagicMock()
         mock_approval.create_request = AsyncMock(return_value=MagicMock(id="a1"))
         mock_approval.wait_for_resolution = AsyncMock(return_value="approved")
@@ -367,4 +370,5 @@ class TestEvaluatePermission:
             PermissionRequest(kind="shell", workspace_path="", full_command_text="git reset --hard HEAD~1"),
             tool_name="Bash",
         )
-        assert result == PermissionDecision.allow
+        assert result == PermissionDecision.deny
+        mock_approval.create_request.assert_not_awaited()

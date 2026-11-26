@@ -93,3 +93,38 @@ async def test_paginated_rebuild_keeps_existing_display_and_duration(session_fac
     assert await reenrich.reenrich_job_events("job-1", session_factory) == 0
     async with session_factory() as session:
         assert await EventRepository(session).get(finish.id) == finish
+
+
+async def test_failed_rebuild_rolls_back_metadata_and_never_marks_completion(session_factory, monkeypatch):
+    start = new_event("job-1", EventKind.tool_call_started, {"tool_call_id": "call", "tool_name": "read_file"})
+    finish = new_event(
+        "job-1",
+        EventKind.tool_call_completed,
+        {"tool_call_id": "call", "success": True},
+        timestamp=start.timestamp + timedelta(seconds=1),
+    )
+    later = new_event(
+        "job-1",
+        EventKind.message_assistant,
+        {"content": "later"},
+        timestamp=start.timestamp + timedelta(seconds=2),
+    )
+    async with serialized_write(session_factory) as session:
+        for event in (start, finish, later):
+            await EventRepository(session).append(event)
+    process = reenrich.ToolPairing.process
+
+    def fail_after_pair(pairing, event):
+        if event.id == later.id:
+            raise ValueError("controlled projection failure")
+        return process(pairing, event)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(reenrich.ToolPairing, "process", fail_after_pair)
+        with pytest.raises(ValueError, match="controlled projection failure"):
+            await reenrich.reenrich_job_events("job-1", session_factory)
+    async with session_factory() as session:
+        repo = EventRepository(session)
+        assert await repo.get(finish.id) == finish
+        assert await repo.list_by_job("job-1", [EventKind.reenrich_complete]) == []
+    assert await reenrich.reenrich_job_events("job-1", session_factory) == 1

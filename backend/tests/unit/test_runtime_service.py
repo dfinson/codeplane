@@ -370,7 +370,10 @@ async def test_scout_uses_job_policy_when_utility_and_primary_sdks_differ(
     runtime._git_service = MagicMock()
     runtime.set_preflight_curator(PreflightCurator(utility, model="utility-model"))
     router = SimpleNamespace(execution_epoch="fixture-epoch", authorize_permission=AsyncMock(return_value=True))
-    runtime._standalone_governance = SimpleNamespace(for_job=lambda pin, policy: router)
+    runtime._standalone_governance = SimpleNamespace(
+        prepare_monitor_baseline=AsyncMock(return_value=None),
+        for_job=lambda pin, policy, *, monitor_baseline: router,
+    )
     runtime._job_contract_pins[job.id] = MagicMock()
     await RuntimeService._setup_action_policy(
         runtime,

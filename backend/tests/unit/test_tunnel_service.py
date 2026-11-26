@@ -396,15 +396,14 @@ class TestWatchdogRelayProbeUnderAccessControl:
         with patch("urllib.request.urlopen", side_effect=self._http_error(code)):
             assert watchdog._health_ok(use_tunnel_url=True) is True
 
-    @pytest.mark.parametrize("code", [502, 503, 504])
-    def test_relay_probe_still_fails_on_bad_gateway(self, code: int) -> None:
-        """The connector fault a restart can actually repair must still be caught."""
+    @pytest.mark.parametrize("code", [500, 502, 503, 504, 530, 599])
+    def test_relay_probe_still_fails_on_server_error(self, code: int) -> None:
         watchdog = self._watchdog()
         with patch("urllib.request.urlopen", side_effect=self._http_error(code)):
             assert watchdog._health_ok(use_tunnel_url=True) is False
 
-    @pytest.mark.parametrize("code", [502, 503, 504])
-    def test_relay_probe_fails_on_bad_gateway_returned_as_a_response(self, code: int) -> None:
+    @pytest.mark.parametrize("code", [500, 502, 503, 504, 530, 599])
+    def test_relay_probe_fails_on_server_error_returned_as_a_response(self, code: int) -> None:
         """Some stacks return the status instead of raising; both paths must agree."""
         watchdog = self._watchdog()
         resp = MagicMock()
@@ -431,11 +430,11 @@ class TestWatchdogRelayProbeUnderAccessControl:
             assert watchdog._health_ok() is False
             assert watchdog._origin_ok() is False
 
-    def test_gated_relay_does_not_accumulate_restart_pressure(self) -> None:
-        """End to end through the check loop: a 403 relay must not trigger a restart."""
+    @pytest.mark.parametrize(("code", "restarts"), [(403, 0), (530, 2)])
+    def test_relay_recovery_distinguishes_access_gates_from_missing_connectors(self, code: int, restarts: int) -> None:
         watchdog = self._watchdog()
         with (
-            patch("urllib.request.urlopen", side_effect=self._http_error(403)),
+            patch("urllib.request.urlopen", side_effect=self._http_error(code)),
             patch.object(watchdog, "_restart_process") as restart,
             patch.object(watchdog, "_origin_ok", return_value=True),
             patch.object(watchdog._stop_event, "wait") as wait,
@@ -443,7 +442,7 @@ class TestWatchdogRelayProbeUnderAccessControl:
             cycles = (watchdog._FAIL_THRESHOLD + 2) * watchdog._RELAY_CHECK_FREQUENCY
             wait.side_effect = [False] * cycles + [True]
             watchdog._run()
-            restart.assert_not_called()
+            assert restart.call_count == restarts
             assert wait.call_count == cycles + 1
 
 

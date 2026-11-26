@@ -34,7 +34,7 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
         import sys
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, patch
-        from copilot import CopilotClient
+        from copilot import CopilotClient, RuntimeConnection
         from backend.services.copilot_adapter import CopilotAdapter
         from backend.services.adapters.completion_context import CompletionContext, completion_context
 
@@ -42,7 +42,7 @@ def test_structured_completion_uses_the_real_sdk_catalog_cache_without_a_second_
             if event in {"socket.connect", "socket.getaddrinfo", "subprocess.Popen"}:
                 raise AssertionError("This SDK cache regression must not start a CLI or use the network")
         async def main():
-            client = CopilotClient()
+            client = CopilotClient(connection=RuntimeConnection.for_stdio(path=sys.executable))
             rpc = AsyncMock(return_value={"models": [{
                 "id": "approved-model", "name": "Offline fixture",
                 "capabilities": {"supports": {"vision": False}, "limits": {

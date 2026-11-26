@@ -418,10 +418,9 @@ class TunnelWatchdog:
             return True
         return self._health_ok()
 
-    #: Statuses Cloudflare/relay edges return when they answered but could not
-    #: reach the origin behind the connector. Only these indicate a connector
-    #: fault that a restart can repair.
-    _RELAY_FAILURE_STATUSES = frozenset({502, 503, 504})
+    # Server errors are not authentication gates, including Cloudflare 530/1033
+    # when no healthy connector is available. Recovery is attempted, not assured.
+    _RELAY_FAILURE_STATUSES = frozenset(range(500, 600))
 
     def _health_ok(self, *, use_tunnel_url: bool = False) -> bool:
         import urllib.error
@@ -439,15 +438,8 @@ class TunnelWatchdog:
                     return resp.status not in self._RELAY_FAILURE_STATUSES
                 return bool(resp.status == 200)
         except urllib.error.HTTPError as exc:
-            # An HTTPError means the edge answered with a definite status, so
-            # the relay itself is reachable. For the *remote* probe that is the
-            # only question being asked: an access-control rejection (Cloudflare
-            # Access returns 403 to this probe, because it carries no session
-            # cookie and no browser User-Agent) says nothing about whether the
-            # connector can reach the origin, and restarting on it produced an
-            # endless ~100s restart cycle that took the public hostname down
-            # for a few seconds each time. Only a bad-gateway class status is
-            # evidence of a fault a restart can repair.
+            # Access rejection does not establish a connector outage. Keep its
+            # exemption without treating an edge's server-error page as health.
             if remote and exc.code not in self._RELAY_FAILURE_STATUSES:
                 log.debug("tunnel_relay_gated", url=url, status=exc.code)
                 return True
