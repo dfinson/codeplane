@@ -3,31 +3,39 @@
 Thin routes: validate input, delegate to ``ProjectService``, return the
 result. ``ProjectRow`` is the sole persistence entity for repo-path
 membership (AD-5) — creating/editing a Project is the only way a repo path
-is durably registered going forward.
+is durably registered going forward. Commit membership before reporting success
+so an immediately following Job request can observe it.
 """
 
 from __future__ import annotations
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.api_schemas import (
     CreateManualTaskLinkRequest,
     CreateProjectRequest,
-    IngestTaskGraphResponse,
+    ProjectApprovalPage,
+    ProjectBoardColumn,
+    ProjectBoardPage,
+    ProjectBoardResponse,
+    ProjectDeliveryPage,
     ProjectListResponse,
     ProjectListSummaryResponse,
     ProjectResponse,
     ProjectSummaryResponse,
+    TaskLinkInspectionResponse,
     TaskLinkListResponse,
     TaskLinkResponse,
     UpdateProjectRequest,
 )
 from backend.models.domain import Project, ProjectSummary, TaskLink
+from backend.services.project.board_service import ProjectBoardService
 from backend.services.project.project_service import ProjectService
 from backend.services.recipe.recipe_service import RecipeService
 from backend.services.runtime import RuntimeService
+from backend.services.task_execution_service import TaskExecutionService
 
 router = APIRouter(tags=["projects"], route_class=DishkaRoute)
 
@@ -78,9 +86,11 @@ def _task_link_to_response(task_link: TaskLink) -> TaskLinkResponse:
 async def create_project(
     body: CreateProjectRequest,
     project_service: FromDishka[ProjectService],
+    session: FromDishka[AsyncSession],
 ) -> ProjectResponse:
     """Create a new Project, registering each repo path (AD-5)."""
     project = await project_service.create(name=body.name, repo_paths=body.repo_paths)
+    await session.commit()
     return _to_response(project)
 
 
@@ -124,6 +134,7 @@ async def update_project(
     project_id: str,
     body: UpdateProjectRequest,
     project_service: FromDishka[ProjectService],
+    session: FromDishka[AsyncSession],
 ) -> ProjectResponse:
     """Rename a Project and/or replace its repo membership."""
     project = await project_service.update(
@@ -132,25 +143,8 @@ async def update_project(
         repo_paths=body.repo_paths,
         confirm_repo_removal=body.confirm_repo_removal,
     )
+    await session.commit()
     return _to_response(project)
-
-
-@router.post(
-    "/settings/projects/{project_id}/ingest-tasks",
-    response_model=IngestTaskGraphResponse,
-    status_code=201,
-)
-async def ingest_project_tasks(
-    project_id: str,
-    recipe_service: FromDishka[RecipeService],
-) -> IngestTaskGraphResponse:
-    """Ingest BMAD stories / spec-kit tasks for every member repo of a Project (CAP-9).
-
-    Stateless, on-demand, read-only against every source repo; re-running
-    upserts existing TaskLinks rather than duplicating them.
-    """
-    task_links = await recipe_service.ingest_project(project_id)
-    return IngestTaskGraphResponse(items=[_task_link_to_response(t) for t in task_links])
 
 
 @router.get("/settings/projects/{project_id}/task-links", response_model=TaskLinkListResponse)
@@ -202,3 +196,51 @@ async def start_task_link(
     await session.commit()
     background_tasks.add_task(runtime_service.setup_and_start, job)
     return _task_link_to_response(task_link)
+
+
+@router.get(
+    "/settings/projects/{project_id}/task-links/{task_link_id}",
+    response_model=TaskLinkInspectionResponse,
+)
+async def inspect_task_link(
+    project_id: str,
+    task_link_id: str,
+    execution_service: FromDishka[TaskExecutionService],
+) -> TaskLinkInspectionResponse:
+    return await execution_service.inspect_task_link(project_id, task_link_id)
+
+
+@router.get("/settings/projects/{project_id}/board", response_model=ProjectBoardResponse)
+async def get_project_board(project_id: str, service: FromDishka[ProjectBoardService]) -> ProjectBoardResponse:
+    return await service.get(project_id)
+
+
+@router.get("/settings/projects/{project_id}/board/columns/{column}", response_model=ProjectBoardPage)
+async def get_project_board_column(
+    project_id: str,
+    column: ProjectBoardColumn,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(20, ge=1, le=100),
+) -> ProjectBoardPage:
+    return await service.page(project_id, column, after=after, limit=limit)
+
+
+@router.get("/settings/projects/{project_id}/board/approvals", response_model=ProjectApprovalPage)
+async def get_project_board_approvals(
+    project_id: str,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(30, ge=1, le=100),
+) -> ProjectApprovalPage:
+    return await service.approvals(project_id, after=after, limit=limit)
+
+
+@router.get("/settings/projects/{project_id}/board/deliveries", response_model=ProjectDeliveryPage)
+async def get_project_board_deliveries(
+    project_id: str,
+    service: FromDishka[ProjectBoardService],
+    after: str = Query("", max_length=512),
+    limit: int = Query(20, ge=1, le=100),
+) -> ProjectDeliveryPage:
+    return await service.deliveries(project_id, after=after, limit=limit)

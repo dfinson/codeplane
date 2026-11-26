@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo, Suspense, Component, type ReactNode } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, PanelLeftClose } from "lucide-react";
 import { toast } from "sonner";
 import { useStore, selectJobs, enrichJob, selectJobDiffs } from "../store";
@@ -28,6 +28,7 @@ import { pathBasename } from "../lib/paths";
 
 import { JobHeaderCard } from "./JobHeaderCard";
 import { MobileBottomNav, MobileFooterActions } from "./JobDetailMobile";
+import { RecipeRunPanel } from "./RecipeRunPanel";
 
 const WorkspaceBrowser = lazyRetry(() => import("./WorkspaceBrowser"));
 const ArtifactViewer = lazyRetry(() => import("./ArtifactViewer"));
@@ -60,10 +61,12 @@ class TabErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 
 
 export function JobDetailScreen() {
+  const [searchParams] = useSearchParams();
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const jobs = useStore(selectJobs);
   const job: JobSummary | undefined = jobId ? jobs[jobId] : undefined;
+  const recipeRun = useStore((state) => jobId ? state.recipeCurrentRuns[jobId] : undefined);
   const [loading, setLoading] = useState(!job);
   const [showSkeleton, setShowSkeleton] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -96,7 +99,7 @@ export function JobDetailScreen() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const diffs = useStore(selectJobDiffs(jobId ?? ""));
   const hasChanges = diffs.length > 0;
-  const hasWorktree = !!job?.worktreePath && !job?.archivedAt;
+  const hasWorktree = !!job?.worktreePath && !job?.observationOnly && !job?.archivedAt;
   const hasArtifacts = true;
   const [artifactCount, setArtifactCount] = useState(0);
   const artifactVersion = useStore((s) => jobId ? (s.artifactVersions[jobId] ?? 0) : 0);
@@ -177,11 +180,11 @@ export function JobDetailScreen() {
   // ── Mobile swipe-to-switch-tab ──
   const mobileTabOrder = useMemo(() => {
     const tabs = ["live"];
-    if (hasChanges) tabs.push("review");
+    if (hasChanges || recipeRun) tabs.push("review");
     tabs.push("files", "metrics");
     tabs.push("artifacts");
     return tabs;
-  }, [hasChanges]);
+  }, [hasChanges, recipeRun]);
   const touchRef = useRef<{ x: number; y: number; t: number; el: EventTarget | null } | null>(null);
   const [slideDir, setSlideDir] = useState<"left" | "right" | null>(null);
 
@@ -221,7 +224,7 @@ export function JobDetailScreen() {
     if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 2 || dt > 400) return;
 
     // Activity overlay: swipe right (dx>0) on Live opens it; swipe left (dx<0) when open closes it
-    if (dx > 0 && tab === "live" && !mobileActivityOpen) {
+    if (dx > 0 && tab === "live" && recipeRun === null && !mobileActivityOpen) {
       setMobileActivityOpen(true);
       return;
     }
@@ -240,9 +243,11 @@ export function JobDetailScreen() {
     if (!nextTab) return;
     // Clear then re-set so consecutive same-direction swipes re-trigger the CSS animation
     setSlideDir(null);
-    requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      requestAnimationFrame(() => setSlideDir(dx < 0 ? "right" : "left"));
+    }
     handleTabChange(nextTab);
-  }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable]);
+  }, [tab, mobileTabOrder, mobileActivityOpen, handleTabChange, isInsideHScrollable, recipeRun]);
 
   const handleViewStepChanges = useCallback((filePaths: string[], label: string, seq?: number, turnId?: string) => {
     setStepFilter({ filePaths, label, scrollToSeq: seq, turnId });
@@ -531,9 +536,9 @@ export function JobDetailScreen() {
     );
   }
 
-  const canCancel = ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
-  const canResume = job.state === "failed";
-  const isRunning = job.state === "running";
+  const canCancel = !job.observationOnly && ["preparing", "queued", "running", "waiting_for_approval"].includes(job.state);
+  const canResume = !job.observationOnly && job.state === "failed" && recipeRun === null;
+  const isRunning = !job.observationOnly && job.state === "running";
   const isPreparing = job.state === "preparing";
 
   const hasMergeConflict =
@@ -542,7 +547,7 @@ export function JobDetailScreen() {
     job.mergeStatus === "conflict" ||
     ((job.conflictFiles?.length ?? 0) > 0));
   const needsResolution =
-    job.state === "review" &&
+    !job.observationOnly && job.state === "review" &&
     (job.resolution === "unresolved" || job.resolution === "conflict" || !job.resolution);
   const isResolved =
     job.state === "completed" &&
@@ -558,12 +563,12 @@ export function JobDetailScreen() {
           <>
             <Link to={projectBoardUrl} className="hover:text-foreground">{owningProject.name}</Link>
             <span>/</span>
-            <Link
+            {job.repo && !job.observationOnly ? <Link
               to={`/projects/id/${encodeURIComponent(owningProject.id)}/repos/${encodeURIComponent(job.repo)}/jobs`}
               className="hover:text-foreground"
             >
               {pathBasename(job.repo) || job.repo}
-            </Link>
+            </Link> : <span>External observation</span>}
             <span>/</span>
             {taskLink && (
               <>
@@ -617,6 +622,7 @@ export function JobDetailScreen() {
 
       {/* ── Desktop: View tab bar ── */}
       <ViewTabBar
+        hasRecipe={Boolean(recipeRun)}
         activeTab={tab}
         onTabChange={handleTabChange}
         hasChanges={hasChanges}
@@ -644,7 +650,10 @@ export function JobDetailScreen() {
       >
         {/* ── Content panel ── */}
         <div className="flex-1 min-w-0 md:flex md:flex-col md:overflow-hidden">
-      {tab === "live" && (
+      <div className={cn("min-h-0 flex-1 overflow-auto pt-3", (tab !== "live" || recipeRun === null) && "hidden")}>
+        <RecipeRunPanel jobId={jobId} requestedRunId={searchParams.get("run") ?? undefined} requestedStepId={searchParams.get("step") ?? undefined} requestedAttemptId={searchParams.get("attempt") ?? undefined} />
+      </div>
+      {tab === "live" && recipeRun === null && (
         <div className="flex flex-row relative md:h-full md:min-h-0">
           {/* ── Activity panel — part of the Live view ── */}
           <ActivityPanel
@@ -692,7 +701,7 @@ export function JobDetailScreen() {
               <CuratedFeed
                 jobId={jobId}
                 sdk={job.sdk}
-                interactive
+                interactive={!job.observationOnly}
                 jobState={job.state}
                 pausable={isRunning}
                 prompt={job.prompt}
@@ -715,7 +724,7 @@ export function JobDetailScreen() {
 
 
 
-      {tab === "files" && (
+      {tab === "files" && hasWorktree && (
         <TabErrorBoundary>
           <Suspense fallback={<div className="flex justify-center py-10"><Spinner /></div>}>
             <WorkspaceBrowser jobId={jobId} />
@@ -772,6 +781,7 @@ export function JobDetailScreen() {
 
       {/* ── Mobile bottom tab bar (iOS-style) ── */}
       <MobileBottomNav
+        hasRecipe={Boolean(recipeRun)}
         tab={tab}
         handleTabChange={handleTabChange}
         hasChanges={hasChanges}

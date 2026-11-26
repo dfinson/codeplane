@@ -108,7 +108,7 @@ async def _insert_job(sf: async_sessionmaker[AsyncSession], job: Job) -> None:
 
         existing = await ProjectRepository(session).get(job.project_id)
         if existing is None:
-            await ProjectRepository(session).create(job.project_id, "Test Project", [job.repo])
+            await ProjectRepository(session).create(job.project_id, "Test Project", [job.execution_repo])
         await JobRepository(session).create(job)
         await session.commit()
 

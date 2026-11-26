@@ -1,0 +1,5 @@
+{"type":"message","channel_id":"local","id":"activity-user","timestamp":"2026-11-18T12:05:03.925942Z","from_property":{"id":"user","name":"Local User","role":"user"},"conversation":{"id":"inert-conversation"},"text":"Read local input."}
+{"type":"message","channel_id":"local","id":"activity-bot","timestamp":"2026-11-18T12:05:03.926423Z","from_property":{"id":"bot","name":"Local Agent","role":"bot"},"conversation":{"id":"inert-conversation"},"text":"Inspecting local input."}
+{"type":"invoke","channel_id":"local","id":"activity-invoke","timestamp":"2026-11-18T12:05:03.926686Z","from_property":{"id":"bot","role":"bot"},"conversation":{"id":"inert-conversation"},"value":{"command":"read","count":0}}
+{"type":"event","channel_id":"local","id":"activity-result","timestamp":"2026-11-18T12:05:03.926901Z","from_property":{"id":"user","role":"user"},"conversation":{"id":"inert-conversation"},"text":"Local result.","value":{"ok":false}}
+{"type":"trace","channel_id":"local","id":"activity-trace","timestamp":"2026-11-18T12:05:03.927107Z","from_property":{"id":"bot","role":"bot"},"conversation":{"id":"inert-conversation"},"text":"Local diagnostic.","value":{"detail":"inert"}}

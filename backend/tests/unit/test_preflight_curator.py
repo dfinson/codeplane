@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import os
+import subprocess
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -316,8 +318,35 @@ def test_scout_denies_symlink_escape(tmp_path: Path) -> None:
     worktree.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    (worktree / "linked").symlink_to(outside, target_is_directory=True)
-    assert not preflight_curator.scout_read_allowed(str(worktree), "read", "view", ["linked/private.py"])
+    link = worktree / "linked"
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True)
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+    try:
+        assert not preflight_curator.scout_read_allowed(str(worktree), "read", "view", ["linked/private.py"])
+        assert not preflight_curator.scout_read_allowed(str(worktree), "read", "Glob", ["linked/**/*.py"])
+    finally:
+        if os.name == "nt":
+            link.rmdir()
+        else:
+            link.unlink()
+
+
+@pytest.mark.parametrize("pattern", ["**/*.py", "src/[ab]?.py"])
+def test_scout_allows_workspace_glob_patterns(tmp_path: Path, pattern: str) -> None:
+    assert preflight_curator.scout_read_allowed(str(tmp_path), "read", "Glob", [pattern])
+
+
+@pytest.mark.parametrize("pattern", ["../outside/**/*.py", "**/../../outside.py", "**/{../../outside,src}/*.py"])
+def test_scout_rejects_glob_traversal(tmp_path: Path, pattern: str) -> None:
+    assert not preflight_curator.scout_read_allowed(str(tmp_path), "read", "Glob", [pattern])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows alias semantics")
+@pytest.mark.parametrize("pattern", ["**/.. /outside", "**/NUL", "**/file:stream", "**/dir./file"])
+def test_scout_rejects_aliases_after_glob_wildcards(tmp_path: Path, pattern: str) -> None:
+    assert not preflight_curator.scout_read_allowed(str(tmp_path), "read", "Glob", [pattern])
 
 
 @pytest.mark.asyncio

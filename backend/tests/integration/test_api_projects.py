@@ -10,17 +10,24 @@ Exercises:
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
-from backend.models.db import JobRow
+from backend.models.db import Base, JobRow
+from backend.persistence.database import create_engine
 
 if TYPE_CHECKING:
-    from httpx import AsyncClient
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from collections.abc import AsyncIterator
+
+    from fastapi import FastAPI
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+    from starlette.types import Message, Receive, Scope, Send
 
 
 def _resolved(path: str) -> str:
@@ -81,6 +88,56 @@ class TestCreateProject:
             json={"name": "No Repos", "repoPaths": []},
         )
         assert resp.status_code == 422
+
+
+class TestProjectCommitBoundary:
+    @pytest.fixture
+    async def engine(self, tmp_path: Path) -> AsyncIterator[AsyncEngine]:
+        engine = create_engine(tmp_path / "project-boundary.db")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.parametrize("operation", ["create", "update"])
+    async def test_membership_is_durable_before_the_success_response(
+        self, app: FastAPI, client: AsyncClient, tmp_path: Path, operation: str
+    ) -> None:
+        endpoint = "/api/settings/projects"
+        target = "/test/commit-boundary"
+        if operation == "update":
+            created = await client.post(endpoint, json={"name": "Commit boundary", "repoPaths": [target]})
+            assert created.status_code == 201
+            endpoint += f"/{created.json()['id']}"
+            target += "-updated"
+        observed: list[list[list[str]]] = []
+
+        async def boundary(scope: Scope, receive: Receive, send: Send) -> None:
+            async def observe(message: Message) -> None:
+                if message["type"] == "http.response.start":
+                    with sqlite3.connect(f"file:{tmp_path / 'project-boundary.db'}?mode=ro", uri=True) as database:
+                        rows = database.execute(
+                            "SELECT repo_paths FROM projects WHERE name=?", ("Commit boundary",)
+                        ).fetchall()
+                    observed.append([json.loads(row[0]) for row in rows])
+                await send(message)
+
+            await app(scope, receive, observe)
+
+        async with AsyncClient(transport=ASGITransport(app=boundary), base_url="http://test") as boundary_client:
+            response = await boundary_client.request(
+                "POST" if operation == "create" else "PATCH",
+                endpoint,
+                json={
+                    "name": "Commit boundary",
+                    "repoPaths": [target],
+                    **({"confirmRepoRemoval": True} if operation == "update" else {}),
+                },
+            )
+        assert response.status_code == (201 if operation == "create" else 200)
+        assert observed == [[[_resolved(target)]]]
 
 
 class TestListAndGetProject:

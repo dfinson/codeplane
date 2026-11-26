@@ -196,14 +196,15 @@ async def get_repo_summary(
             active_job_count = len(active_count_result.scalars().all())
 
             # Aggregate cost from telemetry summary table (last 7 days)
-            from sqlalchemy import text as sa_text
+            from backend.models.currency import optional_float
+            from backend.persistence.currency_projection import currency_query
 
             cost_row = (
                 (
                     await session.execute(
-                        sa_text(
+                        currency_query(
                             "SELECT"
-                            " COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,"
+                            " SUM(total_cost_usd) AS total_cost_usd,"
                             " COUNT(*) AS total_jobs,"
                             " COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens"
                             " + cache_write_tokens), 0) AS total_tokens"
@@ -219,7 +220,7 @@ async def get_repo_summary(
             )
             if cost_row:
                 cost_summary = RepoCostSummary(
-                    total_cost_usd=float(cost_row["total_cost_usd"]),
+                    total_cost_usd=optional_float(cost_row["total_cost_usd"]),
                     total_jobs=int(cost_row["total_jobs"]),
                     total_tokens=int(cost_row["total_tokens"]),
                 )
@@ -238,8 +239,8 @@ async def get_repo_summary(
     )
 
 
-# NOTE: This catch-all route MUST be registered AFTER more specific
-# /health and /summary routes, because {repo_path:path} is greedy
+# NOTE: This catch-all route MUST be registered AFTER the more specific
+# /summary route, because {repo_path:path} is greedy
 # and would otherwise consume the suffix as part of repo_path.
 @router.get("/settings/repos/{repo_path:path}", response_model=RepoDetailResponse)
 async def get_repo_detail(
@@ -498,10 +499,25 @@ async def list_sdks() -> SDKListResponse:
     from backend.services.setup.checks import check_agent_auth, check_agent_cli
 
     config = load_config()
-    default_sdk = config.runtime.default_sdk
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    policy = IntegrationPolicy(config)
+    default_sdk = policy.default_sdk
 
     items: list[SDKInfoResponse] = []
     for sdk in AgentSDK:
+        if not policy.enabled(sdk):
+            items.append(
+                SDKInfoResponse(
+                    id=sdk.value,
+                    name=_SDK_DISPLAY_NAMES.get(sdk.value, sdk.value),
+                    enabled=False,
+                    status="disabled_by_policy",
+                    authenticated=None,
+                    hint="Disabled by runtime.copilot_only. Existing history is preserved.",
+                )
+            )
+            continue
         cli = check_agent_cli(sdk.value)
         if not cli.ready:
             items.append(

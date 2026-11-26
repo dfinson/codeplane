@@ -1,38 +1,12 @@
-"""Password-based authentication for CodePlane.
+"""Application authentication, independent of tunnel reachability checks.
 
-Auth architecture
------------------
-Authentication is enforced via **Starlette HTTP middleware** registered in
-``app_factory.py``.  When a password is configured (tunnel mode or explicit
-``--password`` / ``CODEPLANE_PASSWORD``), *every* incoming HTTP request passes
-through ``auth_middleware`` before reaching any route handler.
+Remote posture is fixed at application construction and never trusts a
+loopback peer: tunnel connectors use loopback too. HTTP, SSE and WebSocket
+upgrades use the same session/JWT policy. Access-only disallows password
+sessions. Direct-local mode preserves same-machine trust.
 
-**Exempt paths** (no session cookie required):
-- ``/api/auth/*`` — login endpoint itself
-- ``/api/health``  — health-check probe
-- Static frontend assets served by the SPA fallback handler
-
-**Localhost bypass**: requests originating from ``127.0.0.1``, ``::1``, or
-``localhost`` are unconditionally trusted and never challenged.  This allows
-same-machine tools and CLIs to access the API without credentials.
-
-**Cloudflare Access bypass**: when ``CPL_CF_ACCESS_TEAM`` and
-``CPL_CF_ACCESS_AUD`` are configured, requests carrying a valid
-``Cf-Access-Jwt-Assertion`` header (signature, audience, and expiry
-verified against Cloudflare's public JWKS) skip the local password gate.
-If the variables are not set the header is ignored entirely.
-
-**WebSocket auth**: WebSocket upgrades are *not* wrapped by the HTTP
-middleware (Starlette handles them on a different code-path).  Instead, each
-WebSocket endpoint calls ``check_websocket_auth`` at connect time, passing the
-client host and cookies extracted from the upgrade request.  The logic mirrors
-the middleware — localhost is trusted, otherwise a valid ``cpl_session`` cookie
-is required.
-
-**Session tokens**: on successful login a cryptographic token is generated,
-stored server-side in ``_session_tokens``, and returned to the browser as an
-``httpOnly`` cookie.  Tokens expire after ``SESSION_TTL`` seconds (default
-24 h); stale tokens are purged lazily during validation.
+Internal HTTP calls use a process-only credential for the explicitly bound
+loopback endpoint. It is not a browser session and is never persisted.
 """
 
 from __future__ import annotations
@@ -41,9 +15,11 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
@@ -62,8 +38,88 @@ COOKIE_NAME = "cpl_session"
 LOCALHOST_ADDRS = {"127.0.0.1", "::1", "localhost"}
 
 # Paths that bypass password auth entirely (checked by prefix or exact match).
-AUTH_EXEMPT_PREFIXES: frozenset[str] = frozenset({"/api/auth/"})
-AUTH_EXEMPT_EXACT: frozenset[str] = frozenset({"/api/health"})
+AUTH_EXEMPT_PREFIXES: frozenset[str] = frozenset()
+AUTH_EXEMPT_EXACT: frozenset[str] = frozenset({"/api/health", "/api/auth/login", "/api/auth/logout"})
+INTERNAL_AUTH_HEADER = "x-codeplane-internal-token"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthPolicy:
+    remote: bool = False
+    access_only: bool = False
+    password_required: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.remote or self.access_only or self.password_required
+
+
+_auth_policy: AuthPolicy | None = None
+_internal_token: str | None = None
+_internal_origin: str | None = None
+
+
+def configure_auth(*, remote: bool, access_only: bool, password: str | None) -> AuthPolicy:
+    """Freeze posture before registering any application routes."""
+    global _auth_policy, _internal_token, _internal_origin  # noqa: PLW0603
+    global _password_hash, _password_salt  # noqa: PLW0603
+    from backend.services.auth import cf_access
+
+    if access_only and (not remote or password or not cf_access.is_configured()):
+        raise ValueError("Access-only requires remote mode, configured Access verification and no password")
+    _session_tokens.clear()
+    _password_hash = None
+    _password_salt = None
+    if password:
+        set_password(password)
+    _auth_policy = AuthPolicy(remote=remote, access_only=access_only, password_required=bool(password))
+    _internal_token = secrets.token_urlsafe(32)
+    _internal_origin = None
+    return _auth_policy
+
+
+def _policy(policy: AuthPolicy | None = None) -> AuthPolicy:
+    return (
+        policy
+        if isinstance(policy, AuthPolicy)
+        else (_auth_policy or AuthPolicy(password_required=is_password_auth_enabled()))
+    )
+
+
+def configure_internal_endpoint(*, host: str, port: int) -> None:
+    """Bind self-call credentials to this process's resolved listener."""
+    global _internal_origin  # noqa: PLW0603
+    if host in {"0.0.0.0", "127.0.0.1", "localhost"}:  # noqa: S104
+        host = "127.0.0.1"
+    elif host in {"::", "::1"}:
+        host = "[::1]"
+    else:
+        raise ValueError("Internal HTTP calls require a loopback-capable listener")
+    if not 0 < port <= 65535:
+        raise ValueError("Internal HTTP endpoint requires the resolved listener port")
+    _internal_origin = f"http://{host}:{port}"
+
+
+def internal_api_url() -> str:
+    if _internal_origin is None:
+        raise RuntimeError("Internal HTTP endpoint has not been bound")
+    return f"{_internal_origin}/api"
+
+
+def internal_request_headers(url: str) -> dict[str, str]:
+    """Return credentials only for our known API, never a preview target."""
+    parsed = urlparse(url)
+    if (
+        _internal_origin is None
+        or f"{parsed.scheme}://{parsed.netloc}" != _internal_origin
+        or parsed.username is not None
+        or parsed.path.startswith("/api/preview")
+        or not (parsed.path == "/api" or parsed.path.startswith("/api/"))
+        or _internal_token is None
+    ):
+        raise ValueError("Refusing internal credential for an untrusted destination")
+    return {INTERNAL_AUTH_HEADER: _internal_token}
+
 
 # Rate limiting: track failed attempts per IP.
 # Window + max follows OWASP brute-force mitigation guidance: short enough to
@@ -196,18 +252,24 @@ def _has_cloudflare_access(request: Request) -> bool:
 
 
 def is_request_authenticated(request: Request) -> bool:
-    """Check if a request is authenticated via localhost or valid session cookie.
-
-    Returns True when auth is not enabled, the request is from localhost,
-    or the request carries a valid session cookie.
-    """
-    if not is_password_auth_enabled():
+    """Authenticate HTTP and SSE against the app's fixed posture."""
+    app = request.scope.get("app")
+    policy = _policy(getattr(getattr(app, "state", None), "auth_policy", None))
+    if not policy.enabled:
         return True
-    if is_localhost(request):
+    if not policy.remote and is_localhost(request):
+        return True
+    internal = request.headers.get(INTERNAL_AUTH_HEADER)
+    if (
+        internal
+        and _internal_token
+        and is_localhost(request)
+        and hmac.compare_digest(internal.encode(), _internal_token.encode())
+    ):
         return True
     if _has_cloudflare_access(request):
         return True
-    return is_valid_token(request.cookies.get(COOKIE_NAME))
+    return not policy.access_only and is_valid_token(request.cookies.get(COOKIE_NAME))
 
 
 def is_password_auth_enabled() -> bool:
@@ -231,18 +293,21 @@ def _record_ws_attempt(ip: str) -> None:
     _ws_auth_attempts[ip].append(time.monotonic())
 
 
-def check_websocket_auth(*, client_host: str | None, cookies: dict[str, str], cf_access_jwt: str | None = None) -> bool:
+def check_websocket_auth(
+    *,
+    client_host: str | None,
+    cookies: dict[str, str],
+    cf_access_jwt: str | None = None,
+    policy: AuthPolicy | None = None,
+) -> bool:
     """Validate authentication for a WebSocket connection.
 
-    Mirrors the HTTP middleware logic: if password auth is not enabled
-    everyone is allowed; localhost is trusted; otherwise a valid
-    ``cpl_session`` cookie is required.
-
-    Failed attempts are rate-limited at 5/min per IP (same as login).
+    Mirrors HTTP posture; origin validation remains a separate check.
     """
-    if not is_password_auth_enabled():
+    resolved = _policy(policy)
+    if not resolved.enabled:
         return True
-    if client_host and client_host in LOCALHOST_ADDRS:
+    if not resolved.remote and client_host and client_host in LOCALHOST_ADDRS:
         return True
     if cf_access_jwt:
         from backend.services.auth import cf_access
@@ -252,7 +317,7 @@ def check_websocket_auth(*, client_host: str | None, cookies: dict[str, str], cf
     ip = client_host or "unknown"
     if _is_ws_rate_limited(ip):
         return False
-    valid = is_valid_token(cookies.get(COOKIE_NAME))
+    valid = not resolved.access_only and is_valid_token(cookies.get(COOKIE_NAME))
     if not valid:
         _record_ws_attempt(ip)
     return valid
@@ -329,6 +394,8 @@ def _client_ip(request: Request) -> str:
 
 async def authenticate_login_request(request: Request) -> Response:
     """Handle POST /api/auth/login — validate password, set cookie."""
+    if _policy().access_only:
+        return JSONResponse({"detail": "Cloudflare Access authentication required"}, status_code=401)
     ip = _client_ip(request)
 
     if _is_rate_limited(ip):
@@ -371,45 +438,52 @@ async def authenticate_logout_request(request: Request) -> Response:
     return response
 
 
-async def auth_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Middleware that enforces password auth when enabled.
-
-    Registered by ``app_factory._configure_middleware`` when a password is set.
-    All HTTP requests (except WebSocket upgrades, which are handled separately
-    by ``check_websocket_auth``) pass through this middleware.
-
-    **Bypass rules** (checked in order):
-
-    1. ``/api/auth/*`` and ``/api/health`` — always allowed so the login
-       endpoint and health probe remain reachable.
-    2. Localhost (``127.0.0.1``, ``::1``, ``localhost``) — trusted, no cookie
-       needed.
-    3. Valid ``cpl_session`` cookie — normal authenticated browser session.
-
-    If none of the above match, API/MCP routes receive a 401 JSON response and
-    browser requests receive the login HTML page.
-    """
+def is_public_request(request: Request) -> bool:
+    """Only bootstrap resources and exact token-validated read routes are public."""
     path = request.url.path
+    gate_source = r"/api/gate/gate-[a-f0-9]{32}"
+    gate_request = gate_source + r"/requests/[a-zA-Z0-9_-]{1,128}"
+    if (
+        request.method == "POST"
+        and re.fullmatch(gate_source + r"/(requests|invoke)", path)
+        or request.method in {"GET", "DELETE"}
+        and re.fullmatch(gate_request, path)
+        or request.method == "POST"
+        and re.fullmatch(gate_request + r"/(consume|observations)", path)
+    ):
+        # These exact handlers require their own execution-scoped control credential,
+        # including in direct-local mode. Issuance remains operator-authenticated.
+        return True
+    if request.method == "POST" and path in {"/api/auth/login", "/api/auth/logout"}:
+        return True
+    if request.method not in {"GET", "HEAD"}:
+        return False
+    if path == "/api/health":
+        return True
+    if request.method == "GET" and re.fullmatch(r"/api/share/[^/]+/(job|events|snapshot|telemetry)", path):
+        # Each of these four handlers validates the scoped token before I/O.
+        return True
+    return bool(re.fullmatch(r"/shared/[^/]+", path) or re.fullmatch(r"/assets/[^/]+", path))
 
-    # Always allow auth endpoints and health check
-    if path in AUTH_EXEMPT_EXACT or any(path.startswith(p) for p in AUTH_EXEMPT_PREFIXES):
+
+async def auth_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Enforce app posture with narrowly scoped bootstrap/share exceptions."""
+    path = request.url.path
+    if is_public_request(request):
+        app = request.scope.get("app")
+        policy = _policy(getattr(getattr(app, "state", None), "auth_policy", None))
+        if policy.access_only and path.startswith(("/api/share/", "/shared/")) and not _has_cloudflare_access(request):
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
         return await call_next(request)
-
-    # Localhost is trusted — no auth needed
-    if is_localhost(request):
-        client_ip = request.client.host if request.client else "unknown"
-        log.debug("auth_localhost_bypass", client_ip=client_ip, path=path)
+    if is_request_authenticated(request):
         return await call_next(request)
-
-    # Cloudflare Access — request already authenticated at the CF edge
-    if _has_cloudflare_access(request):
-        log.debug("auth_cloudflare_access_bypass", path=path)
-        return await call_next(request)
-
-    # Check session cookie
-    token = request.cookies.get(COOKIE_NAME)
-    if is_valid_token(token):
-        log.debug("auth_token_valid", path=path)
+    if (
+        request.method == "POST"
+        and re.fullmatch(r"/api/integrations/[A-Za-z0-9._~-]+/traces", path)
+        and request.headers.get("x-codeplane-ingest-token")
+    ):
+        # This exact handler validates its source credential even in local mode.
+        # Do not promote the credential into operator/SSE/WebSocket authentication.
         return await call_next(request)
 
     # Not authenticated
@@ -423,6 +497,10 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
 def _reset_for_testing() -> None:
     """Reset all module-level mutable state for test isolation."""
     global _password_hash, _password_salt, _logo_b64  # noqa: PLW0603
+    global _auth_policy, _internal_token, _internal_origin  # noqa: PLW0603
+    _auth_policy = None
+    _internal_token = None
+    _internal_origin = None
     _session_tokens.clear()
     _login_attempts.clear()
     _ws_auth_attempts.clear()

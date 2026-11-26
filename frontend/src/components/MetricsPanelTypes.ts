@@ -1,16 +1,11 @@
+import type { CurrencyValue, JobTelemetryResponse } from "../api/types";
 // ---------------------------------------------------------------------------
 // Types shared across MetricsPanel and its section sub-components.
 // ---------------------------------------------------------------------------
 
-export interface ToolCall {
-  name: string;
-  displayLabel?: string;
-  activity?: string;
-  toolCategory?: string;
-  durationMs: number;
-  success: boolean;
-  offsetSec?: number;
-}
+import type { TelemetryToolCall } from "../api/types";
+
+export type ToolCall = TelemetryToolCall;
 
 export interface LLMCall {
   model: string;
@@ -18,7 +13,7 @@ export interface LLMCall {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  cost?: number;
+  cost?: CurrencyValue;
   durationMs: number;
   offsetSec?: number;
   isSubagent: boolean;
@@ -29,12 +24,15 @@ export interface SidecarSession {
   sessionKind: string;
   inputTokens: number;
   outputTokens: number;
-  totalCostUsd: number;
+  totalCostUsd: CurrencyValue;
   llmCallCount: number;
   toolCallCount: number;
 }
 
 export interface TelemetryData {
+  costUsage?: JobTelemetryResponse["costUsage"];
+  estimatedCostUsd?: JobTelemetryResponse["estimatedCostUsd"];
+  legacyCostUnverified?: JobTelemetryResponse["legacyCostUnverified"];
   available: boolean;
   sdk?: string;
   model?: string;
@@ -45,7 +43,7 @@ export interface TelemetryData {
   totalTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
-  totalCost?: number;
+  totalCost?: CurrencyValue;
   contextWindowSize?: number;
   currentContextTokens?: number;
   contextUtilization?: number;
@@ -83,7 +81,7 @@ export interface TurnAction {
 export interface CostDriverBucket {
   dimension: string;
   bucket: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   inputTokens: number;
   outputTokens: number;
   callCount: number;
@@ -106,10 +104,10 @@ export interface CostDriversData {
 
 export interface TurnEconomicsData {
   totalTurns: number;
-  peakTurnCostUsd: number;
-  avgTurnCostUsd: number;
-  costFirstHalfUsd: number;
-  costSecondHalfUsd: number;
+  peakTurnCostUsd: CurrencyValue;
+  avgTurnCostUsd: CurrencyValue;
+  costFirstHalfUsd: CurrencyValue;
+  costSecondHalfUsd: CurrencyValue;
   turnCurve: CostDriverBucket[];
 }
 
@@ -210,6 +208,7 @@ export interface ToolAggregate {
   totalMs: number;
   avgMs: number;
   fails: number;
+  unknown: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,13 +229,7 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-export function formatUsd(amount: number): string {
-  const n = amount ?? 0;
-  if (n < 0.001) return `$${n.toFixed(6)}`;
-  if (n < 0.01)  return `$${n.toFixed(4)}`;
-  if (n < 1)     return `$${n.toFixed(3)}`;
-  return `$${n.toFixed(2)}`;
-}
+export { formatUsd } from "../lib/currency";
 
 export function formatActivityBucket(bucket: string): string {
   switch (bucket) {

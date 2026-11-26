@@ -1,10 +1,10 @@
-"""§6.1 equivalence oracle for imported ingestion: same vendor log ⇒ same TF stream.
+"""§6.1 equivalence oracle for imported ingestion: same vendor log ⇒ same canonical stream.
 
-Drives the *real* production tail/parse path (``FileWatchSource`` + the bundled
-TraceForge ``MappedJsonAdapter`` for the ``copilot``/``claude`` framework mappings)
-against recorded vendor JSONL and asserts the emitted ``traceforge.SessionEvent``
+Drives the real ``NativeJsonlSource`` tail path and bundled Copilot/Claude mappings
+against recorded vendor JSONL and asserts the emitted canonical ``SessionEvent``
 stream carries the same dotted ``EventKind``s and the same salient payload/metadata
-fields the retired hand-rolled watchers produced.
+fields the retired hand-rolled watchers produced. Version-1 replay explicitly uses
+the optional legacy implementation rather than fabricating a new-decoder checkpoint.
 
 Claude fixtures are ported from the deleted ``test_claude_session_watcher.py``
 inline JSONL shapes (user / assistant-text / thinking / tool_use / tool_result).
@@ -165,7 +165,7 @@ def _emitted(event_processor: AsyncMock) -> list[SessionEvent]:
 
 
 class TestClaudeImportedEquivalence:
-    """Claude Code JSONL ⇒ TF stream via the bundled ``claude`` mapping."""
+    """Claude Code JSONL ⇒ canonical stream via the bundled ``claude`` mapping."""
 
     async def test_full_stream_kinds_and_salient_fields(
         self,
@@ -245,14 +245,14 @@ class TestClaudeImportedEquivalence:
         assert completed.payload["success"] is True
         assert completed.payload["result"] == "file contents here"
 
-    async def test_reattach_skip_is_deterministic(
+    async def test_unconverted_legacy_reattach_preserves_checkpoint_without_replaying(
         self,
         claude_watcher: ClaudeSessionStateWatcher,
         event_processor: AsyncMock,
         db_session: async_sessionmaker[AsyncSession],
         tmp_path: Path,
     ) -> None:
-        """Same log + initial_skip_count ⇒ only the un-emitted tail is re-produced."""
+        """An old offset cannot be silently reinterpreted by the final parser."""
         await _insert_job(db_session, "job-re", JobSource.claude_cli, "sess-re")
         _prime(claude_watcher, "sess-re", "job-re")
 
@@ -266,6 +266,26 @@ class TestClaudeImportedEquivalence:
             ],
         )
 
+        from backend.persistence.job_repo import JobRepository
+        from backend.services.ingest._base import _advance_prefix, _canonical_record
+
+        async with db_session() as session:
+            repo = JobRepository(session)
+            await repo.update_ingest_checkpoint(
+                "job-re",
+                {
+                    "version": 1,
+                    "record_count": 1,
+                    "external_session_id": "sess-re",
+                    "mapping_sha256": "retained-parser-identity",
+                    "prefix_sha256": _advance_prefix(
+                        bytes(32), _canonical_record({"type": "user", "message": {"content": "first"}})
+                    ).hex(),
+                },
+                1,
+            )
+            await session.commit()
+
         await asyncio.wait_for(
             claude_watcher._tail_traceforge_events(
                 "sess-re", "job-re", jsonl, initial_skip_count=1, finalize_on_raw=claude_watcher._raw_terminal
@@ -273,13 +293,22 @@ class TestClaudeImportedEquivalence:
             timeout=10,
         )
 
-        kinds = [e.kind for e in _emitted(event_processor)]
+        kinds = [
+            call.args[1].kind
+            for call in event_processor.process_event.call_args_list
+            if not call.kwargs.get("replay") and call.args[1].kind not in _CONTROL_PLANE_KINDS
+        ]
         assert EventKind.message_user not in kinds
-        assert kinds == [EventKind.message_assistant]
+        assert EventKind.message_assistant not in kinds
+        async with db_session() as session:
+            retained = await JobRepository(session).get_ingest_checkpoint("job-re")
+        assert retained["version"] == 1
+        assert retained["mapping_sha256"] == "retained-parser-identity"
+        assert "source" not in retained
 
 
 class TestCopilotImportedEquivalence:
-    """Copilot CLI session JSONL ⇒ TF stream via the bundled ``copilot`` mapping."""
+    """Copilot CLI session JSONL ⇒ canonical stream via the bundled ``copilot`` mapping."""
 
     async def test_full_stream_kinds_and_salient_fields(
         self,

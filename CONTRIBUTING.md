@@ -4,7 +4,7 @@ This guide is for contributors working from source. If you just want to use Code
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - Node.js 20+
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 - Git
@@ -14,7 +14,7 @@ This guide is for contributors working from source. If you just want to use Code
 ```bash
 git clone https://github.com/dfinson/codeplane.git
 cd codeplane
-make install                  # uv sync + npm ci
+make install                  # uv sync --locked + npm ci
 cp .env.sample .env           # optional — set CPL_PASSWORD for remote auth
 ```
 
@@ -43,16 +43,21 @@ make test        # pytest (70% coverage threshold) + vitest
 make ci          # all of the above
 ```
 
+The final package and contributor environment no longer include the retired
+TraceForge compatibility extra. For a core-only environment, use
+`uv sync --locked --no-default-groups`. Historical execution recovery uses the
+separately preserved release described in [Transition retirement](docs/transition-retirement.md).
+
 ## Testing
 
 ### Backend Tests
 
 ```bash
-uv run pytest                              # run all tests
-uv run pytest backend/tests/unit/          # unit tests only
-uv run pytest backend/tests/integration/   # integration tests only
-uv run pytest -k "test_job_creation"       # run specific test by name
-uv run pytest --cov=backend --cov-report=term-missing  # with coverage
+uv run pytest                           # all tests
+uv run pytest backend/tests/unit/        # unit tests
+uv run pytest backend/tests/integration/ # integration tests
+uv run pytest -k "test_job_creation"      # specific test
+uv run pytest --cov=backend --cov-report=term-missing
 ```
 
 ### Frontend Tests
@@ -95,7 +100,7 @@ cd frontend
 npm run generate:api    # generates src/api/schema.d.ts
 ```
 
-The generated `schema.d.ts` is gitignored — import types via `src/api/types.ts` aliases instead.
+The generated `schema.d.ts` is tracked — import types via `src/api/types.ts` aliases instead.
 
 ## Developer Tools
 
@@ -188,7 +193,7 @@ codeplane/
 │       ├── api/                       # API client + generated types
 │       │   ├── client.ts              #   REST API client functions
 │       │   ├── types.ts               #   Friendly type aliases
-│       │   └── schema.d.ts            #   Generated from OpenAPI (gitignored)
+│       │   └── schema.d.ts            #   Generated from OpenAPI (tracked)
 │       ├── components/                # React components
 │       ├── hooks/                     # Custom React hooks (SSE, mobile, etc.)
 │       ├── lib/                       # Utilities

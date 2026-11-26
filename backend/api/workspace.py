@@ -26,7 +26,7 @@ async def list_workspace(
     """List files in the job's worktree (max 200 entries per page)."""
     job = await svc.get_job(job_id)
 
-    worktree = Path(job.worktree_path or job.repo).resolve()
+    worktree = Path(job.execution_workspace).resolve()
     if not worktree.is_dir():
         raise HTTPException(status_code=404, detail="Worktree not found")
 
@@ -76,7 +76,7 @@ async def get_workspace_file(
     """Get the contents of a single file in the job's worktree."""
     job = await svc.get_job(job_id)
 
-    worktree = Path(job.worktree_path or job.repo).resolve()
+    worktree = Path(job.execution_workspace).resolve()
     file_path = (worktree / path).resolve()
 
     # Path traversal prevention
@@ -107,7 +107,7 @@ async def get_workspace_file_raw(
     """Serve a workspace file with its native content type (for images, PDFs, videos, etc.)."""
     job = await svc.get_job(job_id)
 
-    worktree = Path(job.worktree_path or job.repo).resolve()
+    worktree = Path(job.execution_workspace).resolve()
     file_path = (worktree / path).resolve()
 
     # Path traversal prevention

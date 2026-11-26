@@ -16,6 +16,8 @@ from uuid import uuid4
 import pytest
 
 from backend.models.db import JobRow
+from backend.tests.unit.test_ingest_sources import _TASK_ID
+from backend.tests.unit.test_ingest_sources import native_control_stack as native_control_stack
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -32,6 +34,24 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # List Approvals
 # ---------------------------------------------------------------------------
+
+
+class TestRuntimeContract:
+    async def test_native_message_uses_source_aware_runtime_command(self):
+        from unittest.mock import AsyncMock
+
+        from backend.api.approvals import send_message
+        from backend.models.api_schemas import SendMessageRequest
+        from backend.tests.unit.conftest import make_job
+
+        runtime = AsyncMock()
+        runtime.send_operator_message.return_value = True
+        ingest = AsyncMock()
+        jobs = AsyncMock()
+        jobs.get_job.return_value = make_job(source="copilot_cli", external_session_id="native-1")
+        await send_message("job-1", SendMessageRequest(content="fixture"), runtime, ingest, jobs)
+        assert runtime.send_operator_message.await_count == 1
+        ingest.send_operator_message.assert_not_awaited()
 
 
 class TestListApprovals:
@@ -392,7 +412,7 @@ class TestSendMessage:
         mock_runtime_service: AsyncMock,
     ) -> None:
         job_id = await seed_job()
-        mock_runtime_service.send_message.return_value = True
+        mock_runtime_service.send_operator_message.return_value = True
 
         resp = await client.post(
             f"/api/jobs/{job_id}/messages",
@@ -402,7 +422,7 @@ class TestSendMessage:
         body = resp.json()
         assert "seq" in body
         assert "timestamp" in body
-        mock_runtime_service.send_message.assert_called_once_with(job_id, "Try a different approach")
+        mock_runtime_service.send_operator_message.assert_called_once_with(job_id, "Try a different approach")
 
     @pytest.mark.asyncio
     async def test_non_running_job_returns_409(
@@ -412,7 +432,7 @@ class TestSendMessage:
         mock_runtime_service: AsyncMock,
     ) -> None:
         job_id = await seed_job(state="review")
-        mock_runtime_service.send_message.return_value = False
+        mock_runtime_service.send_operator_message.return_value = False
 
         resp = await client.post(
             f"/api/jobs/{job_id}/messages",
@@ -434,3 +454,46 @@ class TestSendMessage:
         job_id = await seed_job()
         resp = await client.post(f"/api/jobs/{job_id}/messages", json={})
         assert resp.status_code == 422
+
+
+class TestNativeBindingAPI:
+    @pytest.mark.parametrize("case", ["accepted", "missing", "mismatch", "off", "rejected", "uncertain"])
+    async def test_native_routing_and_typed_failure(self, client, mock_runtime_service, native_control_stack, case):
+        import json
+
+        import httpx
+
+        stack = native_control_stack
+        if case == "missing":
+            stack.workspace.unlink()
+        elif case in {"mismatch", "off"}:
+            data = json.loads(stack.workspace.read_text(encoding="utf-8"))
+            data["mc_session_id" if case == "mismatch" else "remote_steerable"] = (
+                _TASK_ID if case == "mismatch" else False
+            )
+            stack.workspace.write_text(json.dumps(data), encoding="utf-8")
+        elif case == "rejected":
+            stack.post.return_value = httpx.Response(
+                404, text="PRIVATE-BODY", request=httpx.Request("POST", "https://fixture.invalid")
+            )
+        elif case == "uncertain":
+            stack.post.side_effect = httpx.ReadTimeout("PRIVATE-DIAGNOSTIC")
+        mock_runtime_service.send_operator_message.side_effect = stack.runtime.send_operator_message
+        response = await client.post(f"/api/jobs/{stack.job.id}/messages", json={"content": "fixture"})
+        if case == "accepted":
+            assert response.status_code == 200 and "seq" in response.json()
+        else:
+            assert response.status_code == 503
+            assert response.json()["detail"]["reason"] == (
+                "delivery_unknown" if case == "uncertain" else "delivery_failed"
+            )
+            assert "PRIVATE" not in response.text
+        if case in {"missing", "mismatch", "off"}:
+            stack.post.assert_not_awaited()
+        else:
+            stack.post.assert_awaited_once_with(
+                f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
+                json={"content": "fixture", "type": "user_message"},
+            )
+        stack.runtime.send_message.assert_not_awaited()
+        stack.runtime._resume_orphaned.assert_not_awaited()

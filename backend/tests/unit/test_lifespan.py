@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -17,6 +17,39 @@ from backend.models.events import EventKind, SessionEvent, new_event
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+async def test_optional_startup_never_discovers_provider_models() -> None:
+    import asyncio
+
+    from fastapi import FastAPI
+
+    from backend.config import CPLConfig
+    from backend.lifespan import _init_optional_services
+
+    config = CPLConfig()
+    config.terminal.enabled = False
+    config.retention.cleanup_on_startup = False
+    factory = MagicMock()
+    services = MagicMock()
+    mcp = MagicMock()
+    mcp.session_manager.run.return_value.__aenter__ = AsyncMock()
+    mcp.session_manager.run.return_value.__aexit__ = AsyncMock()
+    with (
+        patch("backend.mcp.server.create_mcp_server", return_value=mcp),
+        patch("backend.lifespan.RetentionService") as retention,
+        patch("backend.services.copilot_adapter._models.fetch_copilot_models_raw", new_callable=AsyncMock) as fetch,
+    ):
+        retention.return_value.daily_loop = AsyncMock()
+        optional = await _init_optional_services(FastAPI(), config, factory, services)
+        try:
+            fetch.assert_not_awaited()
+            assert optional.cached_models_by_sdk["copilot"] == []
+            assert optional.cached_models_by_sdk["claude"]
+        finally:
+            optional.mcp_stop_event.set()
+            optional.retention_task.cancel()
+            await asyncio.gather(optional.mcp_task, optional.retention_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

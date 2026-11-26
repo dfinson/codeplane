@@ -9,14 +9,17 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from backend.models.currency import event_usage, verified_usd
 from backend.models.events import EventKind
+from backend.services.events.observation import has_source_grouping, observed_operation_id
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Coroutine
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-    from traceforge.types import SessionEvent
 
+    from backend.models.session_event import SessionEvent
+    from backend.models.usage import UsageAmount
     from backend.services.analytics.model_pricing import ModelPricingService
     from backend.services.events.event_bus import EventBus
 
@@ -104,13 +107,17 @@ class TelemetrySubscriber:
         metadata = event.metadata
         sdk = (metadata.source_framework if metadata is not None else None) or "unknown"
         kind = str(event.kind)
+        operation = observed_operation_id(event)
+        if has_source_grouping(event) and kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
+            self._schedule_write(self._record_observed_tool(event, operation or f"event:{event.id}", sdk))
+            return
         if kind == EventKind.execution_phase_changed:
             phase = event.payload.get("phase")
             if phase:
                 self.set_execution_phase(job_id, str(phase))
         elif kind == EventKind.telemetry_usage:
-            self._record_usage(job_id, event.payload, sdk)
-        elif kind == EventKind.tool_call_completed:
+            self._record_usage(job_id, event.payload, sdk, metadata=metadata.model_dump(mode="json"))
+        elif kind in (EventKind.tool_call_completed, EventKind.tool_call_failed):
             self._record_completed_tool(job_id, event, sdk)
         elif kind == EventKind.message_user:
             self._buffer_message(job_id, "operator", event.payload)
@@ -147,7 +154,7 @@ class TelemetrySubscriber:
         """Return the current per-job turn counter."""
         return self._turn_counters.get(job_id, 0)
 
-    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str) -> None:
+    def _record_usage(self, job_id: str, payload: dict[str, Any], sdk: str, *, metadata: dict[str, Any]) -> None:
         from backend.services.analytics import telemetry as tel
 
         input_tokens = int(payload.get("input_tokens") or 0)
@@ -159,13 +166,26 @@ class TelemetrySubscriber:
         is_subagent = bool(payload.get("is_subagent", False))
         advance_turn = bool(payload.get("advance_turn", True))
         num_turns = int(payload.get("num_turns") or 1)
-        cost_usd = self._resolve_cost_usd(
-            payload.get("cost_usd"),
-            model,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
+        usage = list(
+            event_usage(
+                "telemetry.usage",
+                job_id,
+                payload,
+                metadata,
+            )
+        )
+        roles = {item.role for item in usage}
+        if len(roles) > 1:
+            raise ValueError("One telemetry invocation cannot combine different accounting roles")
+        role = next(iter(roles), "primary")
+        session_kind = "job" if role == "primary" else "preflight" if role == "scout" else role
+        advance_turn = advance_turn and session_kind == "job"
+        known_usd = verified_usd(usage)
+        cost_usd = float(known_usd) if known_usd is not None else None
+        estimate = (
+            self._estimate_cost(model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+            if cost_usd is None and all(payload.get(key) is not None for key in ("input_tokens", "output_tokens"))
+            else None
         )
 
         attrs: dict[str, Any] = {"job_id": job_id, "sdk": sdk}
@@ -173,21 +193,22 @@ class TelemetrySubscriber:
         tel.tokens_output.add(output_tokens, {**attrs, "model": model})
         tel.tokens_cache_read.add(cache_read_tokens, attrs)
         tel.tokens_cache_write.add(cache_write_tokens, attrs)
-        if cost_usd:
+        if cost_usd is not None:
             tel.cost_usd.add(cost_usd, attrs)
         if duration_ms:
             tel.llm_duration.record(duration_ms, {**attrs, "is_subagent": is_subagent})
 
         db_counters: dict[str, Any] = {
+            "session_kind": session_kind,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_write_tokens": cache_write_tokens,
             "llm_call_count": num_turns,
         }
-        if cost_usd:
+        if cost_usd is not None:
             db_counters["total_cost_usd"] = cost_usd
-        if is_subagent and cost_usd:
+        if is_subagent and cost_usd is not None:
             db_counters["subagent_cost_usd"] = cost_usd
         if duration_ms:
             db_counters["total_llm_duration_ms"] = int(duration_ms)
@@ -204,10 +225,10 @@ class TelemetrySubscriber:
             for _ in range(num_turns):
                 self.advance_turn(job_id)
 
-        if model:
+        if model and session_kind == "job":
             self._schedule_write(self._db_set_model(job_id, model))
 
-        if duration_ms or input_tokens or output_tokens:
+        if duration_ms or input_tokens or output_tokens or usage or estimate is not None:
             self._record_llm_span(
                 job_id,
                 model,
@@ -218,21 +239,30 @@ class TelemetrySubscriber:
                 cache_write_tokens,
                 cost_usd,
                 sdk,
+                usage=usage,
+                estimate=estimate,
+                session_kind=session_kind,
+                is_subagent=is_subagent,
             )
 
-    def _resolve_cost_usd(
+    def _estimate_cost(
         self,
-        raw_cost: Any,
         model: str,
         input_tokens: int,
         output_tokens: int,
         cache_read_tokens: int,
         cache_write_tokens: int,
-    ) -> float:
-        if raw_cost is not None:
-            return float(raw_cost or 0.0)
+    ) -> float | None:
         if self._model_pricing is None or not model:
-            return 0.0
+            return None
+        prices = self._model_pricing.get(model)
+        needed = ["input", "output"]
+        if cache_read_tokens:
+            needed.append("cache_read")
+        if cache_write_tokens:
+            needed.append("cache_write")
+        if not prices or any(type(prices.get(key)) not in (int, float) for key in needed):
+            return None
         return self._model_pricing.compute_cost(
             model,
             input_tokens,
@@ -245,7 +275,8 @@ class TelemetrySubscriber:
         payload = event.payload
         tool_name = str(payload.get("tool_name") or "tool")
         tool_args_str = self._stringify_tool_arguments(payload.get("arguments"))
-        success = bool(payload.get("success"))
+        supplied = payload.get("success")
+        success = supplied if isinstance(supplied, bool) else None
         result_text = str(payload.get("result") or "")
         duration_ms = float(event.metadata.duration_ms or 0.0)
         turn_id = payload.get("turn_id")
@@ -267,13 +298,78 @@ class TelemetrySubscriber:
             sdk=sdk,
         )
 
+    async def _record_observed_tool(self, event: SessionEvent, operation_id: str, sdk: str) -> None:
+        from backend.persistence.telemetry_spans_repo import TelemetrySpansRepository
+        from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
+        from backend.services.tools.tool_classifier import classify_tool, extract_tool_target
+
+        payload = event.payload
+        supplied = payload.get("success")
+        success = supplied if isinstance(supplied, bool) else None
+        tool_name = str(payload.get("tool_name") or "tool")
+        arguments = self._stringify_tool_arguments(payload.get("arguments"))
+        async with self._get_db_session() as session:
+            spans = TelemetrySpansRepository(session)
+            previous = await spans.observed_tool(event.session_id, operation_id)
+            old = previous["attrs"] if previous is not None else {}
+            old_success = old.get("success")
+            conflict = old.get("outcome_conflict") is True or (
+                isinstance(old_success, bool) and isinstance(success, bool) and success != old_success
+            )
+            if conflict:
+                success = None
+            elif success is None and isinstance(old_success, bool):
+                success = old_success
+            duration = event.metadata.duration_ms
+            if duration is None:
+                duration = float(previous["duration_ms"]) if previous is not None else 0.0
+            attrs = {
+                **old,
+                "observation_operation_id": operation_id,
+                "operation_identity_known": observed_operation_id(event) is not None,
+                "latest_observation_event_id": event.id,
+                "integration_binding_id": event.metadata.integration_binding_id,
+                "span_id": event.metadata.span_id,
+                "native_tool_call_id": payload.get("tool_call_id"),
+                "success": success,
+                "outcome_conflict": conflict,
+                "source_timestamp": event.timestamp.isoformat(),
+            }
+            if event.metadata.duration_ms is not None:
+                attrs["source_duration_ms"] = event.metadata.duration_ms
+            if previous is None:
+                observed_at = time.monotonic()
+                await spans.insert(
+                    job_id=event.session_id,
+                    span_type="tool",
+                    name=tool_name,
+                    started_at=round(observed_at - self._job_start_times.get(event.session_id, observed_at), 2),
+                    duration_ms=duration,
+                    attrs=attrs,
+                    tool_category=classify_tool(tool_name),
+                    tool_target=extract_tool_target(tool_name, arguments),
+                    tool_args_json=arguments,
+                    turn_id=payload.get("turn_id"),
+                )
+            else:
+                await spans.update_observed_tool(previous["id"], attrs=attrs, duration_ms=duration)
+            summary = TelemetrySummaryRepository(session)
+            await summary.init_job(event.session_id, sdk=sdk)
+            await summary.increment(
+                job_id=event.session_id,
+                tool_call_count=int(previous is None),
+                tool_failure_count=int(success is False) - int(old_success is False),
+                total_tool_duration_ms=int(duration)
+                - int(float(previous["duration_ms"]) if previous is not None else 0),
+            )
+
     def _record_tool_telemetry(
         self,
         job_id: str,
         *,
         tool_name: str,
         tool_args_str: str | None,
-        success: bool,
+        success: bool | None,
         duration_ms: float,
         result_text: str,
         turn_id: str | None = None,
@@ -281,7 +377,7 @@ class TelemetrySubscriber:
         sdk: str,
     ) -> None:
         from backend.services.analytics import telemetry as tel
-        from backend.services.job.retry_tracker import RetryTracker
+        from backend.services.job.retry_tracker import RetryResult, RetryTracker
         from backend.services.tools.tool_classifier import (
             classify_tool,
             extract_file_paths,
@@ -293,8 +389,9 @@ class TelemetrySubscriber:
             "job_id": job_id,
             "sdk": sdk,
             "tool_name": tool_name,
-            "success": bool(success),
         }
+        if success is not None:
+            attrs["success"] = success
         tel.tool_duration.record(duration_ms, attrs)
 
         category = classify_tool(tool_name)
@@ -308,7 +405,11 @@ class TelemetrySubscriber:
 
         if job_id not in self._retry_trackers:
             self._retry_trackers[job_id] = RetryTracker()
-        retry_result = self._retry_trackers[job_id].record(tool_name, target, 0, success)
+        retry_result = (
+            self._retry_trackers[job_id].record(tool_name, target, 0, success)
+            if success is not None
+            else RetryResult(False, None)
+        )
 
         result_size = len(result_text.encode("utf-8", errors="replace")) if result_text else None
 
@@ -335,7 +436,7 @@ class TelemetrySubscriber:
                 job_id,
                 sdk=sdk,
                 tool_call_count=1,
-                tool_failure_count=0 if success else 1,
+                tool_failure_count=int(success is False),
                 total_tool_duration_ms=int(duration_ms),
                 retry_count=1 if retry_result.is_retry else 0,
                 **file_rw_increment,
@@ -355,7 +456,7 @@ class TelemetrySubscriber:
                 duration_ms=duration_ms,
                 attrs={
                     "success": success,
-                    **({"error_snippet": result_text} if not success and result_text else {}),
+                    **({"error_snippet": result_text} if success is False and result_text else {}),
                 },
                 tool_category=category,
                 tool_target=target,
@@ -380,8 +481,13 @@ class TelemetrySubscriber:
         output_tokens: int,
         cache_read: int,
         cache_write: int,
-        cost_usd: float,
+        cost_usd: float | None,
         sdk: str,
+        *,
+        usage: list[UsageAmount],
+        estimate: float | None,
+        session_kind: str,
+        is_subagent: bool,
     ) -> None:
         _ = sdk
         turn_num = self._turn_counters.get(job_id, 0)
@@ -392,6 +498,7 @@ class TelemetrySubscriber:
         self._schedule_write(
             self._db_insert_span(
                 job_id=job_id,
+                session_kind=session_kind,
                 span_type="llm",
                 name=model or "unknown",
                 started_at=round(offset, 2),
@@ -402,6 +509,14 @@ class TelemetrySubscriber:
                     "cache_read_tokens": cache_read,
                     "cache_write_tokens": cache_write,
                     "cost": cost_usd,
+                    "is_subagent": is_subagent,
+                    "cost_provenance": "verified_usd"
+                    if cost_usd is not None
+                    else "estimate"
+                    if estimate is not None
+                    else "unknown",
+                    "estimated_cost_usd": estimate,
+                    "native_usage": [item.model_dump(mode="json") for item in usage],
                 },
                 turn_number=turn_num,
                 execution_phase=current_phase,
@@ -430,7 +545,7 @@ class TelemetrySubscriber:
         tool_name: str,
         tool_args_str: str | None,
         result_text: str,
-        success: bool,
+        success: bool | None,
     ) -> None:
         payload: dict[str, Any] = {
             "role": "tool_call",
@@ -517,7 +632,7 @@ class TelemetrySubscriber:
                 repo = TelemetrySummaryRepository(session)
                 totals = await repo.increment(job_id=job_id, **counters)
                 if not totals.get("_row_found") and counters:
-                    await repo.init_job(job_id, sdk=sdk)
+                    await repo.init_job(job_id, sdk=sdk, session_kind=counters.get("session_kind", "job"))
                     await repo.increment(job_id=job_id, **counters)
         except Exception:
             log.warning("telemetry_subscriber_db_write_failed", fn="increment", exc_info=True)

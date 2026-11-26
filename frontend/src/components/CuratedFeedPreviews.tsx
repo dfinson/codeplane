@@ -20,6 +20,7 @@ import { SdkIcon } from "./SdkBadge";
 import { Tooltip } from "./ui/tooltip";
 import { cn } from "../lib/utils";
 import { pathBasename } from "../lib/paths";
+import { isFailedTool, isRunningTool, isToolOutcome, toolOutputKey } from "../lib/transcriptIdentity";
 import {
   formatDuration,
   trimWorktreePaths,
@@ -91,7 +92,7 @@ export function PhaseBox({
   );
   const totalDuration = cluster.entries.reduce((sum, e) => sum + (e.toolDurationMs ?? 0), 0);
   const hasEdits = cluster.kind === "write" || cluster.kind === "create";
-  const hasFailure = cluster.entries.some((e) => e.success === false);
+  const hasFailure = cluster.entries.some(isFailedTool);
 
   const firstSeq = cluster.entries[0]?.sequence;
   const turnId = cluster.entries[0]?.turnId;
@@ -214,8 +215,8 @@ export function SubAgentBubble({
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const completedEntry = cluster.entries.find((e) => e.kind === "tool.call.completed");
-  const runningEntry = cluster.entries.find((e) => e.kind === "tool.call.started");
+  const completedEntry = cluster.entries.find((e) => isToolOutcome(e.kind));
+  const runningEntry = cluster.entries.find(isRunningTool);
   const entry = completedEntry ?? runningEntry ?? cluster.entries[cluster.entries.length - 1]!;
 
   const args = parseArgs(entry.arguments);
@@ -288,8 +289,8 @@ export function FileChip({
   selected: boolean;
   onClick: () => void;
 }) {
-  const failed = file.entries.some((e) => e.success === false);
-  const isRunning = file.entries.some((e) => e.kind === "tool.call.started");
+  const failed = file.entries.some(isFailedTool);
+  const isRunning = file.entries.some(isRunningTool);
   const editCount = file.entries.length > 1 ? file.entries.length : undefined;
 
   return (
@@ -353,8 +354,8 @@ function CommandPreview({ entries }: { entries: TranscriptEntry[] }) {
   const entry = entries[entries.length - 1]!;
   const args = parseArgs(entry.arguments);
   const command = trimWorktreePaths((args.command as string) ?? "");
-  const failed = entry.success === false;
-  const isRunning = entry.kind === "tool.call.started";
+  const failed = isFailedTool(entry);
+  const isRunning = isRunningTool(entry);
   const jobs = useStore((s) => s.jobs);
   const createTerminalSession = useStore((s) => s.createTerminalSession);
   const job = jobs[entry.jobId];
@@ -364,9 +365,8 @@ function CommandPreview({ entries }: { entries: TranscriptEntry[] }) {
 
   const liveOutput = useMemo(() => {
     if (!isRunning || !streamingOutput) return "";
-    const values = Object.values(streamingOutput);
-    return values.length > 0 ? values[values.length - 1] : "";
-  }, [isRunning, streamingOutput]);
+    return streamingOutput[toolOutputKey(entry).slice(entry.jobId.length + 1)] ?? "";
+  }, [entry, isRunning, streamingOutput]);
 
   useEffect(() => {
     if (outputRef.current && liveOutput) {
@@ -487,7 +487,7 @@ function EditPreview({ entries }: { entries: TranscriptEntry[]; filePath?: strin
       {entries.map((entry, i) => {
         const args = parseArgs(entry.arguments);
         const name = stripMcpPrefix(entry.toolName ?? "");
-        const failed = entry.success === false;
+        const failed = isFailedTool(entry);
 
         if (name === "multi_replace_string_in_file" || name === "MultiEdit") {
           const edits = (args.replacements ?? args.edits ?? []) as Array<Record<string, unknown>>;

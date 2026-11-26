@@ -216,12 +216,12 @@ function VizHeatmap({ data, config }: { data: unknown[]; config: VizConfig }) {
   const rows = data as Record<string, unknown>[];
   const xs = [...new Set(rows.map((r) => String(r[xKey])))];
   const ys = [...new Set(rows.map((r) => String(r[yKey])))];
-  const values = rows.map((r) => Number(r[vKey] ?? 0));
+  const values = rows.filter(r => r[vKey] != null).map((r) => Number(r[vKey]));
   const maxVal = Math.max(...values, 1);
 
-  const lookup = new Map<string, number>();
+  const lookup = new Map<string, number | null>();
   for (const r of rows) {
-    lookup.set(`${r[xKey]}:${r[yKey]}`, Number(r[vKey] ?? 0));
+    lookup.set(`${r[xKey]}:${r[yKey]}`, r[vKey] == null ? null : Number(r[vKey]));
   }
 
   return (
@@ -240,16 +240,16 @@ function VizHeatmap({ data, config }: { data: unknown[]; config: VizConfig }) {
             <tr key={y}>
               <td className="pr-2 py-0.5 text-muted-foreground text-right">{y}</td>
               {xs.map((x) => {
-                const val = lookup.get(`${x}:${y}`) ?? 0;
-                const opacity = maxVal > 0 ? (val / maxVal) * 0.8 + 0.1 : 0.1;
+                const val = lookup.get(`${x}:${y}`);
+                const opacity = maxVal > 0 && val != null ? (val / maxVal) * 0.8 + 0.1 : 0.1;
                 return (
                   <td
                     key={x}
                     className="px-1.5 py-0.5 text-center tabular-nums"
                     style={{ background: `rgba(99, 102, 241, ${opacity})` }}
-                    title={`${val}`}
+                    title={val == null ? "Unknown" : `${val}`}
                   >
-                    {formatNum(val)}
+                    {val == null ? "Unknown" : formatNum(val)}
                   </td>
                 );
               })}

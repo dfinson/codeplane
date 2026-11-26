@@ -6,6 +6,8 @@
  */
 
 import { test, expect } from "@playwright/test";
+import type { Job, ProjectResponse } from "../src/api/types";
+import { makeProjectBoard, setupProjectBoardMocks, sseBody } from "./helpers";
 
 test.describe("Health & Navigation", () => {
   test("loads the projects overview", async ({ page }) => {
@@ -47,7 +49,7 @@ test.describe("Project board", () => {
     await page.locator('[aria-label="Project list"] a').first().click();
     await page.waitForURL(/\/projects\/id\/.+\/board/);
     await expect(page.getByRole("region", { name: "In Progress" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Awaiting Input" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Needs a decision" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Failed" })).toBeVisible();
   });
 });
@@ -88,13 +90,17 @@ test.describe("Job Creation", () => {
  * can never land in the same microtask checkpoint as React's flush scheduling.
  */
 
-const JOB_FIXTURE = {
+const REPOSITORY = "/repos/example-app";
+const JOB_FIXTURE: Job = {
   id: "e2e-job-running-01",
-  repo: "/repos/example-app",
+  repo: REPOSITORY,
   projectId: "e2e-project-1",
   prompt: "Refactor the authentication module",
   state: "running",
-  strategy: "single_agent",
+  sdk: "copilot",
+  source: "managed",
+  mode: "standard",
+  observationOnly: false,
   baseRef: "main",
   worktreePath: null,
   branch: "refactor/auth",
@@ -104,7 +110,7 @@ const JOB_FIXTURE = {
   prUrl: null,
 };
 
-const COMPLETED_JOB_FIXTURE = {
+const COMPLETED_JOB_FIXTURE: Job = {
   ...JOB_FIXTURE,
   id: "e2e-job-done-02",
   state: "failed",
@@ -113,6 +119,10 @@ const COMPLETED_JOB_FIXTURE = {
 };
 
 const BOARD_PROJECT_URL = "/projects/id/e2e-project-1/board";
+const BOARD_PROJECT: ProjectResponse = {
+  id: "e2e-project-1", name: "example-app", repoPaths: [REPOSITORY],
+  createdAt: JOB_FIXTURE.createdAt, updatedAt: JOB_FIXTURE.updatedAt,
+};
 
 test.describe("React #185 – kanban renders job cards without infinite loop", () => {
   test("project board renders job cards fetched via REST without crashing", async ({
@@ -125,10 +135,11 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
 
-    // Mock SSE: send one heartbeat immediately so the onopen + heartbeat
-    // dispatch land right when the jobs fetch also resolves — this is the
-    // race condition that triggers #185.
+    // Send one buffered heartbeat, then keep the disconnected state stable
+    // while the legitimate failed board read completes its bounded retries.
+    let streams = 0;
     await page.route("**/api/events*", async (route) => {
+      if (streams++ > 0) return route.abort();
       await route.fulfill({
         status: 200,
         headers: {
@@ -140,43 +151,25 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
       });
     });
 
-    // Mock jobs API: return jobs in two different columns (Active + History)
-    // so that both KanbanColumn instances transition from empty to non-empty.
-    await page.route("**/api/jobs*", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          items: [JOB_FIXTURE, COMPLETED_JOB_FIXTURE],
-          cursor: null,
-          hasMore: false,
-        }),
-      });
-    });
-
-    // Mock the owning Project fetch (project-id routing, AD-2 successor):
-    // the board resolves job membership via the Project's repoPaths.
-    await page.route("**/api/settings/projects/e2e-project-1", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          id: "e2e-project-1",
-          name: "example-app",
-          repoPaths: [JOB_FIXTURE.repo],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }),
-      });
-    });
-    await page.route("**/api/settings/projects/e2e-project-1/task-links", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) });
-    });
-
-    // The kanban board is scoped under a stable Project identity (project-id
-    // routing); navigate directly to the canonical board route.
+    let board = makeProjectBoard(BOARD_PROJECT);
+    await setupProjectBoardMocks(page, BOARD_PROJECT, () => board);
     await page.goto(BOARD_PROJECT_URL);
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("0 standalone Jobs");
+    await expect(page.getByText("No work on this page.")).toHaveCount(4);
+    await expect(page.getByText("Something went wrong")).not.toBeVisible();
+
+    const boardUrl = "**/api/settings/projects/e2e-project-1/board";
+    await page.route(boardUrl, async (route) => {
+      await route.fulfill({ status: 503, json: { detail: "Fixture board temporarily unavailable" } });
+    });
+    await page.getByRole("button", { name: "Refresh Board", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Unable to refresh Project Board", { timeout: 10_000 });
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("0 standalone Jobs");
+    await expect(page.getByText("Something went wrong")).not.toBeVisible();
+    await page.unroute(boardUrl);
+    board = makeProjectBoard(BOARD_PROJECT, { in_progress: [JOB_FIXTURE], failed: [COMPLETED_JOB_FIXTURE] });
+    await page.route(boardUrl, async (route) => { await route.fulfill({ json: board }); });
+    await page.getByRole("button", { name: "Refresh Board", exact: true }).click();
 
     // The running job appears in the kanban board card. Use .first() to guard
     // against Playwright's strict-mode violation if the id also appears elsewhere.
@@ -188,6 +181,11 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
     await expect(page.getByText(COMPLETED_JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 5_000,
     });
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("2 standalone Jobs");
+    await expect(page.getByRole("region", { name: "In Progress" }).getByRole("link", { name: "Open Job" }))
+      .toHaveAttribute("href", `/jobs/${JOB_FIXTURE.id}`);
+    await expect(page.getByRole("region", { name: "Failed" }).getByRole("link", { name: "Open Job" }))
+      .toHaveAttribute("href", `/jobs/${COMPLETED_JOB_FIXTURE.id}`);
 
     // If React #185 fires the ErrorBoundary catches it and shows this heading.
     // Check AFTER the job cards have appeared so we catch late-firing crashes
@@ -210,65 +208,21 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
   test("SSE snapshot event transitions empty kanban to job cards without crash", async ({
     page,
   }) => {
-    /**
-     * This test covers the exact scenario from the bug report:
-     *
-     * 1. Project board mounted with empty store (no jobs) → kanban shows "No jobs"
-     * 2. SSE `snapshot` event arrives with a job → store updates state.jobs
-     * 3. KanbanBoard re-renders → KanbanColumn receives non-empty jobs array
-     * 4. KanbanColumn transitions from empty placeholder to <JobCard> children
-     *    inside the column, which was the specific component tree
-     *    mentioned in the issue report.
-     * 5. Verify no React #185 crash (ErrorBoundary must stay inactive).
-     *
-     * The snapshot event deliberately triggers the "empty → non-empty" children
-     * change inside Mantine Stack/Paper that the original crash report highlighted.
-     * Multiple SSE events are sent in one response body to exercise the concurrent
-     * event delivery path that the setTimeout fix protects against.
-     */
     const consoleErrors: string[] = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
 
-    // Start with empty jobs so the kanban renders "No jobs" first.
-    await page.route("**/api/jobs*", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ items: [], cursor: null, hasMore: false }),
-      });
-    });
-
-    // Mock the owning Project fetch (project-id routing, AD-2 successor):
-    // the board resolves job membership via the Project's repoPaths.
-    await page.route("**/api/settings/projects/e2e-project-1", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          id: "e2e-project-1",
-          name: "example-app",
-          repoPaths: [JOB_FIXTURE.repo],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }),
-      });
-    });
-    await page.route("**/api/settings/projects/e2e-project-1/task-links", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) });
-    });
-
-    // SSE mock: heartbeat + snapshot in the same response body so the browser
-    // delivers them as part of the same buffered stream.  The useSSE.ts fix
-    // (setTimeout instead of queueMicrotask) ensures these are dispatched as
-    // separate macrotasks even when buffered together.
-    const snapshotPayload = JSON.stringify({
-      jobs: [JOB_FIXTURE, COMPLETED_JOB_FIXTURE],
-      pendingApprovals: [],
+    let board = makeProjectBoard(BOARD_PROJECT);
+    let reads = 0;
+    await setupProjectBoardMocks(page, BOARD_PROJECT, () => { reads++; return board; });
+    let releaseEvents!: () => void;
+    const released = new Promise<void>((resolve) => { releaseEvents = resolve; });
+    await page.route(`**/api/jobs/${JOB_FIXTURE.id}`, async (route) => {
+      await route.fulfill({ json: JOB_FIXTURE });
     });
     await page.route("**/api/events*", async (route) => {
+      await released;
       await route.fulfill({
         status: 200,
         headers: {
@@ -276,24 +230,35 @@ test.describe("React #185 – kanban renders job cards without infinite loop", (
           "Cache-Control": "no-cache",
           "X-Accel-Buffering": "no",
         },
-        body: [
-          "event: session_heartbeat\ndata: {}\n\n",
-          `event: snapshot\ndata: ${snapshotPayload}\n\n`,
-        ].join(""),
+        body: sseBody([
+          { event: "session.heartbeat", data: {} },
+          { event: "snapshot", data: { jobs: [JOB_FIXTURE, COMPLETED_JOB_FIXTURE], pendingApprovals: [] } },
+          { event: "job.state_changed", data: {
+            id: "board-state-1", session_id: JOB_FIXTURE.id, kind: "job.state_changed",
+            timestamp: JOB_FIXTURE.updatedAt, payload: { state: "running" }, metadata: {},
+          } },
+        ]),
       });
     });
 
-    // The kanban board is now scoped under a Project (AD-2); navigate directly
-    // to the project board route that owns this job's repo.
     await page.goto(BOARD_PROJECT_URL);
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("0 standalone Jobs");
+    await expect(page.getByText("No work on this page.")).toHaveCount(4);
+    const readsBeforeEvents = reads;
+    board = makeProjectBoard(BOARD_PROJECT, { in_progress: [JOB_FIXTURE], failed: [COMPLETED_JOB_FIXTURE] });
+    releaseEvents();
 
-    // SSE snapshot must populate the kanban (empty → non-empty transition).
+    // Buffered SSE invalidates the persisted board rather than deriving cards from the Job page.
     await expect(page.getByText(JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 8_000,
     });
     await expect(page.getByText(COMPLETED_JOB_FIXTURE.id).first()).toBeVisible({
       timeout: 8_000,
     });
+    expect(reads).toBeGreaterThan(readsBeforeEvents);
+    await expect(page.getByLabel("Persisted Project totals")).toContainText("2 standalone Jobs");
+    await expect(page.getByRole("region", { name: "In Progress" })).toContainText("Job: running");
+    await expect(page.getByRole("region", { name: "Failed" })).toContainText("Job: failed");
 
     // Check for ErrorBoundary AFTER the transition, so we catch late crashes.
     await expect(page.getByText("Something went wrong")).not.toBeVisible();

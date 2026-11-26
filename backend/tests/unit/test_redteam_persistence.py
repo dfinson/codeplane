@@ -195,22 +195,23 @@ class TestDuplicatePKs:
             await session.flush()
 
     @pytest.mark.asyncio
-    async def test_duplicate_event_id_fails(self, session: AsyncSession) -> None:
+    async def test_duplicate_event_id_is_idempotent_but_conflicting_content_fails(self, session: AsyncSession) -> None:
         job_repo = JobRepository(session)
         await job_repo.create(_make_job("job-1"))
         await session.commit()
 
         event_repo = EventRepository(session)
         now = datetime.now(UTC)
-        await event_repo.append(
-            new_event(event_id="evt-dup", session_id="job-1", timestamp=now, kind=EventKind.job_created, payload={})
-        )
+        event = new_event(event_id="evt-dup", session_id="job-1", timestamp=now, kind=EventKind.job_created, payload={})
+        cursor = await event_repo.append(event)
         await session.flush()
-        with pytest.raises(IntegrityError):
-            await event_repo.append(
-                new_event(event_id="evt-dup", session_id="job-1", timestamp=now, kind=EventKind.job_created, payload={})
-            )
-            await session.flush()
+        assert await event_repo.append(event) == cursor
+        rows = await event_repo.list_after(0, job_id="job-1")
+        assert len(rows) == 1
+        assert rows[0].event == event
+        with pytest.raises(ValueError, match="Conflicting content for event identity"):
+            await event_repo.append(event.model_copy(update={"payload": {"different": True}}))
+        assert (await event_repo.list_after(0, job_id="job-1"))[0].event == event
 
     @pytest.mark.asyncio
     async def test_duplicate_artifact_id_fails(self, session: AsyncSession) -> None:

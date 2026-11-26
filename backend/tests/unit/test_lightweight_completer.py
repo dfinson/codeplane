@@ -26,7 +26,7 @@ class TestComplete:
         c = LightweightCompleter(adapter, model="test-model")
         result = await c.complete("test prompt")
         assert result.text == "result"
-        adapter.complete.assert_awaited_once_with("test prompt", model="test-model")
+        adapter.complete.assert_awaited_once_with("test prompt", model="test-model", excluded_tools=["*"])
 
 
 class TestCompleteMessages:
@@ -49,6 +49,7 @@ class TestCompleteMessages:
         assert "You are helpful." in call_arg
         assert "User: Hello" in call_arg
         assert "Assistant: Hi" in call_arg
+        assert adapter.complete.call_args.kwargs == {"model": "test-model", "excluded_tools": ["*"]}
 
 
 class TestClose:

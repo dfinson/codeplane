@@ -19,7 +19,7 @@ function shortModelName(model: string): string {
 
 export function ModelCostCard({ scorecard }: { scorecard: ScorecardResponse }) {
   const { avgCostPerMtok, modelCostMix } = scorecard;
-  const hasData = avgCostPerMtok > 0 && modelCostMix.length > 0;
+  const hasData = avgCostPerMtok != null && modelCostMix.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4 space-y-3">
@@ -39,7 +39,7 @@ export function ModelCostCard({ scorecard }: { scorecard: ScorecardResponse }) {
             <span className="cursor-help">{formatUsd(avgCostPerMtok)}</span>
           </Tooltip>
         ) : (
-          <span className="text-muted-foreground">—</span>
+          <span className="text-muted-foreground">Unknown USD</span>
         )}
       </div>
 
@@ -77,7 +77,7 @@ export function ModelCostCard({ scorecard }: { scorecard: ScorecardResponse }) {
       )}
 
       {!hasData && (
-        <p className="text-xs text-muted-foreground">No token data in this period</p>
+        <p className="text-xs text-muted-foreground">No verified USD per-token rate in this period</p>
       )}
     </div>
   );

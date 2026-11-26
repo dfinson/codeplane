@@ -1,0 +1,4 @@
+# Langflow's released host execution engine, without optional provider bundles.
+lfx==0.4.6
+agent-governance-toolkit-core==5.0.0
+cryptography==46.0.7

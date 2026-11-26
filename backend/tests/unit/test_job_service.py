@@ -79,6 +79,73 @@ async def job_service(
 # --- State Machine Unit Tests ---
 
 
+class TestRuntimeContract:
+    @pytest.mark.parametrize("recipe_admission", [False, True])
+    async def test_prepared_creation_uses_explicit_admission_owner(
+        self,
+        job_service,
+        session,
+        recipe_admission,
+    ):
+        from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
+        from backend.tests.unit.conftest import make_job
+
+        prepared = make_job(project_id="proj-default", repo="/repos/test")
+        job = await job_service.persist_prepared_job(
+            prepared,
+            revalidate_project=False,
+            recipe_admission=recipe_admission,
+        )
+        await session.commit()
+        admission = await ExecutionAdmissionRepository(session).current(job.id)
+        if recipe_admission:
+            assert admission is None, "A recipe run not yet inserted is not a legacy admission"
+        else:
+            assert admission is not None and admission.job_id == job.id and admission.origin == "creation"
+
+    async def test_creation_rollback_retains_neither_job_nor_admission(self, job_service, session):
+        from backend.persistence.event_repo import EventRepository
+        from backend.tests.unit.conftest import make_job
+
+        prepared = make_job(project_id="proj-default", repo="/repos/test")
+        await job_service.persist_prepared_job(prepared, revalidate_project=False)
+        await session.rollback()
+        assert await JobRepository(session).get(prepared.id) is None
+        assert await EventRepository(session).list_after(0, job_id=prepared.id) == []
+
+    async def test_naming_returns_event_for_post_commit_publication(self):
+        from backend.tests.unit.conftest import make_job
+
+        repo = AsyncMock()
+        repo.get.return_value = make_job(title=None)
+        git = AsyncMock()
+        git.list_branches.return_value = set()
+        git.list_worktree_names.return_value = set()
+        naming = AsyncMock()
+        naming.generate.return_value = ("Fixture title", "Fixture description", "branch", "worktree")
+        bus = AsyncMock()
+        service = JobService(repo, git, CPLConfig(), naming_service=naming, event_bus=bus)
+        event = await service.enrich_naming_async("job-1", JobSpec(repo="fixture", prompt="fixture"), "fixture")
+        assert event is not None, "Naming must return an event for post-commit publication"
+        assert event.kind == "job.title_updated"
+        repo.update_title_and_branch.assert_awaited_once()
+        bus.publish.assert_not_awaited()
+
+    async def test_cancel_during_setup_cannot_revive_job(self):
+        from backend.tests.unit.conftest import make_job
+
+        job = make_job(state=JobState.preparing, repo="fixture", worktree_name="fixture")
+        canceled = make_job(state=JobState.canceled, repo="fixture", worktree_name="fixture")
+        repo = AsyncMock()
+        repo.get.side_effect = [job, canceled, canceled]
+        git = AsyncMock()
+        git.create_worktree.return_value = ("fixture-worktree", "fixture-branch")
+        service = JobService(repo, git, CPLConfig())
+        result = await service.setup_workspace(job.id)
+        assert result.state == JobState.canceled
+        assert not any(call.args[1] == JobState.queued for call in repo.update_state.call_args_list)
+
+
 class TestStateMachine:
     def test_valid_initial_transitions(self) -> None:
         validate_state_transition(None, JobState.queued)
@@ -680,3 +747,109 @@ class TestJobService:
         with pytest.raises(InvalidStateTransitionError):
             # preparing → running is invalid (must go through queued first)
             await job_service.transition_state(created.id, JobState.running)
+
+
+class TestCreationPhasePreservation:
+    @pytest.mark.asyncio
+    async def test_non_task_creation_preserves_named_configuration_and_caller_rollback(self, job_service, session):
+        from unittest.mock import MagicMock
+
+        spec = JobSpec(
+            repo="/repos/test",
+            project_id="proj-default",
+            prompt="Preserve explicit configuration",
+            base_ref="release/base",
+            title="Explicit title",
+            description="Explicit description",
+            worktree_name="explicit-job",
+            branch="custom/topic",
+            model=None,
+            verify=True,
+            self_review=False,
+            max_turns=7,
+            verify_prompt="Run the targeted checks",
+            self_review_prompt="Inspect the requested changes",
+            enable_stall_detection=False,
+            enable_plan_tracking=True,
+        )
+        with (
+            patch.object(job_service._git, "get_default_branch", new_callable=AsyncMock) as default_branch,
+            patch.object(job_service._git, "create_worktree", new_callable=AsyncMock) as create_worktree,
+            patch.object(job_service._git, "list_branches", new_callable=AsyncMock, return_value=set()),
+            patch.object(job_service._git, "list_worktree_names", MagicMock(return_value=set())),
+        ):
+            created = await job_service.create_job(spec)
+            persisted = await JobRepository(session).get(created.id)
+            assert persisted is not None
+            assert persisted.id == "explicit-job"
+            assert persisted.branch == "custom/topic"
+            assert persisted.base_ref == "release/base"
+            assert persisted.title == "Explicit title"
+            assert persisted.description == "Explicit description"
+            assert persisted.project_id == "proj-default"
+            assert persisted.state == JobState.preparing
+            assert persisted.worktree_path is None
+            for name in (
+                "prompt",
+                "verify",
+                "self_review",
+                "max_turns",
+                "verify_prompt",
+                "self_review_prompt",
+                "enable_stall_detection",
+                "enable_plan_tracking",
+            ):
+                assert getattr(persisted, name) == getattr(spec, name)
+            default_branch.assert_not_awaited()
+            create_worktree.assert_not_awaited()
+            await session.rollback()
+
+        assert await JobRepository(session).get(created.id) is None
+        assert await ProjectRepository(session).get("proj-default") is not None
+
+    @pytest.mark.asyncio
+    async def test_read_only_preparation_does_not_accept_a_job_until_persisted(self, job_service, session):
+        from unittest.mock import MagicMock
+
+        with (
+            patch.object(job_service._git, "get_default_branch", new_callable=AsyncMock, return_value="main"),
+            patch.object(job_service._git, "create_worktree", new_callable=AsyncMock) as create_worktree,
+            patch.object(job_service._git, "list_worktree_names", MagicMock(return_value=set())),
+        ):
+            prepared = await job_service.prepare_job(JobSpec(repo="/repos/test", prompt="Read-only preparation"))
+            assert await JobRepository(session).get(prepared.id) is None
+            assert await JobRepository(session).list_ids() == set()
+            created = await job_service.persist_prepared_job(prepared)
+            assert await JobRepository(session).get(created.id) is not None
+            create_worktree.assert_not_awaited()
+            await session.rollback()
+
+        assert await JobRepository(session).list_ids() == set()
+
+    @pytest.mark.asyncio
+    async def test_final_persistence_collision_preserves_explicit_non_task_branch(self, job_service, session):
+        spec = JobSpec(
+            repo="/repos/test",
+            prompt="Preserve final collision semantics",
+            base_ref="main",
+            title="Named task",
+            worktree_name="same-name",
+            branch="explicit/topic",
+        )
+        first = await job_service.prepare_job(spec)
+        second = await job_service.prepare_job(spec)
+        with (
+            patch.object(job_service._git, "get_default_branch", new_callable=AsyncMock) as default_branch,
+            patch.object(job_service._git, "create_worktree", new_callable=AsyncMock) as create_worktree,
+        ):
+            original = await job_service.persist_prepared_job(first)
+            collided = await job_service.persist_prepared_job(second)
+            await session.commit()
+
+        assert original.id == "same-name"
+        assert collided.id == collided.worktree_name == "same-name-2"
+        assert collided.branch == "explicit/topic"
+        assert second.id == "same-name"
+        assert await JobRepository(session).list_ids() == {"same-name", "same-name-2"}
+        default_branch.assert_not_awaited()
+        create_worktree.assert_not_awaited()

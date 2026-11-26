@@ -4,7 +4,7 @@
 
 import type { LogLine, SecondarySession, SecondarySessionEntry, TranscriptEntry } from "../types";
 import type { SSEHandler, AppState } from "./types";
-import { sameTranscriptEntry } from "../../lib/transcriptIdentity";
+import { isToolOutcome, removePairedToolStarts, sameTranscriptEntry, toolOutputKey } from "../../lib/transcriptIdentity";
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -46,8 +46,10 @@ export function handleTranscriptUpdate(state: AppState, payload: Record<string, 
 
   // tool.result.chunk: accumulate streaming tool output, don't add to transcript
   if (kind === "tool.result.chunk") {
-    const toolCallId = (payload.toolCallId as string | undefined) ?? (payload.toolName as string | undefined) ?? "__tool__";
-    const key = `${jobId}:${toolCallId}`;
+    const key = toolOutputKey({
+      jobId, toolCallId: payload.toolCallId as string | undefined, toolName: payload.toolName as string | undefined,
+      turnId: payload.turnId as string | undefined, metadata: payload.metadata as TranscriptEntry["metadata"],
+    });
     const chunk = (payload.content as string) ?? "";
     return {
       streamingToolOutput: {
@@ -77,14 +79,20 @@ export function handleTranscriptUpdate(state: AppState, payload: Record<string, 
     sequence: payload.sequence as number | undefined,
     timestamp: payload.timestamp as string,
     kind,
+    metadata: payload.metadata as TranscriptEntry["metadata"],
+    pairingStatus: payload.pairingStatus as TranscriptEntry["pairingStatus"],
+    pairingReason: payload.pairingReason as TranscriptEntry["pairingReason"],
     content: payload.content as string,
+    admissionStatus: payload.admissionStatus as TranscriptEntry["admissionStatus"],
+    executionStatus: payload.executionStatus as TranscriptEntry["executionStatus"],
+    operatorContent: payload.operatorContent as TranscriptEntry["operatorContent"],
     title: payload.title as string | undefined,
     turnId: payload.turnId as string | undefined,
     toolCallId: payload.toolCallId as string | undefined,
     toolName: payload.toolName as string | undefined,
     arguments: payload.arguments as string | undefined,
     result: payload.result as string | undefined,
-    success: payload.success as boolean | undefined,
+    success: kind === "tool.call.failed" ? false : payload.success as boolean | undefined,
     toolIssue: payload.toolIssue as string | undefined,
     toolIntent: payload.toolIntent as string | undefined,
     toolTitle: payload.toolTitle as string | undefined,
@@ -95,38 +103,11 @@ export function handleTranscriptUpdate(state: AppState, payload: Record<string, 
   };
   const existing = state.transcript[jobId] ?? [];
 
-  // When a tool.call.completed arrives, replace any matching tool.call.started entry
-  // (same toolName, and same turnId when both are present) so the
-  // in-progress placeholder is superseded.
-  let base = existing;
-  if (entry.kind === "tool.call.completed") {
-    const before = base.length;
-    base = base.filter((e) => {
-      if (e.kind !== "tool.call.started" || e.toolName !== entry.toolName) return true;
-      if (entry.toolCallId && e.toolCallId) return entry.toolCallId !== e.toolCallId;
-      // If both entries have a turnId, they must match to be considered the same call.
-      if (entry.turnId && e.turnId && entry.turnId !== e.turnId) return true;
-      return false;
-    });
-    // If we replaced something, update both transcript and step index.
-    if (base.length < before) {
-      const updated = [...base, entry];
-
-      return {
-        transcript: { ...state.transcript, [jobId]: updated.length > 10_000 ? updated.slice(-10_000) : updated },
-      };
-    }
-  }
-
-  // Deduplicate canonical events by their stable TraceForge event id.
-  // For user messages, match on kind+content only (ignore timestamp) to
-  // suppress the SSE echo when an optimistic entry was already inserted.
-  if (entry.kind === "message.user"
-    ? existing.some((e) => e.kind === "message.user" && e.content === entry.content)
-    : existing.some((e) => sameTranscriptEntry(e, entry))) {
+  // Local optimistic entries are settled by their sender, never by text matching.
+  if (existing.some((e) => sameTranscriptEntry(e, entry))) {
     return null;
   }
-  const updated = [...existing, entry];
+  const updated = isToolOutcome(entry.kind) ? removePairedToolStarts([...existing, entry]) : [...existing, entry];
 
   // When a complete agent message arrives, clear streaming state for that turn.
   let streamingMessages = state.streamingMessages;
@@ -140,10 +121,8 @@ export function handleTranscriptUpdate(state: AppState, payload: Record<string, 
 
   // When a tool.call.completed arrives, clear streaming tool output.
   let streamingToolOutput = state.streamingToolOutput;
-  if (entry.kind === "tool.call.completed") {
-    // Clear all streaming entries for this job (tool call IDs vary)
-    const prefix = `${jobId}:`;
-    const keys = Object.keys(streamingToolOutput).filter((k) => k.startsWith(prefix));
+  if (isToolOutcome(entry.kind)) {
+    const keys = entry.toolCallId ? [toolOutputKey(entry)] : [];
     if (keys.length > 0) {
       streamingToolOutput = { ...streamingToolOutput };
       for (const k of keys) delete streamingToolOutput[k];
@@ -323,6 +302,7 @@ export const transcriptHandlers: Record<string, SSEHandler> = {
   "llm.reasoning.chunk": handleTranscriptUpdate,
   "tool.call.started": handleTranscriptUpdate,
   "tool.call.completed": handleTranscriptUpdate,
+  "tool.call.failed": handleTranscriptUpdate,
   "tool.result.chunk": handleTranscriptUpdate,
   "sidecar.transcript": handleTranscriptUpdate,
   "sidecar.agent_message": handleTranscriptUpdate,

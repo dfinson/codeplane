@@ -7,12 +7,16 @@ import contextlib
 import os
 import re
 import shutil
+import signal
+import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
 from backend.models.domain import CodePlaneError
+from backend.services.auth.workspace_paths import workspace_target
 
 if TYPE_CHECKING:
     from backend.config import CPLConfig
@@ -23,9 +27,25 @@ log = structlog.get_logger()
 class GitError(CodePlaneError):
     """Raised when a git subprocess fails."""
 
-    def __init__(self, message: str, stderr: str = "") -> None:
+    def __init__(self, message: str, stderr: str = "", *, returncode: int | None = None) -> None:
         self.stderr = stderr
+        self.returncode = returncode
         super().__init__(message)
+
+
+@dataclass(frozen=True, slots=True)
+class GitRecoveryTarget:
+    path: str
+    relative_path: str
+    blob: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GitRecoveryWitness:
+    workspace: str
+    commit: str
+    targets: tuple[GitRecoveryTarget, ...]
+    reference: str = "HEAD"
 
 
 class GitService:
@@ -48,9 +68,15 @@ class GitService:
             return urlunparse(cleaned)
         return url
 
-    async def _run_git(self, *args: str, cwd: str | Path) -> str:
+    async def _run_git(
+        self,
+        *args: str,
+        cwd: str | Path,
+        env_overrides: dict[str, str] | None = None,
+        input_bytes: bytes | None = None,
+    ) -> str:
         """Run a git command and return stdout. Raises GitError on failure."""
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env_overrides or {})}
         cwd_path = Path(cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -59,10 +85,12 @@ class GitService:
                 cwd=str(cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
                 env=env,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
-            missing_cwd = exc.filename == str(cwd_path)
+            missing_cwd = exc.filename is not None and Path(exc.filename) == cwd_path
             if not missing_cwd and exc.filename is None and not cwd_path.exists():
                 missing_cwd = True
             if missing_cwd:
@@ -70,7 +98,24 @@ class GitService:
             raise GitError("git executable not found. Ensure Git is installed and available on PATH.") from exc
         except OSError as exc:
             raise GitError(f"git failed to start: {exc}") from exc
-        stdout_bytes, stderr_bytes = await proc.communicate()
+        communication = asyncio.create_task(
+            proc.communicate(input_bytes) if input_bytes is not None else proc.communicate()
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.shield(communication)
+        except asyncio.CancelledError:
+            with contextlib.suppress(ProcessLookupError):
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                elif proc.returncode is None:
+                    proc.kill()
+            while not communication.done():
+                try:
+                    await asyncio.shield(communication)
+                except asyncio.CancelledError:
+                    continue
+            communication.result()
+            raise
         stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
@@ -78,6 +123,7 @@ class GitService:
             raise GitError(
                 f"git {' '.join(args)} failed (exit {proc.returncode}): {stderr}",
                 stderr=stderr,
+                returncode=proc.returncode,
             )
         return stdout
 
@@ -178,6 +224,184 @@ class GitService:
         """Resolve a ref to its full commit SHA."""
         return await self._run_git("rev-parse", ref, cwd=cwd)
 
+    async def recovery_witness(
+        self,
+        *,
+        cwd: str | Path,
+        paths: tuple[str, ...],
+        deadline: float,
+        max_input_bytes: int,
+    ) -> GitRecoveryWitness | None:
+        """Prove current regular-file bytes or new-target absence without writing Git state."""
+
+        def unavailable(reason: str) -> GitRecoveryWitness | None:
+            log.warning("git_recovery_unavailable", reason=reason, target_count=len(paths))
+            return None
+
+        def file_version(value: os.stat_result) -> tuple[int, ...]:
+            return (value.st_ino, value.st_dev, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+        environment = {
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_LITERAL_PATHSPECS": "1",
+        }
+        try:
+            remaining_bytes = max_input_bytes - sum(len(path.encode("utf-8")) for path in paths)
+            if not paths or remaining_bytes < 0:
+                return unavailable("missing_or_oversized_target_set")
+            if os.name != "nt" and any("\\" in path for path in paths):
+                return unavailable("ambiguous_posix_target")
+            async with asyncio.timeout_at(deadline):
+                supplied_root = Path(cwd).absolute()
+                root = supplied_root.resolve(strict=True)
+                try:
+                    await self._run_git(
+                        "config",
+                        "--get-regexp",
+                        r"^(remote\..*\.promisor|extensions\.partialclone)$",
+                        cwd=root,
+                        env_overrides=environment,
+                    )
+                except GitError as exc:
+                    if exc.returncode != 1:
+                        raise
+                else:
+                    return unavailable("partial_repository")
+                head = await self._run_git(
+                    "rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment
+                )
+                targets: list[GitRecoveryTarget] = []
+                versions: list[tuple[str, Path, os.stat_result | None, os.stat_result | None]] = []
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | getattr(os, "O_BINARY", 0)
+                )
+                for declared in sorted(set(paths)):
+                    lexical = Path(declared.replace("\\", "/"))
+                    if not lexical.is_absolute():
+                        lexical = supplied_root / lexical
+                    target = workspace_target(str(root), declared)
+                    relative = target.relative_to(root).as_posix()
+                    if (
+                        not lexical.is_relative_to(supplied_root)
+                        or ".git" in (part.lower() for part in target.relative_to(root).parts)
+                        or ":" in relative
+                        or not lexical.parent.is_dir()
+                    ):
+                        return unavailable("opaque_or_administrative_target")
+                    cursor = lexical
+                    while cursor != supplied_root:
+                        if cursor.is_symlink():
+                            return unavailable("symlink_target")
+                        cursor = cursor.parent
+                    owner = await self._run_git(
+                        "rev-parse", "--show-toplevel", cwd=target.parent, env_overrides=environment
+                    )
+                    if Path(owner).resolve() != root:
+                        return unavailable("different_repository")
+                    entry = await self._run_git(
+                        "ls-tree", "-z", "--full-tree", head, "--", relative, cwd=root, env_overrides=environment
+                    )
+                    try:
+                        observed = target.lstat()
+                    except FileNotFoundError:
+                        observed = None
+                    if observed is None:
+                        if entry:
+                            return unavailable("missing_previously_retained_target")
+                        try:
+                            await self._run_git(
+                                "check-ignore",
+                                "--",
+                                relative,
+                                cwd=root,
+                                env_overrides={**environment, "GIT_LITERAL_PATHSPECS": "0"},
+                            )
+                        except GitError as exc:
+                            if exc.returncode != 1:
+                                raise
+                        else:
+                            return unavailable("ignored_new_target")
+                        targets.append(GitRecoveryTarget(declared, relative, None))
+                        versions.append((declared, target, None, None))
+                        continue
+                    if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1 or not entry:
+                        return unavailable("current_bytes_not_retained")
+                    if observed.st_size > remaining_bytes:
+                        return unavailable("current_byte_bound_exceeded")
+                    records = entry.split("\0")
+                    if len(records) != 2 or records[1]:
+                        return unavailable("ambiguous_retained_target")
+                    description, retained_path = records[0].split("\t", 1)
+                    retained_mode, kind, blob = description.split()
+                    if retained_path != relative or kind != "blob" or retained_mode not in {"100644", "100755"}:
+                        return unavailable("nonregular_retained_target")
+                    with os.fdopen(os.open(target, flags), "rb") as stream:
+                        opened = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(opened.st_mode) or (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_size,
+                            opened.st_mtime_ns,
+                        ) != (
+                            observed.st_dev,
+                            observed.st_ino,
+                            observed.st_size,
+                            observed.st_mtime_ns,
+                        ):
+                            return unavailable("target_changed_during_inspection")
+                        content = stream.read(remaining_bytes + 1)
+                        if file_version(os.fstat(stream.fileno())) != file_version(opened):
+                            return unavailable("target_changed_during_inspection")
+                    if len(content) > remaining_bytes:
+                        return unavailable("current_byte_bound_exceeded")
+                    remaining_bytes -= len(content)
+                    current_blob = await self._run_git(
+                        "hash-object",
+                        "--no-filters",
+                        "--stdin",
+                        cwd=root,
+                        env_overrides=environment,
+                        input_bytes=content,
+                    )
+                    after = target.lstat()
+                    # Windows path stat and fstat may expose different meanings of ctime.
+                    if file_version(after) != file_version(observed):
+                        return unavailable("target_changed_during_inspection")
+                    if current_blob != blob:
+                        return unavailable("current_bytes_not_retained")
+                    await self._run_git("cat-file", "-e", blob, cwd=root, env_overrides=environment)
+                    targets.append(GitRecoveryTarget(declared, relative, blob))
+                    versions.append((declared, target, after, opened))
+                if (
+                    await self._run_git("rev-parse", "--verify", "HEAD^{commit}", cwd=root, env_overrides=environment)
+                    != head
+                ):
+                    return unavailable("retained_reference_changed")
+                for declared, target, before, before_handle in versions:
+                    if workspace_target(str(root), declared) != target:
+                        return unavailable("target_changed_during_inspection")
+                    try:
+                        final = target.lstat()
+                    except FileNotFoundError:
+                        final = None
+                    if (None if final is None else file_version(final)) != (
+                        None if before is None else file_version(before)
+                    ):
+                        return unavailable("target_changed_during_inspection")
+                    if before_handle is not None:
+                        with os.fdopen(os.open(target, flags), "rb") as stream:
+                            if file_version(os.fstat(stream.fileno())) != file_version(before_handle):
+                                return unavailable("target_changed_during_inspection")
+                return GitRecoveryWitness(str(root), head, tuple(targets))
+        except (GitError, OSError, ValueError, TimeoutError) as exc:
+            log.warning("git_recovery_unavailable", reason=type(exc).__name__, detail=str(exc), target_count=len(paths))
+            return None
+
     async def tag(self, name: str, *, message: str = "", cwd: str | Path, force: bool = False) -> None:
         """Create an annotated git tag."""
         force_flag = ["-f"] if force else []
@@ -212,6 +436,67 @@ class GitService:
         await self.add_all(cwd=cwd)
         await self.commit(message, cwd=cwd)
         return True
+
+    async def capture_worktree_commit(self, *, cwd: str | Path, snapshot_ref: str) -> str:
+        """Retain current code without changing the user's index, HEAD or files."""
+        import tempfile
+
+        if not snapshot_ref.startswith("refs/codeplane/recipe-inputs/"):
+            raise GitError("Recipe snapshots require an internal reference namespace")
+        await self._run_git("check-ref-format", snapshot_ref, cwd=cwd)
+        existing = await self._read_exact_ref(snapshot_ref, cwd=cwd)
+        if existing:
+            return existing
+        head = await self.rev_parse("HEAD", cwd=cwd)
+        if await self._run_git("status", "--porcelain", cwd=cwd):
+            with tempfile.TemporaryDirectory(prefix="codeplane-recipe-index-") as temporary:
+                environment = {"GIT_INDEX_FILE": str(Path(temporary) / "index")}
+                await self._run_git("read-tree", head, cwd=cwd, env_overrides=environment)
+                await self._run_git("add", "-A", cwd=cwd, env_overrides=environment)
+                tree = await self._run_git("write-tree", cwd=cwd, env_overrides=environment)
+                captured = await self._run_git(
+                    "-c",
+                    "user.name=CodePlane",
+                    "-c",
+                    "user.email=codeplane@localhost",
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    head,
+                    "-m",
+                    "CodePlane recipe input snapshot",
+                    cwd=cwd,
+                )
+        else:
+            captured = head
+        try:
+            await self._run_git("update-ref", snapshot_ref, captured, "0" * len(captured), cwd=cwd)
+        except GitError:
+            winner = await self._read_exact_ref(snapshot_ref, cwd=cwd)
+            if not winner:
+                raise
+            if await self.rev_parse(f"{winner}^{{tree}}", cwd=cwd) != await self.rev_parse(
+                f"{captured}^{{tree}}", cwd=cwd
+            ):
+                raise GitError("A concurrent input snapshot captured different code") from None
+            return winner
+        return captured
+
+    async def _read_exact_ref(self, ref: str, *, cwd: str | Path) -> str | None:
+        listing = await self._run_git("for-each-ref", "--format=%(refname)\t%(objectname)", ref, cwd=cwd)
+        for line in listing.splitlines():
+            name, object_id = line.split("\t", 1)
+            if name == ref:
+                return object_id
+        return None
+
+    def recipe_worktree_path(self, repo_path: str, name: str) -> str:
+        self._validate_worktree_name(name)
+        parent = (Path(repo_path) / self._worktrees_dirname).resolve()
+        target = (parent / name).resolve()
+        if target.parent != parent:
+            raise GitError("Recipe workspace escapes the configured worktree directory")
+        return str(target)
 
     async def stash(self, *, cwd: str | Path) -> bool:
         """Stash uncommitted changes. Returns True if something was stashed."""
@@ -334,8 +619,24 @@ class GitService:
         Raises:
             GitError: If git operations fail.
         """
+        self._validate_worktree_name(job_id)
         branch_name = branch or f"cpl/{job_id}"
         return await self._setup_secondary_worktree(repo_path, job_id, base_ref, branch_name)
+
+    @staticmethod
+    def _validate_worktree_name(name: str) -> None:
+        from pathlib import PureWindowsPath
+
+        if (
+            not name
+            or name in (".", "..")
+            or "/" in name
+            or "\\" in name
+            or PureWindowsPath(name).drive
+            or "\x00" in name
+            or name.rstrip(" .") != name
+        ):
+            raise GitError("Worktree name must be a single directory name", stderr="invalid worktree name")
 
     async def _is_worktree_dirty(self, repo_path: str | Path) -> bool:
         """Return True if the working tree has uncommitted changes."""
@@ -370,31 +671,18 @@ class GitService:
         branch_name: str,
     ) -> tuple[str, str]:
         """Create a secondary worktree and branch."""
+        self._validate_worktree_name(job_id)
         worktrees_dir = Path(repo_path) / self._worktrees_dirname
-        worktrees_dir.mkdir(parents=True, exist_ok=True)
         worktree_path = worktrees_dir / job_id
-
-        # Run stale-cleanup steps and ref resolution in parallel — these are
-        # independent I/O operations (separate git subprocesses).
-        async def _prune() -> None:
-            with contextlib.suppress(GitError):
-                await self._run_git("worktree", "prune", cwd=repo_path)
-
-        async def _remove_stale_worktree() -> None:
-            if worktree_path.exists():
-                with contextlib.suppress(GitError):
-                    await self._run_git("worktree", "remove", "--force", str(worktree_path), cwd=repo_path)
-                    log.info("stale_worktree_removed", repo=repo_path, path=str(worktree_path))
-
-        async def _resolve() -> str:
-            return await self._resolve_ref(repo_path, base_ref)
-
-        _, _, resolved_base_ref = await asyncio.gather(_prune(), _remove_stale_worktree(), _resolve())
-
-        # Now the branch should be detachable; delete it if it exists.
-        with contextlib.suppress(GitError):
-            await self._run_git("branch", "-D", branch_name, cwd=repo_path)
-            log.info("stale_branch_deleted", repo=repo_path, branch=branch_name)
+        if worktree_path.exists() or worktree_path.is_symlink():
+            raise GitError(
+                f"Worktree destination already exists: {worktree_path}",
+                stderr="existing workspace preserved",
+            )
+        if worktree_path.resolve().parent != worktrees_dir.resolve():
+            raise GitError("Worktree destination escapes configured root", stderr="invalid worktree destination")
+        resolved_base_ref = await self._resolve_ref(repo_path, base_ref)
+        worktrees_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             await self._run_git(
@@ -426,6 +714,7 @@ class GitService:
         Used when resuming a job whose worktree dir no longer exists but the branch is intact.
         Returns the worktree path string.
         """
+        self._validate_worktree_name(job_id)
         worktrees_dir = Path(repo_path) / self._worktrees_dirname
         worktrees_dir.mkdir(parents=True, exist_ok=True)
         worktree_path = worktrees_dir / job_id
@@ -497,7 +786,7 @@ class GitService:
 
         removed = 0
         for entry in worktrees_dir.iterdir():
-            if entry.is_symlink():
+            if entry.is_symlink() or entry.is_junction():
                 log.warning("worktree_symlink_skipped", path=str(entry))
                 continue
             if entry.is_dir():

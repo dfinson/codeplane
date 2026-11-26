@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 
 vi.mock("../../api/client", () => ({
   createProject: vi.fn(),
@@ -9,11 +9,14 @@ vi.mock("../../api/client", () => ({
   unregisterRepo: vi.fn(),
   browseDirectories: vi.fn(),
 }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import { createProject, registerRepo, createRepo, browseDirectories, unregisterRepo } from "../../api/client";
 import { CreateProjectDialog } from "../CreateProjectDialog";
+import { toast } from "sonner";
 
 beforeEach(() => {
+  vi.mocked(toast.info).mockClear();
   vi.mocked(createProject).mockReset();
   vi.mocked(registerRepo).mockReset();
   vi.mocked(createRepo).mockReset();
@@ -44,6 +47,50 @@ async function selectCurrentFolder() {
 }
 
 describe("CreateProjectDialog", () => {
+  it("does not apply a delayed clone to a reopened Project form", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof registerRepo>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof registerRepo>>>((resolve) => { finish = resolve; });
+    vi.mocked(registerRepo).mockReturnValueOnce(pending);
+    const onClose = vi.fn();
+    const onCreated = vi.fn();
+    const { rerender } = render(<CreateProjectDialog open onClose={onClose} onCreated={onCreated} />);
+    fireEvent.click(screen.getByRole("button", { name: "Clone repository" }));
+    fireEvent.change(screen.getByLabelText("Repository URL"), { target: { value: "https://example.com/old.git" } });
+    await selectCurrentFolder();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clone repository" })[1]!);
+    await waitFor(() => expect(registerRepo).toHaveBeenCalledOnce());
+    rerender(<CreateProjectDialog open={false} onClose={onClose} onCreated={onCreated} />);
+    rerender(<CreateProjectDialog open onClose={onClose} onCreated={onCreated} />);
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "New target" } });
+    await act(async () => {
+      finish({ path: "/home/user/old", source: "https://example.com/old.git", cloned: true, registered: true });
+      await pending;
+    });
+    expect(screen.getByLabelText("Project name")).toHaveValue("New target");
+    expect(screen.queryByText("/home/user/old")).not.toBeInTheDocument();
+    expect(unregisterRepo).toHaveBeenCalledWith("/home/user/old");
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining("changed Project form was not updated"));
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a changed init target when an earlier request finishes", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof createRepo>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof createRepo>>>((resolve) => { finish = resolve; });
+    vi.mocked(createRepo).mockReturnValueOnce(pending);
+    render(<CreateProjectDialog open onClose={vi.fn()} onCreated={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Create local repository" }));
+    await selectCurrentFolder();
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create repository" }));
+    await waitFor(() => expect(createRepo).toHaveBeenCalledWith("/home/user", "first"));
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "second" } });
+    await act(async () => { finish({ path: "/home/user/first", name: "first" }); await pending; });
+    expect(screen.getByLabelText("Repository name")).toHaveValue("second");
+    expect(screen.queryByText("/home/user/first")).not.toBeInTheDocument();
+    expect(unregisterRepo).toHaveBeenCalledWith("/home/user/first");
+  });
+
   it("blocks creation with an error when no name is entered", async () => {
     render(<CreateProjectDialog open onClose={() => {}} onCreated={vi.fn()} />);
 

@@ -37,16 +37,12 @@ dependencies = [
     "pyjwt[crypto]>=2.12.0,<3",
     "cryptography>=46.0,<47",
     "cloudflare>=5.1.0",
-    "sh-guard>=0.1.10",
-    # Agent-trace intelligence substrate — deterministic/CPU-only pipeline that
-    # CodePlane's hand-rolled ingestion/classification/structuring/governance/
-    # observability plumbing is being migrated onto (see P0–P7 migration roadmap).
-    # PyPI is the primary distribution (code-only wheel); it pulls the real
-    # traceforge-title-model ONNX weights transitively. A git+ install is avoided
-    # on purpose — it force-checks-out the LFS monorepo and trips a missing LFS
-    # object on the remote (tracked as an upstream defect).
-    "traceforge-toolkit>=0.1.5,<0.2",
     "psutil>=7.2.2",
+    "agent-governance-toolkit-core[mcp]==5.0.0",
+    "tree-sitter==0.25.2",
+    "tree-sitter-bash==0.25.1",
+    "tree-sitter-powershell==0.26.4",
+    "tree-sitter-markdown==0.5.1",
 ]
 
 [project.optional-dependencies]
@@ -55,10 +51,19 @@ push = ["pywebpush>=2.3.0", "py-vapid>=1.9.4", "qrcode>=7.0,<9"]
 telemetry = ["opentelemetry-api>=1.20,<2", "opentelemetry-sdk>=1.20,<2"]
 tokenizer = ["tiktoken>=0.12.0,<1", "anthropic-tokenizer>=0.1.0,<1"]
 all = [
-    "codeplane[voice]",
-    "codeplane[push]",
-    "codeplane[telemetry]",
-    "codeplane[tokenizer]",
+    "codeplane[otlp-export-grpc,otlp-export-http,otlp-ingest,push,telemetry,tokenizer,voice]",
+]
+otlp-ingest = [
+    "opentelemetry-proto==1.45.2",
+    "protobuf==7.35.0",
+]
+otlp-export-http = [
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+]
+otlp-export-grpc = [
+    "opentelemetry-exporter-otlp-proto-grpc==1.45.2",
+    "opentelemetry-sdk==1.45.2",
 ]
 
 [project.scripts]
@@ -115,6 +120,8 @@ runtime-evaluated-decorators = ["dishka.integrations.fastapi.FromDishka"]
 "backend/models/api_schemas.py" = ["F405"]
 # Template service contains long LLM prompt strings that cannot be wrapped.
 "backend/services/sidecar/template_service.py" = ["E501"]
+# Historical producer capture source is retained byte-for-byte for its provenance hash.
+"backend/tests/fixtures/native_formats/sdk_local/capture.py" = ["I001"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -162,6 +169,9 @@ fail_under = 70
 show_missing = true
 skip_empty = true
 
+[tool.uv.sources]
+codeplane = { workspace = true }
+
 [dependency-groups]
 dev = [
     "codeplane[all]",
@@ -175,4 +185,5 @@ dev = [
     "pip-audit>=2.10.0",
     "pytest-timeout>=2.4.0",
     "types-psutil",
+    "types-jsonschema>=4.26.0.20261006",
 ]

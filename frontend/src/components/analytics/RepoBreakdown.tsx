@@ -17,7 +17,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
 
   const chartData = repos.slice(0, 10).map((r) => ({
     name: r.repo ? pathBasename(r.repo) || r.repo : "(none)",
-    cost: Number(r.totalCostUsd) || 0,
+    cost: r.totalCostUsd ?? null,
     jobs: r.jobCount,
   }));
 
@@ -30,7 +30,7 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
           <YAxis tick={{ fontSize: 11, fill: "#888" }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
           <RTooltip
             contentStyle={{ background: "#1a1a2e", border: "1px solid #333", borderRadius: 8, fontSize: 12 }}
-            formatter={(v: TooltipValueType | undefined) => [formatUsd(Number(v ?? 0)), "API-equivalent cost"]}
+            formatter={(v: TooltipValueType | undefined) => [formatUsd(v == null ? null : Number(v)), "Verified USD"]}
           />
           <Bar dataKey="cost" fill="#10b981" radius={[4, 4, 0, 0]} />
         </BarChart>
@@ -44,10 +44,10 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
                 <Tooltip content="Number of jobs run against this repository"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Jobs</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
-                <Tooltip content="Total API-equivalent cost"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Cost</span></Tooltip>
+                <Tooltip content="Verified source USD; unknown is not zero"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Cost</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
-                <Tooltip content="API-equivalent cost per job"><span className="cursor-help border-b border-dotted border-muted-foreground/50">$/Job</span></Tooltip>
+                <Tooltip content="Verified USD per job; unavailable when currency is unknown"><span className="cursor-help border-b border-dotted border-muted-foreground/50">$/Job</span></Tooltip>
               </th>
               <th className="text-right py-1.5 px-2 font-medium">
                 <Tooltip content="Average wall-clock time per job"><span className="cursor-help border-b border-dotted border-muted-foreground/50">Avg Time</span></Tooltip>
@@ -59,14 +59,14 @@ export function RepoBreakdown({ repos }: { repos: AnalyticsRepos["repos"] }) {
           </thead>
           <tbody>
             {repos.map((r, i) => {
-              const costPerJob = r.jobCount > 0 ? (Number(r.totalCostUsd) || 0) / r.jobCount : 0;
+              const costPerJob = r.jobCount > 0 && r.totalCostUsd != null ? r.totalCostUsd / r.jobCount : null;
               return (
                 <tr key={i} className="border-b border-border/50 hover:bg-accent/30">
                   <td className="py-1.5 px-2 font-mono truncate max-w-[200px]" title={r.repo || "(none)"}>
                     {r.repo || <span className="text-muted-foreground italic">(none)</span>}
                   </td>
                   <td className="text-right py-1.5 px-2">{r.jobCount}</td>
-                  <td className="text-right py-1.5 px-2">{formatUsd(Number(r.totalCostUsd) || 0)}</td>
+                  <td className="text-right py-1.5 px-2">{formatUsd(r.totalCostUsd)}</td>
                   <td className="text-right py-1.5 px-2">{formatUsd(costPerJob)}</td>
                   <td className="text-right py-1.5 px-2">{formatDuration(Number(r.avgDurationMs) || 0)}</td>
                   <td className="text-right py-1.5 px-2">{r.toolCalls}</td>

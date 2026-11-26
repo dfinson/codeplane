@@ -1,0 +1,39 @@
+framework: google-adk
+framework_version: "2.14.1"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  event:
+    kind: message.assistant
+    payload:
+      content: content
+      native_event_id: id
+      native_invocation_id: invocation_id
+      native_branch: branch
+      native_author: author
+      input_tokens: usage_metadata.prompt_token_count
+      output_tokens: usage_metadata.candidates_token_count
+  tool_started:
+    kind: tool.call.started
+    payload:
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      arguments: arguments
+  tool_observed:
+    kind: tool.call.completed
+    payload:
+      success: success
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      arguments: arguments
+      result: result
+  tool_failed:
+    kind: tool.call.failed
+    payload:
+      success: success
+      tool_name: tool_name
+      tool_call_id: tool_call_id
+      arguments: arguments
+      error: error
+      error_type: error_type

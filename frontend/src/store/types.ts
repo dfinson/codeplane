@@ -5,47 +5,32 @@
  * and services import these types to stay in sync with the store schema.
  */
 
-import type { DiffFileModel, SDKInfo, StoryResponse } from "../api/types";
+import type {
+  DiffFileModel, Job, SDKInfo, StoryResponse, TrackerOperationResponse, TranscriptPayload,
+  RecipeStepInspection, RecipeAttemptInspection, RecipeRun, RecipeRunList, RecipeStepList,
+  TaskLinkInspection, ProjectBoard, ProjectBoardPage, ProjectApprovalPage, ProjectDeliveryPage,
+  RecipeAttemptControl, ReviewPreparation, ReviewHistoryPage, JobPendingDecisionPage,
+} from "../api/types";
+
 /** Connection status exposed to UI components. */
 export type ConnectionStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
 
 /** Minimal job shape matching JobResponse from the backend. */
-export interface JobSummary {
-  id: string;
-  repo: string;
-  prompt: string;
-  projectId?: string | null;
-  title?: string | null;
-  description?: string | null;
+export interface JobSummary extends Omit<Job, "state" | "mode" | "resolution" | "mergeStatus" | "sdk" | "source" | "observationOnly"> {
   state: string;
-  baseRef: string;
-  worktreePath: string | null;
-  branch: string | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  prUrl?: string | null;
   resolution?: string | null;
-  archivedAt?: string | null;
   mergeStatus?: string | null;
-  worktreeName?: string | null;
   conflictFiles?: string[] | null;
   resolutionError?: string | null;
-  failureReason?: string | null;
-  progressHeadline?: string | null;
-  progressSummary?: string | null;
-  model?: string | null;
   modelDowngraded?: boolean;
   requestedModel?: string | null;
   actualModel?: string | null;
-  sdk?: string;
   /** Current setup step for jobs in 'preparing' state (e.g. "creating_workspace"). */
   setupStep?: string | null;
-  totalCostUsd?: number | null;
-  totalTokens?: number | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
   mode?: string;
+  sdk?: Job["sdk"];
+  source?: Job["source"];
+  observationOnly?: Job["observationOnly"];
 }
 
 export interface ApprovalRequest {
@@ -70,7 +55,7 @@ export interface BatchApprovalAction {
   recommendedAction: RecommendedAction;
   reasonCode: string;
   reason: string;
-  riskScore: number;
+  riskScore: number | null;
   riskBand: string;
   effect: string | null;
   checkpointRef: string | null;
@@ -96,7 +81,8 @@ export interface LogLine {
   context: Record<string, unknown> | null;
 }
 
-export interface TranscriptEntry {
+export interface TranscriptEntry extends Pick<TranscriptPayload,
+  "metadata" | "pairingStatus" | "pairingReason" | "admissionStatus" | "executionStatus" | "operatorContent"> {
   jobId: string;
   eventId?: string;
   sequence?: number;
@@ -225,7 +211,31 @@ export interface ContextHandoff {
 }
 
 export interface AppState {
+  jobPendingDecisionPages: Record<string, JobPendingDecisionPage>;
+  reviewPreparations: Record<string, ReviewPreparation>;
+  reviewHistoryPages: Record<string, ReviewHistoryPage>;
+  recipeAttemptControls: Record<string, RecipeAttemptControl>;
+  projectBoards: Record<string, ProjectBoard>;
+  projectBoardPages: Record<string, ProjectBoardPage>;
+  projectApprovalPages: Record<string, ProjectApprovalPage>;
+  projectDeliveryPages: Record<string, ProjectDeliveryPage>;
+  projectBoardVersion: number;
+  taskLinkInspections: Record<string, TaskLinkInspection>;
+  recipeCurrentRuns: Record<string, RecipeRun | null>;
+  recipeRuns: Record<string, RecipeRun>;
+  recipeRunHistoryPages: Record<string, RecipeRunList>;
+  recipeStepPages: Record<string, RecipeStepList>;
+  recipeStepInspections: Record<string, RecipeStepInspection>;
+  recipeAttemptInspections: Record<string, RecipeAttemptInspection>;
+  recipeVersions: Record<string, number>;
   // Data slices
+  trackerOperations: Record<string, TrackerOperationResponse>;
+  trackerOperationLoads: Record<string, {
+    loading: boolean;
+    loaded: boolean;
+    error: string | null;
+    requestVersion: number;
+  }>;
   jobs: Record<string, JobSummary>;
   approvals: Record<string, ApprovalRequest>;
   batchApprovals: Record<string, BatchApproval>; // keyed by batchId
@@ -284,6 +294,9 @@ export interface AppState {
   jobHeartbeats: Record<string, { lastActivityAt: string; activeToolName?: string; activeToolSince?: string }>;
 
   // Actions
+  hydrateTrackerOperations: (operations: TrackerOperationResponse[]) => void;
+  loadTrackerOperations: (projectId: string) => Promise<void>;
+  refreshTrackerOperations: () => Promise<void>;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setReconnectAttempt: (attempt: number) => void;
   /** Fetches SDK list + models for the default SDK. Called once on app mount. */

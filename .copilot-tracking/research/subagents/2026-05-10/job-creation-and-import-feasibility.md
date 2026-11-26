@@ -38,7 +38,6 @@ CreateJobRequest → JobSpec → svc.create_job() → session.commit() → backg
 Called as background task after job creation:
 1. Validates job is in `preparing` state
 2. Calls `git_service.create_worktree()` — **requires real git repo on disk**
-3. Optionally registers with CodeRecon for indexing
 4. Transitions `preparing → queued`
 5. Publishes `job_setup_progress` events
 
@@ -200,7 +199,6 @@ All columns:
 | `story_text` | Text | Yes | — | — |
 | `review_story_json` | Text | Yes | — | — |
 | `review_story_hash` | String(64) | Yes | — | — |
-| `structural_coupling_delta` | Float | Yes | — | CodeRecon metrics |
 | `structural_cycle_count` | Integer | Yes | — | — |
 | `structural_changes_touch_tests` | Boolean | Yes | — | — |
 | `structural_change_count` | Integer | Yes | — | — |

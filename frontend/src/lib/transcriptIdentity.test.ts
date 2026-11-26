@@ -4,6 +4,7 @@ import {
   mergeTranscriptEntries,
   sameTranscriptEntry,
   transcriptReactKey,
+  removePairedToolStarts,
 } from "./transcriptIdentity";
 
 function entry(overrides: Partial<TranscriptEntry> = {}): TranscriptEntry {
@@ -17,6 +18,36 @@ function entry(overrides: Partial<TranscriptEntry> = {}): TranscriptEntry {
 }
 
 describe("transcript identity", () => {
+  it("never pairs unknown tool identities by repeated name or text", () => {
+    const entries = [
+      entry({ kind: "tool.call.started", toolName: "write", content: "" }),
+      entry({ kind: "tool.call.failed", toolName: "write", content: "" }),
+    ];
+    expect(removePairedToolStarts(entries)).toEqual(entries);
+  });
+
+  it("pairs acquisition channels only within the same binding and native session", () => {
+    const start = entry({
+      kind: "tool.call.started", toolCallId: "call",
+      metadata: {
+        integration_binding_id: "binding", run_id: "session", namespace: ["observation-source", "first"],
+        partial: false, visibility: "visible",
+      },
+    });
+    const sibling = entry({
+      kind: "tool.call.started", toolCallId: "call",
+      metadata: { integration_binding_id: "other-binding", run_id: "session", partial: false, visibility: "visible" },
+    });
+    const failure = entry({
+      kind: "tool.call.failed", toolCallId: "call",
+      metadata: {
+        integration_binding_id: "binding", run_id: "session", namespace: ["observation-source", "second"],
+        partial: false, visibility: "visible",
+      },
+    });
+    expect(removePairedToolStarts([start, sibling, failure])).toEqual([sibling, failure]);
+  });
+
   it("deduplicates by TraceForge event id regardless of producer sequence", () => {
     expect(sameTranscriptEntry(
       entry({ eventId: "evt-1", sequence: 10 }),

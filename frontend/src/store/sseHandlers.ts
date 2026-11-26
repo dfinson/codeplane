@@ -8,6 +8,7 @@
 
 export type { SSEHandler } from "./handlers/types";
 export { enrichJob } from "./handlers/jobHandlers";
+export { mergeTrackerOperations } from "./handlers/miscHandlers";
 
 import type { SSEHandler } from "./handlers/types";
 import { jobHandlers } from "./handlers/jobHandlers";
@@ -21,6 +22,11 @@ import { miscHandlers } from "./handlers/miscHandlers";
 // ---------------------------------------------------------------------------
 
 export const sseHandlers: Record<string, SSEHandler> = {
+  "recipe.updated": (state, payload) => {
+    const jobId = payload.jobId;
+    if (typeof jobId !== "string") return null;
+    return { recipeVersions: { ...state.recipeVersions, [jobId]: (state.recipeVersions[jobId] ?? 0) + 1 } };
+  },
   ...jobHandlers,
   ...transcriptHandlers,
   ...timelineHandlers,

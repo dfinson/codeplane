@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -19,9 +20,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 
-@pytest.fixture
-async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+@contextlib.asynccontextmanager
+async def approval_database(database_url: str) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    engine = create_async_engine(database_url)
     sa_event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -52,8 +53,16 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
                 )
             )
         await session.commit()
-    yield factory
-    await engine.dispose()
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    async with approval_database("sqlite+aiosqlite:///:memory:") as factory:
+        yield factory
 
 
 @pytest.fixture
@@ -81,6 +90,23 @@ class TestCreateRequest:
         approval = await svc.create_request("job-1", "Check?")
         assert approval.id in svc._pending_futures
         assert not svc._pending_futures[approval.id].done()
+
+
+class TestRuntimeContract:
+    async def test_resolved_before_wait_is_read_from_database(self, svc):
+        approval = await svc.create_request("job-1", "Fixture approval")
+        await svc.resolve(approval.id, "approved")
+        result = None
+        with contextlib.suppress(ApprovalNotFoundError):
+            result = await svc.wait_for_resolution(approval.id)
+        assert result == "approved"
+
+    async def test_cancelled_future_does_not_leave_pending_row(self, svc):
+        approval = await svc.create_request("job-1", "Fixture approval")
+        svc._pending_futures[approval.id].cancel()
+        await svc.cleanup_job("job-1")
+        stored = await svc.get(approval.id)
+        assert stored.resolution == "rejected"
 
 
 class TestResolve:

@@ -6,16 +6,18 @@
  */
 
 import { test, expect } from "@playwright/test";
+import type { TranscriptPayload } from "../src/api/types";
 import { makeJob, setupJobDetailMocks, NOW } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const TRANSCRIPT = [
+const TRANSCRIPT: TranscriptPayload[] = [
   {
     jobId: "job-1",
-    seq: 1,
+    eventId: "transcript-1",
+    sequence: 1,
     timestamp: NOW,
     kind: "message.assistant",
     content: "I'll analyze the auth module to understand the current implementation.",
@@ -24,7 +26,8 @@ const TRANSCRIPT = [
   },
   {
     jobId: "job-1",
-    seq: 2,
+    eventId: "transcript-2",
+    sequence: 2,
     timestamp: NOW,
     kind: "tool.call.completed",
     content: "",
@@ -40,7 +43,8 @@ const TRANSCRIPT = [
   },
   {
     jobId: "job-1",
-    seq: 3,
+    eventId: "transcript-3",
+    sequence: 3,
     timestamp: NOW,
     kind: "tool.call.completed",
     content: "",
@@ -56,7 +60,8 @@ const TRANSCRIPT = [
   },
   {
     jobId: "job-1",
-    seq: 4,
+    eventId: "transcript-4",
+    sequence: 4,
     timestamp: NOW,
     kind: "message.assistant",
     content: "I've fixed the authentication bug by adding proper token validation.",
@@ -65,7 +70,8 @@ const TRANSCRIPT = [
   },
   {
     jobId: "job-1",
-    seq: 5,
+    eventId: "transcript-5",
+    sequence: 5,
     timestamp: NOW,
     kind: "message.user",
     content: "Can you also add a test for that fix?",
@@ -73,7 +79,8 @@ const TRANSCRIPT = [
   },
   {
     jobId: "job-1",
-    seq: 6,
+    eventId: "transcript-6",
+    sequence: 6,
     timestamp: NOW,
     kind: "message.assistant",
     content: "Sure! I'll create a unit test for the token validation logic.",

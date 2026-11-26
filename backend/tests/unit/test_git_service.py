@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -42,6 +44,234 @@ def _mock_subprocess(
 # ------------------------------------------------------------------
 
 
+class TestRuntimeContract:
+    async def test_creation_rejects_traversal_without_git(self, tmp_path):
+        service = GitService(CPLConfig())
+        service._run_git = AsyncMock(return_value="main")
+        rejected = False
+        try:
+            await service.create_worktree(str(tmp_path), "..\\escape", "main")
+        except GitError:
+            rejected = True
+        assert rejected
+        service._run_git.assert_not_awaited()
+
+    async def test_creation_preserves_existing_directory(self, tmp_path):
+        service = GitService(CPLConfig())
+        service._run_git = AsyncMock(return_value="main")
+        target = tmp_path / ".codeplane-worktrees" / "existing"
+        target.mkdir(parents=True)
+        marker = target / "keep.txt"
+        marker.write_text("valuable", encoding="utf-8")
+        rejected = False
+        try:
+            await service.create_worktree(str(tmp_path), "existing", "main", "existing-branch")
+        except GitError:
+            rejected = True
+        assert rejected
+        assert marker.read_text(encoding="utf-8") == "valuable"
+        assert not any(c.args[:2] == ("branch", "-D") for c in service._run_git.call_args_list)
+
+
+class TestRecoveryWitness:
+    @pytest.fixture
+    async def recovery_repo(self, git_service, tmp_path):
+        tmp_path = tmp_path / "repository"
+        tmp_path.mkdir()
+        await git_service.run_git("init", "--initial-branch=main", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recovery fixture", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recovery@example.invalid", cwd=tmp_path)
+        (tmp_path / "source.txt").write_bytes(b"retained bytes\n")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit(
+            "test: retain recovery fixture\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=tmp_path,
+        )
+        return tmp_path
+
+    async def witness(self, service, root, paths):
+        from backend.services.action_policy.assessment import DECISION_SECONDS, MAX_INPUT_BYTES
+
+        return await service.recovery_witness(
+            cwd=root,
+            paths=tuple(paths),
+            deadline=asyncio.get_running_loop().time() + DECISION_SECONDS,
+            max_input_bytes=MAX_INPUT_BYTES,
+        )
+
+    async def test_retained_bytes_and_new_target_absence_are_read_only_witnesses(self, git_service, recovery_repo):
+        root = recovery_repo
+        before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+        witness = await self.witness(git_service, root, ["source.txt", "new.txt"])
+        assert witness is not None
+        assert witness.commit == await git_service.rev_parse("HEAD", cwd=root)
+        assert {target.path: target.blob is not None for target in witness.targets} == {
+            "new.txt": False,
+            "source.txt": True,
+        }
+        assert await self.witness(git_service, root, [target.path for target in witness.targets]) == witness
+        assert {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+    @pytest.mark.parametrize("changed_sample", [None, 2, 3], ids=["stable", "during-read", "after-git"])
+    async def test_distinct_path_and_handle_ctimes_keep_both_change_fences(
+        self, git_service, recovery_repo, monkeypatch, changed_sample
+    ):
+        target = (recovery_repo / "source.txt").stat()
+        original = os.fstat
+        samples = 0
+
+        def handle_stat(fd):
+            nonlocal samples
+            observed = original(fd)
+            if (observed.st_dev, observed.st_ino) != (target.st_dev, target.st_ino):
+                return observed
+            samples += 1
+            # Windows path stat can report birth time while fstat reports change time.
+            changed = changed_sample is not None and samples >= changed_sample
+            return os.stat_result(
+                observed,
+                {
+                    "st_atime_ns": observed.st_atime_ns,
+                    "st_mtime_ns": observed.st_mtime_ns,
+                    "st_ctime_ns": observed.st_ctime_ns + 1_000_000_000 + int(changed),
+                },
+            )
+
+        monkeypatch.setattr(os, "fstat", handle_stat)
+        witness = await self.witness(git_service, recovery_repo, ["source.txt"])
+        if changed_sample is None:
+            assert witness is not None
+            assert samples == 3
+        else:
+            assert witness is None
+            assert samples == changed_sample
+
+    @pytest.mark.parametrize("kind", ["dirty", "staged", "untracked", "ignored-new", "directory"])
+    async def test_missing_current_byte_proof_stays_unknown(self, git_service, recovery_repo, kind):
+        root = recovery_repo
+        target = "source.txt"
+        if kind in {"dirty", "staged"}:
+            (root / target).write_text("valuable uncommitted bytes\n")
+            if kind == "staged":
+                await git_service.run_git("add", target, cwd=root)
+        elif kind == "untracked":
+            target = "untracked.txt"
+            (root / target).write_text("valuable untracked bytes\n")
+        elif kind == "ignored-new":
+            target = "ignored.txt"
+        else:
+            target = "directory"
+            (root / target).mkdir()
+        assert await self.witness(git_service, root, [target]) is None
+
+    @pytest.mark.parametrize("change", ["bytes", "ref", "new-target-created"])
+    async def test_consumption_recheck_detects_changed_bytes_ref_and_absence(self, git_service, recovery_repo, change):
+        root = recovery_repo
+        paths = ["source.txt", "new.txt"]
+        before = await self.witness(git_service, root, paths)
+        assert before is not None
+        if change == "bytes":
+            (root / "source.txt").write_text("changed during assessment\n")
+        elif change == "ref":
+            await git_service.commit(
+                "test: advance witness reference\n\n"
+                "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+                cwd=root,
+                allow_empty=True,
+            )
+        else:
+            (root / "new.txt").write_text("new valuable data appeared\n")
+        assert await self.witness(git_service, root, paths) != before
+
+    async def test_git_filters_are_never_executed_for_recovery_evidence(self, git_service, recovery_repo):
+        root = recovery_repo
+        (root / ".gitattributes").write_text("source.txt filter=forbidden\n")
+        await git_service.run_git(
+            "config",
+            "filter.forbidden.clean",
+            "touch recovery-filter-was-run",
+            cwd=root,
+        )
+        witness = await self.witness(git_service, root, ["source.txt"])
+        assert witness is not None
+        assert not (root / "recovery-filter-was-run").exists()
+
+    async def test_current_byte_work_respects_the_existing_input_bound(self, git_service, recovery_repo):
+        from backend.services.action_policy.assessment import MAX_INPUT_BYTES
+
+        (recovery_repo / "source.txt").write_bytes(b"x" * (MAX_INPUT_BYTES + 1))
+        await git_service.add_all(cwd=recovery_repo)
+        await git_service.commit(
+            "test: retain oversized fixture\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=recovery_repo,
+        )
+        assert await self.witness(git_service, recovery_repo, ["source.txt"]) is None
+
+    async def test_partial_repository_and_aliased_targets_cannot_supply_a_witness(self, git_service, recovery_repo):
+        root = recovery_repo
+        os.link(root / "source.txt", root / "alias.txt")
+        assert await self.witness(git_service, root, ["source.txt"]) is None
+        (root / "alias.txt").unlink()
+        await git_service.run_git("config", "remote.fixture.promisor", "true", cwd=root)
+        assert await self.witness(git_service, root, ["source.txt"]) is None
+
+    async def test_witness_deadline_cancels_the_owned_git_operation(self, git_service, recovery_repo, monkeypatch):
+        ended = asyncio.Event()
+
+        async def blocked(*args, **kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.set()
+
+        monkeypatch.setattr(git_service, "_run_git", blocked)
+        assert (
+            await git_service.recovery_witness(
+                cwd=recovery_repo,
+                paths=("source.txt",),
+                max_input_bytes=32768,
+                deadline=asyncio.get_running_loop().time() + 0.01,
+            )
+            is None
+        )
+        assert ended.is_set()
+
+    async def test_absence_is_rechecked_after_git_work_finishes(self, git_service, recovery_repo, monkeypatch):
+        original = git_service._run_git
+        head_reads = 0
+
+        async def changed_after_git(*args, **kwargs):
+            nonlocal head_reads
+            result = await original(*args, **kwargs)
+            if args == ("rev-parse", "--verify", "HEAD^{commit}"):
+                head_reads += 1
+                if head_reads == 2:
+                    (recovery_repo / "new.txt").write_text("valuable bytes appeared during inspection\n")
+            return result
+
+        monkeypatch.setattr(git_service, "_run_git", changed_after_git)
+        assert await self.witness(git_service, recovery_repo, ["new.txt"]) is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX backslashes are literal filename characters")
+    async def test_separator_normalization_cannot_certify_different_native_bytes(self, git_service, recovery_repo):
+        root = recovery_repo
+        external = root.parent / "outside.txt"
+        external.write_text("valuable bytes outside this repository\n")
+        (root / "outside.txt").write_text("different retained workspace bytes\n")
+        (root / "a" / "b").mkdir(parents=True)
+        (root / r"a\b").mkdir()
+        await git_service.run_git("add", "outside.txt", cwd=root)
+        await git_service.commit(
+            "test: retain distinct bytes\n\nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
+            cwd=root,
+        )
+        declared = r"a\b/../../outside.txt"
+        assert (root / declared).resolve() == external
+        assert (root / declared).read_bytes() == external.read_bytes()
+        assert await self.witness(git_service, root, [declared]) is None
+
+
 class TestIsRemoteUrl:
     def test_https_url(self) -> None:
         assert GitService.is_remote_url("https://github.com/org/repo.git") is True
@@ -76,6 +306,103 @@ class TestIsRemoteUrl:
 
 
 class TestRunGit:
+    @pytest.mark.parametrize("phase", ["initial", "collision"])
+    async def test_recipe_snapshot_does_not_reuse_a_descendant_ref(self, git_service, tmp_path, monkeypatch, phase):
+        await git_service.run_git("init", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recipe test", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recipe@example.invalid", cwd=tmp_path)
+        source = tmp_path / "source.txt"
+        source.write_text("committed\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit("Initial fixture", cwd=tmp_path)
+        head = await git_service.rev_parse("HEAD", cwd=tmp_path)
+        source.write_text("staged\n")
+        await git_service.add_all(cwd=tmp_path)
+        source.write_text("unstaged\n")
+        index = await git_service.run_git("write-tree", cwd=tmp_path)
+        status = await git_service.run_git("status", "--porcelain", cwd=tmp_path)
+        parent = "refs/codeplane/recipe-inputs/parent"
+        descendant = f"{parent}/child"
+        original = git_service._run_git
+        if phase == "initial":
+            await git_service.update_ref(descendant, head, cwd=tmp_path)
+        else:
+
+            async def insert_descendant(*args, **kwargs):
+                if args[:2] == ("update-ref", parent):
+                    await original("update-ref", descendant, head, cwd=tmp_path)
+                return await original(*args, **kwargs)
+
+            monkeypatch.setattr(git_service, "_run_git", insert_descendant)
+        with pytest.raises(GitError):
+            await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=parent)
+        assert await git_service.rev_parse(descendant, cwd=tmp_path) == head
+        with pytest.raises(GitError):
+            await git_service.run_git("show-ref", "--verify", parent, cwd=tmp_path)
+        assert await git_service.rev_parse("HEAD", cwd=tmp_path) == head
+        assert await git_service.run_git("write-tree", cwd=tmp_path) == index
+        assert await git_service.run_git("status", "--porcelain", cwd=tmp_path) == status
+        assert source.read_text() == "unstaged\n"
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cancellation")
+    async def test_cancellation_reaps_the_owned_git_process(self, git_service, tmp_path, monkeypatch):
+        spawn = asyncio.create_subprocess_exec
+        started = asyncio.Event()
+        processes = []
+
+        async def record_process(*args, **kwargs):
+            process = await spawn(*args, **kwargs)
+            processes.append(process)
+            started.set()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", record_process)
+        task = asyncio.create_task(
+            git_service.run_git("-c", "alias.recipe-wait=!sleep 60", "recipe-wait", cwd=tmp_path)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
+            assert processes[0].returncode is not None
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_recipe_snapshot_retains_code_without_changing_head_or_index(self, git_service, tmp_path):
+        await git_service.run_git("init", cwd=tmp_path)
+        await git_service.run_git("config", "user.name", "Recipe test", cwd=tmp_path)
+        await git_service.run_git("config", "user.email", "recipe@example.invalid", cwd=tmp_path)
+        tracked = tmp_path / "tracked.txt"
+        tracked.write_text("original\n")
+        (tmp_path / ".gitignore").write_text("ignored.txt\n")
+        await git_service.add_all(cwd=tmp_path)
+        await git_service.commit("Initial fixture", cwd=tmp_path)
+        head = await git_service.rev_parse("HEAD", cwd=tmp_path)
+        tracked.write_text("staged\n")
+        await git_service.run_git("add", "tracked.txt", cwd=tmp_path)
+        tracked.write_text("current unstaged\n")
+        (tmp_path / "untracked.txt").write_text("new input\n")
+        (tmp_path / "ignored.txt").write_text("not an input\n")
+        index = await git_service.run_git("write-tree", cwd=tmp_path)
+        before = await git_service.run_git("status", "--porcelain", cwd=tmp_path)
+
+        ref = "refs/codeplane/recipe-inputs/run-one"
+        captured = await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=ref)
+        assert captured != head
+        assert await git_service.rev_parse("HEAD", cwd=tmp_path) == head
+        assert await git_service.run_git("write-tree", cwd=tmp_path) == index
+        assert await git_service.run_git("status", "--porcelain", cwd=tmp_path) == before
+        assert await git_service.run_git("show", f"{captured}:tracked.txt", cwd=tmp_path) == "current unstaged"
+        assert await git_service.run_git("show", f"{captured}:untracked.txt", cwd=tmp_path) == "new input"
+        assert "ignored.txt" not in await git_service.run_git("ls-tree", "--name-only", captured, cwd=tmp_path)
+        tracked.write_text("later edits\n")
+        assert await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref=ref) == captured
+        with pytest.raises(GitError, match="internal reference"):
+            await git_service.capture_worktree_commit(cwd=tmp_path, snapshot_ref="refs/heads/main")
+
     @pytest.mark.asyncio
     async def test_run_git_success(self, git_service: GitService) -> None:
         mock_proc = _mock_subprocess(stdout="output\n")
@@ -761,11 +1088,21 @@ class TestCleanupWorktrees:
 
     @pytest.mark.asyncio
     async def test_cleanup_skips_symlinks(self, git_service: GitService, tmp_path: Path) -> None:
+        import os
+        import subprocess
+
         wt_dir = tmp_path / ".codeplane-worktrees"
         wt_dir.mkdir()
         real_dir = tmp_path / "real"
         real_dir.mkdir()
-        (wt_dir / "symlink").symlink_to(real_dir)
+        if os.name == "nt":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(wt_dir / "symlink"), str(real_dir)],
+                check=True,
+                capture_output=True,
+            )
+        else:
+            (wt_dir / "symlink").symlink_to(real_dir, target_is_directory=True)
         (wt_dir / "job-1").mkdir()
 
         async def mock_exec(*args, **kwargs):

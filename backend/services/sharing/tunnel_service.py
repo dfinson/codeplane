@@ -13,6 +13,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -21,11 +22,15 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
 
+from backend.config import get_codeplane_dir
 from backend.models.domain import CodePlaneError
+from backend.services.dev_restart.restart_protocol import write_json_atomic
 
 log = structlog.get_logger()
 
@@ -413,6 +418,10 @@ class TunnelWatchdog:
             return True
         return self._health_ok()
 
+    # Server errors are not authentication gates, including Cloudflare 530/1033
+    # when no healthy connector is available. Recovery is attempted, not assured.
+    _RELAY_FAILURE_STATUSES = frozenset(range(500, 600))
+
     def _health_ok(self, *, use_tunnel_url: bool = False) -> bool:
         import urllib.error
         import urllib.request
@@ -421,10 +430,21 @@ class TunnelWatchdog:
             url = f"{self.tunnel_url}/api/health"
         else:
             url = f"http://127.0.0.1:{self._local_port}/api/health"
+        remote = use_tunnel_url or not self._local_port
         try:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=self._HTTP_TIMEOUT) as resp:  # noqa: S310
+                if remote:
+                    return resp.status not in self._RELAY_FAILURE_STATUSES
                 return bool(resp.status == 200)
+        except urllib.error.HTTPError as exc:
+            # Access rejection does not establish a connector outage. Keep its
+            # exemption without treating an edge's server-error page as health.
+            if remote and exc.code not in self._RELAY_FAILURE_STATUSES:
+                log.debug("tunnel_relay_gated", url=url, status=exc.code)
+                return True
+            log.debug("tunnel_health_check_failed", url=url, status=exc.code)
+            return False
         except (urllib.error.URLError, OSError, TimeoutError):
             log.debug("tunnel_health_check_failed", url=url)
             return False
@@ -637,7 +657,7 @@ def validate_remote_provider(
         return None
 
     if provider is RemoteProvider.devtunnel:
-        if not shutil.which("devtunnel"):
+        if not find_devtunnel_executable():
             return "ERROR: 'devtunnel' CLI not found.\n  Install: https://aka.ms/devtunnels/cli\n  Or run: cpl setup"
         if not devtunnel_logged_in():
             # Catch the logged-out state during validation rather than letting
@@ -694,7 +714,7 @@ def _external_tunnel_origin(
         exists, region = _lookup_devtunnel(tunnel_name)
         if not exists or not region:
             raise TunnelStartError(f"Dev Tunnel {tunnel_name!r} was not found; cannot resolve its origin externally.")
-        return f"https://{tunnel_name}-{port}.{region}.devtunnels.ms"
+        return _devtunnel_origin(tunnel_name, port, region)
 
     raise TunnelStartError(f"External tunnel ownership is not supported for provider {provider.value!r}.")
 
@@ -777,7 +797,7 @@ def start_remote_access(
         )
         handle.watchdog = TunnelWatchdog(
             tunnel_url=origin,
-            restart_command=["devtunnel", "host", resolved_name],
+            restart_command=[find_devtunnel_executable() or "devtunnel", "host", resolved_name],
             proc=proc,
             label="devtunnel",
             local_port=port,
@@ -831,6 +851,8 @@ def _run_capture(args: list[str]) -> subprocess.CompletedProcess[str]:
     ``TunnelStartError`` with an actionable message. A synthetic non-zero
     result is returned instead so callers keep their normal error handling.
     """
+    if args[0] == "devtunnel":
+        args = [find_devtunnel_executable() or "devtunnel", *args[1:]]
     try:
         return subprocess.run(args, capture_output=True, text=True, timeout=30)  # noqa: S603
     except subprocess.TimeoutExpired:
@@ -844,6 +866,88 @@ def _run_capture(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 _CODEPLANE_TUNNEL_PREFIX = "cpl-"
+
+_DEVTUNNEL_FALLBACK_PATHS = (
+    Path.home() / "bin" / ("devtunnel.exe" if sys.platform == "win32" else "devtunnel"),
+    Path.home() / ".devtunnel" / ("devtunnel.exe" if sys.platform == "win32" else "devtunnel"),
+    Path("/usr/local/bin/devtunnel"),
+)
+
+
+def find_devtunnel_executable() -> str | None:
+    """Keep normal PATH resolution, otherwise check official installer locations."""
+    if shutil.which("devtunnel"):
+        return "devtunnel"
+    for candidate in _DEVTUNNEL_FALLBACK_PATHS:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+@dataclass(frozen=True)
+class _StableDevTunnel:
+    name: str
+    port: int
+    origin: str
+
+
+def _read_stable_devtunnel() -> _StableDevTunnel | None:
+    path = get_codeplane_dir() / "devtunnel.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise TunnelStartError(f"Cannot read saved Dev Tunnel identity at {path}: {exc}") from exc
+    if isinstance(payload, dict):
+        name, port, origin = payload.get("tunnelName"), payload.get("port"), payload.get("origin")
+        if (
+            isinstance(name, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", name)
+            and type(port) is int
+            and 1 <= port <= 65535
+            and isinstance(origin, str)
+            and _valid_devtunnel_origin(origin)
+        ):
+            return _StableDevTunnel(name=name, port=port, origin=origin)
+    raise TunnelStartError(f"Invalid saved Dev Tunnel identity at {path}; repair or remove that record.")
+
+
+def _valid_devtunnel_origin(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return (
+            parsed.scheme == "https"
+            and (parsed.hostname or "").endswith(".devtunnels.ms")
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 443)
+            and parsed.path in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
+
+
+def _devtunnel_origin(tunnel_name: str, port: int, region: str) -> str:
+    result = _run_capture(["devtunnel", "show", tunnel_name, "--json"])
+    if result.returncode == 0:
+        try:
+            payload = json.loads(result.stdout)
+        except ValueError:
+            payload = None
+        tunnel = payload.get("tunnel", payload) if isinstance(payload, dict) else None
+        ports = tunnel.get("ports") if isinstance(tunnel, dict) else None
+        if isinstance(ports, list):
+            for entry in ports:
+                if isinstance(entry, dict) and entry.get("portNumber") == port:
+                    uri = entry.get("portUri")
+                    if isinstance(uri, str) and _valid_devtunnel_origin(uri):
+                        return uri.rstrip("/")
+    log.warning("devtunnel_port_uri_unavailable", tunnel=tunnel_name, port=port)
+    return f"https://{tunnel_name}-{port}.{region}.devtunnels.ms"
+
 
 # Substrings that identify a logged-out Dev Tunnels CLI. The CLI does not use a
 # single consistent phrasing: ``devtunnel list`` says "Login required." while
@@ -946,6 +1050,9 @@ def _start_devtunnel(port: int, *, tunnel_name: str | None = None) -> tuple[str,
     # rely on the exact same origin next time. A freshly generated random
     # name is not yet known anywhere else, so it is not reusable this run
     # (ARCHITECTURE-SPINE AD-8).
+    previous = _read_stable_devtunnel()
+    if not tunnel_name and previous is not None:
+        tunnel_name = previous.name
     if tunnel_name:
         # Explicit name — use as-is
         exists, region = _lookup_devtunnel(tunnel_name)
@@ -989,11 +1096,21 @@ def _start_devtunnel(port: int, *, tunnel_name: str | None = None) -> tuple[str,
     if not region:
         raise TunnelStartError("Could not determine the Dev Tunnel region.")
 
-    proc = _spawn_connector(["devtunnel", "host", tunnel_name])
+    tunnel_url = _devtunnel_origin(tunnel_name, port, region)
+    if previous is not None and previous.origin != tunnel_url:
+        log.warning("devtunnel_origin_changed", previous_origin=previous.origin, origin=tunnel_url)
+    try:
+        write_json_atomic(
+            get_codeplane_dir() / "devtunnel.json",
+            {"tunnelName": tunnel_name, "port": port, "origin": tunnel_url},
+        )
+    except OSError as exc:
+        raise TunnelStartError(f"Cannot save Dev Tunnel identity: {exc}") from exc
+
+    proc = _spawn_connector([find_devtunnel_executable() or "devtunnel", "host", tunnel_name])
     _wait_for_startup(proc, label="devtunnel")
     _start_output_drain(proc)
 
-    tunnel_url = f"https://{tunnel_name}-{port}.{region}.devtunnels.ms"
     log.debug("tunnel_started", provider="devtunnel", url=tunnel_url)
     return tunnel_url, proc, tunnel_name, origin_is_reusable
 
@@ -1026,9 +1143,8 @@ def _cloudflared_already_running(token: str) -> bool:
     Matching on the process *name* alone is not enough, though: a machine that
     runs cloudflared for some unrelated tunnel would make us skip our own
     connector and print a public URL that routes nowhere. So a process only
-    counts when its command line carries our tunnel token or the tunnel UUID
-    derived from it. A connector we cannot attribute (unreadable command line,
-    config-file mode) is treated as somebody else's, because starting a
+    counts when its command line or TUNNEL_TOKEN environment value identifies
+    our tunnel. A connector we cannot attribute is treated as somebody else's, because starting a
     redundant connector for our tunnel degrades routing while reusing a
     stranger's connector breaks the URL outright.
     """
@@ -1059,10 +1175,19 @@ def _cloudflared_already_running(token: str) -> bool:
             if pid == our_pid or pid in our_descendants:
                 continue
             cmdline = " ".join(proc.info.get("cmdline") or ())
-            if not any(marker in cmdline for marker in markers):
-                log.debug("cloudflared_foreign_connector_ignored", pid=pid)
-                continue
-            return True
+            if any(marker in cmdline for marker in markers):
+                return True
+            # Our token-run connectors receive the token through the environment, not argv.
+            try:
+                env_token = proc.environ().get("TUNNEL_TOKEN")
+            except (psutil.Error, OSError):
+                log.debug("cloudflared_environment_unreadable", pid=pid, exc_info=True)
+                env_token = None
+            if env_token and (
+                env_token == token or (tunnel_id is not None and _cloudflare_tunnel_id(env_token) == tunnel_id)
+            ):
+                return True
+            log.debug("cloudflared_foreign_connector_ignored", pid=pid)
         except (psutil.Error, OSError):
             continue
     return False

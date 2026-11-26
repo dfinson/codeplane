@@ -74,6 +74,37 @@ def _stored(events: list[SessionEvent]) -> list[StoredEvent]:
     return [StoredEvent(storage_cursor=index, event=event) for index, event in enumerate(events, start=1)]
 
 
+@pytest.mark.parametrize("active_jobs", [0, 21])
+async def test_tracker_operation_update_routes_global_matching_job_and_orphans(active_jobs: int) -> None:
+    manager = SSEManager()
+    manager.set_active_job_count(active_jobs)
+    global_connection = SSEConnection()
+    matching = SSEConnection(job_id="job-1")
+    unrelated = SSEConnection(job_id="job-other")
+    for connection in (global_connection, matching, unrelated):
+        manager.register(connection)
+    payload = {"operation": {"id": "operation", "version": 4, "state": "uncertain", "jobRef": "job-1"}}
+    await manager.broadcast_domain_event(
+        new_event(session_id="job-1", kind="tracker.operation_updated", payload=payload),
+        storage_cursor=23,
+    )
+    global_frames, matching_frames = _frames(global_connection), _frames(matching)
+    assert len(global_frames) == len(matching_frames) == 1
+    assert global_frames == matching_frames
+    assert "event: tracker.operation_updated\n" in global_frames[0]
+    assert "id: 23\n" in global_frames[0]
+    body = json.loads(next(line[6:] for line in global_frames[0].splitlines() if line.startswith("data: ")))
+    assert body["payload"] == payload
+    assert _frames(unrelated) == []
+    await manager.broadcast_domain_event(
+        new_event(session_id="", kind="tracker.operation_updated", payload=payload),
+    )
+    orphan_frames = _frames(global_connection)
+    assert len(orphan_frames) == 1
+    assert not orphan_frames[0].startswith("id:")
+    assert _frames(matching) == _frames(unrelated) == []
+
+
 # --- Unit tests for helper functions ---
 
 

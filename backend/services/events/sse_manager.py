@@ -14,6 +14,7 @@ import structlog
 
 from backend.models.api_schemas import ApprovalResponse, SnapshotPayload
 from backend.models.events import TRANSCRIPT_KINDS, EventKind, SessionEvent
+from backend.services.events.observation import allows_observation_notification
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -33,6 +34,9 @@ log = structlog.get_logger()
 _BROADCAST_KINDS: frozenset[str] = frozenset(
     {
         EventKind.job_created,
+        EventKind.tracker_operation_updated,
+        EventKind.recipe_updated,
+        EventKind.review_recorded,
         EventKind.job_setup_progress,
         EventKind.log_line_emitted,
         EventKind.diff_updated,
@@ -53,11 +57,14 @@ _BROADCAST_KINDS: frozenset[str] = frozenset(
         EventKind.job_archived,
         EventKind.job_title_updated,
         EventKind.model_downgraded,
+        EventKind.model_observed,
         EventKind.tool_group_summary,
         EventKind.telemetry_updated,
         EventKind.plan_step_updated,
         EventKind.step_entries_reassigned,
         EventKind.turn_summary,
+        EventKind.verification_started,
+        EventKind.verification_result,
         EventKind.action_classified,
         EventKind.policy_settings_changed,
         EventKind.stall_detected,
@@ -192,7 +199,7 @@ class SSEManager:
         broadcast allowlist are internal-only and dropped here. The optional SSE
         resume cursor is storage-local and never changes event metadata.
         """
-        if event.kind not in _BROADCAST_KINDS:
+        if event.kind not in _BROADCAST_KINDS or not allows_observation_notification(event):
             return  # internal-only event
 
         sse_id = str(storage_cursor) if storage_cursor is not None else None
@@ -307,14 +314,17 @@ class SSEManager:
             job_ids = [j.id for j in fetched_jobs]
             progress_by_job = await event_repo.list_latest_progress_previews(job_ids)
             cost_by_job: dict[str, dict[str, float | int]] = {}
+            usage_by_job = {}
             if session is not None:
                 cost_by_job = await TelemetrySummaryRepository(session).batch_cost_tokens(job_ids)
+                usage_by_job = await TelemetrySummaryRepository(session).batch_cost_usage(job_ids)
 
             job_responses = [
                 JobResponse.from_domain(
                     j,
                     progress_headline=progress_by_job.get(j.id, (None, None))[0],
                     progress_summary=progress_by_job.get(j.id, (None, None))[1],
+                    cost_usage=usage_by_job.get(j.id, []),
                     **{k: v for k, v in cost_by_job.get(j.id, {}).items()},
                 )
                 for j in fetched_jobs
@@ -331,7 +341,7 @@ class SSEManager:
         # Replay the events
         for stored in stored_events:
             event = stored.event
-            if event.kind not in _BROADCAST_KINDS:
+            if event.kind not in _BROADCAST_KINDS or not allows_observation_notification(event):
                 continue
             frame = _format_sse(
                 str(stored.storage_cursor),

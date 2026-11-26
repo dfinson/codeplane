@@ -32,8 +32,10 @@ from backend.api import (
     chats,
     credentials,
     events,
+    external_gate,
     health,
     hooks,
+    integrations,
     job_artifacts,
     job_telemetry,
     jobs,
@@ -42,6 +44,9 @@ from backend.api import (
     policy_settings,
     preview,
     projects,
+    recipe_runs,
+    recipes,
+    reviews,
     settings,
     share,
     sidecar_templates,
@@ -66,6 +71,8 @@ from backend.models.domain import (
     StateConflictError,
     TaskLinkNotFoundError,
 )
+from backend.services.ingest.body_limit import ObservationBodyLimit
+from backend.services.recipe.definition_service import RecipeNotFoundError, RecipeValidationError
 from backend.services.sharing.share_service import InvalidShareTokenError
 
 _FRONTEND_DIR = Path(__file__).resolve().parent / "web"
@@ -91,6 +98,8 @@ def _configure_middleware(
     dev: bool,
     tunnel_origin: str | None,
     password: str | None,
+    remote: bool | None = None,
+    access_only: bool = False,
 ) -> None:
     """Configure security headers, CORS, and authentication middleware.
 
@@ -99,20 +108,11 @@ def _configure_middleware(
     ``X-Frame-Options``, ``Content-Security-Policy``, ``Referrer-Policy``,
     ``Cache-Control``) to every response.
 
-    **Auth model**: when *password* is provided (tunnel mode or explicit
-    ``--password``), an HTTP middleware gate is installed that protects every
-    route by default.  Only the following paths are exempt:
-
-    - ``/api/auth/*`` — the login endpoint itself
-    - ``/api/health`` — liveness/readiness probe
-    - ``/api/events`` — SSE stream (checked inline, not via
-      ``BaseHTTPMiddleware``, because middleware buffering kills SSE)
-    - Localhost requests (``127.0.0.1``, ``::1``) — same-machine access is
-      unconditionally trusted
-
-    Static frontend assets are served by the SPA fallback 404 handler
-    registered in ``_mount_spa_fallback`` and are not affected by this
-    middleware (they sit outside ``/api``).
+    **Auth model**: remote posture or an explicit password installs the gate
+    before requests can arrive. Tunnel verification never changes posture.
+    Health/login bootstrap and exact read-only share routes are exempt;
+    share handlers validate their own scoped tokens. Remote requests cannot
+    use loopback locality as a credential. SSE authenticates before streaming.
 
     **WebSocket endpoints** are *not* protected by this middleware — Starlette
     dispatches WebSocket upgrades before HTTP middleware runs.  WS routes must
@@ -173,19 +173,23 @@ def _configure_middleware(
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    # Password auth — enabled when password is provided (tunnel mode or explicit)
-    if password:
+    from backend.services.auth.middleware import configure_auth
+
+    policy = configure_auth(
+        remote=bool(tunnel_origin) if remote is None else remote,
+        access_only=access_only,
+        password=password,
+    )
+    app.state.auth_policy = policy
+    if policy.enabled:
+        from starlette.routing import Route
+
         from backend.services.auth.middleware import (
             auth_middleware,
             authenticate_login_request,
             authenticate_logout_request,
             is_request_authenticated,
-            set_password,
         )
-
-        set_password(password)
-
-        from starlette.routing import Route
 
         app.routes.insert(0, Route("/api/auth/login", authenticate_login_request, methods=["POST"]))
         app.routes.insert(1, Route("/api/auth/logout", authenticate_logout_request, methods=["POST"]))
@@ -232,10 +236,23 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(chats.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(tracker_links.router, prefix="/api")
+    app.include_router(recipes.router, prefix="/api")
+    app.include_router(integrations.router, prefix="/api")
+    app.include_router(external_gate.router, prefix="/api")
+    app.include_router(recipe_runs.router, prefix="/api")
+    app.include_router(reviews.router, prefix="/api")
 
 
 def _register_domain_exception_handlers(app: FastAPI) -> None:
     """Map domain exceptions to HTTP error responses centrally."""
+
+    @app.exception_handler(RecipeNotFoundError)
+    async def _recipe_not_found(request: Request, exc: RecipeNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(RecipeValidationError)
+    async def _recipe_invalid(request: Request, exc: RecipeValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": exc.result.model_dump(mode="json", by_alias=True)})
 
     @app.exception_handler(JobNotFoundError)
     async def _job_not_found(request: Request, exc: JobNotFoundError) -> JSONResponse:
@@ -329,12 +346,22 @@ def _mount_spa_fallback(app: FastAPI) -> None:
 # ---------------------------------------------------------------------------
 
 
-def create_app(*, dev: bool = False, tunnel_origin: str | None = None, password: str | None = None) -> FastAPI:
+def create_app(
+    *,
+    dev: bool = False,
+    tunnel_origin: str | None = None,
+    password: str | None = None,
+    remote: bool | None = None,
+    access_only: bool = False,
+) -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title="CodePlane", version=__version__, lifespan=lifespan)
 
     app.add_middleware(ContainerMiddleware)
-    _configure_middleware(app, dev=dev, tunnel_origin=tunnel_origin, password=password)
+    app.add_middleware(ObservationBodyLimit)
+    _configure_middleware(
+        app, dev=dev, tunnel_origin=tunnel_origin, password=password, remote=remote, access_only=access_only
+    )
     _register_routes(app)
     _register_domain_exception_handlers(app)
     _mount_spa_fallback(app)

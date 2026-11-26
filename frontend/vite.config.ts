@@ -46,6 +46,6 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/setupTests.ts"],
-    exclude: ["e2e/**", "tracker-e2e/**", "node_modules/**"],
+    exclude: ["e2e/**", "tracker-e2e/**", "recipe-e2e/**", "node_modules/**"],
   },
 });

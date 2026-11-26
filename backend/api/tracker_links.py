@@ -19,6 +19,12 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.responses import Response
 
+from backend.models.api_schemas import (
+    ReconcileTrackerOperationRequest,
+    RetryTrackerOperationRequest,
+    TrackerOperationListResponse,
+    TrackerOperationResponse,
+)
 from backend.models.schemas.base import CamelModel
 from backend.persistence.credential_repo import CredentialRepository
 from backend.persistence.project_repo import ProjectRepository
@@ -27,13 +33,16 @@ from backend.persistence.tracker_link_repo import (
     TrackerLinkProjectNotFoundError,
     TrackerLinkRepository,
 )
+from backend.persistence.tracker_operation_repo import TrackerOperationNotFoundError
 from backend.persistence.tracker_summary_repo import TrackerSummaryRepository
+from backend.services.tracker_resolution import TrackerResolutionError
 from backend.services.tracker_sync_service import (
     TrackerLinkNotFoundError,
     TrackerLinkValidationError,
     TrackerSyncError,
     TrackerSyncService,
 )
+from backend.services.tracker_write_service import TrackerWriteService
 
 router = APIRouter(prefix="/projects/{project_id}/tracker-links", tags=["tracker-links"], route_class=DishkaRoute)
 log = structlog.get_logger()
@@ -78,6 +87,75 @@ def _to_response(
     return TrackerLinkResponse(**data, summary=TrackerSummaryResponse(**summary) if summary else None)
 
 
+@router.get("/operations", response_model=TrackerOperationListResponse)
+async def list_tracker_operations(
+    project_id: str,
+    service: FromDishka[TrackerWriteService],
+    job_ref: str | None = None,
+    tracker_link_ref: str | None = None,
+) -> TrackerOperationListResponse:
+    items = await service.list_operations(
+        project_id,
+        job_ref=job_ref,
+        tracker_link_ref=tracker_link_ref,
+    )
+    return TrackerOperationListResponse(items=items)
+
+
+@router.get("/operations/{operation_id}", response_model=TrackerOperationResponse)
+async def get_tracker_operation(
+    project_id: str,
+    operation_id: str,
+    service: FromDishka[TrackerWriteService],
+) -> TrackerOperationResponse:
+    try:
+        operation = await service.get_operation(operation_id, project_ref=project_id)
+    except TrackerOperationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return operation
+
+
+@router.post("/operations/{operation_id}/reconcile", response_model=TrackerOperationResponse)
+async def reconcile_tracker_operation(
+    project_id: str,
+    operation_id: str,
+    body: ReconcileTrackerOperationRequest,
+    service: FromDishka[TrackerWriteService],
+) -> TrackerOperationResponse:
+    try:
+        return await service.reconcile_operation(
+            project_id,
+            operation_id,
+            expected_version=body.expected_version,
+            resolution=body.resolution,
+            evidence=body.evidence,
+            actor="operator",
+        )
+    except TrackerOperationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/operations/{operation_id}/retry", response_model=TrackerOperationResponse, status_code=201)
+async def retry_tracker_operation(
+    project_id: str,
+    operation_id: str,
+    body: RetryTrackerOperationRequest,
+    service: FromDishka[TrackerWriteService],
+) -> TrackerOperationResponse:
+    try:
+        return await service.retry_operation(
+            project_id,
+            operation_id,
+            expected_version=body.expected_version,
+            request_id=body.request_id,
+        )
+    except TrackerOperationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TrackerResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("", response_model=TrackerLinkListResponse)
 async def list_tracker_links(
     project_id: str,
@@ -101,11 +179,14 @@ async def create_tracker_link(
     async with sf() as session:
         if await ProjectRepository(session).get(project_id) is None:
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' does not exist")
-        if await CredentialRepository(session).get(body.credential_id) is None:
+        credential = await CredentialRepository(session).get(body.credential_id)
+        if credential is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Credential '{body.credential_id}' does not exist",
             )
+        if credential["provider"] not in {"github", "jira", "azure_devops"}:
+            raise HTTPException(status_code=422, detail="Credential is not a tracker credential")
 
     try:
         await tracker_sync_service.test_link(

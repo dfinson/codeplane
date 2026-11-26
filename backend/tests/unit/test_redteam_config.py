@@ -30,8 +30,8 @@ class TestMalformedYAML:
     def test_null_content(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"
         f.write_text("null\n")
-        config = load_config(f)
-        assert isinstance(config, CPLConfig)
+        with pytest.raises(ValueError, match="configuration must be a mapping"):
+            load_config(f)
 
     def test_yaml_just_whitespace(self, tmp_path: Path) -> None:
         f = tmp_path / "config.yaml"

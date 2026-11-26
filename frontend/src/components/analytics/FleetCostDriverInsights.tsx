@@ -5,6 +5,8 @@ import { type FleetCostDriversResponse, fetchRepoCostDrivers, type RepoCostBreak
 import { formatUsd } from "./helpers";
 import { formatTokens, formatActivityBucket, ACTIVITY_DESCRIPTIONS } from "../MetricsPanelTypes";
 import { pathBasename } from "../../lib/paths";
+import { sumKnown } from "../../lib/currency";
+import type { CurrencyValue } from "../../api/types";
 
 // ---------------------------------------------------------------------------
 // Fleet Cost Breakdown — mirrors per-job expandable card design
@@ -12,14 +14,14 @@ import { pathBasename } from "../../lib/paths";
 
 interface ActivityRow {
   bucket: string;
-  costUsd: number;
+  costUsd: CurrencyValue;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
   callCount: number;
   jobCount: number;
-  avgCostPerJob: number;
+  avgCostPerJob: CurrencyValue;
 }
 
 export function FleetCostDriverInsights({ fleetDrivers, period }: { fleetDrivers: FleetCostDriversResponse; period?: number }) {
@@ -54,19 +56,19 @@ export function FleetCostDriverInsights({ fleetDrivers, period }: { fleetDrivers
       .filter((row) => row.dimension === "activity")
       .map((row) => ({
         bucket: row.bucket,
-        costUsd: row.costUsd ?? 0,
+        costUsd: row.costUsd,
         inputTokens: row.inputTokens ?? 0,
         outputTokens: row.outputTokens ?? 0,
         cacheReadTokens: row.cacheReadTokens ?? 0,
         cacheWriteTokens: row.cacheWriteTokens ?? 0,
         callCount: row.callCount ?? 0,
         jobCount: row.jobCount ?? 0,
-        avgCostPerJob: row.avgCostPerJob ?? 0,
+        avgCostPerJob: row.avgCostPerJob,
       }))
-      .sort((a, b) => b.costUsd - a.costUsd);
+      .sort((a, b) => (b.costUsd ?? -1) - (a.costUsd ?? -1));
   }, [fleetDrivers.summary]);
 
-  const totalCost = useMemo(() => activityRows.reduce((s, r) => s + r.costUsd, 0), [activityRows]);
+  const totalCost = useMemo(() => sumKnown(activityRows.map(r => r.costUsd)), [activityRows]);
   const totalTurns = useMemo(() => activityRows.reduce((s, r) => s + r.callCount, 0), [activityRows]);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -133,7 +135,7 @@ export function FleetCostDriverInsights({ fleetDrivers, period }: { fleetDrivers
                         .map((b) => (
                           <div key={b.bucket} className="flex items-center justify-between text-[10px]">
                             <span className="text-muted-foreground">{formatActivityBucket(b.bucket)}</span>
-                            <span className="tabular-nums">{formatUsd(b.costUsd ?? 0)}</span>
+                            <span className="tabular-nums">{formatUsd(b.costUsd)}</span>
                           </div>
                         ))}
                     </div>
@@ -149,10 +151,10 @@ export function FleetCostDriverInsights({ fleetDrivers, period }: { fleetDrivers
         <>
       {activityRows.map((row) => {
         const maxCost = activityRows[0]?.costUsd || 1;
-        const widthPct = (row.costUsd / maxCost) * 100;
-        const pct = totalCost > 0 ? ((row.costUsd / totalCost) * 100).toFixed(0) : "0";
+        const widthPct = row.costUsd == null ? 0 : (row.costUsd / maxCost) * 100;
+        const pct = totalCost != null && totalCost > 0 && row.costUsd != null ? ((row.costUsd / totalCost) * 100).toFixed(0) : "Unknown";
         const isExpanded = expanded.has(row.bucket);
-        const costPerTurn = row.callCount > 0 ? row.costUsd / row.callCount : 0;
+        const costPerTurn = row.callCount > 0 && row.costUsd != null ? row.costUsd / row.callCount : null;
 
         return (
           <div key={row.bucket} className="space-y-1">

@@ -1,15 +1,4 @@
-"""Tests for the action-policy engine wiring — batch-window updates + mid-job reload.
-
-The retired cost-promotion / explicit-rule / cross-platform-regex / ``classify``
-/ ``_get_cost_context`` units were deleted with the hand-rolled decision layer;
-their behavioral coverage now lives in ``test_governance.py`` (decision fidelity),
-``test_cost_ceiling.py`` (USD ceiling), and ``test_governance_subscriber.py``
-(accrual). What remains here is the CodePlane-side wiring that governance does not
-own: the approval batcher window and ``RuntimeService._on_policy_settings_changed``
-(which now refreshes USD ceilings + atomically rebuilds the governance pipelines,
-re-binds each running job's preset, and pushes the slimmed ``RepoPolicy`` to the
-adapters — no path/action/cost rule reloads, no trust-store reload).
-"""
+"""Application-owned policy reload and preserved approval-batcher behavior."""
 
 from __future__ import annotations
 
@@ -19,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from backend.models.events import EventKind, SessionEvent, new_event
 from backend.services.action_policy.batcher import ApprovalBatcher
 from backend.services.action_policy.classifier import Preset
+from backend.services.action_policy.standalone_router import StandalonePolicyRouter
 from backend.services.events.event_bus import EventBus
 
 # ---------------------------------------------------------------------------
@@ -52,24 +42,31 @@ class TestOnPolicySettingsChanged:
     async def test_ignores_non_policy_events(self) -> None:
         svc = _make_runtime_service()
         event = new_event(session_id="j1", kind=EventKind.job_created, payload={})
-        # Should return without error (and without touching the decider).
         await svc._on_policy_settings_changed(event)
-        svc._governance_decider.rebuild.assert_not_called()
+        svc._session_factory.assert_not_called()
 
     async def test_no_op_when_no_running_jobs(self) -> None:
         svc = _make_runtime_service()
         event = _make_policy_event()
         # Empty _policy_routers → returns before any DB access or rebuild.
         await svc._on_policy_settings_changed(event)
-        svc._governance_decider.rebuild.assert_not_called()
+        svc._session_factory.assert_not_called()
 
     async def test_reloads_policy_for_running_jobs(self) -> None:
         svc = _make_runtime_service()
 
-        # A running job whose monitor should be disabled once it goes locked.
-        mock_router = MagicMock()
-        mock_router._monitor = MagicMock()
-        svc._policy_routers["job-1"] = mock_router
+        router = StandalonePolicyRouter(
+            pin=MagicMock(),
+            execution_epoch="epoch",
+            policy=MagicMock(),
+            authority=MagicMock(),
+            contracts=MagicMock(),
+            events=svc._event_bus,
+            checkpoint=MagicMock(),
+            git=MagicMock(),
+            job_is_current=AsyncMock(),
+        )
+        svc._policy_routers["job-1"] = router
 
         mock_batcher = MagicMock()
         svc._policy_batchers["job-1"] = mock_batcher
@@ -87,11 +84,7 @@ class TestOnPolicySettingsChanged:
             svc._session_factory = _make_session_factory(AsyncMock())
             await svc._on_policy_settings_changed(_make_policy_event())
 
-        # Governance refreshed once, atomically, over the shared store.
-        svc._governance_decider.set_usd_ceilings.assert_called_once()
-        svc._governance_decider.rebuild.assert_called_once()
-        # The job's preset is re-bound on the shared decider.
-        svc._governance_decider.register_job.assert_called_once_with("job-1", Preset.locked)
+        mock_repo.get_usd_ceilings.assert_awaited_once()
         # Batcher window updated + adapter policy pushed with the new preset.
         mock_batcher.set_batch_window.assert_called_once_with(3.0)
         mock_adapter.update_repo_policy.assert_called_once()
@@ -99,8 +92,8 @@ class TestOnPolicySettingsChanged:
         assert call_args[0][0] == "job-1"
         policy = call_args[0][1]
         assert policy.preset == Preset.locked
-        # Locked preset disables the LLM monitor.
-        assert mock_router._monitor is None
+        assert router._policy is policy
+        assert svc._repo_policies["job-1"] is policy
 
     async def test_skips_jobs_that_finish_mid_reload(self) -> None:
         svc = _make_runtime_service()
@@ -129,9 +122,6 @@ class TestOnPolicySettingsChanged:
             svc._session_factory = _make_session_factory(AsyncMock())
             await svc._on_policy_settings_changed(_make_policy_event())
 
-        # The global rebuild still ran, but the finished job accrued no per-job work.
-        svc._governance_decider.rebuild.assert_called_once()
-        svc._governance_decider.register_job.assert_not_called()
         mock_adapter.update_repo_policy.assert_not_called()
 
 
@@ -184,9 +174,10 @@ def _make_runtime_service() -> Any:
     svc = object.__new__(RuntimeService)
     svc._event_bus = EventBus()
     svc._policy_routers = {}
+    svc._repo_policies = {}
     svc._policy_batchers = {}
     svc._adapter_registry = MagicMock()
     svc._adapter_registry._adapters = {}
     svc._session_factory = MagicMock()
-    svc._governance_decider = MagicMock()
+    svc._standalone_governance = None
     return svc

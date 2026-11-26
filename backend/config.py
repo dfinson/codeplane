@@ -87,12 +87,17 @@ runtime:
     max_concurrent_jobs: 2
     worktrees_dirname: .codeplane-worktrees
     default_sdk: copilot
+    copilot_only: true
     suppressed_preflight_agent_prompts: []
 
 retention:
   artifact_retention_days: 30
   max_artifact_size_mb: 100
   cleanup_on_startup: false
+
+native_mappings:
+  extra_dirs: []
+  migrated_user_dir: null  # Defaults to mappings/ under CODEPLANE_HOME (or ~/.codeplane)
 
 logging:
   level: info
@@ -110,18 +115,31 @@ class ServerConfig:
     port: int = 8080
 
 
+_DEFAULT_COPILOT_UTILITY_MODEL = "claude-haiku-4.5"
+
+
 @dataclass
 class RuntimeConfig:
     max_concurrent_jobs: int = 2
     worktrees_dirname: str = ".codeplane-worktrees"
-    utility_model: str = ""  # cheap/fast model for naming, summaries, etc. Auto-set from default_sdk if empty.
+    utility_model: str = ""  # Missing/blank uses the provider default; explicit identifiers remain unchanged.
+    utility_sdk: str | None = None
     default_sdk: str = "copilot"  # copilot | claude
+    copilot_only: bool = True
     suppressed_preflight_agent_prompts: list[str] = field(default_factory=list)
     cli_sidecars: list[str] | None = None  # sidecar names for CLI sessions; None = built-in defaults
 
     def __post_init__(self) -> None:
-        if not self.utility_model:
-            self.utility_model = "claude-haiku-4.5" if self.default_sdk == "claude" else "gpt-5-mini"
+        if not isinstance(self.copilot_only, bool):
+            raise ValueError("runtime.copilot_only must be a boolean")
+        if self.utility_sdk is not None and (not isinstance(self.utility_sdk, str) or not self.utility_sdk.strip()):
+            raise ValueError("runtime.utility_sdk must be a nonempty adapter ID or null")
+        if not self.utility_model or not self.utility_model.strip():
+            provider = self.utility_sdk or ("copilot" if self.copilot_only else self.default_sdk)
+            self.utility_model = {
+                "copilot": _DEFAULT_COPILOT_UTILITY_MODEL,
+                "claude": "claude-haiku-4.5",
+            }.get(provider, "")
 
 
 @dataclass
@@ -223,8 +241,8 @@ class PlatformConfig:
 class TelemetryConfig:
     """Telemetry / observability configuration."""
 
-    # Set to push telemetry to an external OTLP collector (e.g. "http://localhost:4317").
-    # When unset, telemetry is in-process only (InMemoryReader).
+    # Retained legacy setting. Only the explicit export binding can enable
+    # sanitized network export; this field alone has no transport authority.
     otel_exporter_endpoint: str = ""
     # Optional budget caps for burn-rate projection in the analytics dashboard.
     claude_monthly_budget_usd: float = 0.0
@@ -235,6 +253,19 @@ class TelemetryConfig:
     # Unique identifier for this CodePlane instance.  Auto-generated on first run
     # if not set.  Used for future Hub telemetry push.
     instance_id: str = ""
+
+
+@dataclass
+class ExportConfig:
+    """Explicit optional export binding; no endpoint alone enables a transport."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    protocol: str = "http/protobuf"
+    credential_id: str | None = None
+    approved_models: list[str] = field(default_factory=list)
+    metrics_endpoint: str = ""
+    metrics_credential_id: str | None = None
 
 
 @dataclass
@@ -255,6 +286,26 @@ class TrailConfig:
 
 
 @dataclass
+class NativeMappingsConfig:
+    """Local declarative definitions, in explicit search order before user/bundled files."""
+
+    extra_dirs: list[str] = field(default_factory=list)
+    migrated_user_dir: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.extra_dirs, list) or any(
+            not isinstance(path, str) or not path.strip() or "\x00" in path for path in self.extra_dirs
+        ):
+            raise ValueError("native_mappings.extra_dirs must be a list of nonempty directory paths")
+        if self.migrated_user_dir is not None and (
+            not isinstance(self.migrated_user_dir, str)
+            or not self.migrated_user_dir.strip()
+            or "\x00" in self.migrated_user_dir
+        ):
+            raise ValueError("native_mappings.migrated_user_dir must be a nonempty directory path")
+
+
+@dataclass
 class CPLConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -265,8 +316,10 @@ class CPLConfig:
     terminal: TerminalConfig = field(default_factory=TerminalConfig)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
     trail: TrailConfig = field(default_factory=TrailConfig)
+    native_mappings: NativeMappingsConfig = field(default_factory=NativeMappingsConfig)
     platforms: dict[str, PlatformConfig] = field(default_factory=dict)
     repos: list[str] = field(default_factory=list)
 
@@ -281,6 +334,50 @@ def _parse_section(raw: dict[str, Any], cls: type, key: str) -> Any:
     return cls(**{k: v for k, v in section.items() if k in valid_keys})
 
 
+def _read_config_data(path: Path) -> dict[str, Any]:
+    """Read settings, retiring the obsolete analysis section atomically."""
+    target = path.resolve(strict=True)
+    original = target.read_bytes()
+    parsed = yaml.safe_load(original)
+    if parsed is None and yaml.compose(original) is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        raise ValueError(f"CodePlane configuration must be a mapping: {path}")
+    if "coderecon" not in parsed:
+        return parsed
+
+    import tempfile
+
+    original_stat = target.stat()
+    del parsed["coderecon"]
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            yaml.safe_dump(parsed, handle, default_flow_style=False, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        current_stat = target.stat()
+        if (
+            path.resolve(strict=True) != target
+            or (current_stat.st_dev, current_stat.st_ino, current_stat.st_mtime_ns, current_stat.st_size)
+            != (original_stat.st_dev, original_stat.st_ino, original_stat.st_mtime_ns, original_stat.st_size)
+            or target.read_bytes() != original
+        ):
+            raise OSError(f"Configuration changed during structural retirement: {path}")
+        os.chmod(temporary, original_stat.st_mode)
+        os.replace(temporary, target)
+        temporary = None
+    except (OSError, yaml.YAMLError):
+        log.error("retired_analysis_config_removal_failed", path=str(path), exc_info=True)
+        raise
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    log.info("retired_analysis_config_removed", path=str(path))
+    return parsed
+
+
 def load_config(path: Path | None = None) -> CPLConfig:
     """Load CodePlane configuration from a YAML file."""
     if path is None:
@@ -289,8 +386,9 @@ def load_config(path: Path | None = None) -> CPLConfig:
     if not path.exists():
         return CPLConfig()
 
-    with open(path) as f:
-        raw = yaml.safe_load(f) or {}
+    raw = _read_config_data(path)
+    if "native_mappings" in raw and not isinstance(raw["native_mappings"], dict):
+        raise ValueError("native_mappings must be a configuration mapping")
 
     # Parse platforms section: platforms.<name>.{auth, repos}
     platforms: dict[str, PlatformConfig] = {}
@@ -313,8 +411,10 @@ def load_config(path: Path | None = None) -> CPLConfig:
         terminal=_parse_section(raw, TerminalConfig, "terminal"),
         verification=_parse_section(raw, VerificationConfig, "verification"),
         telemetry=_parse_section(raw, TelemetryConfig, "telemetry"),
+        export=_parse_section(raw, ExportConfig, "export"),
         pricing=_parse_section(raw, PricingConfig, "pricing"),
         trail=_parse_section(raw, TrailConfig, "trail"),
+        native_mappings=_parse_section(raw, NativeMappingsConfig, "native_mappings"),
         platforms=platforms,
         repos=[str(r) for r in raw.get("repos", []) if r is not None] if isinstance(raw.get("repos", []), list) else [],
     )
@@ -356,8 +456,7 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # Load existing config to preserve unknown keys
     existing: dict[str, Any] = {}
     if path.exists():
-        with open(path) as f:
-            existing = yaml.safe_load(f) or {}
+        existing = _read_config_data(path)
 
     # Merge our known sections — existing keys not in our model are preserved
     def _to_dict(dc: Any) -> dict[str, Any]:
@@ -385,6 +484,8 @@ def save_config(config: CPLConfig, path: Path | None = None) -> None:
     # repos is intentionally omitted — managed by register_repo / unregister_repo
     existing["verification"] = _to_dict(config.verification)
     existing["telemetry"] = _to_dict(config.telemetry)
+    existing["export"] = _to_dict(config.export)
+    existing["native_mappings"] = _to_dict(config.native_mappings)
     # Tracker synchronization uses a fixed production cadence. Remove the
     # retired persisted section when any settings save occurs.
     existing.pop("tracker", None)
@@ -405,8 +506,7 @@ def _update_repos_in_file(repos: list[str], path: Path) -> None:
     """
     existing: dict[str, Any] = {}
     if path.exists():
-        with open(path) as f:
-            existing = yaml.safe_load(f) or {}
+        existing = _read_config_data(path)
     existing["repos"] = repos
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
@@ -589,9 +689,9 @@ def build_session_config(
     """Build a SessionConfig from a Job record and resolved config."""
     from backend.models.domain import SessionConfig
 
-    workspace = job.worktree_path or job.repo
-    mcp_servers = discover_mcp_servers(job.repo, config)
-    protected_paths = resolve_protected_paths(job.repo)
+    workspace = job.execution_workspace
+    mcp_servers = discover_mcp_servers(job.execution_repo, config)
+    protected_paths = resolve_protected_paths(job.execution_repo)
 
     return SessionConfig(
         workspace_path=workspace,

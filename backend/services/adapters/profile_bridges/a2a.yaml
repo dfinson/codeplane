@@ -1,0 +1,35 @@
+framework: a2a
+framework_version: "A2A JSON-RPC 0.3.0;agent-governance-toolkit-core==5.0.0"
+ingestion_mode: stream
+type_field: type
+timestamp_field: timestamp
+events:
+  request_started:
+    kind: integration.request.started
+    payload:
+      operation_id: operation_id
+      rpc_id: rpc_id
+      method: method
+      params: params
+  result:
+    kind: integration.remote.observed
+    payload:
+      operation_id: operation_id
+      rpc_id: rpc_id
+      method: method
+      result: result
+  request_error:
+    kind: integration.request.refused
+    payload:
+      operation_id: operation_id
+      rpc_id: rpc_id
+      method: method
+      error: error
+  request_outcome:
+    kind: integration.request.outcome
+    payload:
+      operation_id: operation_id
+      rpc_id: rpc_id
+      method: method
+      outcome: outcome
+      task_id: task_id

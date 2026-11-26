@@ -9,6 +9,8 @@ import pytest
 
 from backend.mcp.server import create_mcp_server
 from backend.tests.unit.conftest import make_job
+from backend.tests.unit.test_ingest_sources import _TASK_ID
+from backend.tests.unit.test_ingest_sources import native_control_stack as native_control_stack
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -56,6 +58,21 @@ def _tool(mcp_server, name: str):
 # ── Fixtures ─────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def internal_transport():
+    from backend.services.auth import middleware
+
+    # Routing regressions also run on the revision before internal transport authentication existed.
+    configure_auth = getattr(middleware, "configure_auth", None)
+    configure_internal_endpoint = getattr(middleware, "configure_internal_endpoint", None)
+    if configure_auth is not None:
+        configure_auth(remote=False, access_only=False, password=None)
+    if configure_internal_endpoint is not None:
+        configure_internal_endpoint(host="127.0.0.1", port=8080)
+    yield
+    middleware._reset_for_testing()
+
+
 @pytest.fixture
 def mock_session_factory():
     session = AsyncMock()
@@ -81,6 +98,7 @@ def mock_runtime():
     runtime.start_or_enqueue = AsyncMock()
     runtime.cancel = AsyncMock()
     runtime.send_message = AsyncMock(return_value=True)
+    runtime.send_operator_message = AsyncMock(return_value=True)
     return runtime
 
 
@@ -115,7 +133,80 @@ def mcp_server(mock_session_factory, mock_runtime, mock_approval, mock_merge_ser
 # ── Server creation ─────────────────────────────────────────────────
 
 
+class TestRuntimeContract:
+    async def test_message_uses_source_aware_command(self, mcp_server, mock_runtime):
+        mock_runtime.send_operator_message = AsyncMock(return_value=True)
+        result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="native-job", content="fixture")
+        assert mock_runtime.send_operator_message.await_count == 1
+        mock_runtime.send_message.assert_not_awaited()
+        assert "error" not in result
+
+
+class TestNativeBindingMCP:
+    @pytest.mark.parametrize("action", ["message", "cancel"])
+    @pytest.mark.parametrize("case", ["accepted", "missing", "mismatch", "off", "rejected", "uncertain"])
+    async def test_native_routing_and_typed_failure(self, mcp_server, mock_runtime, native_control_stack, action, case):
+        import json
+
+        import httpx
+
+        stack = native_control_stack
+        if case == "missing":
+            stack.workspace.unlink()
+        elif case in {"mismatch", "off"}:
+            data = json.loads(stack.workspace.read_text(encoding="utf-8"))
+            data["mc_session_id" if case == "mismatch" else "remote_steerable"] = (
+                _TASK_ID if case == "mismatch" else False
+            )
+            stack.workspace.write_text(json.dumps(data), encoding="utf-8")
+        elif case == "rejected":
+            stack.post.return_value = httpx.Response(
+                404, text="PRIVATE-BODY", request=httpx.Request("POST", "https://fixture.invalid")
+            )
+        elif case == "uncertain":
+            stack.post.side_effect = httpx.ReadTimeout("PRIVATE-DIAGNOSTIC")
+        cancel = AsyncMock(return_value=make_job(id=stack.job.id, state="canceled"))
+        stack.runtime._make_job_service = MagicMock(return_value=MagicMock(cancel_job=cancel))
+        mock_runtime.send_operator_message.side_effect = stack.runtime.send_operator_message
+        mock_runtime.cancel_job.side_effect = stack.runtime.cancel_job
+        result = await _tool(mcp_server, "codeplane_job")(
+            action=action, job_id=stack.job.id, content="fixture" if action == "message" else None
+        )
+        if case == "accepted":
+            assert "error" not in result
+            assert "seq" in result if action == "message" else result["state"] == "canceled"
+            if action == "cancel":
+                cancel.assert_awaited_once_with(stack.job.id)
+        else:
+            assert "error" in result
+            assert "PRIVATE" not in result["error"]
+            if case == "rejected":
+                assert "404" in result["error"]
+            if case == "uncertain":
+                assert "unknown" in result["error"]
+            cancel.assert_not_awaited()
+        if case in {"missing", "mismatch", "off"}:
+            stack.post.assert_not_awaited()
+        else:
+            stack.post.assert_awaited_once_with(
+                f"https://api.enterprise.githubcopilot.com/agents/tasks/{_TASK_ID}/steer",
+                json={"content": "fixture", "type": "user_message"} if action == "message" else {"type": "abort"},
+            )
+        stack.runtime.send_message.assert_not_awaited()
+        stack.runtime._resume_orphaned.assert_not_awaited()
+
+
 class TestMCPServerCreation:
+    @pytest.mark.asyncio
+    async def test_project_tool_rejects_source_ingestion(self, mcp_server) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
+        tool = next(item for item in await mcp_server.list_tools() if item.name == "codeplane_project")
+        assert "ingest_tasks" not in tool.inputSchema["properties"]["action"]["enum"]
+        assert "ingest_tasks" not in (tool.description or "")
+        with pytest.raises(ToolError, match="ingest_tasks"):
+            await mcp_server.call_tool("codeplane_project", {"action": "ingest_tasks", "project_id": "project"})
+
     def test_creates_server_with_tools(self, mcp_server) -> None:
         assert mcp_server is not None
 
@@ -213,8 +304,9 @@ class TestJobTool:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_cancel(self, mcp_server) -> None:
+    async def test_cancel(self, mcp_server, mock_runtime) -> None:
         job = make_job(id="job-123", repo="/test/repo", state="canceled")
+        mock_runtime.cancel_job.return_value = job
         with (
             patch("backend.mcp.server.JobService") as mock_svc_cls,
             patch("backend.mcp.server.GitService"),
@@ -244,7 +336,7 @@ class TestJobTool:
     async def test_message_success(self, mcp_server, mock_runtime) -> None:
         result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-123", content="hello")
         assert "seq" in result
-        mock_runtime.send_message.assert_awaited_once_with("job-123", "hello")
+        mock_runtime.send_operator_message.assert_awaited_once_with("job-123", "hello")
 
     @pytest.mark.asyncio
     async def test_message_missing_params(self, mcp_server) -> None:
@@ -258,7 +350,7 @@ class TestJobTool:
 
     @pytest.mark.asyncio
     async def test_message_not_running(self, mcp_server, mock_runtime) -> None:
-        mock_runtime.send_message = AsyncMock(return_value=False)
+        mock_runtime.send_operator_message = AsyncMock(return_value=False)
         result = await _tool(mcp_server, "codeplane_job")(action="message", job_id="job-1", content="hi")
         assert "error" in result
 
@@ -371,22 +463,36 @@ class TestTrackerTool:
 
     @pytest.mark.asyncio
     async def test_comment_creates_approval_via_tracker_write_service(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
-        resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.approved)
+        resolved = ResolvedTracker(
+            tracker_link_id="link-1",
+            credential_id="cred-1",
+            ticket_ref="ABC-123",
+            task_link_id="task-1",
+        )
+        outcome = TrackerWriteOutcome(
+            TrackerWriteState.applied,
+            operation_id="operation-1",
+            target_kind="comment",
+        )
 
         with (
             patch("backend.mcp.server.resolve_tracker_for_job", AsyncMock(return_value=resolved)),
-            patch(
-                "backend.services.tracker_resolution.dispatch_tracker_write",
-                AsyncMock(),
-            ) as dispatch,
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
         ):
             result = await _tool(mcp_server, "codeplane_tracker")(
-                action="comment", job_id="job-123", value="Ready for review"
+                action="comment",
+                job_id="job-123",
+                value="Ready for review",
+                request_id="request-1",
             )
 
         assert result["applied"] is True
@@ -394,22 +500,36 @@ class TestTrackerTool:
         assert result["ticketRef"] == "ABC-123"
         assert result["trackerLinkId"] == "link-1"
         assert result["action"] == "comment"
-        dispatch.assert_awaited_once()
-        mock_approval.create_request.assert_awaited_once()
-        _, kwargs = mock_approval.create_request.call_args
-        assert kwargs["requires_explicit_approval"] is True
+        assert result["operationId"] == "operation-1"
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
+            source_key="mcp:job-123:request-1",
+            task_link_id="task-1",
+        )
 
     @pytest.mark.asyncio
     async def test_rejected_approval_never_dispatches(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
-        resolved = ResolvedTracker(tracker_link_id="link-1", credential_id="cred-1", ticket_ref="ABC-123")
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.rejected)
+        resolved = ResolvedTracker(
+            tracker_link_id="link-1",
+            credential_id="cred-1",
+            ticket_ref="ABC-123",
+            task_link_id="task-1",
+        )
+        outcome = TrackerWriteOutcome(TrackerWriteState.rejected, operation_id="operation-2")
 
         with (
             patch("backend.mcp.server.resolve_tracker_for_job", AsyncMock(return_value=resolved)),
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
             patch(
                 "backend.services.tracker_resolution.dispatch_tracker_write",
                 AsyncMock(),
@@ -420,29 +540,38 @@ class TestTrackerTool:
         assert result["applied"] is False
         assert result["state"] == "rejected"
         dispatch.assert_not_awaited()
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.transition, "Done"),
+            source_key=None,
+            task_link_id="task-1",
+        )
 
     @pytest.mark.asyncio
     async def test_provider_failure_reports_failed(self, mcp_server, mock_approval) -> None:
-        from backend.models.domain import ApprovalResolution
         from backend.services.tracker_resolution import ResolvedTracker
+        from backend.services.tracker_write_service import (
+            TrackerWriteAction,
+            TrackerWriteOutcome,
+            TrackerWriteRequest,
+            TrackerWriteService,
+            TrackerWriteState,
+        )
 
         resolved = ResolvedTracker(
             tracker_link_id="link-1",
             credential_id="cred-1",
             ticket_ref="ABC-123",
+            task_link_id="task-1",
         )
-        mock_approval.create_request = AsyncMock(return_value=_make_approval(id="apr-1"))
-        mock_approval.wait_for_resolution = AsyncMock(return_value=ApprovalResolution.approved)
+        outcome = TrackerWriteOutcome(TrackerWriteState.failed, "provider unavailable", operation_id="operation-3")
 
         with (
             patch(
                 "backend.mcp.server.resolve_tracker_for_job",
                 AsyncMock(return_value=resolved),
             ),
-            patch(
-                "backend.services.tracker_resolution.dispatch_tracker_write",
-                AsyncMock(side_effect=RuntimeError("provider unavailable")),
-            ) as dispatch,
+            patch.object(TrackerWriteService, "execute", AsyncMock(return_value=outcome)) as execute,
         ):
             result = await _tool(mcp_server, "codeplane_tracker")(
                 action="comment",
@@ -453,7 +582,12 @@ class TestTrackerTool:
         assert result["applied"] is False
         assert result["state"] == "failed"
         assert result["error"] == "provider unavailable"
-        dispatch.assert_awaited_once()
+        execute.assert_awaited_once_with(
+            "job-123",
+            TrackerWriteRequest("link-1", "ABC-123", TrackerWriteAction.comment, "Ready for review"),
+            source_key=None,
+            task_link_id="task-1",
+        )
 
 
 # ── Approval tool ────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { sumKnown } from "../lib/currency";
 import { useParams, Link, Navigate } from "react-router-dom";
 import {
   Activity, DollarSign,
@@ -45,7 +46,8 @@ function stateColor(state: string): string {
 }
 
 function formatCost(usd: number | null | undefined): string {
-  if (usd == null || usd === 0) return "$0";
+  if (usd == null) return "Unknown USD";
+  if (usd === 0) return "$0.00";
   if (usd < 0.01) return "<$0.01";
   return `$${usd.toFixed(2)}`;
 }
@@ -111,7 +113,7 @@ export function RepoOverview() {
                 .slice(0, 10),
               activeJobCount: summaries.reduce((total, item) => total + item.activeJobCount, 0),
               cost: {
-                totalCostUsd: summaries.reduce((total, item) => total + item.cost.totalCostUsd, 0),
+                totalCostUsd: sumKnown(summaries.map(item => item.cost.totalCostUsd)),
                 totalJobs: summaries.reduce((total, item) => total + item.cost.totalJobs, 0),
                 totalTokens: summaries.reduce((total, item) => total + item.cost.totalTokens, 0),
               },
@@ -237,7 +239,7 @@ export function RepoOverview() {
                   <span className={cn("text-[10px]", stateColor(job.state))}>
                     {job.state}
                   </span>
-                  {job.totalCostUsd != null && job.totalCostUsd > 0 && (
+                  {job.totalCostUsd != null && (job.totalCostUsd ?? -1) > 0 && (
                     <span className="text-[10px] text-muted-foreground">
                       {formatCost(job.totalCostUsd)}
                     </span>

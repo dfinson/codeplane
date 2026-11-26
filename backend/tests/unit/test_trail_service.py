@@ -7,10 +7,10 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from traceforge.types import EventMetadata, ToolMotivation
 
 from backend.models.db import Base, JobTelemetrySpanRow, TrailNodeRow
 from backend.models.events import EventKind, SessionEvent, new_event
+from backend.models.session_event import EventMetadata, ToolMotivation
 from backend.persistence.trail_repo import TrailNodeRepository
 from backend.services.events.event_bus import EventBus
 from backend.services.trail import TrailService
@@ -1436,3 +1436,130 @@ class TestNodeBuilderToolCall:
         state = builder._job_state.get("job-1")
         assert state is not None
         assert any("[assistant]" in m for m in state.recent_messages)
+
+
+class TestTerminalDrainContract:
+    @pytest.mark.parametrize("terminal_kind", [EventKind.job_completed, EventKind.job_review])
+    async def test_terminal_publication_drains_reentrant_plan_events(
+        self, trail_service, trail_repo, session_factory, monkeypatch, terminal_kind
+    ):
+        import asyncio
+
+        from backend.models.domain import Job, JobState
+        from backend.persistence.job_repo import JobRepository
+        from backend.persistence.project_repo import ProjectRepository
+        from backend.services.trail.models import PlanStep
+
+        now = datetime.now(UTC)
+        async with session_factory() as session:
+            await ProjectRepository(session).create("trail-project", "Trail fixture", [r"C:\fixture"])
+            await JobRepository(session).create(
+                Job(
+                    id="job-1",
+                    project_id="trail-project",
+                    repo=r"C:\fixture",
+                    prompt="Fixture plan",
+                    state=JobState.running,
+                    base_ref="main",
+                    branch="work",
+                    worktree_path=None,
+                    session_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+
+        bus = trail_service._event_bus
+        received = []
+
+        async def record(event):
+            received.append(event.kind)
+
+        bus.subscribe(record, required=True)
+        bus.subscribe(trail_service.handle_event)
+        await bus.publish(_job_started_event())
+        state = trail_service._job_state["job-1"]
+        state.plan_steps = [PlanStep("plan-1", "Fixture step")]
+        state.active_idx = 0
+        state.plan_established = True
+        planner = trail_service._plan_manager
+        original_classify = planner.classify_turn
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def classify_after_terminal(job_id, payload):
+            entered.set()
+            await release.wait()
+            return await original_classify(job_id, payload)
+
+        monkeypatch.setattr(planner, "classify_turn", classify_after_terminal)
+        await bus.publish(_make_event(EventKind.step_completed, payload={"step_id": "step-1", "tool_count": 1}))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        builder = trail_service._node_builder
+        terminal = asyncio.create_task(bus.publish(_make_event(terminal_kind)))
+        completed = False
+        try:
+            lock = builder._job_locks["job-1"]
+            for _ in range(100):
+                if lock.locked():
+                    break
+                await asyncio.sleep(0)
+            assert lock.locked(), "Terminal handler must own the lock before classification resumes"
+            release.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(terminal), timeout=5)
+                completed = True
+            except TimeoutError:
+                pass
+        finally:
+            pending = [terminal, *builder._background_tasks]
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        assert completed, "Ignored plan events must not re-enter the terminal handler's held job lock"
+        assert EventKind.plan_step_updated in received
+        assert EventKind.progress_headline in received
+        terminal_nodes = [node for node in await trail_repo.get_by_job("job-1") if node.phase == "terminal"]
+        assert len(terminal_nodes) == 1
+        assert "job-1" not in trail_service._job_state
+        snapshot = await builder._load_snapshot("job-1")
+        assert snapshot is not None
+        assert snapshot.plan_steps[0].tool_count == 1
+
+    @pytest.mark.parametrize(
+        "kind", [EventKind.plan_step_updated, EventKind.progress_headline, EventKind.step_entries_reassigned]
+    )
+    async def test_ignored_kind_never_waits_for_or_changes_job_lock(self, trail_service, kind):
+        import asyncio
+
+        builder = trail_service._node_builder
+        lock = asyncio.Lock()
+        builder._job_locks["job-1"] = lock
+        completed = False
+        async with lock:
+            try:
+                await asyncio.wait_for(trail_service.handle_event(_make_event(kind)), timeout=1)
+                completed = True
+            except TimeoutError:
+                pass
+            assert lock.locked()
+        assert completed, "An event with no trail handler must not wait on a per-job mutation lock"
+
+    @pytest.mark.parametrize(
+        ("kind", "intent"),
+        [
+            (EventKind.job_review, "Job ready for review"),
+            (EventKind.job_completed, "Job completed"),
+            (EventKind.job_failed, "Job failed"),
+            (EventKind.job_canceled, "Job canceled"),
+        ],
+    )
+    async def test_terminal_label_preserves_outcome(self, trail_service, trail_repo, kind, intent):
+        await trail_service.handle_event(_job_started_event())
+        await trail_service.handle_event(_make_event(kind))
+        terminal_nodes = [node for node in await trail_repo.get_by_job("job-1") if node.phase == "terminal"]
+        assert len(terminal_nodes) == 1
+        assert terminal_nodes[0].intent == intent

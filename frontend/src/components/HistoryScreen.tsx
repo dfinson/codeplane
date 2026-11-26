@@ -77,7 +77,7 @@ export function HistoryScreen() {
           (j.title ?? "").toLowerCase().includes(q) ||
           j.prompt.toLowerCase().includes(q) ||
           j.id.toLowerCase().includes(q) ||
-          j.repo.toLowerCase().includes(q),
+          (j.repo ?? "").toLowerCase().includes(q),
       );
     }
     if (filter !== "all") {

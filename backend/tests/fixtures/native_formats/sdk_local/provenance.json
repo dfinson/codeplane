@@ -1,0 +1,83 @@
+{
+  "classification": "actual SDK callback/serialization with inert local input",
+  "live_vendor_or_model_conversation": false,
+  "capture_script": "capture.py",
+  "capture_script_sha256": "8d0a5c8afeb27aa6ac6512c1f848ec5448953f18a64d824f4e8c733f62eab14b",
+  "capture_date_utc": "2026-11-18",
+  "python_version": "3.12.3",
+  "pydantic_version": "2.11.10",
+  "source_contract": {
+    "repository": "dfinson/traceforge",
+    "revision": "46e0340b7bb3fd4740f8dba02a5e7586fa26608f",
+    "langchain_observer_reference": "scripts/capture_traces/capture_langchain.py",
+    "semantic_kernel_observer_reference": "scripts/capture_traces/capture_semantic_kernel.py",
+    "license": "../retained/LICENSE",
+    "notes": "The original paid-model capture entry points were inspected but not executed or imported. This local observer implements their declared callback/filter envelope using native SDK dispatch. No CodePlane decoder, gate wrapper, fabricated context, package loader substitution or model is involved."
+  },
+  "capture_commands": [
+    "uv venv --python 3.12 /tmp/codeplane-sdk-evidence",
+    "uv pip install --python /tmp/codeplane-sdk-evidence/bin/python langchain-core==1.4.7 semantic-kernel==1.36.0 microsoft-agents-hosting-core==1.3.0 microsoft-agents-activity==1.3.0",
+    "uv run --no-project --python /tmp/codeplane-sdk-evidence/bin/python python backend/tests/fixtures/native_formats/sdk_local/capture.py /tmp/codeplane-sdk-capture"
+  ],
+  "byte_retention": "Each JSONL is copied unchanged from the capture output. Callback/filter timestamps and IDs are runtime-generated and are not normalized. FileTranscriptStore bytes are copied from producer-store/local/inert-conversation.transcript and verified against the SDK's default model_dump_json output. A rerun creates new IDs/timestamps; it must not overwrite these retained samples.",
+  "security_boundary": "The capture process installs a Python audit hook before SDK imports that rejects network resolution/connect/send and subprocess launches. No such attempt occurred. It disables SDK tracing/export, strips credential-shaped environment variables, and invokes no model/provider client. Full runtime reports and dependency inventory are host artifacts, not compatibility goldens.",
+  "sources": {
+    "langchain": {
+      "producer": "langchain-core",
+      "version": "1.4.7",
+      "released_mapping_range": ">=0.3",
+      "source_repository": "https://github.com/langchain-ai/langchain",
+      "license": "MIT",
+      "sample_sha256": "a3e2d570bd276507b007b5f7adc91145cf565ae504aa80a9944da359cd5ea64a",
+      "physical_records": 6,
+      "native_api": "StructuredTool.invoke / ainvoke -> BaseCallbackHandler.on_tool_start/on_tool_end/on_tool_error",
+      "envelope": "One JSON object is written by the registered observer per actual callback. Callback arguments retain their values and native names. The observer adds event/timestamp and forward-fills name by SDK run_id, as the released mapping contract requires.",
+      "inert_inputs": ["alpha", "fail", "async"],
+      "evidence_limit": "Real sync/async tool callbacks and failure dispatch only. No chain/chat/model callbacks, model usage or live conversation. Callback run IDs are SDK-generated, not model tool-call IDs.",
+      "sdk_source_hashes": {
+        "langchain_core/callbacks/base.py": "10d692bbd4cfccd82ad514649682f79306b9cd730235c3838bc3d1a96a455dea",
+        "langchain_core/tools/structured.py": "0d49c66ba4078c789f917de1c4ee005ba24983df5f4be6861001b37a0733ac5a"
+      }
+    },
+    "semantic_kernel": {
+      "producer": "semantic-kernel",
+      "version": "1.36.0",
+      "released_mapping_range": ">=1.0",
+      "source_repository": "https://github.com/microsoft/semantic-kernel",
+      "license": "MIT",
+      "sample_sha256": "dca50fd441be9f151378c30c9c0954a018b10c7d6d440284447dbb284c71d74a",
+      "physical_records": 8,
+      "native_api": "KernelFunction.invoke and Kernel.invoke_function_call -> FUNCTION_INVOCATION / AUTO_FUNCTION_INVOCATION filters",
+      "envelope": "The observer surrounds actual next(context), emits native_function/auto_function start/completion/failure ticks and creates invocation_id pairs, as the released mapping contract requires. All argument/result/sequence/terminate fields come from native contexts. The supplied FunctionCallContent is inert local input, not a model response.",
+      "inert_inputs": ["alpha", "fail", "auto"],
+      "evidence_limit": "Three actual local body calls produce four filter pairs because auto invocation nests native invocation. The two auto/native completion records are overlapping observations, not two executions or billable calls. No prompt-rendering/model filters, token usage or live conversation.",
+      "sdk_source_hashes": {
+        "semantic_kernel/kernel.py": "5cb82e615b64f9a19ef1c6062bbe09ea62b4c01a1428aba227e24e4dd8b65fdf",
+        "semantic_kernel/functions/kernel_function_from_method.py": "417c21125b30795acba2b204f9f0ae9ea46b0a2a539c985dbae5b80b971db4cf"
+      }
+    },
+    "maf_transcript": {
+      "producer": "microsoft-agents-hosting-core",
+      "version": "1.3.0",
+      "activity_package": "microsoft-agents-activity",
+      "activity_version": "1.3.0",
+      "released_mapping_range": ">=1.0.0",
+      "source_repository": "https://github.com/microsoft/Agents",
+      "license": "MIT",
+      "sample_sha256": "228462b16099d4cb03a51c8923cbe8ae821ff9c7ab794afcdbca9b15c49d5a9f",
+      "physical_records": 5,
+      "native_api": "FileTranscriptStore.log_activity / get_transcript_activities; Activity.model_dump_json(exclude_none=True, exclude_unset=True)",
+      "envelope": "No capture-authored output envelope: exact SDK-written transcript bytes with from_property and channel_id. Activity IDs/content are explicit inert input; timestamps are assigned by FileTranscriptStore. No by_alias conversion is used.",
+      "evidence_limit": "Actual FileTranscriptStore and serializer output for local Activity objects, not a credentialed M365 conversation. Activity IDs are not tool correlation IDs. The invoke has no execution completion or usage evidence.",
+      "sdk_source_hashes": {
+        "microsoft_agents/hosting/core/storage/transcript/transcript_file_store.py": "5e608368926ff1bbffbac2d276fa79190b3add4268a156ade88f107d7c21a051",
+        "microsoft_agents/activity/activity.py": "bf8b47ac1b23f2c563acee6572849857b74e0d29737e99e270c5fb9202e0a647"
+      }
+    }
+  },
+  "unclosed_evidence": {
+    "live_conversations": ["langchain", "semantic_kernel"],
+    "cli_shape_only": ["aider_markdown", "amazonq", "antigravity", "cline", "continue_dev", "copilot_markdown"],
+    "other": "These captures do not qualify all later producer versions, provider execution, native gates, model usage, full transcript fidelity, or the remaining live producer matrix."
+  }
+}

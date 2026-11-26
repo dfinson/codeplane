@@ -8,6 +8,6 @@ publication) and ``tools/dev_restart.py`` (parent/helper restart flow):
 - ``launch_profile``: the active launch profile (``~/.codeplane/run.json``)
   schema, atomic persistence, and fail-closed validation.
 
-See ``_bmad-output/planning-artifacts/architecture/architecture-codeplane-self-restart-2026-08-07/``
+See ``internal-docs/design/developer-restart.md``
 for the governing architecture and solution design.
 """

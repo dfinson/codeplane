@@ -194,6 +194,7 @@ export function MobileStatusRail({
 // ────────────────────────────────────────────────────────────────────────────
 
 interface MobileBottomNavProps {
+  hasRecipe?: boolean;
   tab: string;
   handleTabChange: (tab: string) => void;
   hasChanges: boolean;
@@ -206,6 +207,7 @@ interface MobileBottomNavProps {
 }
 
 export function MobileBottomNav({
+  hasRecipe = false,
   tab,
   handleTabChange,
   hasChanges,
@@ -219,7 +221,7 @@ export function MobileBottomNav({
   return (
     <nav className="fixed bottom-0 inset-x-0 z-50 md:hidden flex items-end justify-around border-t border-border bg-card/95 backdrop-blur-sm safe-area-pb landscape:items-center" style={{ height: 52 }}>
       {/* Activity toggle — visually distinct (opens overlay, not a tab) */}
-      <button
+      {!hasRecipe && <button
         onClick={() => { if (tab !== "live") handleTabChange("live"); setMobileActivityOpen((o: boolean) => !o); setMobileMoreOpen(false); }}
         className={cn(
           "flex flex-col items-center justify-center gap-0.5 flex-1 pt-1.5 pb-1 min-w-0 transition-colors landscape:flex-row landscape:gap-1 landscape:py-0.5",
@@ -228,10 +230,10 @@ export function MobileBottomNav({
       >
         <ListTree size={20} strokeWidth={mobileActivityOpen ? 2.5 : 1.5} className="landscape:!size-4" />
         <span className={cn("text-[10px] leading-tight truncate landscape:hidden", mobileActivityOpen && "font-semibold")}>Activity</span>
-      </button>
+      </button>}
       {[
-        { id: "live", icon: Radio, label: "Live" },
-        ...(hasChanges ? [{ id: "review", icon: ScanSearch, label: "Review" }] : []),
+        { id: "live", icon: Radio, label: hasRecipe ? "Run" : "Live" },
+        ...(hasChanges || hasRecipe ? [{ id: "review", icon: ScanSearch, label: "Review" }] : []),
         { id: "files", icon: FolderTree, label: "Files" },
       ].map(({ id, icon: Icon, label }) => (
         <button

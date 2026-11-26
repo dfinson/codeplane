@@ -19,6 +19,7 @@ from backend.models.api_schemas import (
     JobResponse,
     ModelInfoResponse,
     ModelListResponse,
+    RecipeResumeResponse,
     ResolveGateRequest,
     ResumeJobRequest,
     SuggestNamesRequest,
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from backend.models.domain import Job
+    from backend.models.usage import UsageAmount
 
 from backend.models.domain import JobMode, JobSpec, JobState, Preset
 
@@ -100,6 +102,7 @@ def job_to_response(
     total_tokens: float | int | None = None,
     input_tokens: float | int | None = None,
     output_tokens: float | int | None = None,
+    cost_usage: list[UsageAmount] | None = None,
 ) -> JobResponse:
     """Map a domain Job to a JobResponse."""
     overrides: dict[str, Any] = {}
@@ -114,6 +117,8 @@ def job_to_response(
         overrides["input_tokens"] = int(input_tokens)
     if output_tokens is not None:
         overrides["output_tokens"] = int(output_tokens)
+    if cost_usage is not None:
+        overrides["cost_usage"] = cost_usage
     return JobResponse.from_domain(job, **overrides)
 
 
@@ -198,6 +203,7 @@ async def create_job(
         enable_stall_detection=body.enable_stall_detection,
         enable_plan_tracking=body.enable_plan_tracking,
         mode=body.mode or JobMode.standard,
+        recipe=body.recipe,
     )
 
     job = await svc.create_job(spec)
@@ -230,8 +236,10 @@ async def create_job(
                         bg_svc = JobService.from_session(
                             bg_session, config, naming_service=naming_service, event_bus=event_bus
                         )
-                        await bg_svc.enrich_naming_async(job.id, spec, resolved_repo)
+                        event = await bg_svc.enrich_naming_async(job.id, spec, resolved_repo)
                         await bg_session.commit()
+                    if event is not None:
+                        await event_bus.publish(event)
                 except Exception:
                     log.error("background_naming_enrichment_failed", job_id=job.id, exc_info=True)
 
@@ -266,6 +274,7 @@ async def list_jobs(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     cost_by_job = await TelemetrySummaryRepository(session).batch_cost_tokens(job_ids)
+    usage_by_job = await TelemetrySummaryRepository(session).batch_cost_usage(job_ids)
 
     items = []
     for j in jobs:
@@ -278,6 +287,7 @@ async def list_jobs(
                 total_tokens=ct.get("total_tokens"),
                 input_tokens=ct.get("input_tokens"),
                 output_tokens=ct.get("output_tokens"),
+                cost_usage=usage_by_job.get(j.id, []),
             )
         )
     return JobListResponse(items=items, cursor=next_cursor, has_more=has_more)
@@ -296,6 +306,7 @@ async def get_job(
     from backend.persistence.telemetry_summary_repo import TelemetrySummaryRepository
 
     ct = (await TelemetrySummaryRepository(session).batch_cost_tokens([job_id])).get(job_id, {})
+    usage = (await TelemetrySummaryRepository(session).batch_cost_usage([job_id])).get(job_id, [])
 
     return job_to_response(
         job,
@@ -304,6 +315,7 @@ async def get_job(
         total_tokens=ct.get("total_tokens"),
         input_tokens=ct.get("input_tokens"),
         output_tokens=ct.get("output_tokens"),
+        cost_usage=usage,
     )
 
 
@@ -313,19 +325,17 @@ async def cancel_job(
     svc: FromDishka[JobService],
     runtime_service: FromDishka[RuntimeService],
     ingest: FromDishka[IngestService],
-    session: FromDishka[AsyncSession],
 ) -> JobResponse:
     """Cancel a running or queued job."""
-    job = await svc.cancel_job(job_id)
-    # Scout finalizes through a separate session when the runtime is canceled.
-    await session.commit()
+    from backend.services.completers.copilot_steer import NativeDeliveryError
 
-    # Delegate abort to IngestService for imported sessions
-    if job.source != "managed":
-        await ingest.abort_session(job_id)
-    else:
-        # Also cancel the runtime task if running
-        await runtime_service.cancel(job_id)
+    try:
+        job = await runtime_service.cancel_job(job_id)
+    except NativeDeliveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "delivery_unknown" if exc.uncertain else "delivery_failed", "message": str(exc)},
+        ) from exc
 
     return job_to_response(job)
 
@@ -402,13 +412,22 @@ async def continue_job(
     return _job_to_create_response(job)
 
 
-@router.post("/jobs/{job_id}/resume", response_model=JobResponse)
+@router.post("/jobs/{job_id}/resume", response_model=RecipeResumeResponse | JobResponse)
 async def resume_job(
     job_id: str,
     runtime_service: FromDishka[RuntimeService],
     body: ResumeJobRequest | None = None,
-) -> JobResponse:
+) -> RecipeResumeResponse | JobResponse:
     """Resume a completed/failed/canceled job in-place, optionally with extra instruction."""
+    if body is not None and body.expected_run_id is not None:
+        job, run = await runtime_service.resume_recipe_run(
+            job_id,
+            body.instruction,
+            expected_run_id=body.expected_run_id,
+            start_request_key=body.start_request_key,
+            selection=body.recipe,
+        )
+        return RecipeResumeResponse(**job_to_response(job).model_dump(), recipe_run=run)
     job = await runtime_service.resume_job(job_id, body.instruction if body is not None else None)
     return job_to_response(job)
 
@@ -418,12 +437,12 @@ async def list_models(
     cached_models_by_sdk: FromDishka[CachedModelsBySdk],
     sdk: str | None = Query(default=None, description="SDK id (copilot | claude). Omit for default."),
 ) -> ModelListResponse:
-    """Return the model list for the requested SDK, cached at server startup.
+    """Resolve enabled provider models on demand and cache successful discovery."""
+    from backend.config import load_config
+    from backend.services.adapters.integration_policy import IntegrationPolicy
 
-    If the cache is empty for the copilot SDK (e.g. auth wasn't ready at
-    startup), attempt a live fetch so the user doesn't have to restart.
-    """
-    resolved_sdk = sdk if sdk is not None else "copilot"
+    policy = IntegrationPolicy(load_config())
+    resolved_sdk = policy.require_enabled(sdk or policy.default_sdk).value
     models = cached_models_by_sdk.get(resolved_sdk, [])
     if not models and resolved_sdk == "copilot":
         try:

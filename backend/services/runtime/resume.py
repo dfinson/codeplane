@@ -9,6 +9,7 @@ This module handles:
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -27,7 +28,10 @@ from backend.models.domain import (
     StateConflictError,
 )
 from backend.models.events import EventKind, new_event
+from backend.models.execution_contracts import ExecutionAdmission, LegacyStartIntent
+from backend.persistence.execution_admission_repo import ExecutionAdmissionRepository
 from backend.persistence.job_repo import JobRepository
+from backend.services.runtime.handoff import PendingHandoff
 
 if TYPE_CHECKING:
     from backend.models.domain import SessionConfig
@@ -61,6 +65,11 @@ def _normalize_resume_instruction(instruction: str | None) -> str:
     return normalized or _DEFAULT_RESUME_INSTRUCTION
 
 
+def _require_legacy_execution_released(host: RuntimeService, job_id: str) -> None:
+    if job_id in host._tasks or job_id in host._starting_tasks:
+        raise StateConflictError("The previous execution is still releasing this Job; a new admission cannot start yet")
+
+
 async def ensure_resumable_worktree(host: RuntimeService, job_repo: JobRepository, job: Job) -> Job:
     """Ensure a job has a usable worktree before resuming or recovering it."""
     from pathlib import Path
@@ -81,7 +90,7 @@ async def ensure_resumable_worktree(host: RuntimeService, job_repo: JobRepositor
 
     git = GitService(host._config)
     try:
-        new_wt = await git.reattach_worktree(job.repo, job.id, job.branch)
+        new_wt = await git.reattach_worktree(job.execution_repo, job.id, job.branch)
         await job_repo.update_worktree_path(job.id, new_wt)
         job.worktree_path = new_wt
         log.info("worktree_reattached", job_id=job.id, path=new_wt)
@@ -118,6 +127,25 @@ async def recover_active_job(
 ) -> Job:
     """Restart an active job after backend restart without marking it failed."""
     from backend.services.runtime.service import RecoverySnapshot
+
+    async with host._session_factory() as session:
+        from backend.persistence.recipe_run_repo import RecipeRunRepository
+
+        pending_job = await JobRepository(session).get(job_id)
+        recipe = await RecipeRunRepository(session).get_for_job(job_id)
+        admissions = ExecutionAdmissionRepository(session)
+        pending_admission = await admissions.current(job_id) if pending_job is not None and recipe is None else None
+        unstarted = pending_admission is not None and await admissions.is_unstarted(pending_admission)
+    if unstarted and pending_job is not None and pending_job.state == JobState.running:
+        recovery_marker = object()
+        host._legacy_recoveries[job_id] = recovery_marker
+        try:
+            await host.start_or_enqueue(pending_job)
+        except BaseException:
+            if host._legacy_recoveries.get(job_id) is recovery_marker:
+                host._legacy_recoveries.pop(job_id, None)
+            raise
+        return pending_job
 
     async with host._session_factory() as session:
         job_repo = JobRepository(session)
@@ -162,11 +190,26 @@ async def recover_active_job(
         # Use a plan-implementing-specific instruction when recovering mid-implementation
         if job.mode == JobMode.plan_implementing and instruction == _SERVER_RESTART_RECOVERY_INSTRUCTION:
             instruction = _PLAN_IMPLEMENTING_RECOVERY_INSTRUCTION
+        if pending_admission is not None and pending_admission.origin == "continuation":
+            intent = pending_admission.start_intent
+            if intent is not None:
+                instruction = f"{instruction}\n\nAccepted continuation instruction:\n{intent.instruction}"
 
         new_session_count = job.session_count + 1
+        deferred_handoff = None
         if job.sdk_session_id:
             override_prompt = instruction
             resume_sdk_session_id: str | None = job.sdk_session_id
+        elif host._execution_contracts is not None:
+            admission = await ExecutionAdmissionRepository(session).current(job_id)
+            deferred_handoff = PendingHandoff(
+                admission.id if admission is not None else None,
+                instruction,
+                job.session_count,
+                new_session_count,
+            )
+            override_prompt = instruction
+            resume_sdk_session_id = None
         else:
             override_prompt = await host._build_resume_handoff_prompt_for_job(
                 session,
@@ -185,6 +228,10 @@ async def recover_active_job(
     if reloaded is None:
         raise JobNotFoundError(f"Job {job_id} not found after recovery reset")
 
+    recovery_marker = object()
+    host._legacy_recoveries[job_id] = recovery_marker
+    if deferred_handoff is not None:
+        host._legacy_handoffs[job_id] = deferred_handoff
     try:
         await host.start_or_enqueue(
             reloaded,
@@ -193,6 +240,10 @@ async def recover_active_job(
         )
     except Exception:
         log.error("recovery_start_failed", job_id=job_id, exc_info=True)
+        if host._legacy_recoveries.get(job_id) is recovery_marker:
+            host._legacy_recoveries.pop(job_id, None)
+        if deferred_handoff is not None and host._legacy_handoffs.get(job_id) is deferred_handoff:
+            host._legacy_handoffs.pop(job_id, None)
         await rollback_recovery(host, job_id, snapshot)
         raise
 
@@ -340,6 +391,17 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
     SDK session is no longer available (daemon restart, session expired, etc.).
     """
     resumable_states = TERMINAL_STATES | {JobState.review}
+    from backend.models.domain import JobSource
+    from backend.persistence.recipe_run_repo import RecipeRunRepository
+    from backend.services.adapters.integration_policy import IntegrationPolicy
+
+    original = await host._get_job(job_id)
+    if original is None:
+        raise JobNotFoundError(f"Job {job_id} does not exist")
+    IntegrationPolicy(host._config).require_enabled(original.sdk)
+    if original.source != JobSource.managed:
+        raise StateConflictError("Native sessions must be resumed through their owning CLI")
+    _require_legacy_execution_released(host, job_id)
     normalized_instruction = _normalize_resume_instruction(instruction)
 
     async with host._session_factory() as session:
@@ -349,6 +411,10 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
             raise JobNotFoundError(f"Job {job_id} does not exist.")
         if job.state not in resumable_states:
             raise StateConflictError(f"Job {job_id} is not in a resumable state (current: {job.state}).")
+        if await RecipeRunRepository(session).get_for_job(job_id) is not None:
+            raise StateConflictError("Recipe continuation must use its owning run admission, not legacy resume")
+        admissions = ExecutionAdmissionRepository(session)
+        previous_admission = await admissions.current(job_id)
 
         previous_state = job.state
         previous_session_count = job.session_count
@@ -368,11 +434,16 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
 
         new_session_count = job.session_count + 1
 
+        handoff_from = None
         if job.sdk_session_id:
             # Primary path: SDK native session resume — full history intact, no summarization cost.
             log.info("resume_via_sdk_session", job_id=job_id, sdk_session_id=job.sdk_session_id)
             override_prompt = normalized_instruction
             resume_sdk_session_id: str | None = job.sdk_session_id
+        elif host._execution_contracts is not None:
+            handoff_from = job.session_count
+            override_prompt = normalized_instruction
+            resume_sdk_session_id = None
         else:
             log.info("resume_via_summarization", job_id=job_id)
             override_prompt = await host._build_resume_handoff_prompt_for_job(
@@ -383,7 +454,26 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
             )
             resume_sdk_session_id = None
 
+        _require_legacy_execution_released(host, job_id)
         await job_repo.reset_for_resume(job_id, new_session_count, merge_status=resume_merge_status)
+        admission = ExecutionAdmission(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            origin="continuation",
+            previous_admission_id=previous_admission.id if previous_admission is not None else None,
+            start_intent=LegacyStartIntent(
+                instruction=normalized_instruction,
+                source_session_number=previous_session_count,
+                target_session_number=new_session_count,
+                resume_sdk_session_id=resume_sdk_session_id,
+                handoff_required=handoff_from is not None,
+                dispatch_prompt=override_prompt if handoff_from is None else None,
+            ),
+        )
+        await admissions.declare_legacy(
+            admission,
+            expected_current=previous_admission.id if previous_admission is not None else None,
+        )
         await session.commit()
 
     # Reload job and start execution
@@ -393,6 +483,16 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
     if job is None:
         raise JobNotFoundError(f"Job {job_id} not found after resume reset")
 
+    host._legacy_recoveries.pop(job_id, None)
+    deferred_handoff = None
+    if handoff_from is not None:
+        deferred_handoff = PendingHandoff(
+            admission.id,
+            normalized_instruction,
+            handoff_from,
+            new_session_count,
+        )
+        host._legacy_handoffs[job_id] = deferred_handoff
     try:
         await host.start_or_enqueue(
             job,
@@ -401,8 +501,14 @@ async def resume_job(host: RuntimeService, job_id: str, instruction: str | None 
         )
     except Exception:
         log.error("resume_start_failed", job_id=job_id, exc_info=True)
+        if deferred_handoff is not None and host._legacy_handoffs.get(job_id) is deferred_handoff:
+            host._legacy_handoffs.pop(job_id, None)
         async with host._session_factory() as session:
             job_repo = JobRepository(session)
+            await ExecutionAdmissionRepository(session).abandon(
+                admission,
+                reason="Legacy continuation startup failed before start_or_enqueue returned",
+            )
             await job_repo.restore_after_failed_resume(
                 job_id,
                 previous_state=previous_state,
@@ -522,9 +628,9 @@ async def create_followup_job(host: RuntimeService, job_id: str, instruction: st
         )
         followup = await svc.create_job(
             JobSpec(
-                repo=original.repo,
+                repo=original.execution_repo,
                 prompt=normalized_instruction,
-                base_ref=original.base_ref,
+                base_ref=original.execution_base_ref,
                 preset=original.preset,
                 model=original.model,
                 sdk=original.sdk,

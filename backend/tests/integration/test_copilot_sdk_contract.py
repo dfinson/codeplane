@@ -27,6 +27,7 @@ def test_generated_usage_quota_and_shutdown_contracts() -> None:
                     adapter = CopilotAdapter()
                     queue = asyncio.Queue()
                     adapter._queues["session"] = queue
+                    adapter._accepting_events.add("session")
                     adapter.set_job_id("session", "job")
                     writes = []
                     adapter._schedule_db_write = writes.append
@@ -100,6 +101,7 @@ def test_generated_usage_quota_and_shutdown_contracts() -> None:
                         raise RuntimeError("Telemetry unavailable")
 
                     adapter._schedule_db_write = reject_write
+                    adapter._accepting_events.add("session")
                     try:
                         await emit("session.shutdown", shutdown)
                     except RuntimeError as error:

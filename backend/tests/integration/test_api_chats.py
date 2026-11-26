@@ -182,7 +182,9 @@ class TestSendChatTurn:
     ) -> None:
         chat_id = (await client.post("/api/chats", json={"title": "Thinking"})).json()["id"]
 
-        async def complete(_prompt: str) -> str:
+        async def complete(_prompt: str, *, system_prompt: str) -> str:
+            assert _prompt == "Conversation:\nuser: Persist this first\nAssistant:"
+            assert "discussion-only Chat" in system_prompt
             async with session_factory() as observer:
                 rows = (
                     (await observer.execute(select(ChatMessageRow).where(ChatMessageRow.chat_id == chat_id)))

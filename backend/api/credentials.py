@@ -9,25 +9,61 @@ created_at.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from pydantic import Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.config import CPLConfig
 from backend.models.schemas.base import CamelModel
 from backend.persistence.credential_repo import CredentialReferencedError, CredentialRepository
+from backend.services.events.export_binding import (
+    ExportConfigurationError,
+    destination_scope,
+    encode_export_credential,
+)
 
-router = APIRouter(prefix="/settings/credentials", tags=["credentials"], route_class=DishkaRoute)
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+
+class CredentialRoute(DishkaRoute):
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def without_secret_inputs(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RequestValidationError as exc:
+                # Missing-field errors can carry the entire credential body.
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": [
+                            {"type": error["type"], "loc": error["loc"], "msg": error["msg"]} for error in exc.errors()
+                        ]
+                    },
+                )
+
+        return without_secret_inputs
+
+
+router = APIRouter(prefix="/settings/credentials", tags=["credentials"], route_class=CredentialRoute)
 log = structlog.get_logger()
-
-_PROVIDER_PATTERN = r"^(github|jira|azure_devops)$"
 
 # NFR9: per-provider PAT scope guidance, copy-paste only — never validated/enforced
 # against TrackerLinks, since a Credential is deliberately global and reusable.
 _PROVIDER_GUIDANCE: dict[str, str] = {
+    "otlp": (
+        "Use only destination-scoped transport-auth headers as a JSON object. "
+        "Choose the exact collector endpoint and protocol. The encrypted credential "
+        "cannot authorize ingestion, control or tracker operations."
+    ),
     "github": (
         "Use a fine-grained personal access token. Scope it to the repos you need: "
         "'Issues: Read & write' for tracker writes; add 'Contents: Read & write' + "
@@ -64,11 +100,12 @@ class CredentialListResponse(CamelModel):
 
 
 class CreateCredentialRequest(CamelModel):
-    provider: str = Field(pattern=_PROVIDER_PATTERN)
+    provider: Literal["github", "jira", "azure_devops", "otlp"]
     label: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
     pat: str = Field(min_length=1)
     email: str | None = None
+    export_protocol: str | None = None
 
     @model_validator(mode="after")
     def validate_jira_email(self) -> CreateCredentialRequest:
@@ -122,6 +159,15 @@ async def create_credential(
     body: CreateCredentialRequest,
     sf: FromDishka[async_sessionmaker[AsyncSession]],
 ) -> CredentialResponse:
+    secret = body.pat
+    if body.provider == "otlp":
+        try:
+            destination_scope(body.base_url, body.export_protocol or "")
+            secret = encode_export_credential(body.export_protocol or "", body.pat)
+        except ExportConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif body.export_protocol is not None:
+        raise HTTPException(status_code=400, detail="Export protocol is only valid for OTLP credentials")
     credential_id = str(uuid.uuid4())
     async with sf() as session:
         repo = CredentialRepository(session)
@@ -130,7 +176,7 @@ async def create_credential(
             provider=body.provider,
             label=body.label,
             base_url=body.base_url,
-            pat=body.pat,
+            pat=secret,
             email=body.email,
         )
         await session.commit()
@@ -143,7 +189,10 @@ async def create_credential(
 async def delete_credential(
     credential_id: str,
     sf: FromDishka[async_sessionmaker[AsyncSession]],
+    config: FromDishka[CPLConfig],
 ) -> None:
+    if credential_id in {config.export.credential_id, config.export.metrics_credential_id}:
+        raise HTTPException(status_code=409, detail="Credential is still referenced by the export binding")
     async with sf() as session:
         repo = CredentialRepository(session)
         try:

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Clock } from "lucide-react";
-import { fetchAnalyticsJobs } from "../../api/client";
+import { fetchAnalyticsJobs, type AnalyticsJobs } from "../../api/client";
 import { Spinner } from "../ui/spinner";
 import { Badge } from "../ui/badge";
 import { formatRelativeTime, formatUsd, STATUS_COLORS } from "./helpers";
@@ -11,7 +11,7 @@ const PREVIEW_COUNT = 5;
 
 export function RecentJobsPreview({ period }: { period: number }) {
   const navigate = useNavigate();
-  const [jobs, setJobs] = useState<{ job_id: string; sdk: string; model: string; repo: string; status: string; total_cost_usd: number; completed_at: string | null; created_at: string }[]>([]);
+  const [jobs, setJobs] = useState<AnalyticsJobs["jobs"]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export function RecentJobsPreview({ period }: { period: number }) {
                   <span className="text-muted-foreground w-16 shrink-0 truncate">{j.status}</span>
                   <span className="truncate flex-1 font-medium">{repoName}</span>
                   <Badge variant="outline" className="text-[10px] shrink-0">{j.model || j.sdk}</Badge>
-                  <span className="text-muted-foreground w-14 text-right shrink-0">{formatUsd(Number(j.total_cost_usd) || 0)}</span>
+                  <span className="text-muted-foreground w-14 text-right shrink-0">{formatUsd(j.total_cost_usd)}</span>
                   <span className="text-muted-foreground w-16 text-right shrink-0">{when ? formatRelativeTime(when) : "—"}</span>
                 </button>
               </li>

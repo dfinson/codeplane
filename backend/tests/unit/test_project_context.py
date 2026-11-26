@@ -245,11 +245,19 @@ services:
 
 class TestInitialSnapshot:
     @pytest.mark.asyncio
+    async def test_lazy_build_never_claims_an_initial_trusted_snapshot(self, tmp_worktree: Path) -> None:
+        (tmp_worktree / "package.json").write_text(json.dumps({"dependencies": {"late-added": "1"}}))
+        ctx = ProjectContext(str(tmp_worktree))
+        await ctx.build()
+        assert ctx.has_dependency("late-added")
+        assert not ctx.has_initial_dependency("late-added")
+
+    @pytest.mark.asyncio
     async def test_initial_deps_frozen(self, tmp_worktree: Path) -> None:
         pkg = {"dependencies": {"react": "^18"}}
         (tmp_worktree / "package.json").write_text(json.dumps(pkg))
         ctx = ProjectContext(str(tmp_worktree))
-        await ctx.build()
+        await ctx.capture_initial()
         assert ctx.has_initial_dependency("react") is True
         assert ctx.has_dependency("react") is True
 
@@ -258,7 +266,7 @@ class TestInitialSnapshot:
         pkg = {"dependencies": {"react": "^18"}}
         (tmp_worktree / "package.json").write_text(json.dumps(pkg))
         ctx = ProjectContext(str(tmp_worktree))
-        await ctx.build()
+        await ctx.capture_initial()
 
         # Simulate agent adding a new dependency
         ctx.dependencies.add("malware")
@@ -269,7 +277,7 @@ class TestInitialSnapshot:
     async def test_initial_host_frozen(self, tmp_worktree: Path) -> None:
         (tmp_worktree / ".env").write_text("API=https://api.stripe.com/v1\n")
         ctx = ProjectContext(str(tmp_worktree))
-        await ctx.build()
+        await ctx.capture_initial()
         assert ctx.has_initial_host("api.stripe.com") is True
 
     def test_has_initial_dependency_before_build(self, tmp_worktree: Path) -> None:
@@ -304,7 +312,7 @@ services:
 """
         (tmp_worktree / "docker-compose.yml").write_text(content)
         ctx = ProjectContext(str(tmp_worktree))
-        await ctx.build()
+        await ctx.capture_initial()
         assert "postgres" in ctx.initial_services
 
     def test_initial_services_before_build(self, tmp_worktree: Path) -> None:

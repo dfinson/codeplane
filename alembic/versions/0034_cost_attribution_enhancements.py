@@ -4,7 +4,7 @@ Supports per-model edit efficiency tracking (Item 6) and token-type
 disaggregation in attribution buckets (Item 8).
 
 Revision ID: 0034
-Revises: 0032
+Revises: 0033
 Create Date: 2026-05-10
 """
 
@@ -15,7 +15,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0034"
-down_revision: Union[str, None] = "0032"
+down_revision: Union[str, None] = "0033"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

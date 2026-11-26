@@ -14,6 +14,7 @@ import structlog
 
 from backend.models.domain import SessionConfig
 from backend.models.events import EventKind
+from backend.services.auth.workspace_paths import workspace_glob_root, workspace_target
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -101,16 +102,13 @@ def scout_read_allowed(workspace: str, kind: str, tool_name: str, paths: list[st
             return False
         candidates = [workspace]
     try:
-        root = Path(workspace).resolve(strict=True)
-        if not root.is_dir():
+        if not Path(workspace).resolve(strict=True).is_dir():
             return False
         for raw in candidates:
-            if "://" in raw or "\x00" in raw:
-                return False
-            candidate = Path(raw.replace("\\", "/"))
-            resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
-            if not resolved.is_relative_to(root):
-                return False
+            if tool_name in {"glob", "Glob"}:
+                workspace_glob_root(workspace, raw)
+            else:
+                workspace_target(workspace, raw)
     except (OSError, ValueError, RuntimeError):
         return False
     return True

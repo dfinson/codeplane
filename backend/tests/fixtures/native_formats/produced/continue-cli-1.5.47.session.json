@@ -1,0 +1,46 @@
+{
+  "sessionId": "codeplane-native-capture",
+  "title": "Untitled Session",
+  "workspaceDirectory": "/tmp/codeplane-continue-capture-JSvgM9",
+  "history": [
+    {
+      "message": {
+        "role": "user",
+        "content": "Describe addition in this synthetic CLI fixture."
+      },
+      "contextItems": [],
+      "editorState": "Describe addition in this synthetic CLI fixture."
+    },
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Addition combines two numbers in this inert fixture."
+      },
+      "contextItems": []
+    },
+    {
+      "message": {
+        "role": "user",
+        "content": "Use the synthetic example 2 plus 3."
+      },
+      "contextItems": [],
+      "editorState": "Use the synthetic example 2 plus 3."
+    },
+    {
+      "message": {
+        "role": "assistant",
+        "content": "The synthetic example gives 5."
+      },
+      "contextItems": []
+    }
+  ],
+  "usage": {
+    "totalCost": 0,
+    "promptTokens": 0,
+    "completionTokens": 0,
+    "promptTokensDetails": {
+      "cachedTokens": 0,
+      "cacheWriteTokens": 0
+    }
+  }
+}

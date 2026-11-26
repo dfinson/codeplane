@@ -1,80 +1,75 @@
-"""Ephemeral share-token service for read-only job sharing.
-
-Tokens are stored in-memory and expire after a configurable TTL.
-"""
+"""Durable, revocable share tokens for read-only job access."""
 
 from __future__ import annotations
 
+import hashlib
 import secrets
-import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import structlog
 
 from backend.models.domain import CodePlaneError
+from backend.persistence.share_token_repo import ShareTokenRepository
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 log = structlog.get_logger()
 
-DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+DEFAULT_TTL_SECONDS = 24 * 60 * 60
 
 
 class InvalidShareTokenError(CodePlaneError):
-    """Raised when a share token is invalid or expired."""
+    """Raised when a share token is unknown, expired or revoked."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class ShareToken:
-    token: str
+    token: str = field(repr=False)
     job_id: str
-    created_at: float
-    ttl: float
+    created_at: datetime
+    expires_at: datetime
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 class ShareService:
-    """In-memory store for share tokens."""
+    """Persist credentials before returning links; validate without a process cache."""
 
-    def __init__(self, ttl: float = DEFAULT_TTL_SECONDS) -> None:
-        self._tokens: dict[str, ShareToken] = {}
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        ttl: float = DEFAULT_TTL_SECONDS,
+    ) -> None:
+        self._repo = ShareTokenRepository(session_factory)
         self._ttl = ttl
 
-    def create_token(self, job_id: str) -> ShareToken:
-        self._evict_expired()
-        token = secrets.token_urlsafe(32)
+    async def create_token(self, job_id: str) -> ShareToken:
+        now = datetime.now(UTC)
         entry = ShareToken(
-            token=token,
+            token=secrets.token_urlsafe(32),
             job_id=job_id,
-            created_at=time.monotonic(),
-            ttl=self._ttl,
+            created_at=now,
+            expires_at=now + timedelta(seconds=self._ttl),
         )
-        self._tokens[token] = entry
-        log.info("share_token_created", job_id=job_id, token=token[:8])
+        await self._repo.create(_token_hash(entry.token), job_id, entry.created_at, entry.expires_at)
+        log.info("share_token_created", job_id=job_id)
         return entry
 
-    def validate(self, token: str) -> str:
-        """Return the *job_id* if the token is valid.
-
-        Raises ``InvalidShareTokenError`` if the token is unknown or expired.
-        """
-        entry = self._tokens.get(token)
-        if entry is None:
-            log.debug("share_token_invalid", token=token[:8])
+    async def validate(self, token: str) -> str:
+        """Return the job ID only while the persisted credential remains valid."""
+        job_id = await self._repo.get_valid_job(_token_hash(token), datetime.now(UTC))
+        if job_id is None:
             raise InvalidShareTokenError("Invalid or expired share link")
-        if time.monotonic() - entry.created_at > entry.ttl:
-            del self._tokens[token]
-            log.info("share_token_expired", job_id=entry.job_id, token=token[:8])
-            raise InvalidShareTokenError("Invalid or expired share link")
-        log.debug("share_token_validated", job_id=entry.job_id, token=token[:8])
-        return entry.job_id
+        return job_id
 
-    def revoke(self, token: str) -> bool:
-        entry = self._tokens.pop(token, None)
-        if entry is not None:
-            log.info("share_token_revoked", job_id=entry.job_id, token=token[:8])
-            return True
-        return False
-
-    def _evict_expired(self) -> None:
-        now = time.monotonic()
-        expired = [k for k, v in self._tokens.items() if now - v.created_at > v.ttl]
-        for k in expired:
-            del self._tokens[k]
+    async def revoke(self, token: str, job_id: str) -> bool:
+        """Delete only the named job's token; repeated revocation is harmless."""
+        revoked = await self._repo.revoke(_token_hash(token), job_id)
+        if revoked:
+            log.info("share_token_revoked", job_id=job_id)
+        return revoked

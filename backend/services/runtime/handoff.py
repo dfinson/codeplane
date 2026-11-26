@@ -6,6 +6,7 @@ needed to resume or follow-up a job in a new session.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
@@ -18,6 +19,14 @@ if TYPE_CHECKING:
     from backend.services.completers.summarization_service import SummarizationService
 
 log = structlog.get_logger()
+
+
+@dataclass(frozen=True, slots=True)
+class PendingHandoff:
+    admission_id: str | None
+    instruction: str
+    source_session_number: int
+    target_session_number: int
 
 
 async def load_handoff_context_for_job(

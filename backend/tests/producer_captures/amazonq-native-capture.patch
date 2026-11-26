@@ -1,0 +1,79 @@
+diff --git a/crates/chat-cli/src/cli/chat/mod.rs b/crates/chat-cli/src/cli/chat/mod.rs
+index 099c0c8..fa5200c 100644
+--- a/crates/chat-cli/src/cli/chat/mod.rs
++++ b/crates/chat-cli/src/cli/chat/mod.rs
+@@ -4026,6 +4026,56 @@ mod tests {
+         agents
+     }
+ 
++    #[tokio::test]
++    async fn codeplane_native_capture() {
++        let mut os = Os::new().await.unwrap();
++        os.client.set_mock_output(serde_json::json!([
++            ["Addition combines two numbers in this inert fixture."],
++            ["The synthetic example gives 5."]
++        ]));
++        let agents = get_test_agents(&os).await;
++        let tool_config = serde_json::from_str::<HashMap<String, ToolSpec>>(include_str!("tools/tool_index.json"))
++            .expect("native tool definitions");
++        ChatSession::new(
++            &mut os,
++            "codeplane-native-capture",
++            agents,
++            None,
++            InputSource::new_mock(vec![
++                "Describe addition in this synthetic AmazonQ fixture.".to_string(),
++                "Use the synthetic example 2 plus 3.".to_string(),
++                "/quit".to_string(),
++            ]),
++            false,
++            || Some(80),
++            ToolManager::default(),
++            None,
++            tool_config,
++            true,
++            false,
++            None,
++        )
++        .await
++        .unwrap()
++        .spawn(&mut os)
++        .await
++        .unwrap();
++        let cwd = std::env::current_dir().unwrap();
++        let saved = os.database.get_conversation_by_path(&cwd).unwrap().expect("native saved conversation");
++        assert_eq!(saved.conversation_id(), "codeplane-native-capture");
++        let raw = os.database.codeplane_capture_raw_conversation(&cwd);
++        assert_eq!(
++            serde_json::from_str::<serde_json::Value>(&raw).unwrap()["history"]
++                .as_array().unwrap().len(),
++            2
++        );
++        assert_eq!(
++            serde_json::from_str::<serde_json::Value>(&raw).unwrap(),
++            serde_json::to_value(saved).unwrap()
++        );
++        std::fs::write(std::env::var("CODEPLANE_AMAZONQ_CAPTURE").unwrap(), raw).unwrap();
++    }
++
+     #[tokio::test]
+     async fn test_flow() {
+         let mut os = Os::new().await.unwrap();
+diff --git a/crates/chat-cli/src/database/mod.rs b/crates/chat-cli/src/database/mod.rs
+index 8640e03..c8ca613 100644
+--- a/crates/chat-cli/src/database/mod.rs
++++ b/crates/chat-cli/src/database/mod.rs
+@@ -395,6 +395,13 @@ impl Database {
+         self.get_json_entry(Table::Conversations, path)
+     }
+ 
++    #[cfg(test)]
++    pub(crate) fn codeplane_capture_raw_conversation(&self, path: &Path) -> String {
++        self.get_entry::<String>(Table::Conversations, path.to_str().unwrap())
++            .unwrap()
++            .expect("actual conversation row")
++    }
++
+     /// Set a chat conversation given a path to the conversation.
+     pub fn set_conversation_by_path(
+         &mut self,

@@ -1,6 +1,7 @@
 """Persistence for per-call telemetry span detail rows.
 
-Append-only: one row per LLM call or tool call.  Used for per-job drill-down
+One row per LLM call or tool operation. Observed operation revisions update this
+read projection while their canonical source events remain immutable. Used for per-job drill-down
 (tool breakdown table, LLM call timeline) and cross-job analytics (tool
 failure rates, latency percentiles).
 """
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import text
 
+from backend.persistence.currency_projection import currency_query
 from backend.persistence.repository import BaseRepository
 
 if TYPE_CHECKING:
@@ -26,7 +28,27 @@ if TYPE_CHECKING:
 
 
 class TelemetrySpansRepository(BaseRepository):
-    """Append-only insert of individual LLM/tool call spans."""
+    """Individual call spans and source-qualified observed-operation projections."""
+
+    async def observed_tool(self, job_id: str, operation_id: str) -> dict[str, Any] | None:
+        result = await self._session.execute(
+            text("""
+                SELECT id, attrs_json, duration_ms FROM job_telemetry_spans
+                WHERE job_id = :job_id AND session_kind = 'job' AND span_type = 'tool'
+                  AND json_extract(attrs_json, '$.observation_operation_id') = :operation_id
+                LIMIT 1
+            """),
+            {"job_id": job_id, "operation_id": operation_id},
+        )
+        row = result.mappings().first()
+        return {**row, "attrs": json.loads(row["attrs_json"])} if row is not None else None
+
+    async def update_observed_tool(self, span_id: int, *, attrs: dict[str, Any], duration_ms: float) -> None:
+        await self._session.execute(
+            text("UPDATE job_telemetry_spans SET attrs_json = :attrs, duration_ms = :duration WHERE id = :id"),
+            {"id": span_id, "attrs": json.dumps(attrs), "duration": duration_ms},
+        )
+        await self._session.flush()
 
     async def insert(
         self,
@@ -111,7 +133,7 @@ class TelemetrySpansRepository(BaseRepository):
     async def list_for_job(self, job_id: str) -> list[TelemetrySpanRow]:
         """Return all spans for a job, ordered by start time."""
         result = await self._session.execute(
-            text("""
+            currency_query("""
                 SELECT id, job_id, span_type, name, started_at, duration_ms, attrs_json,
                        tool_category, tool_target, turn_number, execution_phase,
                        is_retry, retries_span_id,
@@ -120,7 +142,7 @@ class TelemetrySpansRepository(BaseRepository):
                        turn_id, preceding_context, motivation_summary,
                        edit_motivations, created_at
                 FROM job_telemetry_spans
-                WHERE job_id = :job_id
+                WHERE job_id = :job_id AND session_kind = 'job'
                 ORDER BY started_at ASC
             """),
             {"job_id": job_id},
@@ -236,7 +258,9 @@ class TelemetrySpansRepository(BaseRepository):
                     SUM(duration_ms) as total_duration_ms,
                     SUM(CASE WHEN json_extract(attrs_json, '$.success') = 0
                              OR json_extract(attrs_json, '$.success') = 'false'
-                        THEN 1 ELSE 0 END) as failure_count
+                        THEN 1 ELSE 0 END) as failure_count,
+                    SUM(CASE WHEN COALESCE(json_type(attrs_json, '$.success'), 'null') = 'null'
+                        THEN 1 ELSE 0 END) as unknown_count
                 FROM job_telemetry_spans
                 WHERE span_type = 'tool'
                     AND created_at >= datetime('now', '-{int(period_days)} days')
@@ -279,11 +303,11 @@ class TelemetrySpansRepository(BaseRepository):
         (stored in ``tool_target``), returning call counts and total cost.
         """
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
                     tool_target as command,
                     COUNT(*) as call_count,
-                    COALESCE(SUM(cost_usd), 0) as total_cost_usd,
+                    SUM(cost_usd) as total_cost_usd,
                     COALESCE(AVG(duration_ms), 0) as avg_duration_ms,
                     COUNT(DISTINCT job_id) as job_count
                 FROM job_telemetry_spans
@@ -354,12 +378,12 @@ class TelemetrySpansRepository(BaseRepository):
     async def retry_cost_summary(self, *, period_days: int = 30) -> RetryCostSummary:
         """Compute total cost and count of retry spans fleet-wide."""
         result = await self._session.execute(
-            text(f"""
+            currency_query(f"""
                 SELECT
-                    COALESCE(SUM(CASE WHEN is_retry = 1 THEN cost_usd ELSE 0 END), 0) as retry_cost_usd,
-                    SUM(CASE WHEN is_retry = 1 THEN 1 ELSE 0 END) as retry_count,
+                    SUM(CASE WHEN is_retry = 1 THEN cost_usd END) as retry_cost_usd,
+                    COALESCE(SUM(CASE WHEN is_retry = 1 THEN 1 ELSE 0 END), 0) as retry_count,
                     COUNT(*) as total_spans,
-                    COALESCE(SUM(cost_usd), 0) as total_cost_usd
+                    SUM(cost_usd) as total_cost_usd
                 FROM job_telemetry_spans
                 WHERE span_type IN ('llm', 'tool')
                     AND created_at >= datetime('now', '-{int(period_days)} days')
@@ -368,7 +392,7 @@ class TelemetrySpansRepository(BaseRepository):
         row = result.mappings().first()
         if row:
             return cast("RetryCostSummary", dict(row))
-        return {"retry_cost_usd": 0, "retry_count": 0, "total_spans": 0, "total_cost_usd": 0}
+        return {"retry_cost_usd": None, "retry_count": 0, "total_spans": 0, "total_cost_usd": None}
 
     async def tool_failure_hotspots(self, *, period_days: int = 30) -> list[dict[str, Any]]:
         """Find tools with high failure rates (for statistical analysis)."""

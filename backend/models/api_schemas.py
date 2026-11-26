@@ -24,8 +24,41 @@ from backend.models.domain import (  # noqa: TC001 — Pydantic resolves annotat
 # Domain-grouped sub-modules — canonical definitions for base types and telemetry.
 # Re-exported here for backward compatibility.
 from backend.models.schemas.base import *  # noqa: E402,F401,F403
+from backend.models.schemas.external_gate import *  # noqa: E402,F401,F403
+from backend.models.schemas.integrations import *  # noqa: E402,F401,F403
 from backend.models.schemas.metrics import *  # noqa: E402,F401,F403
+from backend.models.schemas.recipes import *  # noqa: E402,F401,F403
+from backend.models.schemas.reviews import *  # noqa: E402,F401,F403
 from backend.models.schemas.telemetry import *  # noqa: E402,F401,F403
+from backend.models.schemas.tracker_operations import (
+    ReconcileTrackerOperationRequest as ReconcileTrackerOperationRequest,
+)
+from backend.models.schemas.tracker_operations import (
+    RetryTrackerOperationRequest as RetryTrackerOperationRequest,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerApprovalSnapshot as TrackerApprovalSnapshot,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationListResponse as TrackerOperationListResponse,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationResponse as TrackerOperationResponse,  # noqa: TC001 -- Pydantic resolves this at runtime.
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerOperationState as TrackerOperationState,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerProviderReceipt as TrackerProviderReceipt,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerReconciliation as TrackerReconciliation,
+)
+from backend.models.schemas.tracker_operations import (
+    TrackerTargetKind as TrackerTargetKind,
+)
+from backend.models.session_event import EventMetadata  # noqa: TC001 - Pydantic resolves annotations at runtime.
+from backend.models.usage import UsageAmount  # noqa: TC001 - Pydantic resolves annotations at runtime.
 
 if TYPE_CHECKING:
     from backend.models.domain import Job
@@ -55,6 +88,7 @@ class CreateJobRequest(CamelModel):
     enable_plan_tracking: bool | None = None
     session_token: str | None = Field(None, max_length=64)
     mode: JobMode | None = None
+    recipe: RecipeSelection | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -80,6 +114,15 @@ class SendMessageRequest(CamelModel):
 
 class ResumeJobRequest(CamelModel):
     instruction: str | None = Field(default=None, max_length=50_000)
+    expected_run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    start_request_key: str | None = Field(default=None, min_length=1, max_length=128)
+    recipe: RecipeSelection | None = None
+
+    @model_validator(mode="after")
+    def _require_recipe_target(self) -> ResumeJobRequest:
+        if (self.start_request_key is not None or self.recipe is not None) and self.expected_run_id is None:
+            raise ValueError("Recipe continuation requires the expected run identity.")
+        return self
 
 
 class ResolveGateRequest(CamelModel):
@@ -228,13 +271,13 @@ class CreateJobResponse(CamelModel):
 
 class JobResponse(CamelModel):
     id: str
-    repo: str
+    repo: str | None
     prompt: str
     project_id: str | None = None
     title: str | None = None
     description: str | None = None
     state: JobState
-    base_ref: str
+    base_ref: str | None
     worktree_path: str | None
     branch: str | None
     preset: Preset | None = None
@@ -263,8 +306,12 @@ class JobResponse(CamelModel):
     parent_job_id: str | None = None
     source: str = "managed"
     external_session_id: str | None = None
+    integration_binding_id: str | None = None
+    observation_only: bool = False
     mode: JobMode = JobMode.standard
     total_cost_usd: float | None = None
+    cost_usage: list[UsageAmount] | None = None
+    """Source-typed cost totals. The legacy total_cost_usd field alone proves no currency."""
     total_tokens: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -319,9 +366,15 @@ class JobResponse(CamelModel):
             parent_job_id=job.parent_job_id,
             source=job.source,
             external_session_id=job.external_session_id,
+            integration_binding_id=job.integration_binding_id,
+            observation_only=job.observation_only,
             mode=JobMode(job.mode) if isinstance(job.mode, str) else JobMode.standard,
             **overrides,
         )
+
+
+class RecipeResumeResponse(JobResponse):
+    recipe_run: RecipeRunResponse
 
 
 class JobListResponse(CamelModel):
@@ -368,7 +421,7 @@ class ArtifactResponse(CamelModel):
 
 class ArtifactListResponse(CamelModel):
     items: list[ArtifactResponse]
-    collection_status: Literal["pending", "collecting", "completed", "failed"] = "pending"
+    collection_status: Literal["pending", "collecting", "completed", "failed", "not_applicable"] = "pending"
     collection_error: str | None = None
     collection_updated_at: datetime | None = None
 
@@ -399,6 +452,19 @@ class TimelineListResponse(CamelModel):
 
 class ApprovalListResponse(CamelModel):
     items: list[ApprovalResponse]
+
+
+class JobPendingDecision(CamelModel):
+    approval: ApprovalResponse
+    recipe_run_id: str | None
+    step_instance_id: str | None
+    attempt_id: str | None
+    human_gate: bool
+
+
+class JobPendingDecisionPage(CamelModel):
+    items: list[JobPendingDecision]
+    next_cursor: str | None
 
 
 class TranscriptSearchListResponse(CamelModel):
@@ -473,7 +539,7 @@ class RepoJobSummary(CamelModel):
 class RepoCostSummary(CamelModel):
     """Aggregated cost for a repo over a time period."""
 
-    total_cost_usd: float = 0
+    total_cost_usd: float | None = None
     total_jobs: int = 0
     total_tokens: int = 0
 
@@ -532,10 +598,100 @@ class TaskLinkListResponse(CamelModel):
     items: list[TaskLinkResponse]
 
 
-class IngestTaskGraphResponse(CamelModel):
-    """Result of an ingestion run — the full upserted TaskLink set for the Project."""
+class TaskDependencyStatus(CamelModel):
+    key: str
+    task_link_id: str | None
+    job_id: str | None
+    job_state: str | None
+    resolution: str | None
+    satisfied: bool
 
-    items: list[TaskLinkResponse]
+
+class TaskLinkInspectionResponse(CamelModel):
+    task: TaskLinkResponse
+    prompt: str
+    prompt_source: Literal["stored_override", "historical_reference"]
+    dependencies: list[TaskDependencyStatus]
+    can_start: bool
+    disabled_reason: str | None
+    pending_approval_ids: list[str]
+    requires_chain_approval: bool
+    sdk: str
+    model: str | None
+    preset: Preset
+    mode: JobMode
+    recipe_revision_id: str | None
+
+
+ProjectBoardColumn = Literal["ready_blocked", "in_progress", "needs_decision", "failed"]
+
+
+class ProjectBoardTotals(CamelModel):
+    task_count: int
+    linked_job_count: int
+    standalone_job_count: int
+    pending_approval_count: int
+    review_job_count: int
+    delivery_attention_count: int
+    work_counts: dict[ProjectBoardColumn, int]
+
+
+class ProjectRecipeStep(CamelModel):
+    id: str
+    title: str
+    state: str
+    reason: str | None
+
+
+class ProjectRecipeSummary(CamelModel):
+    run_id: str
+    revision: int
+    name: str
+    state: str
+    reason: str | None
+    steps: list[ProjectRecipeStep]
+    remaining_step_count: int
+
+
+class ProjectTaskSummary(CamelModel):
+    id: str
+    repo_path: str
+    story_node_id: str | None
+    tracker_ticket_ref: str | None
+    state: str
+
+
+class ProjectBoardItem(CamelModel):
+    id: str
+    column: ProjectBoardColumn
+    job: JobResponse | None
+    tasks: list[ProjectTaskSummary]
+    task_count: int
+    pending_approval_count: int
+    delivery_attention_count: int
+    recipe: ProjectRecipeSummary | None
+    has_failure: bool
+
+
+class ProjectBoardPage(CamelModel):
+    items: list[ProjectBoardItem]
+    next_cursor: str | None
+
+
+class ProjectBoardResponse(CamelModel):
+    project: ProjectResponse
+    totals: ProjectBoardTotals
+    columns: dict[ProjectBoardColumn, ProjectBoardPage]
+
+
+class ProjectApprovalPage(CamelModel):
+    items: list[ApprovalResponse]
+    next_cursor: str | None
+
+
+class ProjectDeliveryPage(CamelModel):
+    items: list[TrackerOperationResponse]
+    next_cursor: str | None
 
 
 class RepoSummaryResponse(CamelModel):
@@ -571,10 +727,16 @@ class TranscriptPayload(CamelModel):
     timestamp: datetime
     kind: str  # dotted TF event kind (e.g. "message.assistant", "tool.call.completed")
     content: str
+    admission_status: str | None = None
+    execution_status: str | None = None
+    operator_content: str | None = None
     # Optional rich fields — only present for specific kinds
     title: str | None = None  # annotation title on agent messages
     turn_id: str | None = None  # groups reasoning + tool_calls + message
     tool_call_id: str | None = None  # pairs tool.call.started/completed
+    metadata: EventMetadata | None = None
+    pairing_status: Literal["unresolved"] | None = None
+    pairing_reason: str | None = None
     tool_name: str | None = None  # tool.call.*: tool identifier
     arguments: str | None = None  # tool.call.*: JSON-serialized arguments
     result: str | None = None  # tool.call.completed: text output from tool
@@ -888,8 +1050,19 @@ class SecondarySessionResponse(CamelModel):
     output: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     entries: list[SecondarySessionEntryResponse] = []
+
+
+class VerificationResultResponse(CamelModel):
+    phase: Literal["verify", "self_review"]
+    attempt: int
+    status: Literal["completed", "failed", "interrupted"]
+    session_number: int
+    sdk_session_id: str | None = None
+    started_at: datetime
+    completed_at: datetime
+    error: str | None = None
 
 
 class JobSnapshotResponse(CamelModel):
@@ -905,13 +1078,14 @@ class JobSnapshotResponse(CamelModel):
     turn_summaries: list[TurnSummaryPayload] = []
     secondary_sessions: list[SecondarySessionResponse] = []
     context_handoffs: list[ContextHandoffPayload] = []
+    verification_results: list[VerificationResultResponse] = []
 
 
 class SDKInfoResponse(CamelModel):
     id: str
     name: str
     enabled: bool
-    status: Literal["ready", "not_installed", "not_configured"]
+    status: Literal["ready", "not_installed", "not_configured", "disabled_by_policy"]
     authenticated: bool | None = None  # None = unknown / not applicable
     hint: str = ""  # actionable suggestion for the user
 
@@ -1011,7 +1185,8 @@ class StepPayload(CamelModel):
     tool_count: int = 0
     agent_message: str | None = None
     duration_ms: int | None = None
-    started_at: datetime
+    started_at: datetime | None = None
+    timing_source: Literal["legacy_unrecorded", "live", "source"] = "legacy_unrecorded"
     completed_at: datetime | None = None
     files_read: list[str] | None = None
     files_written: list[str] | None = None
@@ -1061,6 +1236,8 @@ class TurnSummaryPayload(CamelModel):
     job_id: str
     turn_id: str
     title: str
+    kind: str | None = None
+    version: int | None = None
     activity_id: str
     activity_label: str
     activity_status: str = "active"  # active | done
